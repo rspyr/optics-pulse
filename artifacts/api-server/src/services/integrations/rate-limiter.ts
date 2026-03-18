@@ -22,21 +22,17 @@ export class TokenBucketRateLimiter {
   }
 
   async acquire(): Promise<void> {
-    this.refill();
-    if (this.tokens > 0) {
-      this.tokens--;
-      return;
-    }
     const waitTime = Math.ceil(this.refillIntervalMs / this.refillRate);
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-    this.refill();
-    if (this.tokens > 0) {
-      this.tokens--;
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
+    const maxAttempts = 10;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.refill();
-      this.tokens = Math.max(0, this.tokens - 1);
+      if (this.tokens > 0) {
+        this.tokens--;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
+    this.tokens = 0;
   }
 }
 
