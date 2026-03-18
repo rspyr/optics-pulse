@@ -21,11 +21,12 @@ router.get("/change-logs", async (req, res) => {
   res.json(logs);
 });
 
-router.post("/change-logs", requireRole("super_admin", "agency_user"), async (req, res) => {
+router.post("/change-logs", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const { tenantId, date, title, description, category } = req.body;
 
   if (!tenantId || !date || !title || !description) {
-    return res.status(400).json({ error: "tenantId, date, title, and description are required" });
+    res.status(400).json({ error: "tenantId, date, title, and description are required" });
+    return;
   }
 
   const [log] = await db.insert(changeLogsTable).values({

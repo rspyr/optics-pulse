@@ -177,6 +177,62 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   res.json(result);
 });
 
+router.get("/dashboard/benchmarks", async (req, res) => {
+  const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
+
+  const allMetrics = await Promise.all(tenants.map(async (tenant) => {
+    const leadConditions: SQL[] = [eq(leadsTable.tenantId, tenant.id)];
+    const statsConditions: SQL[] = [eq(campaignsTable.tenantId, tenant.id)];
+    if (startDate) {
+      leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
+      statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
+    }
+    if (endDate) {
+      leadConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
+      statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
+    }
+
+    const [leads, jobs, spendResult] = await Promise.all([
+      db.select().from(leadsTable).where(and(...leadConditions)),
+      db.select().from(jobsTable).where(eq(jobsTable.tenantId, tenant.id)),
+      db.select({
+        total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`
+      }).from(campaignDailyStatsTable)
+        .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+        .where(and(...statsConditions)),
+    ]);
+
+    const totalLeads = leads.length;
+    const bookedLeads = leads.filter(l => l.status === "booked" || l.status === "sold").length;
+    const soldLeads = leads.filter(l => l.status === "sold").length;
+    const revenue = jobs.filter(j => j.status === "completed").reduce((s, j) => s + (j.revenue || 0), 0);
+    const spend = Number(spendResult[0]?.total || 0);
+
+    return { totalLeads, bookedLeads, soldLeads, revenue, spend };
+  }));
+
+  const totals = allMetrics.reduce((acc, m) => ({
+    totalLeads: acc.totalLeads + m.totalLeads,
+    bookedLeads: acc.bookedLeads + m.bookedLeads,
+    soldLeads: acc.soldLeads + m.soldLeads,
+    revenue: acc.revenue + m.revenue,
+    spend: acc.spend + m.spend,
+  }), { totalLeads: 0, bookedLeads: 0, soldLeads: 0, revenue: 0, spend: 0 });
+
+  const avgSaleValue = totals.soldLeads > 0 ? Math.round((totals.revenue / totals.soldLeads) * 100) / 100 : 0;
+
+  res.json({
+    cpl: totals.totalLeads > 0 ? Math.round((totals.spend / totals.totalLeads) * 100) / 100 : 0,
+    bookingRate: totals.totalLeads > 0 ? Math.round((totals.bookedLeads / totals.totalLeads) * 100 * 10) / 10 : 0,
+    closeRate: totals.bookedLeads > 0 ? Math.round((totals.soldLeads / totals.bookedLeads) * 100 * 10) / 10 : 0,
+    avgSaleValue,
+    roas: totals.spend > 0 ? Math.round((totals.revenue / totals.spend) * 100) / 100 : 0,
+  });
+});
+
 router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
 

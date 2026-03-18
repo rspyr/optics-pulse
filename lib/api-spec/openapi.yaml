@@ -591,6 +591,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/ChangeLog"
 
+  /dashboard/benchmarks:
+    get:
+      operationId: getDashboardBenchmarks
+      tags: [dashboard]
+      summary: Get agency-wide benchmark averages (available to all authenticated users)
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Agency-wide average metrics for benchmarking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BenchmarkData"
+
   /dashboard/tenant-performance:
     get:
       operationId: getTenantPerformance
@@ -1008,6 +1032,21 @@ components:
         revenue:
           type: number
       required: [date, spend, revenue]
+
+    BenchmarkData:
+      type: object
+      properties:
+        cpl:
+          type: number
+        bookingRate:
+          type: number
+        closeRate:
+          type: number
+        avgSaleValue:
+          type: number
+        roas:
+          type: number
+      required: [cpl, bookingRate, closeRate, avgSaleValue, roas]
 
     TenantPerformanceRow:
       type: object

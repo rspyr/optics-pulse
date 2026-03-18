@@ -21,6 +21,7 @@ import type {
   AdminUser,
   AttributionEventListResponse,
   AuthUser,
+  BenchmarkData,
   Campaign,
   CampaignStatsResponse,
   ChangeLog,
@@ -31,6 +32,7 @@ import type {
   DeleteTenant200,
   GetAdminDashboardStatsParams,
   GetCampaignStatsParams,
+  GetDashboardBenchmarksParams,
   GetDashboardOverviewParams,
   GetSpendRevenueChartParams,
   GetTenantPerformanceParams,
@@ -2252,6 +2254,106 @@ export const useCreateChangeLog = <
 > => {
   return useMutation(getCreateChangeLogMutationOptions(options));
 };
+
+/**
+ * @summary Get agency-wide benchmark averages (available to all authenticated users)
+ */
+export const getGetDashboardBenchmarksUrl = (
+  params?: GetDashboardBenchmarksParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/dashboard/benchmarks?${stringifiedParams}`
+    : `/api/dashboard/benchmarks`;
+};
+
+export const getDashboardBenchmarks = async (
+  params?: GetDashboardBenchmarksParams,
+  options?: RequestInit,
+): Promise<BenchmarkData> => {
+  return customFetch<BenchmarkData>(getGetDashboardBenchmarksUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDashboardBenchmarksQueryKey = (
+  params?: GetDashboardBenchmarksParams,
+) => {
+  return [`/api/dashboard/benchmarks`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetDashboardBenchmarksQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDashboardBenchmarks>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetDashboardBenchmarksParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDashboardBenchmarks>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetDashboardBenchmarksQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDashboardBenchmarks>>
+  > = ({ signal }) =>
+    getDashboardBenchmarks(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardBenchmarks>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDashboardBenchmarksQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDashboardBenchmarks>>
+>;
+export type GetDashboardBenchmarksQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get agency-wide benchmark averages (available to all authenticated users)
+ */
+
+export function useGetDashboardBenchmarks<
+  TData = Awaited<ReturnType<typeof getDashboardBenchmarks>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetDashboardBenchmarksParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getDashboardBenchmarks>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDashboardBenchmarksQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Get all tenants performance table (agency God View)

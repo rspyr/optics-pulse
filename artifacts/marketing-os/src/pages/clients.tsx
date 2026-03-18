@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetAdminDashboardStats } from "@workspace/api-client-react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -81,10 +81,22 @@ function parseNaturalLanguageFilter(query: string): NLFilterResult {
   else if (q.includes("direct")) result.source = "Direct";
   else if (q.includes("referral")) result.source = "Referral";
 
-  if (q.includes("fit funnel")) result.leadType = "paid";
-  else if (q.includes("quiz")) result.leadType = "organic";
+  if (q.includes("fit funnel") || q.includes("paid")) result.leadType = "paid";
+  else if (q.includes("quiz") || q.includes("organic")) result.leadType = "organic";
+  else if (q.includes("pop-up") || q.includes("popup")) result.leadType = "popup";
 
   return result;
+}
+
+function ClickableMarkerLabel({ viewBox, onClick }: { viewBox?: { x?: number; y?: number }; onClick: () => void }) {
+  if (!viewBox?.x) return null;
+  return (
+    <g onClick={onClick} style={{ cursor: "pointer" }}>
+      <circle cx={viewBox.x} cy={(viewBox.y || 0) - 8} r={8} fill="#F59E0B" opacity={0.2} />
+      <circle cx={viewBox.x} cy={(viewBox.y || 0) - 8} r={5} fill="#F59E0B" />
+      <rect x={viewBox.x - 12} y={(viewBox.y || 0) - 20} width={24} height={24} fill="transparent" />
+    </g>
+  );
 }
 
 function ChangeLogPopover({ log, onClose }: { log: { title: string; description: string; date: string; category: string }; onClose: () => void }) {
@@ -160,22 +172,10 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     limit: 500,
   });
 
-  const { data: benchmarkData } = useGetAdminDashboardStats({
+  const { data: benchmarkData } = useGetDashboardBenchmarks({
     startDate,
     endDate,
   });
-
-  const liveBenchmarks = useMemo(() => {
-    if (!benchmarkData?.agencyAverages) return null;
-    const avg = benchmarkData.agencyAverages;
-    return {
-      cpl: avg.cpl || 0,
-      bookingRate: avg.bookingRate || 0,
-      closeRate: 45,
-      avgSaleValue: 7500,
-      roas: avg.roas || 0,
-    };
-  }, [benchmarkData]);
 
   const leads = leadsData?.leads || [];
   const effectiveSource = activeNlFilter.source || filterSource;
@@ -317,7 +317,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const avgSaleTrend = trendValue(d.avgSaleValue, prev?.avgSaleValue);
   const roiTrend = trendValue(displayROI, prevROI);
 
-  const benchmarks = liveBenchmarks || { cpl: 95, bookingRate: 55, closeRate: 45, avgSaleValue: 7500, roas: 8.5 };
+  const benchmarks = benchmarkData || { cpl: 95, bookingRate: 55, closeRate: 45, avgSaleValue: 7500, roas: 8.5 };
 
   const compLabel = (current: number, benchmark: number, inverse?: boolean) => {
     if (comparisonMode !== "benchmark") return null;
@@ -524,8 +524,11 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           onChange={e => { setFilterLeadType(e.target.value); setActiveNlFilter(prev => ({ ...prev, leadType: undefined })); }}
           className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
         >
-          <option value="">All Types</option>
-          {uniqueLeadTypes.map(t => <option key={t} value={t!}>{t}</option>)}
+          <option value="">All Campaign Types</option>
+          {uniqueLeadTypes.map(t => {
+            const label = t === "paid" ? "Fit Funnel (Paid)" : t === "organic" ? "Quiz (Organic)" : t === "popup" ? "Pop-up" : t;
+            return <option key={t} value={t!}>{label}</option>;
+          })}
         </select>
         <select
           value={filterSalesperson}
@@ -668,12 +671,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                     stroke="#F59E0B"
                     strokeDasharray="4 4"
                     strokeWidth={1.5}
-                    label={{
-                      value: "●",
-                      position: "top",
-                      fill: "#F59E0B",
-                      fontSize: 14,
-                    }}
+                    label={<ClickableMarkerLabel onClick={() => setSelectedChangeLog(log)} />}
                   />
                 ))}
               </BarChart>

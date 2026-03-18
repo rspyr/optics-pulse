@@ -274,6 +274,14 @@ export interface SpendRevenueDataPoint {
   revenue: number;
 }
 
+export interface BenchmarkData {
+  cpl: number;
+  bookingRate: number;
+  closeRate: number;
+  avgSaleValue: number;
+  roas: number;
+}
+
 export interface TenantPerformanceRow {
   tenantId: number;
   tenantName: string;
@@ -515,6 +523,11 @@ export type GetAdminDashboardStatsParams = {
 
 export type ListChangeLogsParams = {
   tenantId?: number;
+  startDate?: string;
+  endDate?: string;
+};
+
+export type GetDashboardBenchmarksParams = {
   startDate?: string;
   endDate?: string;
 };

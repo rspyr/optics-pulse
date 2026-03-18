@@ -552,6 +552,22 @@ export const CreateChangeLogBody = zod.object({
 });
 
 /**
+ * @summary Get agency-wide benchmark averages (available to all authenticated users)
+ */
+export const GetDashboardBenchmarksQueryParams = zod.object({
+  startDate: zod.date().optional(),
+  endDate: zod.date().optional(),
+});
+
+export const GetDashboardBenchmarksResponse = zod.object({
+  cpl: zod.number(),
+  bookingRate: zod.number(),
+  closeRate: zod.number(),
+  avgSaleValue: zod.number(),
+  roas: zod.number(),
+});
+
+/**
  * @summary Get all tenants performance table (agency God View)
  */
 export const GetTenantPerformanceQueryParams = zod.object({
