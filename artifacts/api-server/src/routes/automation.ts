@@ -27,7 +27,7 @@ router.get("/automation/rules", ...agencyOnly, async (_req, res) => {
 
 router.post("/automation/rules", ...agencyOnly, async (req, res) => {
   try {
-    const { name, description, conditionType, conditionValue, actionType, platform, tenantId } = req.body;
+    const { name, description, conditionType, conditionValue, actionType, platform, tenantId, lookbackDays } = req.body;
 
     if (!name || typeof name !== "string" || !name.trim()) {
       res.status(400).json({ error: "name is required" }); return;
@@ -44,12 +44,18 @@ router.post("/automation/rules", ...agencyOnly, async (req, res) => {
 
     const userId = req.session.userId!;
 
+    const parsedLookback = lookbackDays ? Number(lookbackDays) : 30;
+    if (!Number.isFinite(parsedLookback) || parsedLookback < 1 || parsedLookback > 365) {
+      res.status(400).json({ error: "lookbackDays must be between 1 and 365" }); return;
+    }
+
     const insertValues: typeof automationRulesTable.$inferInsert = {
       name: name.trim(),
       description: description?.trim() || null,
       conditionType: conditionType,
       conditionValue: Number(conditionValue),
       actionType: actionType,
+      lookbackDays: parsedLookback,
       platform: platform?.trim() || null,
       tenantId: tenantId ? Number(tenantId) : null,
       createdBy: userId,
@@ -68,7 +74,7 @@ router.put("/automation/rules/:id", ...agencyOnly, async (req, res) => {
     const id = validateId(String(req.params.id));
     if (!id) { res.status(400).json({ error: "Invalid rule ID" }); return; }
 
-    const { name, description, conditionType, conditionValue, actionType, platform, tenantId, isEnabled } = req.body;
+    const { name, description, conditionType, conditionValue, actionType, platform, tenantId, isEnabled, lookbackDays } = req.body;
 
     if (conditionType !== undefined && !VALID_CONDITIONS.includes(conditionType)) {
       res.status(400).json({ error: `conditionType must be one of: ${VALID_CONDITIONS.join(", ")}` }); return;
@@ -79,6 +85,12 @@ router.put("/automation/rules/:id", ...agencyOnly, async (req, res) => {
     if (actionType !== undefined && !VALID_ACTIONS.includes(actionType)) {
       res.status(400).json({ error: `actionType must be one of: ${VALID_ACTIONS.join(", ")}` }); return;
     }
+    if (lookbackDays !== undefined) {
+      const lb = Number(lookbackDays);
+      if (!Number.isFinite(lb) || lb < 1 || lb > 365) {
+        res.status(400).json({ error: "lookbackDays must be between 1 and 365" }); return;
+      }
+    }
 
     const [rule] = await db.update(automationRulesTable).set({
       ...(name !== undefined && { name: String(name).trim() }),
@@ -86,6 +98,7 @@ router.put("/automation/rules/:id", ...agencyOnly, async (req, res) => {
       ...(conditionType !== undefined && { conditionType }),
       ...(conditionValue !== undefined && { conditionValue: Number(conditionValue) }),
       ...(actionType !== undefined && { actionType }),
+      ...(lookbackDays !== undefined && { lookbackDays: Number(lookbackDays) }),
       ...(platform !== undefined && { platform: platform?.trim() || null }),
       ...(tenantId !== undefined && { tenantId: tenantId ? Number(tenantId) : null }),
       ...(isEnabled !== undefined && { isEnabled }),

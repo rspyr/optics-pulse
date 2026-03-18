@@ -14,6 +14,7 @@ export interface UpdateAutomationRuleBody {
   conditionType?: UpdateAutomationRuleBodyConditionType;
   conditionValue?: number;
   actionType?: UpdateAutomationRuleBodyActionType;
+  lookbackDays?: number;
   platform?: string;
   tenantId?: number;
   isEnabled?: boolean;

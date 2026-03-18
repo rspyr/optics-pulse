@@ -18,6 +18,7 @@ export const automationRulesTable = pgTable("automation_rules", {
   conditionType: automationConditionEnum("condition_type").notNull(),
   conditionValue: real("condition_value").notNull(),
   actionType: automationActionEnum("action_type").notNull(),
+  lookbackDays: integer("lookback_days").notNull().default(30),
   platform: text("platform"),
   tenantId: integer("tenant_id").references(() => tenantsTable.id),
   isEnabled: boolean("is_enabled").notNull().default(true),

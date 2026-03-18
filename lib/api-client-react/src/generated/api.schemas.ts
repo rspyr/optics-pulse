@@ -633,6 +633,7 @@ export interface AutomationRule {
   conditionType: AutomationRuleConditionType;
   conditionValue: number;
   actionType: AutomationRuleActionType;
+  lookbackDays: number;
   platform?: string | null;
   tenantId?: number | null;
   isEnabled: boolean;
@@ -668,6 +669,7 @@ export interface CreateAutomationRuleBody {
   conditionType: CreateAutomationRuleBodyConditionType;
   conditionValue: number;
   actionType: CreateAutomationRuleBodyActionType;
+  lookbackDays?: number;
   platform?: string;
   tenantId?: number;
 }
@@ -699,6 +701,7 @@ export interface UpdateAutomationRuleBody {
   conditionType?: UpdateAutomationRuleBodyConditionType;
   conditionValue?: number;
   actionType?: UpdateAutomationRuleBodyActionType;
+  lookbackDays?: number;
   platform?: string;
   tenantId?: number;
   isEnabled?: boolean;

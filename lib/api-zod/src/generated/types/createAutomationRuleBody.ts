@@ -14,6 +14,7 @@ export interface CreateAutomationRuleBody {
   conditionType: CreateAutomationRuleBodyConditionType;
   conditionValue: number;
   actionType: CreateAutomationRuleBodyActionType;
+  lookbackDays?: number;
   platform?: string;
   tenantId?: number;
 }

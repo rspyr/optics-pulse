@@ -678,6 +678,7 @@ export const ListAutomationRulesResponseItem = zod.object({
   ]),
   conditionValue: zod.number(),
   actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  lookbackDays: zod.number(),
   platform: zod.string().nullish(),
   tenantId: zod.number().nullish(),
   isEnabled: zod.boolean(),
@@ -692,6 +693,8 @@ export const ListAutomationRulesResponse = zod.array(
 /**
  * @summary Create an automation rule
  */
+export const createAutomationRuleBodyLookbackDaysDefault = 30;
+
 export const CreateAutomationRuleBody = zod.object({
   name: zod.string(),
   description: zod.string().optional(),
@@ -705,6 +708,9 @@ export const CreateAutomationRuleBody = zod.object({
   ]),
   conditionValue: zod.number(),
   actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  lookbackDays: zod
+    .number()
+    .default(createAutomationRuleBodyLookbackDaysDefault),
   platform: zod.string().optional(),
   tenantId: zod.number().optional(),
 });
@@ -733,6 +739,7 @@ export const UpdateAutomationRuleBody = zod.object({
   actionType: zod
     .enum(["send_alert", "flag_for_review", "auto_pause"])
     .optional(),
+  lookbackDays: zod.number().optional(),
   platform: zod.string().optional(),
   tenantId: zod.number().optional(),
   isEnabled: zod.boolean().optional(),
@@ -752,6 +759,7 @@ export const UpdateAutomationRuleResponse = zod.object({
   ]),
   conditionValue: zod.number(),
   actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  lookbackDays: zod.number(),
   platform: zod.string().nullish(),
   tenantId: zod.number().nullish(),
   isEnabled: zod.boolean(),
@@ -792,6 +800,7 @@ export const ToggleAutomationRuleResponse = zod.object({
   ]),
   conditionValue: zod.number(),
   actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  lookbackDays: zod.number(),
   platform: zod.string().nullish(),
   tenantId: zod.number().nullish(),
   isEnabled: zod.boolean(),

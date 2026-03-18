@@ -8,6 +8,7 @@ import {
   useListAutomationAlerts,
   useAcknowledgeAutomationAlert,
   useGetAutomationAlertCount,
+  useListTenants,
 } from "@workspace/api-client-react";
 import type {
   AutomationRule,
@@ -60,6 +61,7 @@ export default function Automation() {
   const [editingRule, setEditingRule] = useState<AutomationRule | null>(null);
   const [alertFilter, setAlertFilter] = useState<"all" | "unacknowledged" | "acknowledged">("unacknowledged");
 
+  const { data: tenants } = useListTenants();
   const { data: rules, refetch: refetchRules, isLoading: rulesLoading } = useListAutomationRules();
   const { data: alerts, refetch: refetchAlerts, isLoading: alertsLoading } = useListAutomationAlerts({
     acknowledged: alertFilter === "all" ? undefined : alertFilter === "acknowledged" ? "true" : "false",
@@ -78,6 +80,7 @@ export default function Automation() {
     conditionType: "spend_above" as CreateAutomationRuleBody["conditionType"],
     conditionValue: 0,
     actionType: "send_alert" as CreateAutomationRuleBody["actionType"],
+    lookbackDays: 30,
   });
 
   function openCreateForm() {
@@ -87,6 +90,7 @@ export default function Automation() {
       conditionType: "spend_above" as CreateAutomationRuleBody["conditionType"],
       conditionValue: 0,
       actionType: "send_alert" as CreateAutomationRuleBody["actionType"],
+      lookbackDays: 30,
     });
     setShowForm(true);
   }
@@ -99,6 +103,7 @@ export default function Automation() {
       conditionType: rule.conditionType,
       conditionValue: rule.conditionValue,
       actionType: rule.actionType,
+      lookbackDays: rule.lookbackDays,
       platform: rule.platform ?? undefined,
       tenantId: rule.tenantId ?? undefined,
     });
@@ -250,9 +255,19 @@ export default function Automation() {
                             <ActionIcon className="w-3.5 h-3.5" />
                             {ACTION_LABELS[rule.actionType]}
                           </span>
+                          <span className="text-white/40">
+                            {rule.lookbackDays}d window
+                          </span>
                           {rule.platform && (
                             <span className="text-white/40">
                               Platform: <span className="text-white/60">{rule.platform}</span>
+                            </span>
+                          )}
+                          {rule.tenantId && (
+                            <span className="text-white/40">
+                              Tenant: <span className="text-white/60">
+                                {tenants?.find((t: { id: number }) => t.id === rule.tenantId)?.name || `#${rule.tenantId}`}
+                              </span>
                             </span>
                           )}
                         </div>
@@ -458,6 +473,39 @@ export default function Automation() {
                     <option key={k} value={k}>{v}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-white/70 mb-1">Lookback Window</label>
+                  <select
+                    value={formData.lookbackDays || 30}
+                    onChange={(e) => setFormData({ ...formData, lookbackDays: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
+                  >
+                    <option value={1}>Last 1 day</option>
+                    <option value={3}>Last 3 days</option>
+                    <option value={7}>Last 7 days</option>
+                    <option value={14}>Last 14 days</option>
+                    <option value={30}>Last 30 days</option>
+                    <option value={60}>Last 60 days</option>
+                    <option value={90}>Last 90 days</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-white/70 mb-1">Tenant Scope</label>
+                  <select
+                    value={formData.tenantId || ""}
+                    onChange={(e) => setFormData({ ...formData, tenantId: e.target.value ? Number(e.target.value) : undefined })}
+                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
+                  >
+                    <option value="">All Tenants (Global)</option>
+                    {tenants?.map((t: { id: number; name: string }) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>

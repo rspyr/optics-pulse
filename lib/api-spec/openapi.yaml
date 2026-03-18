@@ -2047,6 +2047,8 @@ components:
         actionType:
           type: string
           enum: [send_alert, flag_for_review, auto_pause]
+        lookbackDays:
+          type: integer
         platform:
           type: string
           nullable: true
@@ -2061,7 +2063,7 @@ components:
           type: string
         updatedAt:
           type: string
-      required: [id, name, conditionType, conditionValue, actionType, isEnabled, createdBy, createdAt, updatedAt]
+      required: [id, name, conditionType, conditionValue, actionType, lookbackDays, isEnabled, createdBy, createdAt, updatedAt]
 
     CreateAutomationRuleBody:
       type: object
@@ -2078,6 +2080,9 @@ components:
         actionType:
           type: string
           enum: [send_alert, flag_for_review, auto_pause]
+        lookbackDays:
+          type: integer
+          default: 30
         platform:
           type: string
         tenantId:
@@ -2099,6 +2104,8 @@ components:
         actionType:
           type: string
           enum: [send_alert, flag_for_review, auto_pause]
+        lookbackDays:
+          type: integer
         platform:
           type: string
         tenantId:

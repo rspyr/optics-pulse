@@ -15,6 +15,7 @@ export interface AutomationRule {
   conditionType: AutomationRuleConditionType;
   conditionValue: number;
   actionType: AutomationRuleActionType;
+  lookbackDays: number;
   platform?: string | null;
   tenantId?: number | null;
   isEnabled: boolean;
