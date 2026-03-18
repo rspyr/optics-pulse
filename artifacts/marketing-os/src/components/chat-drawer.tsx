@@ -144,11 +144,12 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
     setIsLoading(true);
 
     try {
+      const history = messages.map(m => ({ role: m.role, content: m.content }));
       const res = await fetch(`${API_BASE}/api/chat/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ question: question.trim() }),
+        body: JSON.stringify({ question: question.trim(), conversationHistory: history }),
       });
       const data = await res.json();
 

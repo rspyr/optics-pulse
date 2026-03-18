@@ -16,7 +16,7 @@ interface QueryResult {
 
 interface QueryPattern {
   patterns: RegExp[];
-  handler: (ctx: ChatContext, match: RegExpMatchArray | null) => Promise<QueryResult>;
+  handler: (ctx: ChatContext, match: RegExpMatchArray | null, question: string) => Promise<QueryResult>;
   description: string;
 }
 
@@ -124,8 +124,8 @@ const queryPatterns: QueryPattern[] = [
       /(?:why|how come|what happened).*(spend|cost).*(go up|increase|rise|spike|jump)/i,
     ],
     description: "CPL increase analysis",
-    handler: async (ctx) => {
-      const currentRange = extractDateRange("");
+    handler: async (ctx, _match, question) => {
+      const currentRange = extractDateRange(question);
       const prevEnd = new Date(new Date(currentRange.startDate).getTime() - 86400000);
       const durationMs = new Date(currentRange.endDate).getTime() - new Date(currentRange.startDate).getTime();
       const prevStart = new Date(prevEnd.getTime() - durationMs);
@@ -159,6 +159,52 @@ const queryPatterns: QueryPattern[] = [
           { period: "Current", cpl: `$${currCPL.toFixed(2)}`, spend: `$${currSpend.totalSpend.toFixed(2)}`, leads: currLeads.total },
         ],
         chartType: "table",
+      };
+    },
+  },
+  {
+    patterns: [
+      /(?:google|meta|facebook).*(spend|cost|performance|leads|stats|campaign)/i,
+      /(?:show|how|list|what).*(google|meta|facebook)/i,
+      /(?:meta|facebook|google)\s+campaign/i,
+    ],
+    description: "Platform-specific performance",
+    handler: async (ctx, match) => {
+      const q = match?.[0]?.toLowerCase() || "";
+      const isMeta = q.includes("meta") || q.includes("facebook");
+      const platformLabel = isMeta ? "Meta" : "Google Ads";
+
+      const allCampaigns = await db.select().from(campaignsTable).where(eq(campaignsTable.tenantId, ctx.tenantId));
+      const campaigns = allCampaigns.filter(c => {
+        const p = c.platform.toLowerCase();
+        if (isMeta) return p === "meta" || p === "facebook";
+        return p === "google" || p === "google_ads";
+      });
+
+      if (campaigns.length === 0) return { answer: `No ${platformLabel} campaigns found.`, chartType: "number" as const };
+
+      const campaignIds = campaigns.map(c => c.id);
+      const conditions: SQL[] = [inArray(campaignDailyStatsTable.campaignId, campaignIds)];
+      if (ctx.startDate) conditions.push(gte(campaignDailyStatsTable.date, ctx.startDate));
+      if (ctx.endDate) conditions.push(lte(campaignDailyStatsTable.date, ctx.endDate));
+
+      const stats = await db.select().from(campaignDailyStatsTable).where(and(...conditions));
+      const totalSpend = stats.reduce((s, r) => s + (r.spend || 0), 0);
+      const totalClicks = stats.reduce((s, r) => s + (r.clicks || 0), 0);
+      const totalImpressions = stats.reduce((s, r) => s + (r.impressions || 0), 0);
+
+      const rows = campaigns.map(c => {
+        const cStats = stats.filter(s => s.campaignId === c.id);
+        const spend = cStats.reduce((s, r) => s + (r.spend || 0), 0);
+        const clicks = cStats.reduce((s, r) => s + (r.clicks || 0), 0);
+        return { campaign: c.name, spend: `$${spend.toFixed(2)}`, clicks, cpc: clicks > 0 ? `$${(spend / clicks).toFixed(2)}` : "N/A" };
+      }).filter(r => parseFloat(r.spend.replace("$", "")) > 0).sort((a, b) => parseFloat(b.spend.replace("$", "")) - parseFloat(a.spend.replace("$", "")));
+
+      return {
+        answer: `**${platformLabel}** performance: $${totalSpend.toFixed(2)} spend, ${totalClicks} clicks, ${totalImpressions.toLocaleString()} impressions across ${campaigns.length} campaigns.`,
+        data: rows,
+        chartType: "table",
+        chartLabel: `${platformLabel} Campaigns`,
       };
     },
   },
@@ -426,60 +472,83 @@ const queryPatterns: QueryPattern[] = [
       };
     },
   },
-  {
-    patterns: [
-      /(?:google|meta|facebook).*(spend|cost|performance|leads|stats)/i,
-      /(?:show|how).*(google|meta|facebook)/i,
-    ],
-    description: "Platform-specific performance",
-    handler: async (ctx, match) => {
-      const q = match?.[0]?.toLowerCase() || "";
-      const platform = q.includes("meta") || q.includes("facebook") ? "meta" : "google_ads";
-      const platformLabel = platform === "meta" ? "Meta" : "Google Ads";
-
-      const campaigns = await db.select().from(campaignsTable).where(
-        and(eq(campaignsTable.tenantId, ctx.tenantId), eq(campaignsTable.platform, platform)),
-      );
-
-      if (campaigns.length === 0) return { answer: `No ${platformLabel} campaigns found.`, chartType: "number" as const };
-
-      const campaignIds = campaigns.map(c => c.id);
-      const conditions: SQL[] = [inArray(campaignDailyStatsTable.campaignId, campaignIds)];
-      if (ctx.startDate) conditions.push(gte(campaignDailyStatsTable.date, ctx.startDate));
-      if (ctx.endDate) conditions.push(lte(campaignDailyStatsTable.date, ctx.endDate));
-
-      const stats = await db.select().from(campaignDailyStatsTable).where(and(...conditions));
-      const totalSpend = stats.reduce((s, r) => s + (r.spend || 0), 0);
-      const totalClicks = stats.reduce((s, r) => s + (r.clicks || 0), 0);
-      const totalImpressions = stats.reduce((s, r) => s + (r.impressions || 0), 0);
-
-      const rows = campaigns.map(c => {
-        const cStats = stats.filter(s => s.campaignId === c.id);
-        const spend = cStats.reduce((s, r) => s + (r.spend || 0), 0);
-        const clicks = cStats.reduce((s, r) => s + (r.clicks || 0), 0);
-        return { campaign: c.name, spend: `$${spend.toFixed(2)}`, clicks, cpc: clicks > 0 ? `$${(spend / clicks).toFixed(2)}` : "N/A" };
-      }).filter(r => parseFloat(r.spend.replace("$", "")) > 0).sort((a, b) => parseFloat(b.spend.replace("$", "")) - parseFloat(a.spend.replace("$", "")));
-
-      return {
-        answer: `**${platformLabel}** performance: $${totalSpend.toFixed(2)} spend, ${totalClicks} clicks, ${totalImpressions.toLocaleString()} impressions across ${campaigns.length} campaigns.`,
-        data: rows,
-        chartType: "table",
-        chartLabel: `${platformLabel} Campaigns`,
-      };
-    },
-  },
 ];
 
-export async function processQuestion(question: string, tenantId: number): Promise<QueryResult> {
-  const dateRange = extractDateRange(question);
+interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function sanitizeHistory(history: ConversationTurn[]): ConversationTurn[] {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
+    .map(t => ({ role: t.role, content: t.content.slice(0, 500) }))
+    .slice(-10);
+}
+
+function findLastSubstantiveUserQuestion(history: ConversationTurn[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const t = history[i];
+    if (t.role !== "user") continue;
+    const c = t.content.toLowerCase().trim();
+    if (c.length > 10 && !/^(why\??|tell me more|more details|explain|and |what about |how about |for |in |during )/.test(c)) {
+      return t.content;
+    }
+  }
+  return history.find(t => t.role === "user")?.content || null;
+}
+
+function resolveQuestionWithContext(question: string, history: ConversationTurn[]): string {
+  const q = question.toLowerCase().trim();
+  const safeHistory = sanitizeHistory(history);
+
+  if (q === "why" || q === "why?" || q === "tell me more" || q === "more details" || q === "explain") {
+    const lastSubstantive = findLastSubstantiveUserQuestion(safeHistory);
+    if (lastSubstantive) return `Why is ${lastSubstantive}`;
+  }
+
+  if (/^(and|what about|how about)\s+(.+)/i.test(q)) {
+    const match = q.match(/^(?:and|what about|how about)\s+(.+)/i);
+    if (match) {
+      const lastAssistant = [...safeHistory].reverse().find(t => t.role === "assistant");
+      if (lastAssistant) {
+        const lc = lastAssistant.content.toLowerCase();
+        if (lc.includes("cpl") || lc.includes("cost per lead")) {
+          return `Show ${match[1]} cost per lead`;
+        }
+        if (lc.includes("campaign")) {
+          return `Show ${match[1]} campaigns`;
+        }
+        if (lc.includes("lead")) {
+          return `Show ${match[1]} leads`;
+        }
+        if (lc.includes("spend")) {
+          return `Show ${match[1]} spend`;
+        }
+      }
+    }
+  }
+
+  if (/^(for|in|during)\s+(last\s+\w+|this\s+\w+)/i.test(q)) {
+    const lastSubstantive = findLastSubstantiveUserQuestion(safeHistory);
+    if (lastSubstantive) return `${lastSubstantive} ${question}`;
+  }
+
+  return question;
+}
+
+export async function processQuestion(question: string, tenantId: number, conversationHistory: ConversationTurn[] = []): Promise<QueryResult> {
+  const resolvedQuestion = resolveQuestionWithContext(question, conversationHistory);
+  const dateRange = extractDateRange(resolvedQuestion);
   const ctx: ChatContext = { tenantId, ...dateRange };
 
   for (const pattern of queryPatterns) {
     for (const regex of pattern.patterns) {
-      const match = question.match(regex);
+      const match = resolvedQuestion.match(regex);
       if (match) {
         try {
-          return await pattern.handler(ctx, match);
+          return await pattern.handler(ctx, match, resolvedQuestion);
         } catch (err) {
           console.error(`[Chat Analytics] Error processing pattern "${pattern.description}":`, err);
           return {
@@ -496,6 +565,8 @@ export async function processQuestion(question: string, tenantId: number): Promi
     chartType: "number",
   };
 }
+
+export type { ConversationTurn };
 
 export async function generateSuggestions(tenantId: number): Promise<string[]> {
   const range = last30Days();

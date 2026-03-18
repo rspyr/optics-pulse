@@ -1,21 +1,29 @@
 import { Router, type IRouter } from "express";
 import { db, savedQuestionsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { processQuestion, generateSuggestions } from "../services/chat-analytics";
+import { processQuestion, generateSuggestions, type ConversationTurn } from "../services/chat-analytics";
 
 const router: IRouter = Router();
 
 router.post("/chat/ask", async (req, res) => {
-  const { question } = req.body as { question?: string };
+  const { question, conversationHistory } = req.body as {
+    question?: string;
+    conversationHistory?: ConversationTurn[];
+  };
   if (!question || typeof question !== "string" || question.trim().length === 0) {
     res.status(400).json({ error: "Question is required" });
     return;
   }
 
+  if (!req.session.userId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
   const tenantId = req.session.tenantId || 1;
+  const history = Array.isArray(conversationHistory) ? conversationHistory.slice(-10) : [];
 
   try {
-    const result = await processQuestion(question.trim(), tenantId);
+    const result = await processQuestion(question.trim(), tenantId, history);
     res.json({ question: question.trim(), ...result });
   } catch (err) {
     console.error("[Chat] Error processing question:", err);
