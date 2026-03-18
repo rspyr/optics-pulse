@@ -29,26 +29,30 @@ export default function Internal() {
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
+  const [syncTenantId, setSyncTenantId] = useState<number | null>(null);
 
   const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
   const fetchSyncStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/integrations/sync-status`, { credentials: "include" });
+      const params = syncTenantId ? `?tenantId=${syncTenantId}` : "";
+      const res = await fetch(`${API_BASE}/api/integrations/sync-status${params}`, { credentials: "include" });
       if (res.ok) setSyncStatus(await res.json());
     } catch { /* ignore */ }
-  }, [API_BASE]);
+  }, [API_BASE, syncTenantId]);
 
   useEffect(() => { fetchSyncStatus(); }, [fetchSyncStatus]);
 
-  const triggerSync = async (integration: string, tenantId: number) => {
+  const triggerSync = async (integration: string) => {
+    const targetTenantId = syncTenantId || data?.tenants?.[0]?.tenantId;
+    if (!targetTenantId) return;
     setSyncLoading(true);
     try {
       await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ tenantId }),
+        body: JSON.stringify({ tenantId: targetTenantId }),
       });
       await fetchSyncStatus();
     } catch { /* ignore */ }
@@ -280,9 +284,23 @@ export default function Internal() {
             <Plug className="w-5 h-5 text-blue-400" />
             <h3 className="font-display text-lg text-white">Integration Sync Status</h3>
           </div>
-          <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
-            <RefreshCw className="w-3 h-3" /> Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            {data?.tenants && data.tenants.length > 0 && (
+              <select
+                value={syncTenantId ?? ""}
+                onChange={(e) => setSyncTenantId(e.target.value ? Number(e.target.value) : null)}
+                className="bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <option value="">All Tenants</option>
+                {data.tenants.map((t) => (
+                  <option key={t.tenantId} value={t.tenantId}>{t.tenantName}</option>
+                ))}
+              </select>
+            )}
+            <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
+              <RefreshCw className="w-3 h-3" /> Refresh
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {(["service_titan", "google_ads", "meta"] as const).map((integ) => {
@@ -308,16 +326,14 @@ export default function Internal() {
                     <p className="text-red-400">{status!.errorCount} errors in recent history</p>
                   )}
                 </div>
-                {data?.tenants && data.tenants.length > 0 && (
-                  <button
-                    onClick={() => triggerSync(integ, data.tenants[0].tenantId)}
-                    disabled={syncLoading}
-                    className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
-                  >
-                    {syncLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                    Sync Now
-                  </button>
-                )}
+                <button
+                  onClick={() => triggerSync(integ)}
+                  disabled={syncLoading || (!syncTenantId && (!data?.tenants || data.tenants.length === 0))}
+                  className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                >
+                  {syncLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  Sync {syncTenantId ? "" : "(All)"}
+                </button>
               </div>
             );
           })}

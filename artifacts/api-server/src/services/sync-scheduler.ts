@@ -123,7 +123,7 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
       const formatted = formatCampaignRow(row);
 
       let [campaign] = await db.select().from(campaignsTable)
-        .where(and(eq(campaignsTable.tenantId, tenantId), eq(campaignsTable.externalId, formatted.externalId)))
+        .where(and(eq(campaignsTable.tenantId, tenantId), eq(campaignsTable.platform, "google_ads"), eq(campaignsTable.externalId, formatted.externalId)))
         .limit(1);
 
       if (!campaign) {
@@ -194,7 +194,7 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       const formatted = formatMetaInsight(insight);
 
       let [campaign] = await db.select().from(campaignsTable)
-        .where(and(eq(campaignsTable.tenantId, tenantId), eq(campaignsTable.externalId, formatted.externalId)))
+        .where(and(eq(campaignsTable.tenantId, tenantId), eq(campaignsTable.platform, "meta"), eq(campaignsTable.externalId, formatted.externalId)))
         .limit(1);
 
       if (!campaign) {
