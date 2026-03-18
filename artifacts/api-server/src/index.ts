@@ -1,4 +1,6 @@
-import app from "./app";
+import { createServer } from "http";
+import app, { sessionMiddleware } from "./app";
+import { initSocketIO } from "./socket";
 
 const rawPort = process.env["PORT"];
 
@@ -14,6 +16,9 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, () => {
+const httpServer = createServer(app);
+initSocketIO(httpServer, sessionMiddleware);
+
+httpServer.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });

@@ -140,6 +140,42 @@ paths:
                   message:
                     type: string
 
+  /leads/hud/queue:
+    get:
+      operationId: getHudQueue
+      tags: [leads]
+      summary: Get lead HUD focus queue (new, follow-ups, background)
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Categorized lead queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HudQueueResponse"
+
+  /leads/hud/stats:
+    get:
+      operationId: getHudStats
+      tags: [leads]
+      summary: Get lead coordinator performance stats for today
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: HUD performance statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HudStats"
+
   /leads:
     get:
       operationId: listLeads
@@ -1252,3 +1288,48 @@ components:
         category:
           type: string
       required: [tenantId, date, title, description]
+
+    HudQueueResponse:
+      type: object
+      properties:
+        newLeads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        followUps:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        background:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        total:
+          type: integer
+      required: [newLeads, followUps, background, total]
+
+    HudStats:
+      type: object
+      properties:
+        callsMadeToday:
+          type: integer
+        bookingsToday:
+          type: integer
+        bookingRate:
+          type: integer
+        commission:
+          type: integer
+        newLeadsToday:
+          type: integer
+        avgSpeedToLead:
+          type: integer
+        soldToday:
+          type: integer
+        bonusTier:
+          type: string
+          enum: [gold, silver, bronze, none]
+        bonusThreshold:
+          type: integer
+        nextBonusAt:
+          type: integer
+      required: [callsMadeToday, bookingsToday, bookingRate, commission, newLeadsToday, avgSpeedToLead, soldToday, bonusTier, bonusThreshold, nextBonusAt]

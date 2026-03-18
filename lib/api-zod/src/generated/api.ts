@@ -91,6 +91,112 @@ export const DeleteTenantResponse = zod.object({
 });
 
 /**
+ * @summary Get lead HUD focus queue (new, follow-ups, background)
+ */
+export const GetHudQueueQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetHudQueueResponse = zod.object({
+  newLeads: zod.array(
+    zod.object({
+      id: zod.number(),
+      tenantId: zod.number(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      phone: zod.string().nullish(),
+      email: zod.string().nullish(),
+      source: zod.string(),
+      leadType: zod.string().nullish(),
+      interestType: zod.string().nullish(),
+      status: zod.enum([
+        "new",
+        "contacted",
+        "booked",
+        "sold",
+        "lost",
+        "cancelled",
+      ]),
+      isNewCustomer: zod.boolean(),
+      matchedGclid: zod.string().nullish(),
+      assignedTo: zod.string().nullish(),
+      createdAt: zod.date(),
+    }),
+  ),
+  followUps: zod.array(
+    zod.object({
+      id: zod.number(),
+      tenantId: zod.number(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      phone: zod.string().nullish(),
+      email: zod.string().nullish(),
+      source: zod.string(),
+      leadType: zod.string().nullish(),
+      interestType: zod.string().nullish(),
+      status: zod.enum([
+        "new",
+        "contacted",
+        "booked",
+        "sold",
+        "lost",
+        "cancelled",
+      ]),
+      isNewCustomer: zod.boolean(),
+      matchedGclid: zod.string().nullish(),
+      assignedTo: zod.string().nullish(),
+      createdAt: zod.date(),
+    }),
+  ),
+  background: zod.array(
+    zod.object({
+      id: zod.number(),
+      tenantId: zod.number(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      phone: zod.string().nullish(),
+      email: zod.string().nullish(),
+      source: zod.string(),
+      leadType: zod.string().nullish(),
+      interestType: zod.string().nullish(),
+      status: zod.enum([
+        "new",
+        "contacted",
+        "booked",
+        "sold",
+        "lost",
+        "cancelled",
+      ]),
+      isNewCustomer: zod.boolean(),
+      matchedGclid: zod.string().nullish(),
+      assignedTo: zod.string().nullish(),
+      createdAt: zod.date(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Get lead coordinator performance stats for today
+ */
+export const GetHudStatsQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetHudStatsResponse = zod.object({
+  callsMadeToday: zod.number(),
+  bookingsToday: zod.number(),
+  bookingRate: zod.number(),
+  commission: zod.number(),
+  newLeadsToday: zod.number(),
+  avgSpeedToLead: zod.number(),
+  soldToday: zod.number(),
+  bonusTier: zod.enum(["gold", "silver", "bronze", "none"]),
+  bonusThreshold: zod.number(),
+  nextBonusAt: zod.number(),
+});
+
+/**
  * @summary List leads with optional filters
  */
 export const listLeadsQueryLimitDefault = 50;

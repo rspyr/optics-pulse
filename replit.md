@@ -84,6 +84,10 @@ All under `/api` prefix:
 - `PATCH /tenants/:tenantId` — update tenant
 - `DELETE /tenants/:tenantId` — soft-delete (deactivate)
 
+### Leads HUD
+- `GET /leads/hud/queue` — categorized lead queue (new, follow-ups, background) for HUD focus queue
+- `GET /leads/hud/stats` — coordinator performance stats (calls, bookings, booking rate, commission, speed-to-lead)
+
 ### Data
 - `GET /leads`, `GET /leads/:leadId`, `PATCH /leads/:leadId` — leads with filtering
 - `GET /campaigns`, `GET /campaigns/stats` — campaigns and daily stats
@@ -114,7 +118,7 @@ All under `/api` prefix:
 ### Agency Portal (super_admin, agency_user)
 - `/` — Command Center dashboard (KPI cards + spend vs revenue chart)
 - `/internal` — Agency God View: sortable cross-client table with conditional red/green formatting, ROAS filter, budget pacing bars, benchmarking vs agency average, click-to-drill-down lead modal
-- `/leads` — Leads HUD (speed-to-lead table with status filters)
+- `/leads` — Gamified Leads HUD: Focus Queue with real-time lead cards (countdown timers, source badges, priority sorting), Quick Actions (click-to-dial, SMS, email, voicemail script), disposition logging (Booked, Never Answered, Out of Area, etc.), commission ticker (+$20 animation on booking), performance stats (calls, bookings, booking rate, speed-to-lead, earned), smart queue tabs (New Leads / Touch These / Background), AI scheduling hints, screen flash + ding on new lead arrival via WebSocket
 - `/clients` — Client Portal preview
 - `/attribution` — Attribution Log (event ingestion & matching waterfall)
 - `/admin/tenants` — Tenant management (CRUD with inline edit)
@@ -123,7 +127,7 @@ All under `/api` prefix:
 
 ### Client Portal (client_admin, client_user) — "Searchlight Killer"
 - `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart
-- `/leads` — Leads view
+- `/leads` — Leads HUD (same gamified interface as agency, scoped to client's tenant)
 - `/attribution` — Attribution Log
 - `/settings` — Settings
 
@@ -145,8 +149,18 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ## Packages
 
+## WebSocket (Socket.IO)
+
+- Socket.IO server attached to the HTTP server via `src/socket.ts`
+- Path: `/api/socket.io`
+- Session middleware shared with Express for authentication
+- Unauthenticated connections are rejected
+- Tenant isolation: clients can only join their own tenant room; agency/admin can join any
+- Events: `new-lead` (emitted to tenant room when new lead arrives), `join-tenant` (client joins tenant room)
+- Demo mode: in development (`NODE_ENV !== 'production'`), auto-creates new leads every 30-60s
+
 ### `artifacts/api-server` (`@workspace/api-server`)
-Express 5 API server. Routes in `src/routes/`. Uses `@workspace/api-zod` for validation and `@workspace/db` for persistence. Session middleware with PostgreSQL store.
+Express 5 API server. Routes in `src/routes/`. Uses `@workspace/api-zod` for validation and `@workspace/db` for persistence. Session middleware with PostgreSQL store. Socket.IO for real-time lead notifications.
 
 ### `artifacts/marketing-os` (`@workspace/marketing-os`)
 React + Vite frontend. Dark mode only, branded with Söhne fonts. Uses `@workspace/api-client-react` for API calls. Auth context provides role-based routing.

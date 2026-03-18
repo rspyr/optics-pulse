@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable } from "@workspace/db";
-import { eq, and, count, desc, SQL } from "drizzle-orm";
+import { eq, and, count, desc, sql, SQL, inArray } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
+import { getHudStats, emitNewLead } from "../socket";
 
 const router: IRouter = Router();
 
@@ -26,6 +27,50 @@ router.get("/leads", async (req, res) => {
   ]);
 
   res.json({ leads, total: totalResult.count });
+});
+
+router.get("/leads/hud/queue", async (req, res) => {
+  const role = req.session.userRole;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
+    : req.session.tenantId ?? null;
+
+  const conditions: SQL[] = [];
+  if (tenantId) conditions.push(eq(leadsTable.tenantId, tenantId));
+  conditions.push(inArray(leadsTable.status, ["new", "contacted"]));
+
+  const where = and(...conditions);
+  const leads = await db.select().from(leadsTable).where(where).orderBy(desc(leadsTable.createdAt)).limit(100);
+
+  const now = Date.now();
+  const newLeads = leads.filter(l => l.status === "new");
+  const followUps = leads.filter(l => {
+    if (l.status !== "contacted") return false;
+    const age = now - new Date(l.updatedAt).getTime();
+    return age < 24 * 60 * 60 * 1000;
+  });
+  const background = leads.filter(l => {
+    if (l.status !== "contacted") return false;
+    const age = now - new Date(l.updatedAt).getTime();
+    return age >= 24 * 60 * 60 * 1000;
+  });
+
+  res.json({
+    newLeads,
+    followUps,
+    background,
+    total: leads.length,
+  });
+});
+
+router.get("/leads/hud/stats", async (req, res) => {
+  const role = req.session.userRole;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
+    : req.session.tenantId ?? null;
+
+  const stats = await getHudStats(tenantId);
+  res.json(stats);
 });
 
 router.get("/leads/:leadId", async (req, res) => {

@@ -34,9 +34,13 @@ import type {
   GetCampaignStatsParams,
   GetDashboardBenchmarksParams,
   GetDashboardOverviewParams,
+  GetHudQueueParams,
+  GetHudStatsParams,
   GetSpendRevenueChartParams,
   GetTenantPerformanceParams,
   HealthStatus,
+  HudQueueResponse,
+  HudStats,
   JobListResponse,
   Lead,
   LeadListResponse,
@@ -556,6 +560,194 @@ export const useDeleteTenant = <
 > => {
   return useMutation(getDeleteTenantMutationOptions(options));
 };
+
+/**
+ * @summary Get lead HUD focus queue (new, follow-ups, background)
+ */
+export const getGetHudQueueUrl = (params?: GetHudQueueParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/leads/hud/queue?${stringifiedParams}`
+    : `/api/leads/hud/queue`;
+};
+
+export const getHudQueue = async (
+  params?: GetHudQueueParams,
+  options?: RequestInit,
+): Promise<HudQueueResponse> => {
+  return customFetch<HudQueueResponse>(getGetHudQueueUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetHudQueueQueryKey = (params?: GetHudQueueParams) => {
+  return [`/api/leads/hud/queue`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetHudQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof getHudQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetHudQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getHudQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetHudQueueQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getHudQueue>>> = ({
+    signal,
+  }) => getHudQueue(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getHudQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetHudQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getHudQueue>>
+>;
+export type GetHudQueueQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get lead HUD focus queue (new, follow-ups, background)
+ */
+
+export function useGetHudQueue<
+  TData = Awaited<ReturnType<typeof getHudQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetHudQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getHudQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetHudQueueQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get lead coordinator performance stats for today
+ */
+export const getGetHudStatsUrl = (params?: GetHudStatsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/leads/hud/stats?${stringifiedParams}`
+    : `/api/leads/hud/stats`;
+};
+
+export const getHudStats = async (
+  params?: GetHudStatsParams,
+  options?: RequestInit,
+): Promise<HudStats> => {
+  return customFetch<HudStats>(getGetHudStatsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetHudStatsQueryKey = (params?: GetHudStatsParams) => {
+  return [`/api/leads/hud/stats`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetHudStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getHudStats>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetHudStatsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getHudStats>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetHudStatsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getHudStats>>> = ({
+    signal,
+  }) => getHudStats(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getHudStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetHudStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getHudStats>>
+>;
+export type GetHudStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get lead coordinator performance stats for today
+ */
+
+export function useGetHudStats<
+  TData = Awaited<ReturnType<typeof getHudStats>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetHudStatsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getHudStats>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetHudStatsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary List leads with optional filters

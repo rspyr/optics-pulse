@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -35,7 +35,7 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
-app.use(session({
+export const sessionMiddleware = session({
   store: new PgStore({
     pool: pool as never,
     tableName: "session",
@@ -57,7 +57,9 @@ app.use(session({
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
   },
-}));
+});
+
+app.use(sessionMiddleware);
 
 const currentDir = typeof __dirname !== "undefined"
   ? __dirname

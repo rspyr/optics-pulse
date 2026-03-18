@@ -1,120 +1,717 @@
-import { useListLeads } from "@workspace/api-client-react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useListLeads, useUpdateLead } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
-import { format } from "date-fns";
-import { Search, Filter, Phone, Mail, MessageSquare } from "lucide-react";
-import { useState } from "react";
+import { useAuth } from "@/components/auth-context";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Phone, Mail, MessageSquare, Mic,
+  DollarSign, TrendingUp, Clock, Zap,
+  ChevronDown, AlertTriangle, Target,
+  Flame, Award, Calendar, PhoneCall,
+  Star, Volume2
+} from "lucide-react";
 
-export default function Leads() {
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  
-  const { data, isLoading } = useListLeads({ limit: 50 });
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
-  // Fallback data when API is unavailable
-  const leads = data?.leads || [
-    { id: 1, firstName: "John", lastName: "Smith", source: "Google Ads", interestType: "Heat Pump", status: "new", createdAt: new Date().toISOString(), phone: "(555) 123-4567" },
-    { id: 2, firstName: "Sarah", lastName: "Johnson", source: "Meta Leads", interestType: "AC Repair", status: "contacted", createdAt: new Date(Date.now() - 3600000).toISOString(), phone: "(555) 987-6543" },
-    { id: 3, firstName: "Michael", lastName: "Brown", source: "Organic Search", interestType: "Full System", status: "booked", createdAt: new Date(Date.now() - 86400000).toISOString(), phone: "(555) 456-7890" },
-    { id: 4, firstName: "Emily", lastName: "Davis", source: "Google Ads", interestType: "Furnace", status: "sold", createdAt: new Date(Date.now() - 172800000).toISOString(), phone: "(555) 234-5678" },
-    { id: 5, firstName: "David", lastName: "Wilson", source: "Direct", interestType: "Maintenance", status: "lost", createdAt: new Date(Date.now() - 259200000).toISOString(), phone: "(555) 876-5432" },
-  ];
+const DISPOSITIONS = [
+  { value: "booked", label: "Booked", color: "emerald" },
+  { value: "never_answered", label: "Never Answered", color: "amber" },
+  { value: "out_of_area", label: "Out of Service Area", color: "red" },
+  { value: "looking_for_job", label: "Looking for Job", color: "gray" },
+  { value: "already_had_estimate", label: "Already Had Estimate", color: "blue" },
+  { value: "dont_remember", label: "Don't Remember Form", color: "gray" },
+  { value: "not_interested", label: "Not Interested", color: "red" },
+  { value: "callback_requested", label: "Callback Requested", color: "amber" },
+];
 
-  const filteredLeads = statusFilter === "all" ? leads : leads.filter(l => l.status === statusFilter);
+const SCRIPTS: Record<string, string> = {
+  "Google Ads": "Hi [NAME], this is [REP] from [COMPANY]. I see you were looking into [INTEREST] — we have availability this week. Would you like to schedule a free estimate?",
+  "Meta Leads": "Hey [NAME]! Thanks for filling out our form on Facebook. I'd love to help you with your [INTEREST] needs. Do you have a moment to chat about scheduling?",
+  "CallRail": "Hi [NAME], I'm returning your call about [INTEREST]. We'd love to get you on the schedule. What times work best for you this week?",
+  "Organic Search": "Hello [NAME], this is [REP] with [COMPANY]. You visited our website about [INTEREST] — we're running a special this month. Can I tell you about it?",
+  "Direct": "Hi [NAME], thank you for reaching out! I'd love to help you with [INTEREST]. Let me find the best time for an estimate.",
+  "Referral": "Hi [NAME]! You were referred to us for [INTEREST]. We'd love to take care of you. When would be a good time for a technician to come out?",
+};
 
-  const getStatusBadge = (status: string) => {
-    switch(status) {
-      case 'new': return <Badge variant="danger" className="animate-pulse">NEW LEAD</Badge>;
-      case 'contacted': return <Badge variant="warning">CONTACTED</Badge>;
-      case 'booked': return <Badge variant="success">BOOKED</Badge>;
-      case 'sold': return <Badge variant="default" className="bg-primary/20 text-white border-primary/50">SOLD</Badge>;
-      case 'lost': return <Badge variant="neutral">LOST</Badge>;
-      default: return <Badge variant="neutral">{status.toUpperCase()}</Badge>;
+const TEXT_TEMPLATES = [
+  "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!",
+  "Hey [NAME], we have same-day availability for [INTEREST] estimates. Want me to reserve a spot for you today?",
+];
+
+function getSchedulingHint(lead: LeadData): string | null {
+  if (!lead.updatedAt || !lead.createdAt) return null;
+  const created = new Date(lead.createdAt);
+  const updated = new Date(lead.updatedAt);
+  const hoursSinceCreated = (Date.now() - created.getTime()) / (1000 * 60 * 60);
+  const createdHour = created.getHours();
+  const createdDay = created.getDay();
+
+  if (lead.status === "contacted" && hoursSinceCreated > 48) {
+    if (createdDay >= 1 && createdDay <= 5 && createdHour >= 8 && createdHour <= 17) {
+      return "This lead hasn't answered M-F 8-5. Try Saturday 10-12 or weekday evening 6-7 PM.";
     }
+    if (createdHour >= 18 || createdHour <= 7) {
+      return "Lead submitted after hours. Try calling during business hours 9-11 AM.";
+    }
+    return "Multiple contact attempts failed. Try a different time of day or send a text first.";
+  }
+
+  if (hoursSinceCreated > 24 && lead.status === "new") {
+    return "This lead is over 24 hours old and hasn't been contacted. Prioritize immediately!";
+  }
+
+  if (lead.disposition === "callback_requested") {
+    return "Callback was requested. Double-dial: try now and again in 2 hours.";
+  }
+
+  return null;
+}
+
+interface LeadData {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone?: string | null;
+  email?: string | null;
+  source: string;
+  leadType?: string | null;
+  interestType?: string | null;
+  status: string;
+  disposition?: string | null;
+  isNewCustomer?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  tenantId?: number;
+}
+
+interface HudStats {
+  callsMadeToday: number;
+  bookingsToday: number;
+  bookingRate: number;
+  commission: number;
+  newLeadsToday: number;
+  avgSpeedToLead: number;
+  soldToday: number;
+  bonusTier: string;
+  bonusThreshold: number;
+  nextBonusAt: number;
+}
+
+function useHudQueue() {
+  const [queue, setQueue] = useState<{ newLeads: LeadData[]; followUps: LeadData[]; background: LeadData[] }>({ newLeads: [], followUps: [], background: [] });
+  const [loading, setLoading] = useState(true);
+
+  const fetchQueue = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/leads/hud/queue`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setQueue(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch HUD queue:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchQueue();
+    const interval = setInterval(fetchQueue, 15000);
+    return () => clearInterval(interval);
+  }, [fetchQueue]);
+
+  return { queue, loading, refetch: fetchQueue };
+}
+
+function useHudStats() {
+  const [stats, setStats] = useState<HudStats>({
+    callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
+    newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
+    bonusTier: "none", bonusThreshold: 30, nextBonusAt: 30,
+  });
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/leads/hud/stats`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setStats(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch HUD stats:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, [fetchStats]);
+
+  return { stats, refetch: fetchStats };
+}
+
+function useSocketIO() {
+  const [newLeadFlash, setNewLeadFlash] = useState(false);
+  const [latestLead, setLatestLead] = useState<LeadData | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  useEffect(() => {
+    const audio = new Audio("data:audio/wav;base64,UklGRl9vT19teleVlfT0+AU5EIBAAAABkAAAAFAAMAeAAAAAA=");
+    audio.volume = 0.3;
+    audioRef.current = audio;
+  }, []);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+
+    const connect = () => {
+      try {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const host = window.location.host;
+        ws = new WebSocket(`${protocol}//${host}/api/socket.io/?EIO=4&transport=websocket`);
+
+        ws.onmessage = (event) => {
+          const data = event.data as string;
+          if (data.includes('"new-lead"') || data.includes('"new-lead-global"')) {
+            try {
+              const match = data.match(/\[.*$/);
+              if (match) {
+                const parsed = JSON.parse(match[0]);
+                if (parsed[1]) {
+                  setLatestLead(parsed[1]);
+                  setNewLeadFlash(true);
+                  if (soundEnabled && audioRef.current) {
+                    audioRef.current.play().catch(() => {});
+                  }
+                  setTimeout(() => setNewLeadFlash(false), 3000);
+                }
+              }
+            } catch {}
+          }
+        };
+
+        ws.onclose = () => {
+          reconnectTimer = setTimeout(connect, 5000);
+        };
+      } catch {
+        reconnectTimer = setTimeout(connect, 5000);
+      }
+    };
+
+    connect();
+
+    return () => {
+      ws?.close();
+      clearTimeout(reconnectTimer);
+    };
+  }, [soundEnabled]);
+
+  return { newLeadFlash, latestLead, soundEnabled, setSoundEnabled };
+}
+
+function LeadTimer({ createdAt }: { createdAt: string }) {
+  const [elapsed, setElapsed] = useState("");
+  const [urgency, setUrgency] = useState<"green" | "amber" | "red">("green");
+
+  useEffect(() => {
+    const update = () => {
+      const diff = Date.now() - new Date(createdAt).getTime();
+      const seconds = Math.floor(diff / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+
+      if (hours > 0) {
+        setElapsed(`${hours}h ${minutes % 60}m`);
+      } else if (minutes > 0) {
+        setElapsed(`${minutes}m ${seconds % 60}s`);
+      } else {
+        setElapsed(`${seconds}s`);
+      }
+
+      if (minutes >= 5) setUrgency("red");
+      else if (minutes >= 2) setUrgency("amber");
+      else setUrgency("green");
+    };
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [createdAt]);
+
+  const colors = {
+    green: "text-emerald-400",
+    amber: "text-amber-400 animate-pulse",
+    red: "text-red-400 animate-pulse",
   };
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+    <span className={cn("font-mono text-sm font-bold tabular-nums", colors[urgency])}>
+      <Clock className="w-3.5 h-3.5 inline mr-1" />
+      {elapsed}
+    </span>
+  );
+}
+
+function CommissionTicker({ amount, show }: { amount: number; show: boolean }) {
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.5 }}
+          animate={{ opacity: 1, y: -30, scale: 1.2 }}
+          exit={{ opacity: 0, y: -60, scale: 0.8 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="fixed top-20 right-10 z-50 pointer-events-none"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-4xl font-display text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.8)]">
+              +${amount}
+            </span>
+            <span className="text-2xl">💰</span>
+          </div>
+          <div className="text-center text-emerald-300 text-sm font-bold mt-1 animate-pulse">
+            BING!
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function LeadCard({
+  lead,
+  isNew,
+  onDisposition,
+  isProcessing,
+}: {
+  lead: LeadData;
+  isNew: boolean;
+  onDisposition: (leadId: number, disposition: string, status: string) => void;
+  isProcessing: boolean;
+}) {
+  const [showDisposition, setShowDisposition] = useState(false);
+  const [showScript, setShowScript] = useState(false);
+  const hint = getSchedulingHint(lead);
+  const script = SCRIPTS[lead.source] || SCRIPTS["Direct"];
+  const personalizedScript = script
+    .replace("[NAME]", lead.firstName)
+    .replace("[INTEREST]", lead.interestType || "HVAC service")
+    .replace("[REP]", "your name")
+    .replace("[COMPANY]", "our company");
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, x: -20, scale: 0.95 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 20, scale: 0.95 }}
+      className={cn(
+        "relative rounded-xl border p-4 transition-all duration-300",
+        isNew
+          ? "bg-gradient-to-r from-red-500/10 via-card/80 to-card/80 border-red-500/30 shadow-[0_0_30px_rgba(242,5,5,0.15)]"
+          : "bg-card/60 border-white/5 hover:border-white/10"
+      )}
+    >
+      {isNew && (
+        <div className="absolute -top-2 -right-2">
+          <span className="relative flex h-5 w-5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+            <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 items-center justify-center">
+              <Zap className="w-3 h-3 text-white" />
+            </span>
+          </span>
+        </div>
+      )}
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-2">
+            <h3 className="font-display text-lg text-white truncate">
+              {lead.firstName} {lead.lastName}
+            </h3>
+            <Badge variant={isNew ? "danger" : lead.status === "contacted" ? "warning" : "neutral"}>
+              {isNew ? "NEW" : lead.status.toUpperCase()}
+            </Badge>
+            {lead.isNewCustomer && (
+              <Badge variant="success" className="text-[10px]">NEW CUSTOMER</Badge>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+            <span className="flex items-center gap-1.5">
+              <span className={cn(
+                "w-2 h-2 rounded-full",
+                lead.source.includes("Google") ? "bg-blue-400" :
+                lead.source.includes("Meta") ? "bg-indigo-400" :
+                lead.source.includes("Call") ? "bg-green-400" : "bg-gray-400"
+              )} />
+              {lead.source}
+            </span>
+            {lead.interestType && (
+              <span className="text-white/70">{lead.interestType}</span>
+            )}
+            {lead.leadType && (
+              <span className="text-white/50 text-xs">{lead.leadType}</span>
+            )}
+            {lead.phone && (
+              <span className="text-white/60 font-mono text-xs">{lead.phone}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-2">
+          <LeadTimer createdAt={lead.createdAt} />
+        </div>
+      </div>
+
+      {hint && (
+        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+          <Calendar className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-300">{hint}</p>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        <a
+          href={lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, "")}` : "#"}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+        >
+          <Phone className="w-3.5 h-3.5" /> Call
+        </a>
+        <button
+          onClick={() => {
+            if (lead.phone) {
+              const msg = TEXT_TEMPLATES[0]
+                .replace("[NAME]", lead.firstName)
+                .replace("[INTEREST]", lead.interestType || "HVAC")
+                .replace("[REP]", "your name")
+                .replace("[COMPANY]", "our company");
+              window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(msg)}`);
+            }
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium hover:bg-blue-500/20 transition-colors"
+        >
+          <MessageSquare className="w-3.5 h-3.5" /> Text
+        </button>
+        <a
+          href={lead.email ? `mailto:${lead.email}?subject=Your HVAC Inquiry&body=${encodeURIComponent(`Hi ${lead.firstName},\n\nThank you for your interest in ${lead.interestType || 'our HVAC services'}. I'd love to schedule a time to discuss your needs.\n\nBest regards`)}` : "#"}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-medium hover:bg-purple-500/20 transition-colors"
+        >
+          <Mail className="w-3.5 h-3.5" /> Email
+        </a>
+        <button
+          onClick={() => setShowScript(!showScript)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/60 text-xs font-medium hover:bg-white/10 transition-colors"
+        >
+          <Mic className="w-3.5 h-3.5" /> {showScript ? "Hide" : "Script"}
+        </button>
+
+        <div className="ml-auto relative">
+          <button
+            onClick={() => setShowDisposition(!showDisposition)}
+            disabled={isProcessing}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+              "bg-white/5 border border-white/10 text-white/60 hover:bg-white/10",
+              isProcessing && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <Target className="w-3.5 h-3.5" />
+            {isProcessing ? "Saving..." : "Log Outcome"}
+            <ChevronDown className="w-3 h-3" />
+          </button>
+          {showDisposition && !isProcessing && (
+            <div className="absolute right-0 mt-1 w-52 bg-card border border-white/10 rounded-lg shadow-2xl z-20 overflow-hidden">
+              {DISPOSITIONS.map(d => (
+                <button
+                  key={d.value}
+                  onClick={() => {
+                    const newStatus = d.value === "booked" ? "booked" : "contacted";
+                    onDisposition(lead.id, d.value, newStatus);
+                    setShowDisposition(false);
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2"
+                >
+                  <span className={cn(
+                    "w-2 h-2 rounded-full",
+                    d.color === "emerald" ? "bg-emerald-400" :
+                    d.color === "amber" ? "bg-amber-400" :
+                    d.color === "red" ? "bg-red-400" :
+                    d.color === "blue" ? "bg-blue-400" : "bg-gray-400"
+                  )} />
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showScript && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/5">
+              <p className="text-xs text-white/50 uppercase tracking-wider mb-1.5 font-medium">Call Script — {lead.source}</p>
+              <p className="text-sm text-gray-300 leading-relaxed">{personalizedScript}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+export default function Leads() {
+  const { queue, loading, refetch } = useHudQueue();
+  const { stats, refetch: refetchStats } = useHudStats();
+  const { newLeadFlash, latestLead, soundEnabled, setSoundEnabled } = useSocketIO();
+  const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
+  const [showCommission, setShowCommission] = useState(false);
+  const [activeTab, setActiveTab] = useState<"new" | "followup" | "background">("new");
+
+  useEffect(() => {
+    if (latestLead) {
+      refetch();
+      refetchStats();
+    }
+  }, [latestLead, refetch, refetchStats]);
+
+  const handleDisposition = async (leadId: number, disposition: string, status: string) => {
+    setProcessingLeads(prev => new Set(prev).add(leadId));
+    try {
+      const res = await fetch(`${API_BASE}/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ disposition, status }),
+      });
+      if (res.ok) {
+        if (disposition === "booked") {
+          setShowCommission(true);
+          setTimeout(() => setShowCommission(false), 2000);
+        }
+        await refetch();
+        await refetchStats();
+      }
+    } catch (e) {
+      console.error("Failed to update disposition:", e);
+    } finally {
+      setProcessingLeads(prev => {
+        const next = new Set(prev);
+        next.delete(leadId);
+        return next;
+      });
+    }
+  };
+
+  const activeLeads = activeTab === "new" ? queue.newLeads : activeTab === "followup" ? queue.followUps : queue.background;
+
+  const tierColors = {
+    gold: "from-amber-400 to-yellow-500",
+    silver: "from-gray-300 to-gray-400",
+    bronze: "from-orange-400 to-orange-600",
+    none: "from-gray-600 to-gray-700",
+  };
+
+  return (
+    <div className="relative min-h-screen">
+      <AnimatePresence>
+        {newLeadFlash && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0.3, 0, 0.2, 0] }}
+            transition={{ duration: 1.5 }}
+            className="fixed inset-0 bg-red-500 pointer-events-none z-40"
+          />
+        )}
+      </AnimatePresence>
+
+      <CommissionTicker amount={20} show={showCommission} />
+
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <GradientHeading className="text-3xl md:text-4xl mb-2">Leads HUD</GradientHeading>
-          <p className="font-sub text-muted-foreground text-sm tracking-wide">SPEED-TO-LEAD COMMAND CENTER</p>
+          <GradientHeading className="text-3xl md:text-4xl mb-1">
+            <Flame className="w-8 h-8 inline text-primary mr-2" />
+            Leads HUD
+          </GradientHeading>
+          <p className="font-sub text-muted-foreground text-sm tracking-[0.2em] uppercase">
+            Speed-to-Lead Command Center
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className={cn(
+              "p-2 rounded-lg border transition-colors",
+              soundEnabled
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                : "bg-white/5 border-white/10 text-white/40"
+            )}
+            title={soundEnabled ? "Sound ON" : "Sound OFF"}
+          >
+            <Volume2 className="w-4 h-4" />
+          </button>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card/60 border border-white/5">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
+            </span>
+            <span className="text-xs text-emerald-400 font-medium">LIVE</span>
+          </div>
         </div>
       </header>
 
-      <PremiumCard className="p-0 overflow-hidden">
-        <div className="p-4 border-b border-white/5 flex flex-col sm:flex-row gap-4 justify-between items-center bg-white/[0.02]">
-          <div className="relative w-full sm:w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Search leads by name, phone..." 
-              className="w-full bg-background border border-white/10 text-white text-sm rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all"
-            />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <PremiumCard className="p-4 !hover:border-white/10">
+          <div className="flex items-center justify-between mb-2">
+            <PhoneCall className="w-5 h-5 text-blue-400" />
+            <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
           </div>
-          <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
-            {['all', 'new', 'contacted', 'booked', 'sold'].map(s => (
-              <button 
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={cn(
-                  "px-4 py-2 text-xs font-medium rounded-lg uppercase tracking-wider transition-colors whitespace-nowrap",
-                  statusFilter === s 
-                    ? "bg-white/10 text-white border border-white/20" 
-                    : "text-muted-foreground hover:text-white hover:bg-white/5 border border-transparent"
-                )}
-              >
-                {s}
-              </button>
+          <p className="text-2xl font-display text-white">{stats.callsMadeToday}</p>
+          <p className="text-xs text-muted-foreground mt-1">calls made today</p>
+        </PremiumCard>
+
+        <PremiumCard className="p-4 !hover:border-white/10">
+          <div className="flex items-center justify-between mb-2">
+            <Target className="w-5 h-5 text-emerald-400" />
+            <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Booked</span>
+          </div>
+          <p className="text-2xl font-display text-white">{stats.bookingsToday}</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
+        </PremiumCard>
+
+        <PremiumCard className="p-4 !hover:border-white/10">
+          <div className="flex items-center justify-between mb-2">
+            <Clock className="w-5 h-5 text-amber-400" />
+            <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
+          </div>
+          <p className="text-2xl font-display text-white">{stats.avgSpeedToLead}s</p>
+          <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
+        </PremiumCard>
+
+        <PremiumCard className={cn("p-4 !hover:border-white/10 relative overflow-hidden")}>
+          <div className={cn(
+            "absolute inset-0 opacity-10 bg-gradient-to-br",
+            tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none
+          )} />
+          <div className="relative">
+            <div className="flex items-center justify-between mb-2">
+              <DollarSign className="w-5 h-5 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
+            </div>
+            <p className="text-2xl font-display text-emerald-400">${stats.commission}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {stats.bonusTier !== "none" ? (
+                <span className="text-amber-400">
+                  <Award className="w-3 h-3 inline mr-1" />
+                  {stats.bonusTier.toUpperCase()} tier
+                </span>
+              ) : (
+                `${stats.nextBonusAt - stats.bookingRate}% to bonus`
+              )}
+            </p>
+          </div>
+        </PremiumCard>
+      </div>
+
+      <div className="flex gap-2 mb-4">
+        {[
+          { key: "new" as const, label: "New Leads", count: queue.newLeads.length, color: "text-red-400", ping: queue.newLeads.length > 0 },
+          { key: "followup" as const, label: "Touch These", count: queue.followUps.length, color: "text-amber-400", ping: false },
+          { key: "background" as const, label: "Background", count: queue.background.length, color: "text-gray-400", ping: false },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2",
+              activeTab === tab.key
+                ? "bg-white/10 text-white border border-white/20"
+                : "text-muted-foreground hover:text-white hover:bg-white/5 border border-transparent"
+            )}
+          >
+            {tab.ping && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+              </span>
+            )}
+            {tab.label}
+            <span className={cn("text-xs font-mono", tab.color)}>{tab.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center mx-auto mb-4 animate-pulse">
+              <Zap className="w-6 h-6 text-primary" />
+            </div>
+            <p className="text-muted-foreground text-sm">Loading focus queue...</p>
+          </div>
+        </div>
+      ) : activeLeads.length === 0 ? (
+        <PremiumCard className="py-16 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
+            <Star className="w-8 h-8 text-emerald-400" />
+          </div>
+          <h3 className="font-display text-xl text-white mb-2">
+            {activeTab === "new" ? "No New Leads" : activeTab === "followup" ? "No Follow-ups" : "Queue Clear"}
+          </h3>
+          <p className="text-muted-foreground text-sm max-w-md mx-auto">
+            {activeTab === "new"
+              ? "Waiting for new leads to arrive. The screen will flash and ding when one comes in."
+              : activeTab === "followup"
+              ? "All follow-ups are handled. Great work!"
+              : "No background leads need attention right now."}
+          </p>
+        </PremiumCard>
+      ) : (
+        <div className="space-y-3">
+          <AnimatePresence mode="popLayout">
+            {activeLeads.map(lead => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                isNew={lead.status === "new"}
+                onDisposition={handleDisposition}
+                isProcessing={processingLeads.has(lead.id)}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {activeTab === "new" && queue.newLeads.length === 0 && queue.followUps.length > 0 && (
+        <div className="mt-6">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400" />
+            <h3 className="text-sm font-medium text-amber-400 uppercase tracking-wider">Re-engagement Queue</h3>
+          </div>
+          <div className="space-y-3">
+            {queue.followUps.slice(0, 3).map(lead => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                isNew={false}
+                onDisposition={handleDisposition}
+                isProcessing={processingLeads.has(lead.id)}
+              />
             ))}
           </div>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-white/5 bg-background/50">
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Lead</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Source</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Interest</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Time</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {isLoading && leads.length === 0 ? (
-                <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">Loading leads...</td></tr>
-              ) : filteredLeads.map((lead) => (
-                <tr key={lead.id} className="group hover:bg-white/[0.02] transition-colors">
-                  <td className="p-4">
-                    <div className="font-medium text-white">{lead.firstName} {lead.lastName}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{lead.phone}</div>
-                  </td>
-                  <td className="p-4 text-sm text-gray-300">{lead.source}</td>
-                  <td className="p-4 text-sm text-gray-300">{lead.interestType || '-'}</td>
-                  <td className="p-4">{getStatusBadge(lead.status)}</td>
-                  <td className="p-4 text-sm text-muted-foreground">
-                    {format(new Date(lead.createdAt), 'MMM d, h:mm a')}
-                  </td>
-                  <td className="p-4 text-right">
-                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button className="p-2 bg-white/5 hover:bg-primary/20 hover:text-primary rounded-md text-muted-foreground transition-colors" title="Call">
-                        <Phone className="w-4 h-4" />
-                      </button>
-                      <button className="p-2 bg-white/5 hover:bg-primary/20 hover:text-primary rounded-md text-muted-foreground transition-colors" title="SMS">
-                        <MessageSquare className="w-4 h-4" />
-                      </button>
-                      <button className="p-2 bg-white/5 hover:bg-primary/20 hover:text-primary rounded-md text-muted-foreground transition-colors" title="Email">
-                        <Mail className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </PremiumCard>
+      )}
     </div>
   );
 }

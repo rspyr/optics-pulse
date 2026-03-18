@@ -421,9 +421,47 @@ export interface CreateChangeLogInput {
   category?: string;
 }
 
+export interface HudQueueResponse {
+  newLeads: Lead[];
+  followUps: Lead[];
+  background: Lead[];
+  total: number;
+}
+
+export type HudStatsBonusTier =
+  (typeof HudStatsBonusTier)[keyof typeof HudStatsBonusTier];
+
+export const HudStatsBonusTier = {
+  gold: "gold",
+  silver: "silver",
+  bronze: "bronze",
+  none: "none",
+} as const;
+
+export interface HudStats {
+  callsMadeToday: number;
+  bookingsToday: number;
+  bookingRate: number;
+  commission: number;
+  newLeadsToday: number;
+  avgSpeedToLead: number;
+  soldToday: number;
+  bonusTier: HudStatsBonusTier;
+  bonusThreshold: number;
+  nextBonusAt: number;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
+};
+
+export type GetHudQueueParams = {
+  tenantId?: number;
+};
+
+export type GetHudStatsParams = {
+  tenantId?: number;
 };
 
 export type ListLeadsParams = {
