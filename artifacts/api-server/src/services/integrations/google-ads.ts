@@ -134,7 +134,7 @@ export async function uploadOfflineConversions(
   try {
     await googleAdsFetch(
       config,
-      `/customers/${customerId}/conversionUploads:uploadClickConversions`,
+      `/customers/${customerId}:uploadClickConversions`,
       {
         method: "POST",
         body: JSON.stringify({

@@ -51,16 +51,18 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     .limit(50);
 
   const integrations = ["service_titan", "google_ads", "meta"];
-  const statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }> = {};
+  const statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; latestRunAt: string | null }> = {};
 
   for (const integ of integrations) {
     const integLogs = recentLogs.filter((l) => l.integration === integ);
     const latest = integLogs[0];
+    const lastSuccessful = integLogs.find((l) => l.status === "completed");
     statusByIntegration[integ] = {
-      lastSync: latest?.completedAt?.toISOString() || null,
+      lastSync: lastSuccessful?.completedAt?.toISOString() || null,
       lastStatus: latest?.status || "never",
       lastRecords: latest?.recordsProcessed || 0,
       errorCount: integLogs.filter((l) => l.status === "error").length,
+      latestRunAt: latest?.completedAt?.toISOString() || null,
     };
   }
 

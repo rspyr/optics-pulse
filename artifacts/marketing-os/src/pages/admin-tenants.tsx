@@ -389,8 +389,8 @@ export default function AdminTenants() {
                                   )}
                                 </div>
                                 <div className="text-xs text-muted-foreground space-y-1">
-                                  <div>Last Sync: {status.lastSync ? new Date(status.lastSync).toLocaleString() : "Never"}</div>
-                                  <div>Status: <span className={status.lastStatus === "completed" ? "text-emerald-400" : status.lastStatus === "error" ? "text-red-400" : "text-muted-foreground"}>{status.lastStatus}</span></div>
+                                  <div>Last Success: {status.lastSync ? new Date(status.lastSync).toLocaleString() : "Never"}</div>
+                                  <div>Latest Run: <span className={status.lastStatus === "completed" ? "text-emerald-400" : status.lastStatus === "error" ? "text-red-400" : "text-muted-foreground"}>{status.lastStatus}</span></div>
                                   <div>Records: {status.lastRecords}</div>
                                   {status.errorCount > 0 && <div className="text-red-400">Errors (recent): {status.errorCount}</div>}
                                 </div>
