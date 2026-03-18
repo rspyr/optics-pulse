@@ -5,6 +5,8 @@ import crypto from "crypto";
 
 const router: IRouter = Router();
 
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "dev-webhook-secret";
+
 function hashValue(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
@@ -13,8 +15,25 @@ function normalizePhone(phone: string): string {
   return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 }
 
+function verifySignature(payload: string, signature: string | undefined): boolean {
+  if (process.env.NODE_ENV === "development" && !signature) {
+    return true;
+  }
+  if (!signature) return false;
+  const expected = crypto.createHmac("sha256", WEBHOOK_SECRET).update(payload).digest("hex");
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
 router.post("/webhooks/ingest", async (req, res) => {
   try {
+    const rawBody = JSON.stringify(req.body);
+    const signature = req.headers["x-mos-signature"] as string | undefined;
+
+    if (!verifySignature(rawBody, signature)) {
+      res.status(401).json({ success: false, eventId: 0, message: "Invalid webhook signature" });
+      return;
+    }
+
     const body = IngestWebhookBody.parse(req.body);
     const { source, data } = body;
 

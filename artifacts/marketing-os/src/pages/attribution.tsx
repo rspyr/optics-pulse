@@ -2,15 +2,28 @@ import { useListAttributionEvents } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { format } from "date-fns";
 
-export default function Attribution() {
-  const { data, isLoading } = useListAttributionEvents({});
+type EventRow = {
+  id: number;
+  eventType: string;
+  matchLevel: string;
+  utmSource?: string | null;
+  gclid?: string | null;
+  hashedPhone?: string | null;
+  hashedEmail?: string | null;
+  billingAddress?: string | null;
+  fbclid?: string | null;
+  createdAt: string;
+};
 
-  const mockEvents = data?.events || [
-    { id: 1, eventType: "click", source: "Google Ads", matchLevel: "diamond", gclid: "CjwKCAjw7...", createdAt: new Date().toISOString() },
-    { id: 2, eventType: "call", source: "CallRail DNI", matchLevel: "golden", hashedPhone: "e3b0c44...", createdAt: new Date(Date.now() - 3600000).toISOString() },
-    { id: 3, eventType: "form_fill", source: "GHL Widget", matchLevel: "silver", hashedEmail: "8a9b2c3...", createdAt: new Date(Date.now() - 7200000).toISOString() },
-    { id: 4, eventType: "call", source: "CallRail Organic", matchLevel: "bronze", billingAddress: "123 Main St...", createdAt: new Date(Date.now() - 86400000).toISOString() },
-    { id: 5, eventType: "click", source: "Meta CAPI", matchLevel: "unmatched", fbclid: "IwAR2xyz...", createdAt: new Date(Date.now() - 172800000).toISOString() },
+export default function Attribution() {
+  const { data } = useListAttributionEvents({});
+
+  const events: EventRow[] = (data?.events as EventRow[] | undefined) || [
+    { id: 1, eventType: "click", utmSource: "google", matchLevel: "diamond", gclid: "CjwKCAjw7...", createdAt: new Date().toISOString() },
+    { id: 2, eventType: "call", utmSource: "callrail", matchLevel: "golden", hashedPhone: "e3b0c44...", createdAt: new Date(Date.now() - 3600000).toISOString() },
+    { id: 3, eventType: "form_fill", utmSource: "ghl", matchLevel: "silver", hashedEmail: "8a9b2c3...", createdAt: new Date(Date.now() - 7200000).toISOString() },
+    { id: 4, eventType: "call", utmSource: "callrail", matchLevel: "bronze", billingAddress: "123 Main St...", createdAt: new Date(Date.now() - 86400000).toISOString() },
+    { id: 5, eventType: "click", utmSource: "meta", matchLevel: "unmatched", fbclid: "IwAR2xyz...", createdAt: new Date(Date.now() - 172800000).toISOString() },
   ];
 
   const getMatchBadge = (level: string) => {
@@ -43,11 +56,11 @@ export default function Attribution() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {mockEvents.map((ev) => (
+              {events.map((ev) => (
                 <tr key={ev.id} className="group hover:bg-white/[0.02] transition-colors font-mono text-sm">
                   <td className="p-4 text-muted-foreground">{format(new Date(ev.createdAt), 'MM/dd HH:mm:ss')}</td>
                   <td className="p-4 text-white uppercase">{ev.eventType.replace('_', ' ')}</td>
-                  <td className="p-4 text-gray-400">{ev.source}</td>
+                  <td className="p-4 text-gray-400">{ev.utmSource || ev.eventType}</td>
                   <td className="p-4">{getMatchBadge(ev.matchLevel)}</td>
                   <td className="p-4 text-muted-foreground truncate max-w-[200px]">
                     {ev.gclid || ev.hashedPhone || ev.hashedEmail || ev.billingAddress || ev.fbclid || 'N/A'}
