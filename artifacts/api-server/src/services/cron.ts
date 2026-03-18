@@ -1,4 +1,5 @@
 import { runScheduledReconciliation } from "./reconciliation";
+import { setNextScheduledRunGetter } from "./reconciliation";
 
 let cronTimer: ReturnType<typeof setTimeout> | null = null;
 let cronHour = 3;
@@ -34,9 +35,18 @@ function scheduleNext() {
   }, delay);
 }
 
-export function startReconciliationCron(hour: number = 3, minute: number = 0) {
-  cronHour = hour;
-  cronMinute = minute;
+export function startReconciliationCron(hour?: number, minute?: number) {
+  const envHour = process.env["RECON_CRON_HOUR"];
+  const envMinute = process.env["RECON_CRON_MINUTE"];
+
+  cronHour = envHour ? parseInt(envHour, 10) : (hour ?? 3);
+  cronMinute = envMinute ? parseInt(envMinute, 10) : (minute ?? 0);
+
+  if (isNaN(cronHour) || cronHour < 0 || cronHour > 23) cronHour = 3;
+  if (isNaN(cronMinute) || cronMinute < 0 || cronMinute > 59) cronMinute = 0;
+
+  setNextScheduledRunGetter(() => getNextRunTime().toISOString());
+
   if (cronTimer) clearTimeout(cronTimer);
   scheduleNext();
   console.log(`[Cron] Reconciliation cron initialized (daily at ${String(cronHour).padStart(2, "0")}:${String(cronMinute).padStart(2, "0")})`);

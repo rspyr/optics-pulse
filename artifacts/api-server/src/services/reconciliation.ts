@@ -62,6 +62,10 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     let matched = false;
     let matchedGclid: string | null = null;
 
+    const nameParts = job.customerName.split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+
     if (job.matchedGclid) {
       const [event] = await db.select().from(attributionEventsTable)
         .where(and(
@@ -87,19 +91,41 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       }
     }
 
-    const gclidEvents = await db.select().from(attributionEventsTable)
-      .where(and(
-        eq(attributionEventsTable.tenantId, job.tenantId),
-        isNotNull(attributionEventsTable.gclid)
-      ));
-
-    const nameParts = job.customerName.split(" ");
-    const firstName = nameParts[0] || "";
-    const lastName = nameParts.slice(1).join(" ") || "";
-
-    const leads = await db.select().from(leadsTable)
+    const matchingLeads = await db.select().from(leadsTable)
       .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)))
       .limit(20);
+
+    let diamondViaLead = false;
+    for (const lead of matchingLeads) {
+      if (!lead.matchedGclid) continue;
+      const [gclidEvent] = await db.select().from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, job.tenantId),
+          eq(attributionEventsTable.gclid, lead.matchedGclid)
+        ))
+        .limit(1);
+      if (gclidEvent) {
+        matchedGclid = lead.matchedGclid;
+        await db.update(jobsTable).set({
+          matchLevel: "diamond",
+          matchedGclid: matchedGclid,
+          updatedAt: new Date(),
+        }).where(eq(jobsTable.id, job.id));
+        await db.update(attributionEventsTable).set({
+          matchLevel: "diamond",
+          matchConfidence: 1.0,
+        }).where(eq(attributionEventsTable.id, gclidEvent.id));
+        results.diamond++;
+        diamondViaLead = true;
+        if (matchedGclid && job.revenue > 0) {
+          ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+        }
+        break;
+      }
+    }
+    if (diamondViaLead) continue;
+
+    const leads = matchingLeads;
 
     for (const lead of leads) {
       if (lead.phone) {
@@ -167,40 +193,46 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       .limit(20);
 
     let bronzeMatched = false;
-    for (const addrLead of addressLeads) {
-      if (!addrLead.lastName || addrLead.lastName.toLowerCase() !== lastName.toLowerCase()) continue;
+    if (lastName) {
+      const normalizedLastName = lastName.trim().toLowerCase();
 
       const addressEvents = await db.select().from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.tenantId, job.tenantId),
           isNotNull(attributionEventsTable.billingAddress)
         ))
-        .limit(20);
+        .limit(50);
 
       for (const addrEvent of addressEvents) {
         if (!addrEvent.billingAddress) continue;
-        const normalizedEventAddr = normalizeAddress(addrEvent.billingAddress);
-        const lastNameInAddr = normalizedEventAddr.includes(lastName.toLowerCase());
-        if (!lastNameInAddr) continue;
+        const normalizedAddr = normalizeAddress(addrEvent.billingAddress);
+        if (!normalizedAddr.includes(normalizedLastName)) continue;
 
-        matchedGclid = addrEvent.gclid || null;
-        await db.update(jobsTable).set({
-          matchLevel: "bronze",
-          matchedGclid: matchedGclid,
-          updatedAt: new Date(),
-        }).where(eq(jobsTable.id, job.id));
-        await db.update(attributionEventsTable).set({
-          matchLevel: "bronze",
-          matchConfidence: 0.6,
-        }).where(eq(attributionEventsTable.id, addrEvent.id));
-        results.bronze++;
-        bronzeMatched = true;
-        if (matchedGclid && job.revenue > 0) {
-          ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+        for (const addrLead of addressLeads) {
+          if (!addrLead.lastName || addrLead.lastName.toLowerCase() !== normalizedLastName) continue;
+          const leadFullName = `${addrLead.firstName} ${addrLead.lastName}`.toLowerCase();
+          const jobFullName = job.customerName.toLowerCase();
+          if (leadFullName !== jobFullName) continue;
+
+          matchedGclid = addrEvent.gclid || null;
+          await db.update(jobsTable).set({
+            matchLevel: "bronze",
+            matchedGclid: matchedGclid,
+            updatedAt: new Date(),
+          }).where(eq(jobsTable.id, job.id));
+          await db.update(attributionEventsTable).set({
+            matchLevel: "bronze",
+            matchConfidence: 0.6,
+          }).where(eq(attributionEventsTable.id, addrEvent.id));
+          results.bronze++;
+          bronzeMatched = true;
+          if (matchedGclid && job.revenue > 0) {
+            ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+          }
+          break;
         }
-        break;
+        if (bronzeMatched) break;
       }
-      if (bronzeMatched) break;
     }
     if (bronzeMatched) continue;
 
@@ -259,6 +291,12 @@ function buildOciPayload(gclid: string, jobId: number, tenantId: number, revenue
   };
 }
 
+let _nextScheduledRunGetter: (() => string) | null = null;
+
+export function setNextScheduledRunGetter(getter: () => string) {
+  _nextScheduledRunGetter = getter;
+}
+
 export async function getReconciliationStatus(tenantId: number | null) {
   const conditions = tenantId ? eq(reconciliationRunsTable.tenantId, tenantId) : undefined;
 
@@ -274,21 +312,13 @@ export async function getReconciliationStatus(tenantId: number | null) {
     .orderBy(desc(reconciliationRunsTable.createdAt))
     .limit(10);
 
+  const nextScheduledRun = _nextScheduledRunGetter ? _nextScheduledRunGetter() : new Date().toISOString();
+
   return {
     latestRun: latestRun || null,
     recentRuns: allRuns,
-    nextScheduledRun: getNextScheduledTime(),
+    nextScheduledRun,
   };
-}
-
-function getNextScheduledTime(): string {
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(3, 0, 0, 0);
-  if (next <= now) {
-    next.setDate(next.getDate() + 1);
-  }
-  return next.toISOString();
 }
 
 export async function runScheduledReconciliation(): Promise<ReconciliationResult[]> {

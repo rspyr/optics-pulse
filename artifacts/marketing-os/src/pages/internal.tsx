@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation } from "@workspace/api-client-react";
+import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
 import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award } from "lucide-react";
@@ -223,7 +224,7 @@ export default function Internal() {
           <div className="mt-4">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Runs</p>
             <div className="space-y-1">
-              {reconStatus.recentRuns.slice(0, 5).map((run: any) => (
+              {reconStatus.recentRuns.slice(0, 5).map((run: ReconciliationRun) => (
                 <div key={run.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02]">
                   <div className="flex items-center gap-2">
                     <span className={`w-1.5 h-1.5 rounded-full ${run.status === "completed" ? "bg-emerald-400" : "bg-red-400"}`} />
