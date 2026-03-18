@@ -26,7 +26,9 @@ function verifySignature(payload: string, signature: string | undefined): boolea
 
 router.post("/webhooks/ingest", async (req, res) => {
   try {
-    const rawBody = JSON.stringify(req.body);
+    const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody
+      ? (req as typeof req & { rawBody?: Buffer }).rawBody!.toString("utf-8")
+      : JSON.stringify(req.body);
     const signature = req.headers["x-mos-signature"] as string | undefined;
 
     if (!verifySignature(rawBody, signature)) {

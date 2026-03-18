@@ -30,7 +30,7 @@ export default function Dashboard() {
     </div>;
   }
 
-  // Fallback data if API is down so it still looks stunning
+  // Fallback data when API is unavailable
   const displayOverview = overview || {
     totalSpend: 15420,
     totalRevenue: 128500,

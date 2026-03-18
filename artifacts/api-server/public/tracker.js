@@ -30,6 +30,25 @@
     setCookie(COOKIE_NAME, gclid, COOKIE_TTL);
   }
 
+  var LS_TTL_MS = COOKIE_TTL * 86400000;
+
+  function purgeStaleStorage() {
+    try {
+      var raw = localStorage.getItem(LS_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (parsed.expiresAt && new Date(parsed.expiresAt).getTime() < Date.now()) {
+        localStorage.removeItem(LS_KEY);
+        return null;
+      }
+      return parsed;
+    } catch(e) {
+      return null;
+    }
+  }
+
+  purgeStaleStorage();
+
   var utmData = {
     gclid: gclid || getCookie(COOKIE_NAME) || null,
     wbraid: wbraid || null,
@@ -37,7 +56,8 @@
     utmMedium: utmMedium,
     utmCampaign: utmCampaign,
     landingPage: location.href,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + LS_TTL_MS).toISOString()
   };
 
   try {
@@ -47,8 +67,7 @@
   function injectHiddenFields(form) {
     if (form.dataset.mosInjected) return;
     form.dataset.mosInjected = "1";
-    var stored = {};
-    try { stored = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e) {}
+    var stored = purgeStaleStorage() || {};
     var fields = ["gclid", "wbraid", "utmSource", "utmMedium", "utmCampaign", "landingPage"];
     fields.forEach(function(f) {
       if (stored[f]) {

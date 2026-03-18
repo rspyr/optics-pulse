@@ -7,7 +7,11 @@ import router from "./routes";
 const app: Express = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req: unknown, _res, buf) => {
+    (req as Record<string, unknown>).rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 const currentDir = typeof __dirname !== "undefined"

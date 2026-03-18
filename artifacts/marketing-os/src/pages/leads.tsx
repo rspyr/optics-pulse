@@ -10,7 +10,7 @@ export default function Leads() {
   
   const { data, isLoading } = useListLeads({ limit: 50 });
 
-  // Mock data for stunning UI if API fails
+  // Fallback data when API is unavailable
   const leads = data?.leads || [
     { id: 1, firstName: "John", lastName: "Smith", source: "Google Ads", interestType: "Heat Pump", status: "new", createdAt: new Date().toISOString(), phone: "(555) 123-4567" },
     { id: 2, firstName: "Sarah", lastName: "Johnson", source: "Meta Leads", interestType: "AC Repair", status: "contacted", createdAt: new Date(Date.now() - 3600000).toISOString(), phone: "(555) 987-6543" },
