@@ -1,7 +1,42 @@
-import { db, trainingItemsTable, trainingEmailLogsTable, trainingDismissalsTable, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, usersTable } from "@workspace/db";
+import nodemailer from "nodemailer";
+import { db, trainingItemsTable, trainingEmailLogsTable, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, usersTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, inArray } from "drizzle-orm";
 
-async function computeTenantMetrics(tenantId: number) {
+const METRIC_LABELS: Record<string, string> = {
+  booking_rate: "Booking Rate",
+  close_rate: "Close Rate",
+  cpl: "Cost Per Lead",
+  roas: "ROAS",
+  avg_sale_value: "Avg Sale Value",
+};
+
+const METRIC_FORMATS: Record<string, (v: number) => string> = {
+  booking_rate: v => `${v.toFixed(1)}%`,
+  close_rate: v => `${v.toFixed(1)}%`,
+  cpl: v => `$${v.toFixed(2)}`,
+  roas: v => `${v.toFixed(1)}x`,
+  avg_sale_value: v => `$${v.toFixed(0)}`,
+};
+
+function createTransporter() {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = process.env.SMTP_PORT;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+
+  if (smtpHost && smtpUser && smtpPass) {
+    return nodemailer.createTransport({
+      host: smtpHost,
+      port: Number(smtpPort) || 587,
+      secure: (Number(smtpPort) || 587) === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+    });
+  }
+
+  return null;
+}
+
+export async function computeTenantMetrics(tenantId: number) {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
   const startDate = thirtyDaysAgo.toISOString().split("T")[0];
@@ -46,11 +81,122 @@ async function computeTenantMetrics(tenantId: number) {
   };
 }
 
-async function sendTrainingAlertEmail(tenantName: string, ownerEmail: string, metric: string, value: number, threshold: number, trainingTitle: string): Promise<void> {
-  console.log(`[Training Alert Email] To: ${ownerEmail} | Tenant: ${tenantName} | ${metric} = ${value} (threshold: ${threshold}) | Recommended: "${trainingTitle}"`);
+interface AlertEmailParams {
+  tenantName: string;
+  ownerEmail: string;
+  metric: string;
+  value: number;
+  threshold: number;
+  direction: string;
+  trainingTitle: string;
+  trainingDescription: string;
+  trainingUrl: string | null;
+  trainingContentType: string;
+  trainingPrice: number | null;
 }
 
-export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number }> {
+async function sendTrainingAlertEmail(params: AlertEmailParams): Promise<boolean> {
+  const { tenantName, ownerEmail, metric, value, threshold, direction, trainingTitle, trainingDescription, trainingUrl, trainingContentType, trainingPrice } = params;
+
+  const metricLabel = METRIC_LABELS[metric] || metric;
+  const formatter = METRIC_FORMATS[metric] || ((v: number) => String(v));
+  const formattedValue = formatter(value);
+  const formattedThreshold = formatter(threshold);
+
+  const ctaText = trainingContentType === "paid_course"
+    ? `Enroll Now${trainingPrice ? ` — $${trainingPrice}` : ""}`
+    : "Read This Free Tip";
+  const ctaLink = trainingUrl || "#";
+
+  const subject = `⚠️ ${metricLabel} Alert for ${tenantName} — Action Recommended`;
+
+  const htmlBody = `
+    <div style="font-family: Inter, sans-serif; max-width: 600px; margin: 0 auto; background: #0A0F1F; color: #ffffff; padding: 32px; border-radius: 12px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="font-size: 24px; font-weight: 800; color: #ffffff; margin: 0;">Marketing OS</h1>
+        <p style="color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin: 4px 0 0;">Performance Alert</p>
+      </div>
+
+      <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <p style="color: #f59e0b; font-size: 14px; font-weight: 600; margin: 0 0 8px;">
+          ⚠️ ${metricLabel} is ${direction} threshold
+        </p>
+        <p style="color: #d1d5db; font-size: 13px; margin: 0;">
+          <strong>${tenantName}</strong>'s ${metricLabel} is currently <strong>${formattedValue}</strong>
+          (threshold: ${formattedThreshold}).
+        </p>
+      </div>
+
+      <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+        <h2 style="font-size: 16px; color: #ffffff; margin: 0 0 8px;">
+          ${trainingContentType === "paid_course" ? "🎓" : "💡"} Recommended: ${trainingTitle}
+        </h2>
+        <p style="color: #9ca3af; font-size: 13px; line-height: 1.6; margin: 0 0 16px;">
+          ${trainingDescription}
+        </p>
+        ${trainingUrl ? `
+        <a href="${ctaLink}" style="display: inline-block; background: #F20505; color: #ffffff; text-decoration: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 600;">
+          ${ctaText}
+        </a>` : ""}
+      </div>
+
+      <p style="color: #6b7280; font-size: 11px; text-align: center; margin: 0;">
+        This alert was sent by Marketing OS. You will not receive another alert for this metric within 7 days.
+      </p>
+    </div>
+  `;
+
+  const textBody = `
+${metricLabel} Alert for ${tenantName}
+
+Your ${metricLabel} is currently ${formattedValue} (threshold: ${formattedThreshold}).
+
+Recommended Training: ${trainingTitle}
+${trainingDescription}
+${trainingUrl ? `\nAccess here: ${trainingUrl}` : ""}
+
+— Marketing OS
+  `.trim();
+
+  const transporter = createTransporter();
+  const fromEmail = process.env.SMTP_FROM || "alerts@marketingos.io";
+
+  if (transporter) {
+    try {
+      await transporter.sendMail({
+        from: `"Marketing OS" <${fromEmail}>`,
+        to: ownerEmail,
+        subject,
+        text: textBody,
+        html: htmlBody,
+      });
+      console.log(`[Training Alert] Email sent to ${ownerEmail} for ${tenantName} (${metric})`);
+      return true;
+    } catch (err) {
+      console.error(`[Training Alert] Failed to send email to ${ownerEmail}:`, err);
+      return false;
+    }
+  }
+
+  console.log(`[Training Alert] SMTP not configured — logging email instead`);
+  console.log(`[Training Alert] To: ${ownerEmail} | Subject: ${subject}`);
+  console.log(`[Training Alert] Body: ${textBody}`);
+  return true;
+}
+
+export interface TrainingAlert {
+  tenantId: number;
+  tenantName: string;
+  metric: string;
+  value: number;
+  threshold: number;
+  trainingItemId: number;
+  trainingTitle: string;
+  trainingUrl: string | null;
+  emailSent: boolean;
+}
+
+export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number; alerts: TrainingAlert[] }> {
   console.log("[Training Scheduler] Running automated training alert check...");
 
   const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
@@ -58,7 +204,7 @@ export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number
     and(eq(trainingItemsTable.isActive, true), sql`${trainingItemsTable.metricTrigger} IS NOT NULL`)
   );
 
-  let alertsGenerated = 0;
+  const alerts: TrainingAlert[] = [];
 
   for (const tenant of tenants) {
     const metrics = await computeTenantMetrics(tenant.id);
@@ -90,14 +236,19 @@ export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number
         if (recentLog.length === 0) {
           const roundedValue = Math.round(metricValue * 100) / 100;
 
-          await sendTrainingAlertEmail(
-            tenant.name,
+          const emailSent = await sendTrainingAlertEmail({
+            tenantName: tenant.name,
             ownerEmail,
-            item.metricTrigger,
-            roundedValue,
-            item.thresholdValue,
-            item.title
-          );
+            metric: item.metricTrigger,
+            value: roundedValue,
+            threshold: item.thresholdValue,
+            direction,
+            trainingTitle: item.title,
+            trainingDescription: item.description,
+            trainingUrl: item.url,
+            trainingContentType: item.contentType,
+            trainingPrice: item.price,
+          });
 
           await db.insert(trainingEmailLogsTable).values({
             tenantId: tenant.id,
@@ -107,14 +258,24 @@ export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number
             thresholdValue: item.thresholdValue,
           });
 
-          alertsGenerated++;
+          alerts.push({
+            tenantId: tenant.id,
+            tenantName: tenant.name,
+            metric: item.metricTrigger,
+            value: roundedValue,
+            threshold: item.thresholdValue,
+            trainingItemId: item.id,
+            trainingTitle: item.title,
+            trainingUrl: item.url,
+            emailSent,
+          });
         }
       }
     }
   }
 
-  console.log(`[Training Scheduler] Alert check complete: ${alertsGenerated} alert(s) generated.`);
-  return { alertsGenerated };
+  console.log(`[Training Scheduler] Alert check complete: ${alerts.length} alert(s) generated.`);
+  return { alertsGenerated: alerts.length, alerts };
 }
 
 let trainingInterval: ReturnType<typeof setInterval> | null = null;

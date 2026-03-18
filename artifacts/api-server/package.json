@@ -18,6 +18,7 @@
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-session": "^1.19.0",
+    "nodemailer": "^8.0.2",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
@@ -28,6 +29,7 @@
     "@types/express": "^5.0.6",
     "@types/express-session": "^1.18.2",
     "@types/node": "catalog:",
+    "@types/nodemailer": "^7.0.11",
     "esbuild": "^0.27.3",
     "tsx": "catalog:"
   }

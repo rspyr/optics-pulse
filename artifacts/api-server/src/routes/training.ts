@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, trainingItemsTable, trainingDismissalsTable, trainingEmailLogsTable, trainingPurchasesTable, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable } from "@workspace/db";
 import { eq, and, desc, inArray, sql, SQL, gte, lte } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { runTrainingAlertCheck } from "../services/training-scheduler";
+import { runTrainingAlertCheck, type TrainingAlert } from "../services/training-scheduler";
 
 const router: IRouter = Router();
 
@@ -148,6 +148,7 @@ router.delete("/training/items/:id", requireRole("super_admin", "agency_user"), 
   const id = validateId(String(req.params.id));
   if (!id) { res.status(400).json({ error: "Invalid training item ID" }); return; }
 
+  await db.delete(trainingPurchasesTable).where(eq(trainingPurchasesTable.trainingItemId, id));
   await db.delete(trainingDismissalsTable).where(eq(trainingDismissalsTable.trainingItemId, id));
   await db.delete(trainingEmailLogsTable).where(eq(trainingEmailLogsTable.trainingItemId, id));
   await db.delete(trainingItemsTable).where(eq(trainingItemsTable.id, id));
@@ -261,22 +262,17 @@ router.post("/training/dismiss/:id", async (req, res) => {
 
 router.post("/training/check-alerts", requireRole("super_admin", "agency_user"), async (_req, res) => {
   const result = await runTrainingAlertCheck();
-  const logs = await db.select().from(trainingEmailLogsTable)
-    .orderBy(desc(trainingEmailLogsTable.sentAt))
-    .limit(20);
-
-  const alerts = logs.map(log => ({
-    tenantId: log.tenantId,
-    tenantName: "",
-    metric: log.metricTrigger,
-    value: log.metricValue,
-    threshold: log.thresholdValue,
-    trainingTitle: "",
-  }));
 
   res.json({
     alertsGenerated: result.alertsGenerated,
-    alerts: alerts.slice(0, result.alertsGenerated || 5),
+    alerts: result.alerts.map((a: TrainingAlert) => ({
+      tenantId: a.tenantId,
+      tenantName: a.tenantName,
+      metric: a.metric,
+      value: a.value,
+      threshold: a.threshold,
+      trainingTitle: a.trainingTitle,
+    })),
     message: result.alertsGenerated > 0
       ? `${result.alertsGenerated} metric alert(s) detected. Alert emails sent to tenant owners.`
       : "All tenant metrics are within thresholds.",
