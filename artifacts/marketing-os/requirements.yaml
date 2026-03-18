@@ -1,0 +1,15 @@
+packages:
+  "recharts": "For the spend vs revenue bar charts"
+  "date-fns": "For human-readable date formatting"
+  "framer-motion": "For premium page transitions and micro-interactions"
+  "clsx": "For conditional class names"
+  "tailwind-merge": "For merging tailwind classes"
+
+images:
+  - path: "artifacts/marketing-os/public/images/auth-bg.png"
+    description: "Dark, abstract, premium Nordic minimal gradient background with subtle deep navy and crimson red light leaks, perfectly suited for a luxury SaaS login screen"
+    aspect_ratio: "16:9"
+
+notes:
+  - Assumes @workspace/api-client-react exports all generated react-query hooks.
+  - Requires valid backend endpoints to display real data, but includes robust loading and error states.

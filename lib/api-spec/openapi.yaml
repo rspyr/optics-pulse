@@ -3,13 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Marketing OS API - Attribution Engine & Leads Dashboard
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: tenants
+    description: Tenant management
+  - name: leads
+    description: Lead management
+  - name: campaigns
+    description: Campaign and ad spend data
+  - name: attribution
+    description: Attribution events and matching
+  - name: jobs
+    description: ServiceTitan job/revenue data
+  - name: webhooks
+    description: Webhook ingestion endpoints
+  - name: dashboard
+    description: Dashboard analytics and KPIs
+
 paths:
   /healthz:
     get:
@@ -24,6 +39,359 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /tenants:
+    get:
+      operationId: listTenants
+      tags: [tenants]
+      summary: List all tenants
+      responses:
+        "200":
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tenant"
+    post:
+      operationId: createTenant
+      tags: [tenants]
+      summary: Create a new tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantInput"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+
+  /tenants/{tenantId}:
+    get:
+      operationId: getTenant
+      tags: [tenants]
+      summary: Get tenant by ID
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+
+  /leads:
+    get:
+      operationId: listLeads
+      tags: [leads]
+      summary: List leads with optional filters
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [new, contacted, booked, sold, lost, cancelled]
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of leads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadListResponse"
+
+  /leads/{leadId}:
+    get:
+      operationId: getLead
+      tags: [leads]
+      summary: Get lead by ID
+      parameters:
+        - name: leadId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Lead details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+    patch:
+      operationId: updateLead
+      tags: [leads]
+      summary: Update lead status or details
+      parameters:
+        - name: leadId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLeadInput"
+      responses:
+        "200":
+          description: Updated lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      tags: [campaigns]
+      summary: List campaigns
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [google, meta]
+      responses:
+        "200":
+          description: List of campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Campaign"
+
+  /campaigns/stats:
+    get:
+      operationId: getCampaignStats
+      tags: [campaigns]
+      summary: Get aggregated campaign stats
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Aggregated campaign statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignStatsResponse"
+
+  /attribution/events:
+    get:
+      operationId: listAttributionEvents
+      tags: [attribution]
+      summary: List attribution events
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: matchLevel
+          in: query
+          schema:
+            type: string
+            enum: [diamond, golden, silver, bronze, unmatched]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of attribution events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttributionEventListResponse"
+
+  /jobs:
+    get:
+      operationId: listJobs
+      tags: [jobs]
+      summary: List jobs/revenue records
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobListResponse"
+
+  /webhooks/ingest:
+    post:
+      operationId: ingestWebhook
+      tags: [webhooks]
+      summary: Ingest webhook from CallRail, GoHighLevel, or forms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookIngestPayload"
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookIngestResponse"
+
+  /dashboard/overview:
+    get:
+      operationId: getDashboardOverview
+      tags: [dashboard]
+      summary: Get dashboard KPI overview
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Dashboard KPI data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardOverview"
+
+  /dashboard/spend-revenue:
+    get:
+      operationId: getSpendRevenueChart
+      tags: [dashboard]
+      summary: Get spend vs revenue time series for charts
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Time series data for spend vs revenue chart
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SpendRevenueDataPoint"
+
+  /dashboard/tenant-performance:
+    get:
+      operationId: getTenantPerformance
+      tags: [dashboard]
+      summary: Get all tenants performance table (agency God View)
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Performance data for all tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TenantPerformanceRow"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +402,380 @@ components:
       required:
         - status
 
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        serviceTitanId:
+          type: string
+          nullable: true
+        timezone:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, timezone, isActive, createdAt]
+
+    CreateTenantInput:
+      type: object
+      properties:
+        name:
+          type: string
+        serviceTitanId:
+          type: string
+        timezone:
+          type: string
+          default: "America/New_York"
+      required: [name]
+
+    Lead:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        source:
+          type: string
+        leadType:
+          type: string
+          nullable: true
+        interestType:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [new, contacted, booked, sold, lost, cancelled]
+        isNewCustomer:
+          type: boolean
+        matchedGclid:
+          type: string
+          nullable: true
+        assignedTo:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, firstName, lastName, source, status, isNewCustomer, createdAt]
+
+    UpdateLeadInput:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [new, contacted, booked, sold, lost, cancelled]
+        assignedTo:
+          type: string
+        disposition:
+          type: string
+
+    LeadListResponse:
+      type: object
+      properties:
+        leads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        total:
+          type: integer
+      required: [leads, total]
+
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        platform:
+          type: string
+          enum: [google, meta]
+        externalId:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, platform, externalId, name, status, createdAt]
+
+    CampaignStatsResponse:
+      type: object
+      properties:
+        totalSpend:
+          type: number
+        totalImpressions:
+          type: integer
+        totalClicks:
+          type: integer
+        totalConversions:
+          type: integer
+        avgCpc:
+          type: number
+        avgCpl:
+          type: number
+        dailyStats:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyStatRow"
+      required: [totalSpend, totalImpressions, totalClicks, totalConversions, avgCpc, avgCpl, dailyStats]
+
+    DailyStatRow:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        spend:
+          type: number
+        impressions:
+          type: integer
+        clicks:
+          type: integer
+        conversions:
+          type: integer
+      required: [date, spend, impressions, clicks, conversions]
+
+    AttributionEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        eventType:
+          type: string
+          enum: [click, call, form_fill]
+        gclid:
+          type: string
+          nullable: true
+        wbraid:
+          type: string
+          nullable: true
+        fbclid:
+          type: string
+          nullable: true
+        hashedPhone:
+          type: string
+          nullable: true
+        hashedEmail:
+          type: string
+          nullable: true
+        billingAddress:
+          type: string
+          nullable: true
+        utmSource:
+          type: string
+          nullable: true
+        utmCampaign:
+          type: string
+          nullable: true
+        utmMedium:
+          type: string
+          nullable: true
+        landingPage:
+          type: string
+          nullable: true
+        matchLevel:
+          type: string
+          enum: [diamond, golden, silver, bronze, unmatched]
+          nullable: true
+        matchConfidence:
+          type: number
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, eventType, createdAt]
+
+    AttributionEventListResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttributionEvent"
+        total:
+          type: integer
+      required: [events, total]
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        stJobId:
+          type: string
+          nullable: true
+        customerName:
+          type: string
+        jobType:
+          type: string
+        revenue:
+          type: number
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+        matchedGclid:
+          type: string
+          nullable: true
+        matchLevel:
+          type: string
+          enum: [diamond, golden, silver, bronze, unmatched]
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, customerName, jobType, revenue, status, createdAt]
+
+    JobListResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        total:
+          type: integer
+      required: [jobs, total]
+
+    WebhookIngestPayload:
+      type: object
+      properties:
+        source:
+          type: string
+          enum: [callrail, ghl, form, manual]
+        data:
+          type: object
+          properties:
+            phone:
+              type: string
+            email:
+              type: string
+            gclid:
+              type: string
+            firstName:
+              type: string
+            lastName:
+              type: string
+            landingPage:
+              type: string
+            utmSource:
+              type: string
+            utmCampaign:
+              type: string
+            utmMedium:
+              type: string
+          additionalProperties: true
+      required: [source, data]
+
+    WebhookIngestResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        eventId:
+          type: integer
+        message:
+          type: string
+      required: [success, message]
+
+    DashboardOverview:
+      type: object
+      properties:
+        totalSpend:
+          type: number
+        totalRevenue:
+          type: number
+        roas:
+          type: number
+        totalLeads:
+          type: integer
+        bookedLeads:
+          type: integer
+        soldLeads:
+          type: integer
+        bookingRate:
+          type: number
+        closeRate:
+          type: number
+        avgSaleValue:
+          type: number
+        cpl:
+          type: number
+        attributionMatchRate:
+          type: number
+        previousPeriod:
+          type: object
+          properties:
+            totalSpend:
+              type: number
+            totalRevenue:
+              type: number
+            roas:
+              type: number
+            totalLeads:
+              type: integer
+            cpl:
+              type: number
+          nullable: true
+      required: [totalSpend, totalRevenue, roas, totalLeads, bookedLeads, soldLeads, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
+
+    SpendRevenueDataPoint:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        spend:
+          type: number
+        revenue:
+          type: number
+      required: [date, spend, revenue]
+
+    TenantPerformanceRow:
+      type: object
+      properties:
+        tenantId:
+          type: integer
+        tenantName:
+          type: string
+        mtdSpend:
+          type: number
+        mtdRevenue:
+          type: number
+        cpl:
+          type: number
+        bookingRate:
+          type: number
+        closeRate:
+          type: number
+        roas:
+          type: number
+        leadCount:
+          type: integer
+      required: [tenantId, tenantName, mtdSpend, mtdRevenue, cpl, bookingRate, closeRate, roas, leadCount]
