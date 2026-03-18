@@ -90,8 +90,13 @@ router.delete("/chat/saved-questions/:id", async (req, res) => {
     return;
   }
 
+  const tenantId = req.session.tenantId || 1;
   await db.delete(savedQuestionsTable).where(
-    and(eq(savedQuestionsTable.id, id), eq(savedQuestionsTable.userId, userId)),
+    and(
+      eq(savedQuestionsTable.id, id),
+      eq(savedQuestionsTable.userId, userId),
+      eq(savedQuestionsTable.tenantId, tenantId),
+    ),
   );
 
   res.json({ success: true });
