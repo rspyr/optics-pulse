@@ -85,6 +85,9 @@ function parseNaturalLanguageFilter(query: string): NLFilterResult {
   else if (q.includes("quiz") || q.includes("organic")) result.leadType = "organic";
   else if (q.includes("pop-up") || q.includes("popup")) result.leadType = "popup";
 
+  const salespersonMatch = q.match(/(?:salesperson|rep|assigned to|by)\s+(\w+)/);
+  if (salespersonMatch) result.assignedTo = salespersonMatch[1];
+
   return result;
 }
 

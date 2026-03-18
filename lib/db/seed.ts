@@ -1,4 +1,4 @@
-import { db, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable } from "./src";
+import { db, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, changeLogsTable } from "./src";
 import crypto from "crypto";
 
 const FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher", "Ashley", "Matthew", "Nicole", "Andrew", "Stephanie"];
@@ -165,8 +165,23 @@ async function seed() {
   await db.insert(attributionEventsTable).values(events);
   console.log(`Created ${events.length} attribution events`);
 
+  const changeLogEntries = [
+    { tenantId: tenant1.id, date: new Date(Date.now() - 25 * 86400000).toISOString().split("T")[0], title: "Launched Google Performance Max", description: "Switched from standard search to Performance Max campaign targeting HVAC install keywords across Google properties.", category: "campaign" },
+    { tenantId: tenant1.id, date: new Date(Date.now() - 20 * 86400000).toISOString().split("T")[0], title: "Updated Meta Lead Form", description: "Reduced lead form fields from 8 to 4. Added instant form pre-fill for returning visitors.", category: "creative" },
+    { tenantId: tenant1.id, date: new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0], title: "Budget Increase: Google Ads", description: "Increased daily budget from $150 to $250 based on strong ROAS performance over last 14 days.", category: "budget" },
+    { tenantId: tenant1.id, date: new Date(Date.now() - 10 * 86400000).toISOString().split("T")[0], title: "New Landing Page: Heat Pump", description: "Deployed dedicated heat pump landing page with video testimonial and financing calculator.", category: "creative" },
+    { tenantId: tenant1.id, date: new Date(Date.now() - 5 * 86400000).toISOString().split("T")[0], title: "Paused Low-Performing Ad Sets", description: "Paused 3 Meta ad sets with CPL above $200. Reallocated budget to top-performing lookalike audiences.", category: "campaign" },
+    { tenantId: tenant2.id, date: new Date(Date.now() - 22 * 86400000).toISOString().split("T")[0], title: "Launched Fit Funnel Campaign", description: "Deployed new multi-step quiz funnel targeting homeowners with aging HVAC systems.", category: "campaign" },
+    { tenantId: tenant2.id, date: new Date(Date.now() - 18 * 86400000).toISOString().split("T")[0], title: "Google Ads: Negative Keywords Update", description: "Added 45 negative keywords to eliminate commercial/DIY search traffic waste.", category: "campaign" },
+    { tenantId: tenant2.id, date: new Date(Date.now() - 12 * 86400000).toISOString().split("T")[0], title: "New Video Creative", description: "Launched 3 new 15-second video ads featuring customer testimonials for Meta placement.", category: "creative" },
+    { tenantId: tenant2.id, date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased overall ad budget by 20% ahead of spring HVAC season.", category: "budget" },
+    { tenantId: tenant2.id, date: new Date(Date.now() - 3 * 86400000).toISOString().split("T")[0], title: "A/B Test: Landing Page CTAs", description: "Started A/B test comparing 'Get Free Estimate' vs 'Schedule Your Consultation' CTAs.", category: "creative" },
+  ];
+  await db.insert(changeLogsTable).values(changeLogEntries);
+  console.log(`Created ${changeLogEntries.length} change log entries`);
+
   console.log("\nSeed complete!");
-  console.log(`Summary: 2 tenants, ${campaigns.length} campaigns, ${dailyStats.length} daily stats, ${leads.length} leads, ${jobs.length} jobs, ${events.length} attribution events`);
+  console.log(`Summary: 2 tenants, ${campaigns.length} campaigns, ${dailyStats.length} daily stats, ${leads.length} leads, ${jobs.length} jobs, ${events.length} attribution events, ${changeLogEntries.length} change logs`);
   process.exit(0);
 }
 
