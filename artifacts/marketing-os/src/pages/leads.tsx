@@ -39,6 +39,13 @@ const TEXT_TEMPLATES = [
   "Hey [NAME], we have same-day availability for [INTEREST] estimates. Want me to reserve a spot for you today?",
 ];
 
+const VOICEMAIL_SCRIPTS: Record<string, string> = {
+  "Google Ads": "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry. We have great availability this week for a free estimate. Please call us back at your earliest convenience. Again, this is [REP] at [COMPANY]. Have a great day!",
+  "Meta Leads": "Hey [NAME], this is [REP] from [COMPANY]. You filled out a form about [INTEREST] and I wanted to reach out personally. We'd love to help — call us back when you get a chance and we'll get you scheduled. Thanks!",
+  "CallRail": "Hi [NAME], [REP] here from [COMPANY], returning your call about [INTEREST]. Sorry I missed you — please give us a ring back and we'll take care of you. Talk soon!",
+  default: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!",
+};
+
 function getSchedulingHint(lead: LeadData): string | null {
   if (!lead.updatedAt || !lead.createdAt) return null;
   const created = new Date(lead.createdAt);
@@ -156,6 +163,7 @@ function useHudStats() {
 function useSocketIO(tenantId: number | null, isAgency: boolean) {
   const [newLeadFlash, setNewLeadFlash] = useState(false);
   const [latestLead, setLatestLead] = useState<LeadData | null>(null);
+  const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const socketRef = useRef<IOSocket | null>(null);
@@ -194,6 +202,10 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
       setTimeout(() => setNewLeadFlash(false), 3000);
     });
 
+    socket.on("lead-updated", () => {
+      setLeadUpdatedSignal(prev => prev + 1);
+    });
+
     socket.on("disconnect", () => {
       console.log("[HUD] Socket.IO disconnected");
     });
@@ -204,7 +216,7 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
     };
   }, [tenantId, isAgency, soundEnabled]);
 
-  return { newLeadFlash, latestLead, soundEnabled, setSoundEnabled };
+  return { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled };
 }
 
 function LeadTimer({ createdAt }: { createdAt: string }) {
@@ -289,8 +301,15 @@ function LeadCard({
 }) {
   const [showDisposition, setShowDisposition] = useState(false);
   const [showScript, setShowScript] = useState(false);
+  const [showVoicemail, setShowVoicemail] = useState(false);
   const hint = getSchedulingHint(lead);
   const script = SCRIPTS[lead.source] || SCRIPTS["Direct"];
+  const vmScript = VOICEMAIL_SCRIPTS[lead.source] || VOICEMAIL_SCRIPTS["default"];
+  const personalizedVm = vmScript
+    .replace("[NAME]", lead.firstName)
+    .replace("[INTEREST]", lead.interestType || "HVAC service")
+    .replace("[REP]", "your name")
+    .replace("[COMPANY]", "our company");
   const personalizedScript = script
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -398,10 +417,16 @@ function LeadCard({
           <Mail className="w-3.5 h-3.5" /> Email
         </a>
         <button
-          onClick={() => setShowScript(!showScript)}
+          onClick={() => { setShowScript(!showScript); if (showVoicemail) setShowVoicemail(false); }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/60 text-xs font-medium hover:bg-white/10 transition-colors"
         >
           <Mic className="w-3.5 h-3.5" /> {showScript ? "Hide" : "Script"}
+        </button>
+        <button
+          onClick={() => { setShowVoicemail(!showVoicemail); if (showScript) setShowScript(false); }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-medium hover:bg-orange-500/20 transition-colors"
+        >
+          <Volume2 className="w-3.5 h-3.5" /> {showVoicemail ? "Hide VM" : "VM Drop"}
         </button>
 
         <div className="ml-auto relative">
@@ -460,6 +485,30 @@ function LeadCard({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showVoicemail && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-3 p-3 rounded-lg bg-orange-500/5 border border-orange-500/10">
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs text-orange-400/70 uppercase tracking-wider font-medium">Voicemail Drop Script</p>
+                <button
+                  onClick={() => navigator.clipboard.writeText(personalizedVm)}
+                  className="text-[10px] text-orange-400/60 hover:text-orange-400 transition-colors"
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="text-sm text-gray-300 leading-relaxed">{personalizedVm}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -469,10 +518,9 @@ export default function Leads() {
   const tenantId = user?.tenantId ?? null;
   const { queue, loading, refetch } = useHudQueue();
   const { stats, refetch: refetchStats } = useHudStats();
-  const { newLeadFlash, latestLead, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
+  const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
-  const [activeTab, setActiveTab] = useState<"new" | "followup" | "background">("new");
 
   useEffect(() => {
     if (latestLead) {
@@ -480,6 +528,13 @@ export default function Leads() {
       refetchStats();
     }
   }, [latestLead, refetch, refetchStats]);
+
+  useEffect(() => {
+    if (leadUpdatedSignal > 0) {
+      refetch();
+      refetchStats();
+    }
+  }, [leadUpdatedSignal, refetch, refetchStats]);
 
   const handleDisposition = async (leadId: number, disposition: string, status: string) => {
     setProcessingLeads(prev => new Set(prev).add(leadId));
@@ -509,7 +564,11 @@ export default function Leads() {
     }
   };
 
-  const activeLeads = activeTab === "new" ? queue.newLeads : activeTab === "followup" ? queue.followUps : queue.background;
+  const unifiedQueue = [
+    ...queue.newLeads.map(l => ({ ...l, _priority: "new" as const })),
+    ...queue.followUps.map(l => ({ ...l, _priority: "followup" as const })),
+    ...queue.background.map(l => ({ ...l, _priority: "background" as const })),
+  ];
 
   const tierColors = {
     gold: "from-amber-400 to-yellow-500",
@@ -566,147 +625,176 @@ export default function Leads() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <PremiumCard className="p-4 !hover:border-white/10">
-          <div className="flex items-center justify-between mb-2">
-            <PhoneCall className="w-5 h-5 text-blue-400" />
-            <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
-          </div>
-          <p className="text-2xl font-display text-white">{stats.callsMadeToday}</p>
-          <p className="text-xs text-muted-foreground mt-1">calls made today</p>
-        </PremiumCard>
-
-        <PremiumCard className="p-4 !hover:border-white/10">
-          <div className="flex items-center justify-between mb-2">
-            <Target className="w-5 h-5 text-emerald-400" />
-            <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Booked</span>
-          </div>
-          <p className="text-2xl font-display text-white">{stats.bookingsToday}</p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
-        </PremiumCard>
-
-        <PremiumCard className="p-4 !hover:border-white/10">
-          <div className="flex items-center justify-between mb-2">
-            <Clock className="w-5 h-5 text-amber-400" />
-            <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
-          </div>
-          <p className="text-2xl font-display text-white">{stats.avgSpeedToLead}s</p>
-          <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
-        </PremiumCard>
-
-        <PremiumCard className={cn("p-4 !hover:border-white/10 relative overflow-hidden")}>
-          <div className={cn(
-            "absolute inset-0 opacity-10 bg-gradient-to-br",
-            tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none
-          )} />
-          <div className="relative">
-            <div className="flex items-center justify-between mb-2">
-              <DollarSign className="w-5 h-5 text-emerald-400" />
-              <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
-            </div>
-            <p className="text-2xl font-display text-emerald-400">${stats.commission}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {stats.bonusTier !== "none" ? (
-                <span className="text-amber-400">
-                  <Award className="w-3 h-3 inline mr-1" />
-                  {stats.bonusTier.toUpperCase()} tier
+      <div className="flex gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex items-center gap-1.5">
+              {queue.newLeads.length > 0 && (
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
                 </span>
-              ) : (
-                `${stats.nextBonusAt - stats.bookingRate}% to bonus`
               )}
-            </p>
-          </div>
-        </PremiumCard>
-      </div>
-
-      <div className="flex gap-2 mb-4">
-        {[
-          { key: "new" as const, label: "New Leads", count: queue.newLeads.length, color: "text-red-400", ping: queue.newLeads.length > 0 },
-          { key: "followup" as const, label: "Touch These", count: queue.followUps.length, color: "text-amber-400", ping: false },
-          { key: "background" as const, label: "Background", count: queue.background.length, color: "text-gray-400", ping: false },
-        ].map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={cn(
-              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2",
-              activeTab === tab.key
-                ? "bg-white/10 text-white border border-white/20"
-                : "text-muted-foreground hover:text-white hover:bg-white/5 border border-transparent"
-            )}
-          >
-            {tab.ping && (
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-            )}
-            {tab.label}
-            <span className={cn("text-xs font-mono", tab.color)}>{tab.count}</span>
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="text-center">
-            <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center mx-auto mb-4 animate-pulse">
-              <Zap className="w-6 h-6 text-primary" />
+              <span className="text-xs text-white/50 uppercase tracking-wider font-medium">Focus Queue</span>
             </div>
-            <p className="text-muted-foreground text-sm">Loading focus queue...</p>
+            <div className="flex items-center gap-2 text-xs text-white/30">
+              <span className="text-red-400 font-mono">{queue.newLeads.length} new</span>
+              <span>·</span>
+              <span className="text-amber-400 font-mono">{queue.followUps.length} follow-up</span>
+              <span>·</span>
+              <span className="text-white/30 font-mono">{queue.background.length} background</span>
+            </div>
           </div>
-        </div>
-      ) : activeLeads.length === 0 ? (
-        <PremiumCard className="py-16 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
-            <Star className="w-8 h-8 text-emerald-400" />
-          </div>
-          <h3 className="font-display text-xl text-white mb-2">
-            {activeTab === "new" ? "No New Leads" : activeTab === "followup" ? "No Follow-ups" : "Queue Clear"}
-          </h3>
-          <p className="text-muted-foreground text-sm max-w-md mx-auto">
-            {activeTab === "new"
-              ? "Waiting for new leads to arrive. The screen will flash and ding when one comes in."
-              : activeTab === "followup"
-              ? "All follow-ups are handled. Great work!"
-              : "No background leads need attention right now."}
-          </p>
-        </PremiumCard>
-      ) : (
-        <div className="space-y-3">
-          <AnimatePresence mode="popLayout">
-            {activeLeads.map(lead => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                isNew={lead.status === "new"}
-                onDisposition={handleDisposition}
-                isProcessing={processingLeads.has(lead.id)}
-              />
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
 
-      {activeTab === "new" && queue.newLeads.length === 0 && queue.followUps.length > 0 && (
-        <div className="mt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle className="w-4 h-4 text-amber-400" />
-            <h3 className="text-sm font-medium text-amber-400 uppercase tracking-wider">Re-engagement Queue</h3>
-          </div>
-          <div className="space-y-3">
-            {queue.followUps.slice(0, 3).map(lead => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                isNew={false}
-                onDisposition={handleDisposition}
-                isProcessing={processingLeads.has(lead.id)}
-              />
-            ))}
-          </div>
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="text-center">
+                <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center mx-auto mb-4 animate-pulse">
+                  <Zap className="w-6 h-6 text-primary" />
+                </div>
+                <p className="text-muted-foreground text-sm">Loading focus queue...</p>
+              </div>
+            </div>
+          ) : unifiedQueue.length === 0 ? (
+            <PremiumCard className="py-16 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
+                <Star className="w-8 h-8 text-emerald-400" />
+              </div>
+              <h3 className="font-display text-xl text-white mb-2">Queue Clear</h3>
+              <p className="text-muted-foreground text-sm max-w-md mx-auto">
+                Waiting for new leads to arrive. The screen will flash and ding when one comes in.
+              </p>
+            </PremiumCard>
+          ) : (
+            <div className="space-y-3">
+              <AnimatePresence mode="popLayout">
+                {unifiedQueue.map((lead, idx) => {
+                  const isFirstFollowUp = lead._priority === "followup" && (idx === 0 || unifiedQueue[idx - 1]._priority === "new");
+                  const isFirstBackground = lead._priority === "background" && (idx === 0 || unifiedQueue[idx - 1]._priority !== "background");
+                  return (
+                    <div key={lead.id}>
+                      {isFirstFollowUp && (
+                        <div className="flex items-center gap-2 mb-2 mt-4">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="text-xs text-amber-400 uppercase tracking-wider font-medium">Follow Up</span>
+                          <div className="flex-1 h-px bg-amber-500/20" />
+                        </div>
+                      )}
+                      {isFirstBackground && (
+                        <div className="flex items-center gap-2 mb-2 mt-4">
+                          <span className="text-xs text-white/30 uppercase tracking-wider font-medium">Background</span>
+                          <div className="flex-1 h-px bg-white/5" />
+                        </div>
+                      )}
+                      <div className={cn(lead._priority === "background" && "opacity-50")}>
+                        <LeadCard
+                          lead={lead}
+                          isNew={lead._priority === "new"}
+                          onDisposition={handleDisposition}
+                          isProcessing={processingLeads.has(lead.id)}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
-      )}
+
+        <aside className="hidden lg:flex flex-col gap-3 w-72 shrink-0 sticky top-4 self-start">
+          <PremiumCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <PhoneCall className="w-5 h-5 text-blue-400" />
+              <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
+            </div>
+            <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
+            <p className="text-xs text-muted-foreground mt-1">calls made today</p>
+          </PremiumCard>
+
+          <PremiumCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <Target className="w-5 h-5 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Booked</span>
+            </div>
+            <p className="text-3xl font-display text-white">{stats.bookingsToday}</p>
+            <div className="mt-2 w-full bg-white/5 rounded-full h-1.5">
+              <div
+                className="h-full rounded-full bg-emerald-400 transition-all"
+                style={{ width: `${Math.min(stats.bookingRate, 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
+          </PremiumCard>
+
+          <PremiumCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <Clock className="w-5 h-5 text-amber-400" />
+              <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
+            </div>
+            <p className="text-3xl font-display text-white">{stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
+            <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
+          </PremiumCard>
+
+          <PremiumCard className={cn("p-4 relative overflow-hidden")}>
+            <div className={cn(
+              "absolute inset-0 opacity-10 bg-gradient-to-br",
+              tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none
+            )} />
+            <div className="relative">
+              <div className="flex items-center justify-between mb-3">
+                <DollarSign className="w-5 h-5 text-emerald-400" />
+                <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
+              </div>
+              <p className="text-3xl font-display text-emerald-400">${stats.commission}</p>
+              <p className="text-xs text-muted-foreground mt-2">
+                {stats.bonusTier !== "none" ? (
+                  <span className="text-amber-400">
+                    <Award className="w-3 h-3 inline mr-1" />
+                    {stats.bonusTier.toUpperCase()} TIER
+                  </span>
+                ) : (
+                  `${stats.nextBonusAt - stats.bookingRate}% to next bonus`
+                )}
+              </p>
+            </div>
+          </PremiumCard>
+        </aside>
+      </div>
+
+      <div className="lg:hidden grid grid-cols-2 gap-3 mt-6">
+        <PremiumCard className="p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <PhoneCall className="w-4 h-4 text-blue-400" />
+            <span className="text-xs text-blue-400/60 uppercase">Calls</span>
+          </div>
+          <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
+        </PremiumCard>
+        <PremiumCard className="p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Target className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs text-emerald-400/60 uppercase">Booked</span>
+          </div>
+          <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
+        </PremiumCard>
+        <PremiumCard className="p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Clock className="w-4 h-4 text-amber-400" />
+            <span className="text-xs text-amber-400/60 uppercase">Speed</span>
+          </div>
+          <p className="text-xl font-display text-white">{stats.avgSpeedToLead}s</p>
+        </PremiumCard>
+        <PremiumCard className={cn("p-3 relative overflow-hidden")}>
+          <div className={cn("absolute inset-0 opacity-10 bg-gradient-to-br", tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none)} />
+          <div className="relative">
+            <div className="flex items-center gap-2 mb-1">
+              <DollarSign className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
+            </div>
+            <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
+          </div>
+        </PremiumCard>
+      </div>
     </div>
   );
 }

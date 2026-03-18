@@ -102,6 +102,12 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   }
 }
 
+export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("lead-updated", lead);
+  }
+}
+
 async function createDemoLead(): Promise<void> {
   try {
     const firstName = randomFrom(DEMO_FIRST_NAMES);

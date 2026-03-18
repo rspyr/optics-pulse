@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, leadsTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
-import { getHudStats, emitNewLead } from "../socket";
+import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
 
 const router: IRouter = Router();
 
@@ -117,6 +117,7 @@ router.patch("/leads/:leadId", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
+  emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
   res.json(lead);
 });
 
