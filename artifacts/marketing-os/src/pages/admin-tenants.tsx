@@ -1,7 +1,7 @@
-import { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -47,6 +47,24 @@ export default function AdminTenants() {
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<TenantForm>(emptyForm);
   const [showIntegrationConfig, setShowIntegrationConfig] = useState(false);
+  const [expandedSyncTenant, setExpandedSyncTenant] = useState<number | null>(null);
+  const [tenantSyncStatuses, setTenantSyncStatuses] = useState<Record<number, { statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }> }>>({});
+
+  const fetchTenantSyncStatus = useCallback(async (tenantId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/integrations/sync-status?tenantId=${tenantId}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setTenantSyncStatuses((prev) => ({ ...prev, [tenantId]: data }));
+      }
+    } catch { /* ignore */ }
+  }, [API_BASE]);
+
+  useEffect(() => {
+    if (expandedSyncTenant && !tenantSyncStatuses[expandedSyncTenant]) {
+      fetchTenantSyncStatus(expandedSyncTenant);
+    }
+  }, [expandedSyncTenant, tenantSyncStatuses, fetchTenantSyncStatus]);
 
   const buildIntegrationConfig = () => {
     const config: Record<string, string> = {};
@@ -286,8 +304,10 @@ export default function AdminTenants() {
             <tbody className="divide-y divide-white/5">
               {tenants?.map((tenant) => {
                 const t = tenant as unknown as Record<string, unknown>;
+                const tid = t.id as number;
                 return (
-                  <tr key={t.id as number} className="hover:bg-white/[0.02] transition-colors">
+                  <React.Fragment key={tid}>
+                  <tr className="hover:bg-white/[0.02] transition-colors">
                     {editId === (t.id as number) ? (
                       <>
                         <td className="p-4 text-sm text-muted-foreground">{t.id as number}</td>
@@ -326,10 +346,21 @@ export default function AdminTenants() {
                         <td className="p-4 text-sm text-muted-foreground">{(t.serviceTitanId as string) || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{t.timezone as string}</td>
                         <td className="p-4">
-                          <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>
-                            <Key className="w-3 h-3 inline mr-1" />
-                            {t.hasIntegrationConfig ? "Configured" : "None"}
-                          </Badge>
+                          <div className="flex items-center gap-2">
+                            <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>
+                              <Key className="w-3 h-3 inline mr-1" />
+                              {t.hasIntegrationConfig ? "Configured" : "None"}
+                            </Badge>
+                            {Boolean(t.hasIntegrationConfig) && (
+                              <button
+                                onClick={() => setExpandedSyncTenant(expandedSyncTenant === tid ? null : tid)}
+                                className="text-muted-foreground hover:text-white"
+                                title="Sync Status"
+                              >
+                                <Activity className="w-4 h-4 inline" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
                         <td className="p-4 text-right space-x-2">
@@ -339,6 +370,40 @@ export default function AdminTenants() {
                       </>
                     )}
                   </tr>
+                  {expandedSyncTenant === (t.id as number) && (
+                    <tr className="bg-white/[0.01]">
+                      <td colSpan={7} className="px-6 py-4">
+                        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Integration Sync Status</div>
+                        {tenantSyncStatuses[t.id as number] ? (
+                          <div className="grid grid-cols-3 gap-4">
+                            {Object.entries(tenantSyncStatuses[t.id as number].statusByIntegration).map(([key, status]) => (
+                              <div key={key} className="bg-background/50 border border-white/5 rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-sm font-medium text-white capitalize">{key.replace(/_/g, " ")}</span>
+                                  {status.lastStatus === "completed" ? (
+                                    <CheckCircle className="w-4 h-4 text-emerald-400" />
+                                  ) : status.lastStatus === "error" ? (
+                                    <XCircle className="w-4 h-4 text-red-400" />
+                                  ) : (
+                                    <Activity className="w-4 h-4 text-muted-foreground" />
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground space-y-1">
+                                  <div>Last Sync: {status.lastSync ? new Date(status.lastSync).toLocaleString() : "Never"}</div>
+                                  <div>Status: <span className={status.lastStatus === "completed" ? "text-emerald-400" : status.lastStatus === "error" ? "text-red-400" : "text-muted-foreground"}>{status.lastStatus}</span></div>
+                                  <div>Records: {status.lastRecords}</div>
+                                  {status.errorCount > 0 && <div className="text-red-400">Errors (recent): {status.errorCount}</div>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-muted-foreground">Loading sync status...</div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
                 );
               })}
             </tbody>

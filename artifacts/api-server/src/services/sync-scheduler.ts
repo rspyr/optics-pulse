@@ -100,7 +100,10 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
 
   const config = getTenantConfig(tenant);
   if (!config?.googleAdsApiKey || !config?.googleAdsCustomerId) {
-    return { synced: 0, error: "Google Ads not configured" };
+    return { synced: 0, error: "Google Ads not configured (missing API key or customer ID)" };
+  }
+  if (!config.googleAdsDeveloperToken) {
+    return { synced: 0, error: "Google Ads not configured (missing developer token)" };
   }
 
   const syncLog = await logSync(tenantId, "google_ads", "campaigns", new Date());

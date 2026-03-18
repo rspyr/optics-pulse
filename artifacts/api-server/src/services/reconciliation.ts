@@ -310,11 +310,11 @@ async function pushConversionsToExternalAPIs(
     return;
   }
 
-  if (config.googleAdsApiKey && config.googleAdsCustomerId && ociPayloads.length > 0) {
+  if (config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken && ociPayloads.length > 0) {
     const startedAt = new Date();
     try {
       const gaConfig = {
-        developerToken: config.googleAdsDeveloperToken || "",
+        developerToken: config.googleAdsDeveloperToken!,
         accessToken: config.googleAdsApiKey,
         customerId: config.googleAdsCustomerId,
         loginCustomerId: config.googleAdsLoginCustomerId,

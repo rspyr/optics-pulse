@@ -86,7 +86,7 @@ router.get("/integrations/tenant-config/:tenantId", requireRole("super_admin", "
     try {
       const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
       configuredIntegrations.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret);
-      configuredIntegrations.google_ads = !!(config.googleAdsApiKey || config.googleAdsDeveloperToken);
+      configuredIntegrations.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
       configuredIntegrations.meta = !!(config.metaAccessToken && config.metaAdAccountId);
       configuredIntegrations.callrail = !!config.callRailApiKey;
     } catch {
