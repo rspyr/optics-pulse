@@ -8,6 +8,7 @@ import {
   TrendingUp, DollarSign, Calendar, Search,
   AlertTriangle, X, Zap, Bookmark, Plus, Trash2,
 } from "lucide-react";
+import ChatDrawer from "@/components/chat-drawer";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ReferenceLine,
@@ -879,6 +880,8 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </div>
         </div>
       </PremiumCard>
+
+      <ChatDrawer tenantId={effectiveTenantId} />
     </div>
   );
 }

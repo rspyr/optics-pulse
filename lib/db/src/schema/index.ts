@@ -8,3 +8,4 @@ export * from "./sessions";
 export * from "./change-logs";
 export * from "./reconciliation-runs";
 export * from "./integration-sync-logs";
+export * from "./saved-questions";

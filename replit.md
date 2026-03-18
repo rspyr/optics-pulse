@@ -50,7 +50,7 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`, `saved_questions`
 Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
 User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
 
@@ -102,6 +102,13 @@ All under `/api` prefix:
 - `POST /integrations/sync/:integration` — trigger manual sync (service_titan, google_ads, meta) for a tenant
 - `GET /integrations/sync-status` — sync status dashboard with per-integration last sync time, record counts, error counts
 - `GET /integrations/tenant-config/:tenantId` — check which integrations are configured per tenant
+
+### Chat Analytics
+- `POST /chat/ask` — submit a natural language question, returns formatted answer with data
+- `GET /chat/suggestions` — contextual suggested questions based on data patterns (CPL changes, booking rates, etc.)
+- `GET /chat/saved-questions` — list user's saved questions
+- `POST /chat/saved-questions` — save a question
+- `DELETE /chat/saved-questions/:id` — remove a saved question
 
 ### Dashboard
 - `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
@@ -158,7 +165,7 @@ Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanCl
 - `/settings` — System configuration
 
 ### Client Portal (client_admin, client_user) — "Searchlight Killer"
-- `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart
+- `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart, Chat Analytics drawer ("Ask Your Data")
 - `/leads` — Leads HUD (same gamified interface as agency, scoped to client's tenant)
 - `/attribution` — Attribution Log
 - `/settings` — Settings

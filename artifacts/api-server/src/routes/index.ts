@@ -12,6 +12,7 @@ import dashboardRouter from "./dashboard";
 import adminRouter from "./admin";
 import changeLogsRouter from "./change-logs";
 import integrationsRouter from "./integrations";
+import chatRouter from "./chat";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(dashboardRouter);
 router.use(adminRouter);
 router.use(changeLogsRouter);
 router.use(integrationsRouter);
+router.use(chatRouter);
 
 export default router;
