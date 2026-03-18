@@ -583,6 +583,21 @@ export interface TrainingAlertResponse {
   message: string;
 }
 
+export interface TrainingPurchase {
+  id: number;
+  trainingItemId: number;
+  tenantId: number;
+  userId: number;
+  pricePaid: number;
+  purchasedAt: string;
+}
+
+export interface TrainingPurchaseResponse {
+  success: boolean;
+  alreadyPurchased?: boolean;
+  purchase?: TrainingPurchase;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -798,4 +813,8 @@ export type DeleteTrainingItem200 = {
 
 export type DismissTraining200 = {
   success?: boolean;
+};
+
+export type ListAllTrainingPurchasesParams = {
+  tenantId?: number;
 };

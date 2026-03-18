@@ -6,6 +6,13 @@ import {
   useDeleteTrainingItem,
   useCheckTrainingAlerts,
 } from "@workspace/api-client-react";
+import type {
+  CreateTrainingItemBody,
+  CreateTrainingItemBodyMetricTrigger,
+  UpdateTrainingItemBody,
+  TrainingAlertResponse,
+  TrainingAlertResponseAlertsItem,
+} from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import {
@@ -93,25 +100,37 @@ export default function AdminTraining() {
   };
 
   const handleSubmit = async () => {
-    const payload: Record<string, unknown> = {
-      title: form.title,
-      description: form.description,
-      category: form.category,
-      contentType: form.contentType,
-      metricTrigger: form.metricTrigger || null,
-      thresholdValue: form.thresholdValue ? Number(form.thresholdValue) : null,
-      thresholdDirection: form.thresholdDirection,
-      price: form.price ? Number(form.price) : null,
-      url: form.url || null,
-      thumbnailUrl: form.thumbnailUrl || null,
-      sortOrder: Number(form.sortOrder),
-      isActive: form.isActive,
-    };
-
     if (editingId) {
-      await updateMutation.mutateAsync({ id: editingId, data: payload as any });
+      const payload: UpdateTrainingItemBody = {
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        contentType: form.contentType,
+        metricTrigger: form.metricTrigger || null,
+        thresholdValue: form.thresholdValue ? Number(form.thresholdValue) : null,
+        thresholdDirection: form.thresholdDirection,
+        price: form.price ? Number(form.price) : null,
+        url: form.url || null,
+        sortOrder: Number(form.sortOrder),
+        isActive: form.isActive,
+      };
+      await updateMutation.mutateAsync({ id: editingId, data: payload });
     } else {
-      await createMutation.mutateAsync({ data: payload as any });
+      const payload: CreateTrainingItemBody = {
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        contentType: form.contentType,
+        metricTrigger: (form.metricTrigger || undefined) as CreateTrainingItemBodyMetricTrigger | undefined,
+        thresholdValue: form.thresholdValue ? Number(form.thresholdValue) : null,
+        thresholdDirection: form.thresholdDirection,
+        price: form.price ? Number(form.price) : null,
+        url: form.url || null,
+        thumbnailUrl: form.thumbnailUrl || null,
+        sortOrder: Number(form.sortOrder),
+        isActive: form.isActive,
+      };
+      await createMutation.mutateAsync({ data: payload });
     }
     setShowForm(false);
     refetch();
@@ -123,12 +142,14 @@ export default function AdminTraining() {
   };
 
   const handleCheckAlerts = async () => {
-    await alertsMutation.mutateAsync(undefined as any);
+    await alertsMutation.mutateAsync();
     setExpandedAlerts(true);
   };
 
   const freeItems = (items || []).filter(i => i.contentType === "free_tip");
   const paidItems = (items || []).filter(i => i.contentType === "paid_course");
+
+  const alertsData = alertsMutation.data as TrainingAlertResponse | undefined;
 
   if (isLoading) {
     return (
@@ -165,30 +186,30 @@ export default function AdminTraining() {
         </div>
       </header>
 
-      {alertsMutation.data && (
+      {alertsData && (
         <PremiumCard className="p-5">
           <button
             onClick={() => setExpandedAlerts(!expandedAlerts)}
             className="w-full flex items-center justify-between"
           >
             <div className="flex items-center gap-3">
-              {(alertsMutation.data as any).alertsGenerated > 0 ? (
+              {alertsData.alertsGenerated > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-amber-400" />
               ) : (
                 <CheckCircle className="w-5 h-5 text-emerald-400" />
               )}
-              <span className="text-sm text-white font-medium">{(alertsMutation.data as any).message}</span>
+              <span className="text-sm text-white font-medium">{alertsData.message}</span>
             </div>
             {expandedAlerts ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
           </button>
-          {expandedAlerts && (alertsMutation.data as any).alerts?.length > 0 && (
+          {expandedAlerts && alertsData.alerts?.length > 0 && (
             <div className="mt-4 space-y-2">
-              {(alertsMutation.data as any).alerts.map((alert: any, i: number) => (
+              {alertsData.alerts.map((alert: TrainingAlertResponseAlertsItem, i: number) => (
                 <div key={i} className="flex items-center gap-4 px-4 py-3 bg-white/5 rounded-lg border border-white/5">
                   <div className="flex-1">
                     <p className="text-sm text-white font-medium">{alert.tenantName}</p>
                     <p className="text-xs text-muted-foreground">
-                      {alert.metric.replace("_", " ")} is {alert.value} (threshold: {alert.threshold})
+                      {(alert.metric || "").replace("_", " ")} is {alert.value} (threshold: {alert.threshold})
                     </p>
                   </div>
                   <span className="text-xs text-amber-400 bg-amber-500/10 px-2 py-1 rounded">{alert.trainingTitle}</span>

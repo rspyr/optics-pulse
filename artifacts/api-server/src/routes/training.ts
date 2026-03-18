@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, trainingItemsTable, trainingDismissalsTable, trainingEmailLogsTable, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable } from "@workspace/db";
+import { db, trainingItemsTable, trainingDismissalsTable, trainingEmailLogsTable, trainingPurchasesTable, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable } from "@workspace/db";
 import { eq, and, desc, inArray, sql, SQL, gte, lte } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
+import { runTrainingAlertCheck } from "../services/training-scheduler";
 
 const router: IRouter = Router();
 
@@ -259,61 +260,25 @@ router.post("/training/dismiss/:id", async (req, res) => {
 });
 
 router.post("/training/check-alerts", requireRole("super_admin", "agency_user"), async (_req, res) => {
-  const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-  const items = await db.select().from(trainingItemsTable).where(
-    and(eq(trainingItemsTable.isActive, true), sql`${trainingItemsTable.metricTrigger} IS NOT NULL`)
-  );
+  const result = await runTrainingAlertCheck();
+  const logs = await db.select().from(trainingEmailLogsTable)
+    .orderBy(desc(trainingEmailLogsTable.sentAt))
+    .limit(20);
 
-  const alerts: { tenantId: number; tenantName: string; metric: string; value: number; threshold: number; trainingTitle: string }[] = [];
-
-  for (const tenant of tenants) {
-    const metrics = await computeTenantMetrics(tenant.id);
-
-    for (const item of items) {
-      if (!item.metricTrigger || item.thresholdValue == null) continue;
-
-      const metricValue = metrics[item.metricTrigger as keyof typeof metrics];
-      if (metricValue === undefined) continue;
-
-      const direction = item.thresholdDirection || "below";
-      const triggered = direction === "below" ? metricValue < item.thresholdValue : metricValue > item.thresholdValue;
-
-      if (triggered) {
-        const recentLog = await db.select().from(trainingEmailLogsTable).where(
-          and(
-            eq(trainingEmailLogsTable.tenantId, tenant.id),
-            eq(trainingEmailLogsTable.trainingItemId, item.id),
-            gte(trainingEmailLogsTable.sentAt, new Date(Date.now() - 7 * 86400000))
-          )
-        );
-
-        if (recentLog.length === 0) {
-          alerts.push({
-            tenantId: tenant.id,
-            tenantName: tenant.name,
-            metric: item.metricTrigger,
-            value: Math.round(metricValue * 100) / 100,
-            threshold: item.thresholdValue,
-            trainingTitle: item.title,
-          });
-
-          await db.insert(trainingEmailLogsTable).values({
-            tenantId: tenant.id,
-            trainingItemId: item.id,
-            metricTrigger: item.metricTrigger,
-            metricValue: Math.round(metricValue * 100) / 100,
-            thresholdValue: item.thresholdValue,
-          });
-        }
-      }
-    }
-  }
+  const alerts = logs.map(log => ({
+    tenantId: log.tenantId,
+    tenantName: "",
+    metric: log.metricTrigger,
+    value: log.metricValue,
+    threshold: log.thresholdValue,
+    trainingTitle: "",
+  }));
 
   res.json({
-    alertsGenerated: alerts.length,
-    alerts,
-    message: alerts.length > 0
-      ? `${alerts.length} metric alert(s) detected. In production, emails would be sent to tenant owners.`
+    alertsGenerated: result.alertsGenerated,
+    alerts: alerts.slice(0, result.alertsGenerated || 5),
+    message: result.alertsGenerated > 0
+      ? `${result.alertsGenerated} metric alert(s) detected. Alert emails sent to tenant owners.`
       : "All tenant metrics are within thresholds.",
   });
 });
@@ -329,6 +294,69 @@ router.get("/training/email-logs", requireRole("super_admin", "agency_user"), as
     .limit(100);
 
   res.json(logs);
+});
+
+router.post("/training/purchase/:id", async (req, res) => {
+  if (!req.session.userId) { res.status(401).json({ error: "Authentication required" }); return; }
+  if (!req.session.tenantId) { res.status(403).json({ error: "Tenant context required" }); return; }
+
+  const trainingItemId = validateId(String(req.params.id));
+  if (!trainingItemId) { res.status(400).json({ error: "Invalid training item ID" }); return; }
+
+  const [item] = await db.select().from(trainingItemsTable).where(
+    and(eq(trainingItemsTable.id, trainingItemId), eq(trainingItemsTable.isActive, true))
+  );
+  if (!item) { res.status(404).json({ error: "Training item not found" }); return; }
+  if (item.contentType !== "paid_course") { res.status(400).json({ error: "Only paid courses can be purchased" }); return; }
+
+  const existing = await db.select().from(trainingPurchasesTable).where(
+    and(
+      eq(trainingPurchasesTable.trainingItemId, trainingItemId),
+      eq(trainingPurchasesTable.tenantId, req.session.tenantId),
+      eq(trainingPurchasesTable.userId, req.session.userId)
+    )
+  );
+
+  if (existing.length > 0) {
+    res.json({ success: true, alreadyPurchased: true, purchase: existing[0] });
+    return;
+  }
+
+  const [purchase] = await db.insert(trainingPurchasesTable).values({
+    trainingItemId,
+    tenantId: req.session.tenantId,
+    userId: req.session.userId,
+    pricePaid: item.price || 0,
+  }).returning();
+
+  res.status(201).json({ success: true, purchase });
+});
+
+router.get("/training/purchases", async (req, res) => {
+  if (!req.session.userId) { res.status(401).json({ error: "Authentication required" }); return; }
+  if (!req.session.tenantId) { res.status(403).json({ error: "Tenant context required" }); return; }
+
+  const purchases = await db.select().from(trainingPurchasesTable).where(
+    and(
+      eq(trainingPurchasesTable.tenantId, req.session.tenantId),
+      eq(trainingPurchasesTable.userId, req.session.userId)
+    )
+  ).orderBy(desc(trainingPurchasesTable.purchasedAt));
+
+  res.json(purchases);
+});
+
+router.get("/training/purchases/all", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = req.query.tenantId ? validateId(String(req.query.tenantId)) : undefined;
+  const conditions: SQL[] = [];
+  if (tenantId) conditions.push(eq(trainingPurchasesTable.tenantId, tenantId));
+
+  const purchases = await db.select().from(trainingPurchasesTable)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(trainingPurchasesTable.purchasedAt))
+    .limit(100);
+
+  res.json(purchases);
 });
 
 export default router;

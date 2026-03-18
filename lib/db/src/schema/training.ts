@@ -42,6 +42,16 @@ export const trainingEmailLogsTable = pgTable("training_email_logs", {
   sentAt: timestamp("sent_at").notNull().defaultNow(),
 });
 
+export const trainingPurchasesTable = pgTable("training_purchases", {
+  id: serial("id").primaryKey(),
+  trainingItemId: integer("training_item_id").notNull().references(() => trainingItemsTable.id),
+  tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
+  userId: integer("user_id").notNull().references(() => usersTable.id),
+  pricePaid: real("price_paid").notNull(),
+  purchasedAt: timestamp("purchased_at").notNull().defaultNow(),
+});
+
 export type TrainingItem = typeof trainingItemsTable.$inferSelect;
 export type TrainingDismissal = typeof trainingDismissalsTable.$inferSelect;
 export type TrainingEmailLog = typeof trainingEmailLogsTable.$inferSelect;
+export type TrainingPurchase = typeof trainingPurchasesTable.$inferSelect;

@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
+import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -187,7 +188,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const trainingItems = useMemo(() => {
     if (!trainingData?.items) return [];
-    return (trainingData.items as any[]).filter((i: any) => !dismissedTrainingIds.has(i.id));
+    return (trainingData.items as TrainingItem[]).filter((i: TrainingItem) => !dismissedTrainingIds.has(i.id));
   }, [trainingData, dismissedTrainingIds]);
 
   const handleDismissTraining = useCallback((id: number) => {
@@ -485,7 +486,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       {trainingItems.length > 0 && (
         <TrainingCards
           items={trainingItems}
-          metrics={(trainingData?.metrics as any) || {}}
+          metrics={(trainingData?.metrics as TrainingContextualResponseMetrics) || {}}
           onDismiss={handleDismissTraining}
         />
       )}

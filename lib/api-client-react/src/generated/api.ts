@@ -48,6 +48,7 @@ import type {
   JobListResponse,
   Lead,
   LeadListResponse,
+  ListAllTrainingPurchasesParams,
   ListAttributionEventsParams,
   ListCampaignsParams,
   ListChangeLogsParams,
@@ -65,6 +66,8 @@ import type {
   TrainingAlertResponse,
   TrainingContextualResponse,
   TrainingItem,
+  TrainingPurchase,
+  TrainingPurchaseResponse,
   UpdateLeadInput,
   UpdateTenantInput,
   UpdateTrainingItemBody,
@@ -3453,3 +3456,266 @@ export const useCheckTrainingAlerts = <
 > => {
   return useMutation(getCheckTrainingAlertsMutationOptions(options));
 };
+
+/**
+ * @summary Purchase a paid training course
+ */
+export const getPurchaseTrainingItemUrl = (id: number) => {
+  return `/api/training/purchase/${id}`;
+};
+
+export const purchaseTrainingItem = async (
+  id: number,
+  options?: RequestInit,
+): Promise<TrainingPurchaseResponse> => {
+  return customFetch<TrainingPurchaseResponse>(getPurchaseTrainingItemUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getPurchaseTrainingItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof purchaseTrainingItem>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof purchaseTrainingItem>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["purchaseTrainingItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof purchaseTrainingItem>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return purchaseTrainingItem(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PurchaseTrainingItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof purchaseTrainingItem>>
+>;
+
+export type PurchaseTrainingItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Purchase a paid training course
+ */
+export const usePurchaseTrainingItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof purchaseTrainingItem>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof purchaseTrainingItem>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getPurchaseTrainingItemMutationOptions(options));
+};
+
+/**
+ * @summary List current user's training purchases
+ */
+export const getListMyTrainingPurchasesUrl = () => {
+  return `/api/training/purchases`;
+};
+
+export const listMyTrainingPurchases = async (
+  options?: RequestInit,
+): Promise<TrainingPurchase[]> => {
+  return customFetch<TrainingPurchase[]>(getListMyTrainingPurchasesUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMyTrainingPurchasesQueryKey = () => {
+  return [`/api/training/purchases`] as const;
+};
+
+export const getListMyTrainingPurchasesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMyTrainingPurchases>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTrainingPurchases>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListMyTrainingPurchasesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listMyTrainingPurchases>>
+  > = ({ signal }) => listMyTrainingPurchases({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTrainingPurchases>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListMyTrainingPurchasesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMyTrainingPurchases>>
+>;
+export type ListMyTrainingPurchasesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List current user's training purchases
+ */
+
+export function useListMyTrainingPurchases<
+  TData = Awaited<ReturnType<typeof listMyTrainingPurchases>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTrainingPurchases>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListMyTrainingPurchasesQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all training purchases (admin only)
+ */
+export const getListAllTrainingPurchasesUrl = (
+  params?: ListAllTrainingPurchasesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/training/purchases/all?${stringifiedParams}`
+    : `/api/training/purchases/all`;
+};
+
+export const listAllTrainingPurchases = async (
+  params?: ListAllTrainingPurchasesParams,
+  options?: RequestInit,
+): Promise<TrainingPurchase[]> => {
+  return customFetch<TrainingPurchase[]>(
+    getListAllTrainingPurchasesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAllTrainingPurchasesQueryKey = (
+  params?: ListAllTrainingPurchasesParams,
+) => {
+  return [`/api/training/purchases/all`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAllTrainingPurchasesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAllTrainingPurchases>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListAllTrainingPurchasesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAllTrainingPurchases>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAllTrainingPurchasesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAllTrainingPurchases>>
+  > = ({ signal }) =>
+    listAllTrainingPurchases(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAllTrainingPurchases>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAllTrainingPurchasesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAllTrainingPurchases>>
+>;
+export type ListAllTrainingPurchasesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all training purchases (admin only)
+ */
+
+export function useListAllTrainingPurchases<
+  TData = Awaited<ReturnType<typeof listAllTrainingPurchases>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListAllTrainingPurchasesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAllTrainingPurchases>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAllTrainingPurchasesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

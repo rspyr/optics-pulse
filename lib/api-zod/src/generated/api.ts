@@ -935,3 +935,59 @@ export const CheckTrainingAlertsResponse = zod.object({
   ),
   message: zod.string(),
 });
+
+/**
+ * @summary Purchase a paid training course
+ */
+export const PurchaseTrainingItemParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PurchaseTrainingItemResponse = zod.object({
+  success: zod.boolean(),
+  alreadyPurchased: zod.boolean().optional(),
+  purchase: zod
+    .object({
+      id: zod.number(),
+      trainingItemId: zod.number(),
+      tenantId: zod.number(),
+      userId: zod.number(),
+      pricePaid: zod.number(),
+      purchasedAt: zod.date(),
+    })
+    .optional(),
+});
+
+/**
+ * @summary List current user's training purchases
+ */
+export const ListMyTrainingPurchasesResponseItem = zod.object({
+  id: zod.number(),
+  trainingItemId: zod.number(),
+  tenantId: zod.number(),
+  userId: zod.number(),
+  pricePaid: zod.number(),
+  purchasedAt: zod.date(),
+});
+export const ListMyTrainingPurchasesResponse = zod.array(
+  ListMyTrainingPurchasesResponseItem,
+);
+
+/**
+ * @summary List all training purchases (admin only)
+ */
+export const ListAllTrainingPurchasesQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const ListAllTrainingPurchasesResponseItem = zod.object({
+  id: zod.number(),
+  trainingItemId: zod.number(),
+  tenantId: zod.number(),
+  userId: zod.number(),
+  pricePaid: zod.number(),
+  purchasedAt: zod.date(),
+});
+export const ListAllTrainingPurchasesResponse = zod.array(
+  ListAllTrainingPurchasesResponseItem,
+);

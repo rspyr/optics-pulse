@@ -4,25 +4,13 @@ import {
   Lightbulb, GraduationCap, ExternalLink, X, DollarSign,
   TrendingDown, AlertTriangle, ChevronDown, ChevronUp,
 } from "lucide-react";
+import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 
 const API_BASE = "";
 
-interface TrainingItem {
-  id: number;
-  title: string;
-  description: string;
-  category: string;
-  contentType: string;
-  metricTrigger: string | null;
-  thresholdValue: number | null;
-  thresholdDirection: string | null;
-  price: number | null;
-  url: string | null;
-}
-
 interface TrainingCardsProps {
   items: TrainingItem[];
-  metrics: Record<string, number>;
+  metrics: TrainingContextualResponseMetrics;
   onDismiss: (id: number) => void;
 }
 
@@ -81,9 +69,10 @@ export default function TrainingCards({ items, metrics, onDismiss }: TrainingCar
       {!collapsed && (
         <div className="px-5 pb-5 space-y-3">
           {items.map(item => {
-            const metricLabel = item.metricTrigger ? METRIC_LABELS[item.metricTrigger] || item.metricTrigger : null;
-            const currentValue = item.metricTrigger ? metrics[item.metricTrigger] : null;
-            const formatter = item.metricTrigger ? METRIC_FORMATS[item.metricTrigger] : null;
+            const trigger = item.metricTrigger || null;
+            const metricLabel = trigger ? METRIC_LABELS[trigger] || trigger : null;
+            const currentValue = trigger ? (metrics as Record<string, number | undefined>)[trigger] ?? null : null;
+            const formatter = trigger ? METRIC_FORMATS[trigger] : null;
 
             return (
               <div

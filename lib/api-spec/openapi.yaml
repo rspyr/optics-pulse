@@ -912,6 +912,66 @@ paths:
               schema:
                 $ref: "#/components/schemas/TrainingAlertResponse"
 
+  /training/purchase/{id}:
+    post:
+      operationId: purchaseTrainingItem
+      tags: [training]
+      summary: Purchase a paid training course
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Purchase created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingPurchaseResponse"
+        "200":
+          description: Already purchased
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingPurchaseResponse"
+
+  /training/purchases:
+    get:
+      operationId: listMyTrainingPurchases
+      tags: [training]
+      summary: List current user's training purchases
+      responses:
+        "200":
+          description: User purchases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrainingPurchase"
+
+  /training/purchases/all:
+    get:
+      operationId: listAllTrainingPurchases
+      tags: [training]
+      summary: List all training purchases (admin only)
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: All purchases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrainingPurchase"
+
 components:
   schemas:
     HealthStatus:
@@ -1747,3 +1807,32 @@ components:
                 type: string
         message:
           type: string
+
+    TrainingPurchase:
+      type: object
+      required: [id, trainingItemId, tenantId, userId, pricePaid, purchasedAt]
+      properties:
+        id:
+          type: integer
+        trainingItemId:
+          type: integer
+        tenantId:
+          type: integer
+        userId:
+          type: integer
+        pricePaid:
+          type: number
+        purchasedAt:
+          type: string
+          format: date-time
+
+    TrainingPurchaseResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        alreadyPurchased:
+          type: boolean
+        purchase:
+          $ref: "#/components/schemas/TrainingPurchase"
