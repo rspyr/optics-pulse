@@ -34,6 +34,7 @@ import type {
   DeleteTrainingItem200,
   DismissTraining200,
   GetAdminDashboardStatsParams,
+  GetAdminLeaderboardParams,
   GetCampaignStatsParams,
   GetDashboardBenchmarksParams,
   GetDashboardOverviewParams,
@@ -48,6 +49,7 @@ import type {
   JobListResponse,
   Lead,
   LeadListResponse,
+  LeaderboardResponse,
   ListAllTrainingPurchasesParams,
   ListAttributionEventsParams,
   ListCampaignsParams,
@@ -2370,6 +2372,106 @@ export const useUpdateUser = <
 > => {
   return useMutation(getUpdateUserMutationOptions(options));
 };
+
+/**
+ * @summary Get cross-client leaderboard with ranked performance and trends
+ */
+export const getGetAdminLeaderboardUrl = (
+  params?: GetAdminLeaderboardParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/leaderboard?${stringifiedParams}`
+    : `/api/admin/leaderboard`;
+};
+
+export const getAdminLeaderboard = async (
+  params?: GetAdminLeaderboardParams,
+  options?: RequestInit,
+): Promise<LeaderboardResponse> => {
+  return customFetch<LeaderboardResponse>(getGetAdminLeaderboardUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminLeaderboardQueryKey = (
+  params?: GetAdminLeaderboardParams,
+) => {
+  return [`/api/admin/leaderboard`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetAdminLeaderboardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminLeaderboard>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAdminLeaderboardParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminLeaderboard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminLeaderboardQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminLeaderboard>>
+  > = ({ signal }) =>
+    getAdminLeaderboard(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminLeaderboard>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminLeaderboardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminLeaderboard>>
+>;
+export type GetAdminLeaderboardQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get cross-client leaderboard with ranked performance and trends
+ */
+
+export function useGetAdminLeaderboard<
+  TData = Awaited<ReturnType<typeof getAdminLeaderboard>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAdminLeaderboardParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminLeaderboard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminLeaderboardQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Get aggregated stats for all tenants (Command Center)

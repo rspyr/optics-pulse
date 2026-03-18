@@ -110,6 +110,9 @@ All under `/api` prefix:
 - `POST /chat/saved-questions` — save a question
 - `DELETE /chat/saved-questions/:id` — remove a saved question
 
+### Leaderboards
+- `GET /admin/leaderboard?metric=closeRate|revenue|cpl|bookingRate` — cross-client ranked leaderboard with period-over-period trends, agency average benchmark, outlier detection (1.5σ), and per-tenant product purchases
+
 ### Dashboard
 - `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
 - `GET /dashboard/spend-revenue` — daily spend vs revenue chart data (supports date range filtering)

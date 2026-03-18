@@ -598,6 +598,50 @@ export interface TrainingPurchaseResponse {
   purchase?: TrainingPurchase;
 }
 
+export interface LeaderboardProduct {
+  name: string;
+  category: string;
+  pricePaid: number;
+  purchasedAt?: string | null;
+}
+
+export interface LeaderboardEntry {
+  tenantId: number;
+  tenantName: string;
+  metricValue: number;
+  previousValue: number;
+  trend: number;
+  rank: number;
+  closeRate: number;
+  revenue: number;
+  cpl: number;
+  bookingRate: number;
+  roas: number;
+  totalLeads: number;
+  spend: number;
+  isOutlier: boolean;
+  outlierDirection?: string | null;
+  products: LeaderboardProduct[];
+}
+
+export type LeaderboardResponsePeriod = {
+  start?: string;
+  end?: string;
+};
+
+export type LeaderboardResponsePreviousPeriod = {
+  start?: string;
+  end?: string;
+};
+
+export interface LeaderboardResponse {
+  metric: string;
+  period: LeaderboardResponsePeriod;
+  previousPeriod: LeaderboardResponsePreviousPeriod;
+  agencyAverage: number;
+  rankings: LeaderboardEntry[];
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -708,6 +752,20 @@ export type GetSpendRevenueChartParams = {
 export type Logout200 = {
   success?: boolean;
 };
+
+export type GetAdminLeaderboardParams = {
+  metric?: GetAdminLeaderboardMetric;
+};
+
+export type GetAdminLeaderboardMetric =
+  (typeof GetAdminLeaderboardMetric)[keyof typeof GetAdminLeaderboardMetric];
+
+export const GetAdminLeaderboardMetric = {
+  closeRate: "closeRate",
+  revenue: "revenue",
+  cpl: "cpl",
+  bookingRate: "bookingRate",
+} as const;
 
 export type GetAdminDashboardStatsParams = {
   startDate?: string;

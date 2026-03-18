@@ -13,6 +13,7 @@ import {
   Building,
   GraduationCap,
   BookOpen,
+  Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -25,6 +26,7 @@ const AGENCY_NAV = [
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/admin/tenants", label: "Tenants", icon: Building },
   { href: "/admin/users", label: "Users", icon: UserCog },
+  { href: "/leaderboards", label: "Leaderboards", icon: Trophy },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

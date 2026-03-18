@@ -662,6 +662,57 @@ export const UpdateUserResponse = zod.object({
 });
 
 /**
+ * @summary Get cross-client leaderboard with ranked performance and trends
+ */
+export const getAdminLeaderboardQueryMetricDefault = `closeRate`;
+
+export const GetAdminLeaderboardQueryParams = zod.object({
+  metric: zod
+    .enum(["closeRate", "revenue", "cpl", "bookingRate"])
+    .default(getAdminLeaderboardQueryMetricDefault),
+});
+
+export const GetAdminLeaderboardResponse = zod.object({
+  metric: zod.string(),
+  period: zod.object({
+    start: zod.string().optional(),
+    end: zod.string().optional(),
+  }),
+  previousPeriod: zod.object({
+    start: zod.string().optional(),
+    end: zod.string().optional(),
+  }),
+  agencyAverage: zod.number(),
+  rankings: zod.array(
+    zod.object({
+      tenantId: zod.number(),
+      tenantName: zod.string(),
+      metricValue: zod.number(),
+      previousValue: zod.number(),
+      trend: zod.number(),
+      rank: zod.number(),
+      closeRate: zod.number(),
+      revenue: zod.number(),
+      cpl: zod.number(),
+      bookingRate: zod.number(),
+      roas: zod.number(),
+      totalLeads: zod.number(),
+      spend: zod.number(),
+      isOutlier: zod.boolean(),
+      outlierDirection: zod.string().nullish(),
+      products: zod.array(
+        zod.object({
+          name: zod.string(),
+          category: zod.string(),
+          pricePaid: zod.number(),
+          purchasedAt: zod.date().nullish(),
+        }),
+      ),
+    }),
+  ),
+});
+
+/**
  * @summary Get aggregated stats for all tenants (Command Center)
  */
 export const GetAdminDashboardStatsQueryParams = zod.object({
