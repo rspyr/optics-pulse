@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -28,8 +28,15 @@ const queryClient = new QueryClient({
   },
 });
 
+function AgencyGuard({ children }: { children: React.ReactNode }) {
+  const { isAgency } = useAuth();
+  if (!isAgency) return <Redirect to="/" />;
+  return <>{children}</>;
+}
+
 function AuthenticatedRoutes() {
   const { user, loading, isAgency } = useAuth();
+  const [location] = useLocation();
 
   if (loading) {
     return (
@@ -48,6 +55,15 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
+  if (location === "/" && isAgency) {
+    return <Redirect to="/internal" />;
+  }
+
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users"];
+  if (!isAgency && agencyOnlyPaths.includes(location)) {
+    return <Redirect to="/" />;
+  }
+
   return (
     <AppLayout>
       <Switch>
@@ -55,14 +71,10 @@ function AuthenticatedRoutes() {
         <Route path="/leads" component={Leads} />
         <Route path="/attribution" component={Attribution} />
         <Route path="/settings" component={Settings} />
-        {isAgency && (
-          <>
-            <Route path="/internal" component={Internal} />
-            <Route path="/clients" component={Clients} />
-            <Route path="/admin/tenants" component={AdminTenants} />
-            <Route path="/admin/users" component={AdminUsers} />
-          </>
-        )}
+        <Route path="/internal">{() => <AgencyGuard><Internal /></AgencyGuard>}</Route>
+        <Route path="/clients">{() => <AgencyGuard><Clients /></AgencyGuard>}</Route>
+        <Route path="/admin/tenants">{() => <AgencyGuard><AdminTenants /></AgencyGuard>}</Route>
+        <Route path="/admin/users">{() => <AgencyGuard><AdminUsers /></AgencyGuard>}</Route>
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

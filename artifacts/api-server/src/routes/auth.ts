@@ -35,6 +35,7 @@ router.post("/auth/login", async (req, res) => {
 
     req.session.userId = user.id;
     req.session.userRole = user.role;
+    req.session.tenantId = user.tenantId;
     req.session.save(() => {
       res.json({
         id: user.id,

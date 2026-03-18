@@ -243,6 +243,8 @@ export default function Internal() {
         <LeadDrilldownModal
           tenantId={drilldownTenant.id}
           tenantName={drilldownTenant.name}
+          startDate={startDate}
+          endDate={endDate}
           onClose={() => setDrilldownTenant(null)}
         />
       )}
@@ -267,8 +269,20 @@ function MetricRow({ label, value, avg, delta }: { label: string; value: string;
   );
 }
 
-function LeadDrilldownModal({ tenantId, tenantName, onClose }: { tenantId: number; tenantName: string; onClose: () => void }) {
-  const { data, isLoading } = useListLeads({ tenantId, limit: 100 });
+function getLeadStage(status: string): string {
+  switch (status) {
+    case "new": return "Prospect";
+    case "contacted": return "Engaged";
+    case "booked": return "Opportunity";
+    case "sold": return "Closed-Won";
+    case "lost": return "Closed-Lost";
+    case "cancelled": return "Closed-Lost";
+    default: return "Unknown";
+  }
+}
+
+function LeadDrilldownModal({ tenantId, tenantName, startDate, endDate, onClose }: { tenantId: number; tenantName: string; startDate: string; endDate: string; onClose: () => void }) {
+  const { data, isLoading } = useListLeads({ tenantId, limit: 200 });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -291,42 +305,56 @@ function LeadDrilldownModal({ tenantId, tenantName, onClose }: { tenantId: numbe
           {isLoading ? (
             <div className="text-center text-muted-foreground py-8">Loading leads...</div>
           ) : (
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-white/5">
-                  <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
-                  <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Source</th>
-                  <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Interest</th>
-                  <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
-                  <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {data?.leads?.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-white/[0.02]">
-                    <td className="py-3 text-sm text-white">{lead.firstName} {lead.lastName}</td>
-                    <td className="py-3 text-sm text-muted-foreground">{lead.source}</td>
-                    <td className="py-3 text-sm text-muted-foreground">{lead.interestType || "—"}</td>
-                    <td className="py-3">
-                      <Badge variant={
-                        lead.status === "sold" ? "success" :
-                        lead.status === "booked" ? "default" :
-                        lead.status === "lost" || lead.status === "cancelled" ? "danger" :
-                        "neutral"
-                      }>
-                        {lead.status}
-                      </Badge>
-                    </td>
-                    <td className="py-3 text-sm text-muted-foreground">
-                      {new Date(lead.createdAt).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-                {(!data?.leads || data.leads.length === 0) && (
-                  <tr><td colSpan={5} className="py-8 text-center text-muted-foreground">No leads found</td></tr>
-                )}
-              </tbody>
-            </table>
+            (() => {
+              const startMs = new Date(startDate).getTime();
+              const endMs = new Date(endDate).getTime() + 86400000;
+              const filteredLeads = data?.leads?.filter((lead) => {
+                const leadTime = new Date(lead.createdAt).getTime();
+                return leadTime >= startMs && leadTime <= endMs;
+              }) || [];
+              return (
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-white/5">
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Source</th>
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Interest</th>
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Stage</th>
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
+                      <th className="pb-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {filteredLeads.map((lead) => (
+                      <tr key={lead.id} className="hover:bg-white/[0.02]">
+                        <td className="py-3 text-sm text-white">{lead.firstName} {lead.lastName}</td>
+                        <td className="py-3 text-sm text-muted-foreground">{lead.source}</td>
+                        <td className="py-3 text-sm text-muted-foreground">{lead.interestType || "—"}</td>
+                        <td className="py-3">
+                          <span className="text-xs font-medium text-ice/80">{getLeadStage(lead.status)}</span>
+                        </td>
+                        <td className="py-3">
+                          <Badge variant={
+                            lead.status === "sold" ? "success" :
+                            lead.status === "booked" ? "default" :
+                            lead.status === "lost" || lead.status === "cancelled" ? "danger" :
+                            "neutral"
+                          }>
+                            {lead.status}
+                          </Badge>
+                        </td>
+                        <td className="py-3 text-sm text-muted-foreground">
+                          {new Date(lead.createdAt).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredLeads.length === 0 && (
+                      <tr><td colSpan={6} className="py-8 text-center text-muted-foreground">No leads found in date range</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              );
+            })()
           )}
         </div>
       </div>
