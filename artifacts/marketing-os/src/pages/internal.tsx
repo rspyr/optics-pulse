@@ -9,8 +9,8 @@ type SortDir = "asc" | "desc";
 
 export default function Internal() {
   const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
-  const startDate = thirtyDaysAgo.toISOString().split("T")[0];
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startDate = monthStart.toISOString().split("T")[0];
   const endDate = now.toISOString().split("T")[0];
 
   const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate });
