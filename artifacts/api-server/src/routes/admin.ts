@@ -330,7 +330,7 @@ router.get("/admin/leaderboard", ...agencyOnly, async (req, res) => {
 
     const ranked = entries.map((e, i) => ({ ...e, rank: i + 1 }));
 
-    const values = ranked.map(e => e.metricValue).filter(v => v > 0);
+    const values = ranked.map(e => e.metricValue);
     const agencyAverage = values.length > 0 ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100 : 0;
     const stdDev = values.length > 1
       ? Math.sqrt(values.reduce((sum, v) => sum + Math.pow(v - agencyAverage, 2), 0) / values.length)

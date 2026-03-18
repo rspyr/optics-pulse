@@ -18,11 +18,12 @@ const METRIC_TABS: { key: MetricKey; label: string; icon: typeof Trophy; format:
   { key: "bookingRate", label: "Booking Rate", icon: Users, format: (v) => `${v.toFixed(1)}%`, unit: "%" },
 ];
 
-function TrendBadge({ trend }: { trend: number }) {
+function TrendBadge({ trend, lowerIsBetter = false }: { trend: number; lowerIsBetter?: boolean }) {
   if (trend === 0) return <span className="inline-flex items-center gap-1 text-xs text-gray-400"><Minus className="w-3 h-3" />0%</span>;
   const isUp = trend > 0;
+  const isPositive = lowerIsBetter ? !isUp : isUp;
   return (
-    <span className={cn("inline-flex items-center gap-1 text-xs font-medium", isUp ? "text-emerald-400" : "text-red-400")}>
+    <span className={cn("inline-flex items-center gap-1 text-xs font-medium", isPositive ? "text-emerald-400" : "text-red-400")}>
       {isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
       {isUp ? "+" : ""}{trend.toFixed(1)}%
     </span>
@@ -178,7 +179,7 @@ export default function Leaderboards() {
                     <td className="p-4 text-right">
                       <span className="font-display text-lg text-white">{tab.format(entry.metricValue)}</span>
                     </td>
-                    <td className="p-4 text-right"><TrendBadge trend={entry.trend} /></td>
+                    <td className="p-4 text-right"><TrendBadge trend={entry.trend} lowerIsBetter={activeMetric === "cpl"} /></td>
                     <td className="p-4 text-right">
                       <span className={cn("text-sm font-medium", isGood ? "text-emerald-400" : "text-red-400")}>
                         {vsAvg > 0 ? "+" : ""}{vsAvg.toFixed(1)}%
@@ -277,7 +278,8 @@ function ClientDetailModal({
               {agencyAverage > 0 && (
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-blue-400 z-10"
-                  style={{ left: `${Math.min(50, 100)}%` }}
+                  style={{ left: "50%" }}
+                  title="Agency Average"
                 />
               )}
               <div
