@@ -10,14 +10,16 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const jobConditions: SQL[] = [];
   const spendConditions: SQL[] = [];
 
-  let campaignIds: number[] = [];
+  let tenantHasCampaigns = true;
   if (tenantId) {
     leadConditions.push(eq(leadsTable.tenantId, tenantId));
     jobConditions.push(eq(jobsTable.tenantId, tenantId));
     const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
-    campaignIds = tenantCampaigns.map(c => c.id);
+    const campaignIds = tenantCampaigns.map(c => c.id);
     if (campaignIds.length > 0) {
       spendConditions.push(inArray(campaignDailyStatsTable.campaignId, campaignIds));
+    } else {
+      tenantHasCampaigns = false;
     }
   }
   if (startDate) {
@@ -38,7 +40,9 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const [leads, jobs, spendResult] = await Promise.all([
     db.select().from(leadsTable).where(leadWhere),
     db.select().from(jobsTable).where(jobWhere),
-    db.select({ total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)` }).from(campaignDailyStatsTable).where(spendWhere),
+    tenantHasCampaigns
+      ? db.select({ total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)` }).from(campaignDailyStatsTable).where(spendWhere)
+      : Promise.resolve([{ total: 0 }]),
   ]);
 
   const totalLeads = leads.length;
