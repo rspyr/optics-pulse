@@ -67,7 +67,7 @@ function AuthenticatedRoutes() {
   return (
     <AppLayout>
       <Switch>
-        <Route path="/" component={Dashboard} />
+        <Route path="/">{() => isAgency ? <Dashboard key="dashboard" /> : <Clients key="clients" />}</Route>
         <Route path="/leads" component={Leads} />
         <Route path="/attribution" component={Attribution} />
         <Route path="/settings" component={Settings} />

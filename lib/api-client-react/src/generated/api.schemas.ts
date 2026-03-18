@@ -244,7 +244,13 @@ export type DashboardOverviewPreviousPeriod = {
   totalRevenue?: number;
   roas?: number;
   totalLeads?: number;
+  bookedLeads?: number;
+  soldLeads?: number;
+  bookingRate?: number;
+  closeRate?: number;
+  avgSaleValue?: number;
   cpl?: number;
+  attributionMatchRate?: number;
 } | null;
 
 export interface DashboardOverview {
@@ -389,6 +395,24 @@ export interface AdminDashboardStats {
   agencyAverages: AgencyAverages;
 }
 
+export interface ChangeLog {
+  id: number;
+  tenantId: number;
+  date: string;
+  title: string;
+  description: string;
+  category: string;
+  createdAt: string;
+}
+
+export interface CreateChangeLogInput {
+  tenantId: number;
+  date: string;
+  title: string;
+  description: string;
+  category?: string;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -485,6 +509,12 @@ export type Logout200 = {
 };
 
 export type GetAdminDashboardStatsParams = {
+  startDate?: string;
+  endDate?: string;
+};
+
+export type ListChangeLogsParams = {
+  tenantId?: number;
   startDate?: string;
   endDate?: string;
 };

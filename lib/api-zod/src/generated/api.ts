@@ -366,7 +366,13 @@ export const GetDashboardOverviewResponse = zod.object({
       totalRevenue: zod.number().optional(),
       roas: zod.number().optional(),
       totalLeads: zod.number().optional(),
+      bookedLeads: zod.number().optional(),
+      soldLeads: zod.number().optional(),
+      bookingRate: zod.number().optional(),
+      closeRate: zod.number().optional(),
+      avgSaleValue: zod.number().optional(),
       cpl: zod.number().optional(),
+      attributionMatchRate: zod.number().optional(),
     })
     .nullish(),
 });
@@ -512,6 +518,37 @@ export const GetAdminDashboardStatsResponse = zod.object({
     totalRevenue: zod.number(),
     totalLeads: zod.number(),
   }),
+});
+
+/**
+ * @summary List change logs for a tenant
+ */
+export const ListChangeLogsQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+  startDate: zod.date().optional(),
+  endDate: zod.date().optional(),
+});
+
+export const ListChangeLogsResponseItem = zod.object({
+  id: zod.number(),
+  tenantId: zod.number(),
+  date: zod.date(),
+  title: zod.string(),
+  description: zod.string(),
+  category: zod.string(),
+  createdAt: zod.date(),
+});
+export const ListChangeLogsResponse = zod.array(ListChangeLogsResponseItem);
+
+/**
+ * @summary Create a change log entry
+ */
+export const CreateChangeLogBody = zod.object({
+  tenantId: zod.number(),
+  date: zod.date(),
+  title: zod.string(),
+  description: zod.string(),
+  category: zod.string().optional(),
 });
 
 /**

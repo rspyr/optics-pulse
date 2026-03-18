@@ -5,20 +5,17 @@ import { requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
 
-router.get("/dashboard/overview", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const startDate = req.query.startDate as string | undefined;
-  const endDate = req.query.endDate as string | undefined;
-
+async function computeMetrics(tenantId: number | null, startDate?: string, endDate?: string) {
   const leadConditions: SQL[] = [];
   const jobConditions: SQL[] = [];
   const spendConditions: SQL[] = [];
 
+  let campaignIds: number[] = [];
   if (tenantId) {
     leadConditions.push(eq(leadsTable.tenantId, tenantId));
     jobConditions.push(eq(jobsTable.tenantId, tenantId));
     const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
-    const campaignIds = tenantCampaigns.map(c => c.id);
+    campaignIds = tenantCampaigns.map(c => c.id);
     if (campaignIds.length > 0) {
       spendConditions.push(inArray(campaignDailyStatsTable.campaignId, campaignIds));
     }
@@ -59,7 +56,7 @@ router.get("/dashboard/overview", async (req, res) => {
   const roas = totalSpend > 0 ? Math.round((totalRevenue / totalSpend) * 100) / 100 : 0;
   const attributionMatchRate = totalJobs > 0 ? Math.round((matchedEvents / totalJobs) * 100 * 10) / 10 : 0;
 
-  res.json({
+  return {
     totalSpend: Math.round(totalSpend * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     roas,
@@ -71,25 +68,82 @@ router.get("/dashboard/overview", async (req, res) => {
     avgSaleValue,
     cpl,
     attributionMatchRate,
-    previousPeriod: null,
-  });
+  };
+}
+
+router.get("/dashboard/overview", async (req, res) => {
+  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
+
+  const current = await computeMetrics(tenantId, startDate, endDate);
+
+  let previousPeriod = null;
+  if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const durationMs = end.getTime() - start.getTime();
+    const prevEnd = new Date(start.getTime() - 86400000);
+    const prevStart = new Date(prevEnd.getTime() - durationMs);
+    previousPeriod = await computeMetrics(
+      tenantId,
+      prevStart.toISOString().split("T")[0],
+      prevEnd.toISOString().split("T")[0]
+    );
+  }
+
+  res.json({ ...current, previousPeriod });
 });
 
 router.get("/dashboard/spend-revenue", async (req, res) => {
   const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
 
   let statsQuery;
   let jobsQuery;
   if (tenantId) {
     const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
     const campaignIds = tenantCampaigns.map(c => c.id);
-    statsQuery = campaignIds.length > 0
-      ? db.select().from(campaignDailyStatsTable).where(inArray(campaignDailyStatsTable.campaignId, campaignIds)).orderBy(campaignDailyStatsTable.date)
-      : Promise.resolve([]);
-    jobsQuery = db.select().from(jobsTable).where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.status, "completed")));
+
+    const statsConditions: SQL[] = [];
+    const jobConditions: SQL[] = [eq(jobsTable.tenantId, tenantId), eq(jobsTable.status, "completed")];
+
+    if (campaignIds.length > 0) {
+      statsConditions.push(inArray(campaignDailyStatsTable.campaignId, campaignIds));
+    }
+    if (startDate) {
+      statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
+      jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
+    }
+    if (endDate) {
+      statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
+      jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
+    }
+
+    statsQuery = campaignIds.length > 0 && statsConditions.length > 0
+      ? db.select().from(campaignDailyStatsTable).where(and(...statsConditions)).orderBy(campaignDailyStatsTable.date)
+      : campaignIds.length > 0
+        ? db.select().from(campaignDailyStatsTable).where(inArray(campaignDailyStatsTable.campaignId, campaignIds)).orderBy(campaignDailyStatsTable.date)
+        : Promise.resolve([]);
+    jobsQuery = db.select().from(jobsTable).where(and(...jobConditions));
   } else {
-    statsQuery = db.select().from(campaignDailyStatsTable).orderBy(campaignDailyStatsTable.date);
-    jobsQuery = db.select().from(jobsTable).where(eq(jobsTable.status, "completed"));
+    const statsConditions: SQL[] = [];
+    const jobConditions: SQL[] = [eq(jobsTable.status, "completed")];
+
+    if (startDate) {
+      statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
+      jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
+    }
+    if (endDate) {
+      statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
+      jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
+    }
+
+    statsQuery = statsConditions.length > 0
+      ? db.select().from(campaignDailyStatsTable).where(and(...statsConditions)).orderBy(campaignDailyStatsTable.date)
+      : db.select().from(campaignDailyStatsTable).orderBy(campaignDailyStatsTable.date);
+    jobsQuery = db.select().from(jobsTable).where(and(...jobConditions));
   }
 
   const [stats, jobs] = await Promise.all([statsQuery, jobsQuery]);

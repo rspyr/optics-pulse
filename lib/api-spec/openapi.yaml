@@ -544,6 +544,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminDashboardStats"
 
+  /change-logs:
+    get:
+      operationId: listChangeLogs
+      tags: [dashboard]
+      summary: List change logs for a tenant
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: List of change logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChangeLog"
+    post:
+      operationId: createChangeLog
+      tags: [dashboard]
+      summary: Create a change log entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChangeLogInput"
+      responses:
+        "201":
+          description: Change log created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeLog"
+
   /dashboard/tenant-performance:
     get:
       operationId: getTenantPerformance
@@ -933,7 +980,19 @@ components:
               type: number
             totalLeads:
               type: integer
+            bookedLeads:
+              type: integer
+            soldLeads:
+              type: integer
+            bookingRate:
+              type: number
+            closeRate:
+              type: number
+            avgSaleValue:
+              type: number
             cpl:
+              type: number
+            attributionMatchRate:
               type: number
           nullable: true
       required: [totalSpend, totalRevenue, roas, totalLeads, bookedLeads, soldLeads, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
@@ -1117,3 +1176,40 @@ components:
         agencyAverages:
           $ref: "#/components/schemas/AgencyAverages"
       required: [tenants, agencyAverages]
+
+    ChangeLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        date:
+          type: string
+          format: date
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, tenantId, date, title, description, category, createdAt]
+
+    CreateChangeLogInput:
+      type: object
+      properties:
+        tenantId:
+          type: integer
+        date:
+          type: string
+          format: date
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+      required: [tenantId, date, title, description]

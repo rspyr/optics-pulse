@@ -11,5 +11,11 @@ export type DashboardOverviewPreviousPeriod = {
   totalRevenue?: number;
   roas?: number;
   totalLeads?: number;
+  bookedLeads?: number;
+  soldLeads?: number;
+  bookingRate?: number;
+  closeRate?: number;
+  avgSaleValue?: number;
   cpl?: number;
+  attributionMatchRate?: number;
 } | null;

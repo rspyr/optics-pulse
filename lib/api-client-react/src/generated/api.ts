@@ -23,6 +23,8 @@ import type {
   AuthUser,
   Campaign,
   CampaignStatsResponse,
+  ChangeLog,
+  CreateChangeLogInput,
   CreateTenantInput,
   CreateUserInput,
   DashboardOverview,
@@ -38,6 +40,7 @@ import type {
   LeadListResponse,
   ListAttributionEventsParams,
   ListCampaignsParams,
+  ListChangeLogsParams,
   ListJobsParams,
   ListLeadsParams,
   LoginInput,
@@ -2069,6 +2072,186 @@ export function useGetAdminDashboardStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary List change logs for a tenant
+ */
+export const getListChangeLogsUrl = (params?: ListChangeLogsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/change-logs?${stringifiedParams}`
+    : `/api/change-logs`;
+};
+
+export const listChangeLogs = async (
+  params?: ListChangeLogsParams,
+  options?: RequestInit,
+): Promise<ChangeLog[]> => {
+  return customFetch<ChangeLog[]>(getListChangeLogsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListChangeLogsQueryKey = (params?: ListChangeLogsParams) => {
+  return [`/api/change-logs`, ...(params ? [params] : [])] as const;
+};
+
+export const getListChangeLogsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listChangeLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListChangeLogsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listChangeLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListChangeLogsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listChangeLogs>>> = ({
+    signal,
+  }) => listChangeLogs(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listChangeLogs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListChangeLogsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listChangeLogs>>
+>;
+export type ListChangeLogsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List change logs for a tenant
+ */
+
+export function useListChangeLogs<
+  TData = Awaited<ReturnType<typeof listChangeLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListChangeLogsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listChangeLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListChangeLogsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a change log entry
+ */
+export const getCreateChangeLogUrl = () => {
+  return `/api/change-logs`;
+};
+
+export const createChangeLog = async (
+  createChangeLogInput: CreateChangeLogInput,
+  options?: RequestInit,
+): Promise<ChangeLog> => {
+  return customFetch<ChangeLog>(getCreateChangeLogUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createChangeLogInput),
+  });
+};
+
+export const getCreateChangeLogMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createChangeLog>>,
+    TError,
+    { data: BodyType<CreateChangeLogInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createChangeLog>>,
+  TError,
+  { data: BodyType<CreateChangeLogInput> },
+  TContext
+> => {
+  const mutationKey = ["createChangeLog"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createChangeLog>>,
+    { data: BodyType<CreateChangeLogInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createChangeLog(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateChangeLogMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createChangeLog>>
+>;
+export type CreateChangeLogMutationBody = BodyType<CreateChangeLogInput>;
+export type CreateChangeLogMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a change log entry
+ */
+export const useCreateChangeLog = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createChangeLog>>,
+    TError,
+    { data: BodyType<CreateChangeLogInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createChangeLog>>,
+  TError,
+  { data: BodyType<CreateChangeLogInput> },
+  TContext
+> => {
+  return useMutation(getCreateChangeLogMutationOptions(options));
+};
 
 /**
  * @summary Get all tenants performance table (agency God View)

@@ -50,7 +50,7 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`
 Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
 User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
 
@@ -93,9 +93,13 @@ All under `/api` prefix:
 - `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification
 
 ### Dashboard
-- `GET /dashboard/overview` — KPI overview (spend, revenue, ROAS, leads, booking/close rates)
-- `GET /dashboard/spend-revenue` — daily spend vs revenue chart data
+- `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
+- `GET /dashboard/spend-revenue` — daily spend vs revenue chart data (supports date range filtering)
 - `GET /dashboard/tenant-performance` — cross-client benchmarking
+
+### Change Logs
+- `GET /change-logs` — list change log entries (by tenantId + date range)
+- `POST /change-logs` — create change log entry (agency only)
 
 ## Attribution Engine (4-Level Waterfall)
 
@@ -117,8 +121,8 @@ All under `/api` prefix:
 - `/admin/users` — User management (CRUD with role assignment)
 - `/settings` — System configuration
 
-### Client Portal (client_admin, client_user)
-- `/` — Dashboard (CPL, booking rate, KPIs)
+### Client Portal (client_admin, client_user) — "Searchlight Killer"
+- `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart
 - `/leads` — Leads view
 - `/attribution` — Attribution Log
 - `/settings` — Settings
@@ -133,6 +137,7 @@ Run `npx tsx lib/db/seed.ts` to populate demo data, then `npx tsx lib/db/seed-us
 - 80 leads with varied statuses
 - 28 jobs linked to booked/sold leads
 - 120 attribution events across all match levels
+- 10 change log entries (marketing changes with dates + descriptions)
 
 ## TypeScript & Composite Projects
 
