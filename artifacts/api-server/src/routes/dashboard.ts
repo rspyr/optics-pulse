@@ -48,7 +48,7 @@ router.get("/dashboard/overview", async (req, res) => {
   const soldLeads = leads.filter(l => l.status === "sold").length;
   const totalRevenue = jobs.filter(j => j.status === "completed").reduce((s, j) => s + (j.revenue || 0), 0);
   const totalSpend = Number(spendResult[0]?.total || 0);
-  const matchedEvents = jobs.filter(j => j.matchedGclid).length;
+  const matchedEvents = jobs.filter(j => j.matchLevel && j.matchLevel !== "unmatched").length;
   const totalJobs = jobs.length;
 
   const bookingRate = totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0;
