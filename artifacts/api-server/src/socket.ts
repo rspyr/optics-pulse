@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable } from "@workspace/db";
-import { eq, and, count, sql } from "drizzle-orm";
+import { db, leadsTable, tenantsTable } from "@workspace/db";
+import { eq, and, count, sql, avg } from "drizzle-orm";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
@@ -60,7 +60,20 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
       return;
     }
 
-    console.log(`[Socket.IO] Client connected: ${socket.id} (user ${session.userId})`);
+    const role = session.userRole;
+    console.log(`[Socket.IO] Client connected: ${socket.id} (user ${session.userId}, role ${role})`);
+
+    if (role === "super_admin" || role === "agency_user") {
+      db.select({ id: tenantsTable.id }).from(tenantsTable).then(tenants => {
+        for (const t of tenants) {
+          socket.join(`tenant-${t.id}`);
+        }
+        console.log(`[Socket.IO] ${socket.id} auto-joined ${tenants.length} tenant rooms (agency)`);
+      }).catch(err => console.error("[Socket.IO] Error auto-joining tenant rooms:", err));
+    } else if (session.tenantId) {
+      socket.join(`tenant-${session.tenantId}`);
+      console.log(`[Socket.IO] ${socket.id} joined tenant-${session.tenantId}`);
+    }
 
     socket.on("join-tenant", (tenantId: number) => {
       if (typeof tenantId !== "number" || !Number.isInteger(tenantId) || tenantId <= 0) {
@@ -68,7 +81,6 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
         return;
       }
 
-      const role = session.userRole;
       if (role === "super_admin" || role === "agency_user") {
         socket.join(`tenant-${tenantId}`);
       } else if (session.tenantId === tenantId) {
@@ -113,7 +125,9 @@ async function createDemoLead(): Promise<void> {
     const firstName = randomFrom(DEMO_FIRST_NAMES);
     const lastName = randomFrom(DEMO_LAST_NAMES);
     const source = randomFrom(DEMO_SOURCES);
-    const tenantId = Math.random() > 0.5 ? 1 : 2;
+    const allTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable);
+    if (allTenants.length === 0) return;
+    const tenantId = randomFrom(allTenants).id;
 
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
@@ -188,7 +202,17 @@ export async function getHudStats(tenantId: number | null) {
   const bookingRate = totalCalls > 0 ? Math.round((bookings / totalCalls) * 100) : 0;
   const commission = bookings * 20;
   const newLeadsToday = allLeadsToday.count;
-  const avgSpeedToLead = Math.round(45 + Math.random() * 120);
+
+  const speedConditions = tenantId
+    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`);
+  const [speedResult] = await db
+    .select({
+      avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
+    })
+    .from(leadsTable)
+    .where(speedConditions);
+  const avgSpeedToLead = Math.round(Number(speedResult?.avgSpeed ?? 0));
 
   return {
     callsMadeToday: totalCalls,

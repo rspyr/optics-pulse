@@ -185,12 +185,6 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
 
     socket.on("connect", () => {
       console.log("[HUD] Socket.IO connected:", socket.id);
-      if (tenantId) {
-        socket.emit("join-tenant", tenantId);
-      } else if (isAgency) {
-        socket.emit("join-tenant", 1);
-        socket.emit("join-tenant", 2);
-      }
     });
 
     socket.on("new-lead", (lead: LeadData) => {
