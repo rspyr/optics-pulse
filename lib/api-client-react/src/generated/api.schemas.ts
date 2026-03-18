@@ -280,6 +280,115 @@ export interface TenantPerformanceRow {
   leadCount: number;
 }
 
+export interface LoginInput {
+  email: string;
+  password: string;
+}
+
+export type AuthUserRole = (typeof AuthUserRole)[keyof typeof AuthUserRole];
+
+export const AuthUserRole = {
+  super_admin: "super_admin",
+  agency_user: "agency_user",
+  client_admin: "client_admin",
+  client_user: "client_user",
+} as const;
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  name: string;
+  role: AuthUserRole;
+  tenantId?: number | null;
+  tenantName?: string | null;
+}
+
+export type AdminUserRole = (typeof AdminUserRole)[keyof typeof AdminUserRole];
+
+export const AdminUserRole = {
+  super_admin: "super_admin",
+  agency_user: "agency_user",
+  client_admin: "client_admin",
+  client_user: "client_user",
+} as const;
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  name: string;
+  role: AdminUserRole;
+  tenantId?: number | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export type CreateUserInputRole =
+  (typeof CreateUserInputRole)[keyof typeof CreateUserInputRole];
+
+export const CreateUserInputRole = {
+  super_admin: "super_admin",
+  agency_user: "agency_user",
+  client_admin: "client_admin",
+  client_user: "client_user",
+} as const;
+
+export interface CreateUserInput {
+  email: string;
+  name: string;
+  password: string;
+  role: CreateUserInputRole;
+  tenantId?: number | null;
+}
+
+export type UpdateUserInputRole =
+  (typeof UpdateUserInputRole)[keyof typeof UpdateUserInputRole];
+
+export const UpdateUserInputRole = {
+  super_admin: "super_admin",
+  agency_user: "agency_user",
+  client_admin: "client_admin",
+  client_user: "client_user",
+} as const;
+
+export interface UpdateUserInput {
+  name?: string;
+  email?: string;
+  password?: string;
+  role?: UpdateUserInputRole;
+  tenantId?: number | null;
+  isActive?: boolean;
+}
+
+export interface AdminTenantStats {
+  tenantId: number;
+  tenantName: string;
+  mtdSpend: number;
+  mtdRevenue: number;
+  projectedSpend: number;
+  monthlyBudget: number;
+  cpl: number;
+  bookingRate: number;
+  closeRate: number;
+  roas: number;
+  totalLeads: number;
+  bookedLeads: number;
+  soldLeads: number;
+}
+
+export interface AgencyAverages {
+  cpl: number;
+  roas: number;
+  bookingRate: number;
+  totalSpend: number;
+  totalRevenue: number;
+  totalLeads: number;
+}
+
+export interface AdminDashboardStats {
+  tenants: AdminTenantStats[];
+  agencyAverages: AgencyAverages;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -367,6 +476,15 @@ export type GetDashboardOverviewParams = {
 
 export type GetSpendRevenueChartParams = {
   tenantId?: number;
+  startDate?: string;
+  endDate?: string;
+};
+
+export type Logout200 = {
+  success?: boolean;
+};
+
+export type GetAdminDashboardStatsParams = {
   startDate?: string;
   endDate?: string;
 };

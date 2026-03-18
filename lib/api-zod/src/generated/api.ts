@@ -390,6 +390,131 @@ export const GetSpendRevenueChartResponse = zod.array(
 );
 
 /**
+ * @summary Login with email and password
+ */
+export const LoginBody = zod.object({
+  email: zod.string(),
+  password: zod.string(),
+});
+
+export const LoginResponse = zod.object({
+  id: zod.number(),
+  email: zod.string(),
+  name: zod.string(),
+  role: zod.enum(["super_admin", "agency_user", "client_admin", "client_user"]),
+  tenantId: zod.number().nullish(),
+  tenantName: zod.string().nullish(),
+});
+
+/**
+ * @summary Logout current session
+ */
+export const LogoutResponse = zod.object({
+  success: zod.boolean().optional(),
+});
+
+/**
+ * @summary Get current authenticated user
+ */
+export const GetCurrentUserResponse = zod.object({
+  id: zod.number(),
+  email: zod.string(),
+  name: zod.string(),
+  role: zod.enum(["super_admin", "agency_user", "client_admin", "client_user"]),
+  tenantId: zod.number().nullish(),
+  tenantName: zod.string().nullish(),
+});
+
+/**
+ * @summary List all users
+ */
+export const ListUsersResponseItem = zod.object({
+  id: zod.number(),
+  email: zod.string(),
+  name: zod.string(),
+  role: zod.enum(["super_admin", "agency_user", "client_admin", "client_user"]),
+  tenantId: zod.number().nullish(),
+  isActive: zod.boolean(),
+  createdAt: zod.date(),
+});
+export const ListUsersResponse = zod.array(ListUsersResponseItem);
+
+/**
+ * @summary Create a new user
+ */
+export const CreateUserBody = zod.object({
+  email: zod.string(),
+  name: zod.string(),
+  password: zod.string(),
+  role: zod.enum(["super_admin", "agency_user", "client_admin", "client_user"]),
+  tenantId: zod.number().nullish(),
+});
+
+/**
+ * @summary Update a user
+ */
+export const UpdateUserParams = zod.object({
+  userId: zod.coerce.number(),
+});
+
+export const UpdateUserBody = zod.object({
+  name: zod.string().optional(),
+  email: zod.string().optional(),
+  password: zod.string().optional(),
+  role: zod
+    .enum(["super_admin", "agency_user", "client_admin", "client_user"])
+    .optional(),
+  tenantId: zod.number().nullish(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateUserResponse = zod.object({
+  id: zod.number(),
+  email: zod.string(),
+  name: zod.string(),
+  role: zod.enum(["super_admin", "agency_user", "client_admin", "client_user"]),
+  tenantId: zod.number().nullish(),
+  isActive: zod.boolean(),
+  createdAt: zod.date(),
+});
+
+/**
+ * @summary Get aggregated stats for all tenants (Command Center)
+ */
+export const GetAdminDashboardStatsQueryParams = zod.object({
+  startDate: zod.date().optional(),
+  endDate: zod.date().optional(),
+});
+
+export const GetAdminDashboardStatsResponse = zod.object({
+  tenants: zod.array(
+    zod.object({
+      tenantId: zod.number(),
+      tenantName: zod.string(),
+      mtdSpend: zod.number(),
+      mtdRevenue: zod.number(),
+      projectedSpend: zod.number(),
+      monthlyBudget: zod.number(),
+      cpl: zod.number(),
+      bookingRate: zod.number(),
+      closeRate: zod.number(),
+      roas: zod.number(),
+      totalLeads: zod.number(),
+      bookedLeads: zod.number(),
+      soldLeads: zod.number(),
+    }),
+  ),
+  agencyAverages: zod.object({
+    cpl: zod.number(),
+    roas: zod.number(),
+    bookingRate: zod.number(),
+    totalSpend: zod.number(),
+    totalRevenue: zod.number(),
+    totalLeads: zod.number(),
+  }),
+});
+
+/**
  * @summary Get all tenants performance table (agency God View)
  */
 export const GetTenantPerformanceQueryParams = zod.object({

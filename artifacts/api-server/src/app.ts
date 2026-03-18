@@ -2,17 +2,62 @@ import express, { type Express } from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import { pool } from "@workspace/db";
 import router from "./routes";
+
+const PgStore = connectPgSimple(session);
 
 const app: Express = express();
 
-app.use(cors());
+const allowedOrigins = process.env.REPLIT_DEV_DOMAIN
+  ? [`https://${process.env.REPLIT_DEV_DOMAIN}`]
+  : ["http://localhost:5173"];
+if (process.env.REPLIT_DOMAINS) {
+  process.env.REPLIT_DOMAINS.split(",").forEach(d => allowedOrigins.push(`https://${d}`));
+}
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json({
   verify: (req: unknown, _res, buf) => {
     (req as Record<string, unknown>).rawBody = buf;
   },
 }));
 app.use(express.urlencoded({ extended: true }));
+
+app.use(session({
+  store: new PgStore({
+    pool: pool as never,
+    tableName: "session",
+    createTableIfMissing: false,
+  }),
+  secret: (() => {
+    const secret = process.env.SESSION_SECRET;
+    if (!secret && process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET environment variable is required in production");
+    }
+    return secret || "mos-dev-secret-change-in-production";
+  })(),
+  resave: false,
+  saveUninitialized: false,
+  name: "mos.sid",
+  cookie: {
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+  },
+}));
 
 const currentDir = typeof __dirname !== "undefined"
   ? __dirname

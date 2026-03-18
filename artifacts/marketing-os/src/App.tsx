@@ -4,13 +4,17 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
+import { AuthProvider, useAuth } from "@/components/auth-context";
 import { AppLayout } from "@/components/layout";
+import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Leads from "@/pages/leads";
 import Clients from "@/pages/clients";
 import Internal from "@/pages/internal";
 import Attribution from "@/pages/attribution";
 import Settings from "@/pages/settings";
+import AdminTenants from "@/pages/admin-tenants";
+import AdminUsers from "@/pages/admin-users";
 
 import soehneExtra from '@assets/soehne-extrafett_1773849837050.woff2';
 import soehneDrei from '@assets/soehne-dreiviertelfett_1773849837042.woff2';
@@ -24,16 +28,41 @@ const queryClient = new QueryClient({
   },
 });
 
-function Router() {
+function AuthenticatedRoutes() {
+  const { user, loading, isAgency } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-[0_0_25px_rgba(242,5,5,0.5)] mx-auto mb-4 animate-pulse">
+            <span className="font-display text-white text-2xl leading-none pt-1">M</span>
+          </div>
+          <p className="text-muted-foreground text-sm">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <AppLayout>
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/leads" component={Leads} />
-        <Route path="/clients" component={Clients} />
-        <Route path="/internal" component={Internal} />
         <Route path="/attribution" component={Attribution} />
         <Route path="/settings" component={Settings} />
+        {isAgency && (
+          <>
+            <Route path="/internal" component={Internal} />
+            <Route path="/clients" component={Clients} />
+            <Route path="/admin/tenants" component={AdminTenants} />
+            <Route path="/admin/users" component={AdminUsers} />
+          </>
+        )}
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
@@ -60,9 +89,11 @@ function App() {
         }
       `}</style>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
+        <AuthProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+            <AuthenticatedRoutes />
+          </WouterRouter>
+        </AuthProvider>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

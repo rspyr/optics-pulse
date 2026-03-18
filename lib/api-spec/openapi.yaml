@@ -24,6 +24,10 @@ tags:
     description: Webhook ingestion endpoints
   - name: dashboard
     description: Dashboard analytics and KPIs
+  - name: auth
+    description: Authentication
+  - name: admin
+    description: Admin portal management
 
 paths:
   /healthz:
@@ -410,6 +414,135 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SpendRevenueDataPoint"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout current session
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: Get current authenticated user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+
+  /admin/users:
+    get:
+      operationId: listUsers
+      tags: [admin]
+      summary: List all users
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+    post:
+      operationId: createUser
+      tags: [admin]
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserInput"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+
+  /admin/users/{userId}:
+    patch:
+      operationId: updateUser
+      tags: [admin]
+      summary: Update a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserInput"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+
+  /admin/dashboard-stats:
+    get:
+      operationId: getAdminDashboardStats
+      tags: [admin]
+      summary: Get aggregated stats for all tenants (Command Center)
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Admin dashboard stats with agency averages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDashboardStats"
 
   /dashboard/tenant-performance:
     get:
@@ -839,3 +972,148 @@ components:
         leadCount:
           type: integer
       required: [tenantId, tenantName, mtdSpend, mtdRevenue, cpl, bookingRate, closeRate, roas, leadCount]
+
+    LoginInput:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required: [email, password]
+
+    AuthUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, agency_user, client_admin, client_user]
+        tenantId:
+          type: integer
+          nullable: true
+        tenantName:
+          type: string
+          nullable: true
+      required: [id, email, name, role]
+
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, agency_user, client_admin, client_user]
+        tenantId:
+          type: integer
+          nullable: true
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, email, name, role, isActive, createdAt]
+
+    CreateUserInput:
+      type: object
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, agency_user, client_admin, client_user]
+        tenantId:
+          type: integer
+          nullable: true
+      required: [email, name, password, role]
+
+    UpdateUserInput:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, agency_user, client_admin, client_user]
+        tenantId:
+          type: integer
+          nullable: true
+        isActive:
+          type: boolean
+
+    AdminTenantStats:
+      type: object
+      properties:
+        tenantId:
+          type: integer
+        tenantName:
+          type: string
+        mtdSpend:
+          type: number
+        mtdRevenue:
+          type: number
+        projectedSpend:
+          type: number
+        monthlyBudget:
+          type: number
+        cpl:
+          type: number
+        bookingRate:
+          type: number
+        closeRate:
+          type: number
+        roas:
+          type: number
+        totalLeads:
+          type: integer
+        bookedLeads:
+          type: integer
+        soldLeads:
+          type: integer
+      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
+
+    AgencyAverages:
+      type: object
+      properties:
+        cpl:
+          type: number
+        roas:
+          type: number
+        bookingRate:
+          type: number
+        totalSpend:
+          type: number
+        totalRevenue:
+          type: number
+        totalLeads:
+          type: integer
+      required: [cpl, roas, bookingRate, totalSpend, totalRevenue, totalLeads]
+
+    AdminDashboardStats:
+      type: object
+      properties:
+        tenants:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminTenantStats"
+        agencyAverages:
+          $ref: "#/components/schemas/AgencyAverages"
+      required: [tenants, agencyAverages]

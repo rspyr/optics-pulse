@@ -27,6 +27,7 @@ Full-stack Marketing OS platform for HVAC marketing agencies. Features a proprie
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
+- **Auth**: express-session + connect-pg-simple + bcryptjs
 
 ## Structure
 
@@ -39,7 +40,7 @@ artifacts-monorepo/
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection + seed.ts
+│   └── db/                 # Drizzle ORM schema + DB connection + seed files
 ├── attached_assets/        # PRD, Product Map, Attribution Strategy, Brand Guidelines, fonts
 ├── scripts/                # Utility scripts
 ├── pnpm-workspace.yaml
@@ -49,19 +50,49 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`
-Enums: `lead_status`, `job_status`, `event_type`, `match_level`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`
+Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
+User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
+
+## Authentication
+
+- Session-based auth using `express-session` with PostgreSQL session store (`connect-pg-simple`)
+- Passwords hashed with `bcryptjs`
+- Session cookie name: `mos.sid` (7-day expiry)
+- Role-based access: super_admin/agency_user see full admin portal; client_admin/client_user see limited portal
+- Demo users seeded via `npx tsx lib/db/seed-users.ts` (password: demo1234)
 
 ## API Endpoints
 
 All under `/api` prefix:
-- `GET /health` — health check
-- `GET/POST /tenants`, `GET /tenants/:tenantId` — tenant CRUD
+
+### Auth
+- `POST /auth/login` — login with email/password, returns user
+- `POST /auth/logout` — destroy session
+- `GET /auth/me` — get current authenticated user
+
+### Admin
+- `GET /admin/users` — list all users
+- `POST /admin/users` — create user (email, name, password, role, tenantId)
+- `PATCH /admin/users/:userId` — update user
+- `GET /admin/dashboard-stats` — aggregated per-tenant stats with budget pacing and agency averages
+
+### Tenants
+- `GET /tenants` — list tenants
+- `POST /tenants` — create tenant
+- `GET /tenants/:tenantId` — get tenant
+- `PATCH /tenants/:tenantId` — update tenant
+- `DELETE /tenants/:tenantId` — soft-delete (deactivate)
+
+### Data
 - `GET /leads`, `GET /leads/:leadId`, `PATCH /leads/:leadId` — leads with filtering
 - `GET /campaigns`, `GET /campaigns/stats` — campaigns and daily stats
 - `GET /attribution/events` — attribution events with match level filtering
+- `POST /attribution/reconcile` — run waterfall reconciliation
 - `GET /jobs` — jobs with status filtering
-- `POST /webhooks/ingest` — webhook ingestion (CallRail, ServiceTitan, manual)
+- `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification
+
+### Dashboard
 - `GET /dashboard/overview` — KPI overview (spend, revenue, ROAS, leads, booking/close rates)
 - `GET /dashboard/spend-revenue` — daily spend vs revenue chart data
 - `GET /dashboard/tenant-performance` — cross-client benchmarking
@@ -71,22 +102,32 @@ All under `/api` prefix:
 1. **Diamond** — GCLID/WBRAID direct match (confidence: 1.0)
 2. **Golden** — hashedPhone + timestamp fuzzy (confidence: 0.9)
 3. **Silver** — hashedEmail match (confidence: 0.8)
-4. **Bronze** — billingAddress match (confidence: 0.6)
+4. **Bronze** — billingAddress household match (confidence: 0.6)
 5. **Unmatched** — no match found
 
 ## Frontend Pages
 
+### Agency Portal (super_admin, agency_user)
 - `/` — Command Center dashboard (KPI cards + spend vs revenue chart)
+- `/internal` — Agency God View: sortable cross-client table with conditional red/green formatting, ROAS filter, budget pacing bars, benchmarking vs agency average, click-to-drill-down lead modal
 - `/leads` — Leads HUD (speed-to-lead table with status filters)
-- `/clients` — Client Portal / Searchlight Killer (CPL, booking rate, funnel bottlenecks)
-- `/internal` — Agency God View (cross-client benchmarking table)
+- `/clients` — Client Portal preview
 - `/attribution` — Attribution Log (event ingestion & matching waterfall)
-- `/settings` — System configuration (API keys, capture script)
+- `/admin/tenants` — Tenant management (CRUD with inline edit)
+- `/admin/users` — User management (CRUD with role assignment)
+- `/settings` — System configuration
+
+### Client Portal (client_admin, client_user)
+- `/` — Dashboard (CPL, booking rate, KPIs)
+- `/leads` — Leads view
+- `/attribution` — Attribution Log
+- `/settings` — Settings
 
 ## Seed Data
 
-Run `npx tsx lib/db/seed.ts` to populate demo data:
+Run `npx tsx lib/db/seed.ts` to populate demo data, then `npx tsx lib/db/seed-users.ts` for users:
 - 2 tenants (Apex HVAC, Nordic Climate Solutions)
+- 7 demo users (3 agency, 4 client)
 - 6 campaigns (Google + Meta per tenant)
 - 31 days of daily stats (186 rows)
 - 80 leads with varied statuses
@@ -100,13 +141,13 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 ## Packages
 
 ### `artifacts/api-server` (`@workspace/api-server`)
-Express 5 API server. Routes in `src/routes/`. Uses `@workspace/api-zod` for validation and `@workspace/db` for persistence.
+Express 5 API server. Routes in `src/routes/`. Uses `@workspace/api-zod` for validation and `@workspace/db` for persistence. Session middleware with PostgreSQL store.
 
 ### `artifacts/marketing-os` (`@workspace/marketing-os`)
-React + Vite frontend. Dark mode only, branded with Söhne fonts. Uses `@workspace/api-client-react` for API calls.
+React + Vite frontend. Dark mode only, branded with Söhne fonts. Uses `@workspace/api-client-react` for API calls. Auth context provides role-based routing.
 
 ### `lib/db` (`@workspace/db`)
-Drizzle ORM with PostgreSQL. Exports db client and schema models. Seed script at `lib/db/seed.ts`.
+Drizzle ORM with PostgreSQL. Exports db client, pool, and schema models. Seed scripts at `lib/db/seed.ts` and `lib/db/seed-users.ts`.
 
 ### `lib/api-spec` (`@workspace/api-spec`)
 OpenAPI 3.1 spec and Orval codegen config. Run `pnpm --filter @workspace/api-spec run codegen`.

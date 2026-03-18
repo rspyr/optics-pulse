@@ -1,0 +1,211 @@
+import { useState, useEffect } from "react";
+import { useListTenants } from "@workspace/api-client-react";
+import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
+import { Plus, Edit2, X, Check, UserCog } from "lucide-react";
+
+const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+
+interface AdminUser {
+  id: number;
+  email: string;
+  name: string;
+  role: string;
+  tenantId: number | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+const ROLES = ["super_admin", "agency_user", "client_admin", "client_user"] as const;
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: "Super Admin",
+  agency_user: "Agency User",
+  client_admin: "Client Admin",
+  client_user: "Client User",
+};
+
+export default function AdminUsers() {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { data: tenants } = useListTenants();
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "client_user" as string, tenantId: "" as string });
+
+  const fetchUsers = async () => {
+    const res = await fetch(`${API_BASE}/api/admin/users`, { credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      setUsers(data);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchUsers(); }, []);
+
+  const handleCreate = async () => {
+    await fetch(`${API_BASE}/api/admin/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...form,
+        tenantId: form.tenantId ? parseInt(form.tenantId) : null,
+      }),
+      credentials: "include",
+    });
+    setShowCreate(false);
+    setForm({ name: "", email: "", password: "", role: "client_user", tenantId: "" });
+    fetchUsers();
+  };
+
+  const handleUpdate = async (id: number) => {
+    const body: Record<string, unknown> = {
+      name: form.name,
+      email: form.email,
+      role: form.role,
+      tenantId: form.tenantId ? parseInt(form.tenantId) : null,
+    };
+    if (form.password) body.password = form.password;
+
+    await fetch(`${API_BASE}/api/admin/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      credentials: "include",
+    });
+    setEditId(null);
+    fetchUsers();
+  };
+
+  const toggleActive = async (user: AdminUser) => {
+    await fetch(`${API_BASE}/api/admin/users/${user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isActive: !user.isActive }),
+      credentials: "include",
+    });
+    fetchUsers();
+  };
+
+  const startEdit = (user: AdminUser) => {
+    setEditId(user.id);
+    setForm({ name: user.name, email: user.email, password: "", role: user.role, tenantId: user.tenantId?.toString() || "" });
+  };
+
+  const getTenantName = (tenantId: number | null) => {
+    if (!tenantId || !tenants) return "—";
+    const t = tenants.find(t => t.id === tenantId);
+    return t?.name || `#${tenantId}`;
+  };
+
+  return (
+    <div className="space-y-6">
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <GradientHeading className="text-3xl md:text-4xl mb-2">User Management</GradientHeading>
+          <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE TEAM & CLIENT ACCESS</p>
+        </div>
+        <button
+          onClick={() => { setShowCreate(true); setForm({ name: "", email: "", password: "", role: "client_user", tenantId: "" }); }}
+          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white font-medium px-5 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(242,5,5,0.3)]"
+        >
+          <Plus className="w-4 h-4" />
+          Add User
+        </button>
+      </header>
+
+      {showCreate && (
+        <PremiumCard className="p-6">
+          <h3 className="font-display text-lg text-white mb-4">New User</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="Full Name" className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <input value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))}
+              placeholder="Email" type="email" className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <input value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
+              placeholder="Password" type="password" className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <select value={form.role} onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))}
+              className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+              {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+            </select>
+            <select value={form.tenantId} onChange={(e) => setForm(f => ({ ...f, tenantId: e.target.value }))}
+              className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+              <option value="">No Tenant (Agency)</option>
+              {tenants?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={handleCreate} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm">
+              <Check className="w-4 h-4" /> Create
+            </button>
+            <button onClick={() => setShowCreate(false)} className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm">
+              <X className="w-4 h-4" /> Cancel
+            </button>
+          </div>
+        </PremiumCard>
+      )}
+
+      <PremiumCard className="p-0 overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center text-muted-foreground">Loading users...</div>
+        ) : (
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-white/5 bg-background/50">
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Email</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Role</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Tenant</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {users.map((user) => (
+                <tr key={user.id} className="hover:bg-white/[0.02] transition-colors">
+                  {editId === user.id ? (
+                    <>
+                      <td className="p-4"><input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" /></td>
+                      <td className="p-4"><input value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" /></td>
+                      <td className="p-4">
+                        <select value={form.role} onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
+                          {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-4">
+                        <select value={form.tenantId} onChange={(e) => setForm(f => ({ ...f, tenantId: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
+                          <option value="">None</option>
+                          {tenants?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-4"><Badge variant={user.isActive ? "success" : "danger"}>{user.isActive ? "Active" : "Inactive"}</Badge></td>
+                      <td className="p-4 text-right space-x-2">
+                        <button onClick={() => handleUpdate(user.id)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-4 h-4 inline" /></button>
+                        <button onClick={() => setEditId(null)} className="text-muted-foreground hover:text-white"><X className="w-4 h-4 inline" /></button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="p-4 font-medium text-white flex items-center gap-2"><UserCog className="w-4 h-4 text-muted-foreground" />{user.name}</td>
+                      <td className="p-4 text-sm text-muted-foreground">{user.email}</td>
+                      <td className="p-4"><Badge variant={user.role.includes("admin") ? "default" : "neutral"}>{ROLE_LABELS[user.role] || user.role}</Badge></td>
+                      <td className="p-4 text-sm text-muted-foreground">{getTenantName(user.tenantId)}</td>
+                      <td className="p-4">
+                        <button onClick={() => toggleActive(user)}>
+                          <Badge variant={user.isActive ? "success" : "danger"}>{user.isActive ? "Active" : "Inactive"}</Badge>
+                        </button>
+                      </td>
+                      <td className="p-4 text-right">
+                        <button onClick={() => startEdit(user)} className="text-muted-foreground hover:text-white"><Edit2 className="w-4 h-4 inline" /></button>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </PremiumCard>
+    </div>
+  );
+}

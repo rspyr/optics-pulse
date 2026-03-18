@@ -8,15 +8,27 @@ import {
   Link as LinkIcon, 
   Settings,
   LogOut,
-  Menu
+  Menu,
+  UserCog,
+  Building
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/components/auth-context";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+const AGENCY_NAV = [
+  { href: "/", label: "Command Center", icon: LayoutDashboard },
+  { href: "/internal", label: "God View", icon: Shield },
   { href: "/leads", label: "Leads HUD", icon: Users },
   { href: "/clients", label: "Client Portal", icon: Building2 },
-  { href: "/internal", label: "God View", icon: Shield },
+  { href: "/attribution", label: "Attribution", icon: LinkIcon },
+  { href: "/admin/tenants", label: "Tenants", icon: Building },
+  { href: "/admin/users", label: "Users", icon: UserCog },
+  { href: "/settings", label: "Settings", icon: Settings },
+];
+
+const CLIENT_NAV = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/leads", label: "Leads", icon: Users },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -24,10 +36,12 @@ const NAV_ITEMS = [
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
+  const { user, logout, isAgency } = useAuth();
+
+  const navItems = isAgency ? AGENCY_NAV : CLIENT_NAV;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Mobile sidebar toggle */}
       <button 
         className="md:hidden fixed top-4 left-4 z-50 p-2 bg-card rounded-md border border-white/10"
         onClick={() => setIsMobileOpen(!isMobileOpen)}
@@ -35,7 +49,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <Menu className="w-5 h-5 text-white" />
       </button>
 
-      {/* Sidebar */}
       <aside className={cn(
         "fixed md:static inset-y-0 left-0 z-40 w-64 bg-card/80 backdrop-blur-2xl border-r border-white/5 transition-transform duration-300 ease-in-out flex flex-col",
         isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
@@ -47,16 +60,30 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <span className="font-display text-xl tracking-widest text-white mt-1">MARKETING OS</span>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 mt-4">
-          {NAV_ITEMS.map((item) => {
-            const isActive = location === item.href;
+        {user && (
+          <div className="px-6 pb-4">
+            <div className="bg-white/5 rounded-lg px-3 py-2 border border-white/5">
+              <p className="text-sm font-medium text-white truncate">{user.name}</p>
+              <p className="text-xs text-muted-foreground truncate">
+                {user.role === "super_admin" ? "Super Admin" :
+                 user.role === "agency_user" ? "Agency User" :
+                 user.role === "client_admin" ? "Client Admin" : "Client User"}
+                {user.tenantName ? ` · ${user.tenantName}` : ""}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+          {navItems.map((item) => {
+            const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
             return (
               <Link 
                 key={item.href} 
                 href={item.href}
                 onClick={() => setIsMobileOpen(false)}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 group relative",
+                  "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative",
                   isActive 
                     ? "text-white bg-white/5" 
                     : "text-muted-foreground hover:text-white hover:bg-white/5"
@@ -73,14 +100,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="p-4 border-t border-white/5">
-          <button className="flex items-center gap-3 px-4 py-3 w-full rounded-lg text-sm font-medium text-muted-foreground hover:text-white hover:bg-white/5 transition-all">
+          <button 
+            onClick={logout}
+            className="flex items-center gap-3 px-4 py-3 w-full rounded-lg text-sm font-medium text-muted-foreground hover:text-white hover:bg-white/5 transition-all"
+          >
             <LogOut className="w-5 h-5" />
             Sign Out
           </button>
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-y-auto relative">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-secondary/20 via-background to-background pointer-events-none" />
         <div className="relative z-10 p-6 md:p-10 min-h-full">
