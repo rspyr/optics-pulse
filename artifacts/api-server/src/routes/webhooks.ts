@@ -5,8 +5,6 @@ import crypto from "crypto";
 
 const router: IRouter = Router();
 
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "dev-webhook-secret";
-
 function hashValue(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
@@ -16,12 +14,30 @@ function normalizePhone(phone: string): string {
 }
 
 function verifySignature(payload: string, signature: string | undefined): boolean {
-  if (process.env.NODE_ENV === "development" && !signature) {
+  const secret = process.env.WEBHOOK_SECRET;
+  if (process.env.NODE_ENV === "development" && !secret) {
     return true;
   }
-  if (!signature) return false;
-  const expected = crypto.createHmac("sha256", WEBHOOK_SECRET).update(payload).digest("hex");
+  if (!secret || !signature) return false;
+  const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  if (signature.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
+interface WebhookBodyWithTenant {
+  source: string;
+  tenantId?: number;
+  data: {
+    gclid?: string;
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+    utmSource?: string;
+    utmCampaign?: string;
+    utmMedium?: string;
+    landingPage?: string;
+  };
 }
 
 router.post("/webhooks/ingest", async (req, res) => {
@@ -34,7 +50,7 @@ router.post("/webhooks/ingest", async (req, res) => {
       return;
     }
 
-    const body = IngestWebhookBody.parse(req.body);
+    const body = IngestWebhookBody.parse(req.body) as unknown as WebhookBodyWithTenant;
     const { source, data } = body;
 
     const hashedPhone = data.phone ? hashValue(normalizePhone(data.phone)) : null;
@@ -44,7 +60,7 @@ router.post("/webhooks/ingest", async (req, res) => {
     if (source === "callrail") eventType = "call";
     else if (source === "manual") eventType = "click";
 
-    const tenantId = (body as any).tenantId ? Number((body as any).tenantId) : 1;
+    const tenantId = body.tenantId ?? 1;
 
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
@@ -75,8 +91,9 @@ router.post("/webhooks/ingest", async (req, res) => {
     }
 
     res.json({ success: true, eventId: event.id, message: `Webhook from ${source} processed successfully` });
-  } catch (error: any) {
-    res.status(400).json({ success: false, eventId: 0, message: error.message || "Failed to process webhook" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process webhook";
+    res.status(400).json({ success: false, eventId: 0, message });
   }
 });
 

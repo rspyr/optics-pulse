@@ -56,6 +56,41 @@ export const GetTenantResponse = zod.object({
 });
 
 /**
+ * @summary Update a tenant
+ */
+export const UpdateTenantParams = zod.object({
+  tenantId: zod.coerce.number(),
+});
+
+export const UpdateTenantBody = zod.object({
+  name: zod.string().optional(),
+  serviceTitanId: zod.string().optional(),
+  timezone: zod.string().optional(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateTenantResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  serviceTitanId: zod.string().nullish(),
+  timezone: zod.string(),
+  isActive: zod.boolean(),
+  createdAt: zod.date(),
+});
+
+/**
+ * @summary Soft-delete (deactivate) a tenant
+ */
+export const DeleteTenantParams = zod.object({
+  tenantId: zod.coerce.number(),
+});
+
+export const DeleteTenantResponse = zod.object({
+  success: zod.boolean().optional(),
+  message: zod.string().optional(),
+});
+
+/**
  * @summary List leads with optional filters
  */
 export const listLeadsQueryLimitDefault = 50;

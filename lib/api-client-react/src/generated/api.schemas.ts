@@ -24,6 +24,13 @@ export interface CreateTenantInput {
   timezone?: string;
 }
 
+export interface UpdateTenantInput {
+  name?: string;
+  serviceTitanId?: string;
+  timezone?: string;
+  isActive?: boolean;
+}
+
 export type LeadStatus = (typeof LeadStatus)[keyof typeof LeadStatus];
 
 export const LeadStatus = {
@@ -270,6 +277,11 @@ export interface TenantPerformanceRow {
   roas: number;
   leadCount: number;
 }
+
+export type DeleteTenant200 = {
+  success?: boolean;
+  message?: string;
+};
 
 export type ListLeadsParams = {
   tenantId?: number;

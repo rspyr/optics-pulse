@@ -90,6 +90,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Tenant"
+    patch:
+      operationId: updateTenant
+      tags: [tenants]
+      summary: Update a tenant
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantInput"
+      responses:
+        "200":
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+    delete:
+      operationId: deleteTenant
+      tags: [tenants]
+      summary: Soft-delete (deactivate) a tenant
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Tenant deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
 
   /leads:
     get:
@@ -432,6 +477,18 @@ components:
           type: string
           default: "America/New_York"
       required: [name]
+
+    UpdateTenantInput:
+      type: object
+      properties:
+        name:
+          type: string
+        serviceTitanId:
+          type: string
+        timezone:
+          type: string
+        isActive:
+          type: boolean
 
     Lead:
       type: object

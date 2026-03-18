@@ -10,7 +10,10 @@ router.get("/leads", async (req, res) => {
   const conditions: SQL[] = [];
 
   if (query.tenantId) conditions.push(eq(leadsTable.tenantId, query.tenantId));
-  if (query.status) conditions.push(eq(leadsTable.status, query.status as any));
+  if (query.status) {
+    const status = query.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
+    conditions.push(eq(leadsTable.status, status));
+  }
   if (query.source) conditions.push(eq(leadsTable.source, query.source));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -38,8 +41,10 @@ router.get("/leads/:leadId", async (req, res) => {
 router.patch("/leads/:leadId", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
   const body = UpdateLeadBody.parse(req.body);
-  const updateData: Record<string, any> = { updatedAt: new Date() };
-  if (body.status) updateData.status = body.status;
+  const updateData: Partial<typeof leadsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
+  if (body.status) {
+    updateData.status = body.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
+  }
   if (body.assignedTo) updateData.assignedTo = body.assignedTo;
   if (body.disposition) updateData.disposition = body.disposition;
 

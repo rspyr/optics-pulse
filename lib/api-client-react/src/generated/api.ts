@@ -22,6 +22,7 @@ import type {
   CampaignStatsResponse,
   CreateTenantInput,
   DashboardOverview,
+  DeleteTenant200,
   GetCampaignStatsParams,
   GetDashboardOverviewParams,
   GetSpendRevenueChartParams,
@@ -38,6 +39,7 @@ import type {
   Tenant,
   TenantPerformanceRow,
   UpdateLeadInput,
+  UpdateTenantInput,
   WebhookIngestPayload,
   WebhookIngestResponse,
 } from "./api.schemas";
@@ -370,6 +372,177 @@ export function useGetTenant<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Update a tenant
+ */
+export const getUpdateTenantUrl = (tenantId: number) => {
+  return `/api/tenants/${tenantId}`;
+};
+
+export const updateTenant = async (
+  tenantId: number,
+  updateTenantInput: UpdateTenantInput,
+  options?: RequestInit,
+): Promise<Tenant> => {
+  return customFetch<Tenant>(getUpdateTenantUrl(tenantId), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateTenantInput),
+  });
+};
+
+export const getUpdateTenantMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTenant>>,
+    TError,
+    { tenantId: number; data: BodyType<UpdateTenantInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateTenant>>,
+  TError,
+  { tenantId: number; data: BodyType<UpdateTenantInput> },
+  TContext
+> => {
+  const mutationKey = ["updateTenant"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateTenant>>,
+    { tenantId: number; data: BodyType<UpdateTenantInput> }
+  > = (props) => {
+    const { tenantId, data } = props ?? {};
+
+    return updateTenant(tenantId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateTenantMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateTenant>>
+>;
+export type UpdateTenantMutationBody = BodyType<UpdateTenantInput>;
+export type UpdateTenantMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a tenant
+ */
+export const useUpdateTenant = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTenant>>,
+    TError,
+    { tenantId: number; data: BodyType<UpdateTenantInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateTenant>>,
+  TError,
+  { tenantId: number; data: BodyType<UpdateTenantInput> },
+  TContext
+> => {
+  return useMutation(getUpdateTenantMutationOptions(options));
+};
+
+/**
+ * @summary Soft-delete (deactivate) a tenant
+ */
+export const getDeleteTenantUrl = (tenantId: number) => {
+  return `/api/tenants/${tenantId}`;
+};
+
+export const deleteTenant = async (
+  tenantId: number,
+  options?: RequestInit,
+): Promise<DeleteTenant200> => {
+  return customFetch<DeleteTenant200>(getDeleteTenantUrl(tenantId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteTenantMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteTenant>>,
+    TError,
+    { tenantId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteTenant>>,
+  TError,
+  { tenantId: number },
+  TContext
+> => {
+  const mutationKey = ["deleteTenant"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteTenant>>,
+    { tenantId: number }
+  > = (props) => {
+    const { tenantId } = props ?? {};
+
+    return deleteTenant(tenantId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteTenantMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteTenant>>
+>;
+
+export type DeleteTenantMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Soft-delete (deactivate) a tenant
+ */
+export const useDeleteTenant = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteTenant>>,
+    TError,
+    { tenantId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteTenant>>,
+  TError,
+  { tenantId: number },
+  TContext
+> => {
+  return useMutation(getDeleteTenantMutationOptions(options));
+};
 
 /**
  * @summary List leads with optional filters

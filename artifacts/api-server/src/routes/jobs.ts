@@ -10,7 +10,10 @@ router.get("/jobs", async (req, res) => {
   const conditions: SQL[] = [];
 
   if (query.tenantId) conditions.push(eq(jobsTable.tenantId, query.tenantId));
-  if (query.status) conditions.push(eq(jobsTable.status, query.status as any));
+  if (query.status) {
+    const status = query.status as "pending" | "in_progress" | "completed" | "cancelled";
+    conditions.push(eq(jobsTable.status, status));
+  }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   const limit = query.limit ?? 50;

@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { CreateTenantBody, GetTenantParams } from "@workspace/api-zod";
+import { CreateTenantBody, GetTenantParams, UpdateTenantBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -32,11 +32,11 @@ router.get("/tenants/:tenantId", async (req, res) => {
 
 router.patch("/tenants/:tenantId", async (req, res) => {
   const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
-  const body = req.body;
-  const updateData: Record<string, any> = { updatedAt: new Date() };
-  if (body.name) updateData.name = body.name;
-  if (body.serviceTitanId) updateData.serviceTitanId = body.serviceTitanId;
-  if (body.timezone) updateData.timezone = body.timezone;
+  const body = UpdateTenantBody.parse(req.body);
+  const updateData: Partial<typeof tenantsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
+  if (body.name !== undefined) updateData.name = body.name;
+  if (body.serviceTitanId !== undefined) updateData.serviceTitanId = body.serviceTitanId;
+  if (body.timezone !== undefined) updateData.timezone = body.timezone;
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();
