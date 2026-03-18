@@ -1,12 +1,12 @@
-import { useState, useMemo } from "react";
-import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads } from "@workspace/api-client-react";
+import { useState, useMemo, useCallback } from "react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetAdminDashboardStats } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { cn, formatCurrency, formatPercentage } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
 import {
   ArrowUpRight, ArrowDownRight, Target, Flame, CheckCircle,
-  TrendingUp, DollarSign, Calendar, Filter, Search,
-  AlertTriangle, ChevronDown, X, Info, Zap,
+  TrendingUp, DollarSign, Calendar, Search,
+  AlertTriangle, X, Zap, Bookmark, Plus, Trash2,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,15 +17,27 @@ import {
 type DateRange = "7" | "14" | "30" | "90";
 type ComparisonMode = "none" | "previous" | "benchmark";
 
-const AGENCY_FEE = 5000;
+const DEFAULT_AGENCY_FEE = 5000;
+const QUICK_VIEWS_STORAGE_KEY = "mos_quick_views";
 
-const BENCHMARK_DATA = {
-  cpl: 95,
-  bookingRate: 55,
-  closeRate: 45,
-  avgSaleValue: 7500,
-  roas: 8.5,
-};
+interface QuickView {
+  id: string;
+  name: string;
+  source: string;
+  leadType: string;
+  salesperson: string;
+}
+
+function loadQuickViews(): QuickView[] {
+  try {
+    const raw = localStorage.getItem(QUICK_VIEWS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveQuickViews(views: QuickView[]) {
+  localStorage.setItem(QUICK_VIEWS_STORAGE_KEY, JSON.stringify(views));
+}
 
 function parseDateRange(days: DateRange) {
   const now = new Date();
@@ -75,19 +87,53 @@ function parseNaturalLanguageFilter(query: string): NLFilterResult {
   return result;
 }
 
+function ChangeLogPopover({ log, onClose }: { log: { title: string; description: string; date: string; category: string }; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div
+        className="relative bg-card border border-white/10 rounded-xl shadow-2xl w-full max-w-md p-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h4 className="text-sm font-medium text-white">{log.title}</h4>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-[10px] text-muted-foreground">
+                {new Date(log.date + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">{log.category}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-white p-1">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <p className="text-xs text-gray-300 leading-relaxed">{log.description}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { user } = useAuth();
+  const { user, isAgency } = useAuth();
   const effectiveTenantId = tenantIdOverride ?? user?.tenantId ?? 1;
 
   const [dateRange, setDateRange] = useState<DateRange>("30");
   const [roiMode, setRoiMode] = useState<"roas" | "allcosts">("roas");
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("previous");
   const [showChangeLog, setShowChangeLog] = useState(false);
+  const [selectedChangeLog, setSelectedChangeLog] = useState<{ title: string; description: string; date: string; category: string } | null>(null);
   const [nlQuery, setNlQuery] = useState("");
   const [activeNlFilter, setActiveNlFilter] = useState<NLFilterResult>({});
   const [filterSource, setFilterSource] = useState("");
   const [filterLeadType, setFilterLeadType] = useState("");
   const [filterSalesperson, setFilterSalesperson] = useState("");
+  const [agencyFee, setAgencyFee] = useState(DEFAULT_AGENCY_FEE);
+  const [showFeeInput, setShowFeeInput] = useState(false);
+  const [quickViews, setQuickViews] = useState<QuickView[]>(loadQuickViews);
+  const [showSaveView, setShowSaveView] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
 
   const { startDate, endDate } = parseDateRange(dateRange);
 
@@ -113,6 +159,23 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     tenantId: effectiveTenantId,
     limit: 500,
   });
+
+  const { data: benchmarkData } = useGetAdminDashboardStats({
+    startDate,
+    endDate,
+  });
+
+  const liveBenchmarks = useMemo(() => {
+    if (!benchmarkData?.agencyAverages) return null;
+    const avg = benchmarkData.agencyAverages;
+    return {
+      cpl: avg.cpl || 0,
+      bookingRate: avg.bookingRate || 0,
+      closeRate: 45,
+      avgSaleValue: 7500,
+      roas: avg.roas || 0,
+    };
+  }, [benchmarkData]);
 
   const leads = leadsData?.leads || [];
   const effectiveSource = activeNlFilter.source || filterSource;
@@ -148,31 +211,74 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const uniqueLeadTypes = useMemo(() => [...new Set(leads.map(l => l.leadType).filter(Boolean))].sort(), [leads]);
   const uniqueSalespeople = useMemo(() => [...new Set(leads.map(l => l.assignedTo).filter(Boolean))].sort(), [leads]);
 
-  const chartDataWithLogs = useMemo(() => {
+  const chartDataForDisplay = useMemo(() => {
     if (!chartData) return [];
     const logDates = new Set((changeLogs || []).map(l => l.date));
+    const numDays = Number(dateRange);
+    const dailyFee = agencyFee / 30;
     return chartData.map(point => ({
       ...point,
       hasChangeLog: logDates.has(point.date),
+      totalCost: roiMode === "allcosts" ? point.spend + dailyFee : point.spend,
     }));
-  }, [chartData, changeLogs]);
+  }, [chartData, changeLogs, roiMode, agencyFee, dateRange]);
 
-  const handleNlSubmit = () => {
+  const handleNlSubmit = useCallback(() => {
     if (!nlQuery.trim()) return;
     const parsed = parseNaturalLanguageFilter(nlQuery);
     setActiveNlFilter(parsed);
     if (parsed.source) setFilterSource("");
     if (parsed.leadType) setFilterLeadType("");
     if (parsed.assignedTo) setFilterSalesperson("");
-  };
+  }, [nlQuery]);
 
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setFilterSource("");
     setFilterLeadType("");
     setFilterSalesperson("");
     setNlQuery("");
     setActiveNlFilter({});
-  };
+  }, []);
+
+  const saveCurrentView = useCallback(() => {
+    if (!newViewName.trim()) return;
+    const view: QuickView = {
+      id: crypto.randomUUID(),
+      name: newViewName.trim(),
+      source: filterSource,
+      leadType: filterLeadType,
+      salesperson: filterSalesperson,
+    };
+    const updated = [...quickViews, view];
+    setQuickViews(updated);
+    saveQuickViews(updated);
+    setNewViewName("");
+    setShowSaveView(false);
+  }, [newViewName, filterSource, filterLeadType, filterSalesperson, quickViews]);
+
+  const applyQuickView = useCallback((view: QuickView) => {
+    setFilterSource(view.source);
+    setFilterLeadType(view.leadType);
+    setFilterSalesperson(view.salesperson);
+    setActiveNlFilter({});
+    setNlQuery("");
+  }, []);
+
+  const deleteQuickView = useCallback((id: string) => {
+    const updated = quickViews.filter(v => v.id !== id);
+    setQuickViews(updated);
+    saveQuickViews(updated);
+  }, [quickViews]);
+
+  const changeLogLookup = useMemo(() => {
+    const map = new Map<string, { title: string; description: string; date: string; category: string }[]>();
+    (changeLogs || []).forEach(log => {
+      const existing = map.get(log.date) || [];
+      existing.push(log);
+      map.set(log.date, existing);
+    });
+    return map;
+  }, [changeLogs]);
 
   if (overviewLoading || chartLoading) {
     return (
@@ -196,14 +302,13 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const prev = d.previousPeriod;
 
-  const allCostsSpend = d.totalSpend + AGENCY_FEE;
+  const allCostsSpend = d.totalSpend + agencyFee;
   const allCostsROI = allCostsSpend > 0 ? Math.round(((d.totalRevenue - allCostsSpend) / allCostsSpend) * 100) / 100 : 0;
   const displayROI = roiMode === "roas" ? d.roas : allCostsROI;
   const roiLabel = roiMode === "roas" ? "ROAS" : "True ROI";
-  const roiSuffix = roiMode === "roas" ? "x" : "%";
   const roiValue = roiMode === "roas" ? `${displayROI.toFixed(1)}x` : `${(displayROI * 100).toFixed(0)}%`;
 
-  const prevAllCostsROI = prev ? ((prev.totalRevenue || 0) - ((prev.totalSpend || 0) + AGENCY_FEE)) / (((prev.totalSpend || 0) + AGENCY_FEE) || 1) : null;
+  const prevAllCostsROI = prev ? ((prev.totalRevenue || 0) - ((prev.totalSpend || 0) + agencyFee)) / (((prev.totalSpend || 0) + agencyFee) || 1) : null;
   const prevROI = roiMode === "roas" ? prev?.roas : prevAllCostsROI;
 
   const cplTrend = trendValueInverse(d.cpl, prev?.cpl);
@@ -211,6 +316,8 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const closeTrend = trendValue(d.closeRate, prev?.closeRate);
   const avgSaleTrend = trendValue(d.avgSaleValue, prev?.avgSaleValue);
   const roiTrend = trendValue(displayROI, prevROI);
+
+  const benchmarks = liveBenchmarks || { cpl: 95, bookingRate: 55, closeRate: 45, avgSaleValue: 7500, roas: 8.5 };
 
   const compLabel = (current: number, benchmark: number, inverse?: boolean) => {
     if (comparisonMode !== "benchmark") return null;
@@ -225,35 +332,35 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       value: formatCurrency(hasActiveFilters && filteredMetrics ? d.totalSpend / (filteredMetrics.totalLeads || 1) : d.cpl),
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : cplTrend,
       icon: Target,
-      benchmark: compLabel(d.cpl, BENCHMARK_DATA.cpl, true),
+      benchmark: compLabel(d.cpl, benchmarks.cpl, true),
     },
     {
       label: "Booking Rate",
       value: `${(hasActiveFilters && filteredMetrics ? filteredMetrics.bookingRate : d.bookingRate).toFixed(1)}%`,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : bookingTrend,
       icon: Flame,
-      benchmark: compLabel(d.bookingRate, BENCHMARK_DATA.bookingRate),
+      benchmark: compLabel(d.bookingRate, benchmarks.bookingRate),
     },
     {
       label: "Close Rate",
       value: `${(hasActiveFilters && filteredMetrics ? filteredMetrics.closeRate : d.closeRate).toFixed(1)}%`,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : closeTrend,
       icon: CheckCircle,
-      benchmark: compLabel(d.closeRate, BENCHMARK_DATA.closeRate),
+      benchmark: compLabel(d.closeRate, benchmarks.closeRate),
     },
     {
       label: "Avg Sale Value",
       value: formatCurrency(d.avgSaleValue),
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : avgSaleTrend,
       icon: DollarSign,
-      benchmark: compLabel(d.avgSaleValue, BENCHMARK_DATA.avgSaleValue),
+      benchmark: compLabel(d.avgSaleValue, benchmarks.avgSaleValue),
     },
     {
       label: roiLabel,
       value: roiValue,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : roiTrend,
       icon: TrendingUp,
-      benchmark: compLabel(displayROI, BENCHMARK_DATA.roas),
+      benchmark: compLabel(displayROI, benchmarks.roas),
     },
   ];
 
@@ -302,6 +409,10 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   return (
     <div className="space-y-8">
+      {selectedChangeLog && (
+        <ChangeLogPopover log={selectedChangeLog} onClose={() => setSelectedChangeLog(null)} />
+      )}
+
       <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Client Portal</GradientHeading>
@@ -309,18 +420,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 bg-card border border-white/10 rounded-lg p-1">
-            {(["7", "14", "30", "90"] as DateRange[]).map(d => (
+            {(["7", "14", "30", "90"] as DateRange[]).map(r => (
               <button
-                key={d}
-                onClick={() => setDateRange(d)}
+                key={r}
+                onClick={() => setDateRange(r)}
                 className={cn(
                   "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
-                  dateRange === d
-                    ? "bg-white/10 text-white shadow-sm"
-                    : "text-muted-foreground hover:text-white"
+                  dateRange === r ? "bg-white/10 text-white shadow-sm" : "text-muted-foreground hover:text-white"
                 )}
               >
-                {d}D
+                {r}D
               </button>
             ))}
           </div>
@@ -427,11 +536,60 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           {uniqueSalespeople.map(s => <option key={s} value={s!}>{s}</option>)}
         </select>
         {hasActiveFilters && (
-          <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors">
-            <X className="w-3 h-3" /> Clear
-          </button>
+          <>
+            <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors">
+              <X className="w-3 h-3" /> Clear
+            </button>
+            <button
+              onClick={() => setShowSaveView(true)}
+              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
+            >
+              <Bookmark className="w-3 h-3" /> Save View
+            </button>
+          </>
         )}
       </div>
+
+      {(quickViews.length > 0 || showSaveView) && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mr-1">Quick Views:</span>
+          {quickViews.map(view => (
+            <div key={view.id} className="flex items-center gap-1 group">
+              <button
+                onClick={() => applyQuickView(view)}
+                className="px-3 py-1 rounded-full text-xs bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white transition-all"
+              >
+                {view.name}
+              </button>
+              <button
+                onClick={() => deleteQuickView(view.id)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-all"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          {showSaveView && (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newViewName}
+                onChange={e => setNewViewName(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && saveCurrentView()}
+                placeholder="View name..."
+                className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-1.5 w-32 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                autoFocus
+              />
+              <button onClick={saveCurrentView} className="text-emerald-400 hover:text-emerald-300">
+                <Plus className="w-4 h-4" />
+              </button>
+              <button onClick={() => { setShowSaveView(false); setNewViewName(""); }} className="text-muted-foreground hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <PremiumCard className="lg:col-span-2 p-6 flex flex-col" transition={{ delay: 0.3 }}>
@@ -439,7 +597,9 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
             <div>
               <h3 className="font-display text-lg text-white">Spend vs Revenue</h3>
               <p className="text-muted-foreground text-xs">
-                {roiMode === "allcosts" ? "Includes agency retainer in spend calculation" : "Ad spend only (ROAS view)"}
+                {roiMode === "allcosts"
+                  ? `Includes ${formatCurrency(agencyFee)}/mo agency retainer (${formatCurrency(Math.round(agencyFee / 30))}/day)`
+                  : "Ad spend only (ROAS view)"}
               </p>
             </div>
             <button
@@ -457,7 +617,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </div>
           <div className="flex-1 min-h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartDataWithLogs} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={chartDataForDisplay} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -484,12 +644,21 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                   contentStyle={{ backgroundColor: "#0A0F1F", borderColor: "#1E293B", borderRadius: "8px", color: "#fff", fontSize: "12px" }}
                   labelFormatter={v => {
                     const d = new Date(v + "T00:00:00");
-                    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    const logsForDate = changeLogLookup.get(v as string);
+                    let label = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    if (showChangeLog && logsForDate) {
+                      label += `\n📌 ${logsForDate.map(l => l.title).join(", ")}`;
+                    }
+                    return label;
                   }}
                   formatter={(value: number, name: string) => [formatCurrency(value), name]}
                 />
                 <Legend wrapperStyle={{ paddingTop: "16px", fontSize: "12px" }} />
-                <Bar yAxisId="left" dataKey="spend" name="Ad Spend" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                {roiMode === "allcosts" ? (
+                  <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                ) : (
+                  <Bar yAxisId="left" dataKey="spend" name="Ad Spend" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                )}
                 <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill="#F20505" radius={[3, 3, 0, 0]} maxBarSize={32} />
                 {showChangeLog && changeLogs && changeLogs.map((log, i) => (
                   <ReferenceLine
@@ -513,12 +682,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
           {showChangeLog && changeLogs && changeLogs.length > 0 && (
             <div className="mt-4 border-t border-white/5 pt-4">
-              <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Marketing Changes</h4>
+              <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Marketing Changes — Click to expand</h4>
               <div className="space-y-2 max-h-[180px] overflow-y-auto pr-2">
                 {changeLogs.map(log => (
-                  <div key={log.id} className="flex gap-3 p-2.5 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors">
+                  <button
+                    key={log.id}
+                    onClick={() => setSelectedChangeLog(log)}
+                    className="w-full text-left flex gap-3 p-2.5 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] hover:border-amber-500/20 transition-all cursor-pointer"
+                  >
                     <div className="w-2 h-2 rounded-full bg-amber-400 mt-1.5 shrink-0" />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-0.5">
                         <span className="text-xs font-medium text-white">{log.title}</span>
                         <span className="text-[10px] text-muted-foreground">
@@ -526,9 +699,9 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                         </span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-muted-foreground">{log.category}</span>
                       </div>
-                      <p className="text-xs text-muted-foreground leading-relaxed">{log.description}</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed line-clamp-1">{log.description}</p>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -605,9 +778,38 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       </div>
 
       <PremiumCard className="p-6" transition={{ delay: 0.5 }}>
-        <div className="flex items-center gap-2 mb-6">
-          <Zap className="w-5 h-5 text-primary" />
-          <h3 className="font-display text-lg text-white">Financial Transparency</h3>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-primary" />
+            <h3 className="font-display text-lg text-white">Financial Transparency</h3>
+          </div>
+          {roiMode === "allcosts" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Agency Fee:</span>
+              {showFeeInput ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-white">$</span>
+                  <input
+                    type="number"
+                    value={agencyFee}
+                    onChange={e => setAgencyFee(Math.max(0, Number(e.target.value)))}
+                    onBlur={() => setShowFeeInput(false)}
+                    onKeyDown={e => e.key === "Enter" && setShowFeeInput(false)}
+                    className="bg-card border border-white/10 text-white text-xs rounded px-2 py-1 w-20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    autoFocus
+                  />
+                  <span className="text-xs text-muted-foreground">/mo</span>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowFeeInput(true)}
+                  className="text-xs text-white bg-white/5 border border-white/10 rounded px-2 py-1 hover:bg-white/10 transition-colors"
+                >
+                  {formatCurrency(agencyFee)}/mo
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -626,7 +828,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
               {roiMode === "allcosts" && (
                 <div className="flex justify-between">
                   <span className="text-gray-400">Agency Retainer</span>
-                  <span className="text-red-400">- {formatCurrency(AGENCY_FEE)}</span>
+                  <span className="text-red-400">- {formatCurrency(agencyFee)}</span>
                 </div>
               )}
               <div className="border-t border-white/5 pt-2 flex justify-between">
