@@ -33,7 +33,15 @@ router.get("/attribution/events", async (req, res) => {
 });
 
 router.post("/attribution/reconcile", async (req, res) => {
-  const tenantId = req.body.tenantId ? Number(req.body.tenantId) : null;
+  const role = req.session.userRole;
+  let tenantId: number | null = req.body.tenantId ? Number(req.body.tenantId) : null;
+  if (role !== "super_admin" && role !== "agency_user") {
+    tenantId = req.session.tenantId ?? null;
+    if (!tenantId) {
+      res.status(403).json({ error: "No tenant assigned" });
+      return;
+    }
+  }
   const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, unmatched: 0 };
 
   const jobConditions: SQL[] = [];

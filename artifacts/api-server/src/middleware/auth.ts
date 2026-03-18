@@ -54,6 +54,9 @@ export function enforceTenantScope(req: Request, res: Response, next: NextFuncti
 
   if (!requestedTenantId && !paramTenantId) {
     req.query.tenantId = String(userTenantId);
+    if (req.body && typeof req.body === "object") {
+      req.body.tenantId = userTenantId;
+    }
   }
 
   next();
