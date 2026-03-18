@@ -24,22 +24,6 @@ function verifySignature(payload: string, signature: string | undefined): boolea
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-interface WebhookBodyWithTenant {
-  source: string;
-  tenantId?: number;
-  data: {
-    gclid?: string;
-    phone?: string;
-    email?: string;
-    firstName?: string;
-    lastName?: string;
-    utmSource?: string;
-    utmCampaign?: string;
-    utmMedium?: string;
-    landingPage?: string;
-  };
-}
-
 router.post("/webhooks/ingest", async (req, res) => {
   try {
     const rawBody = JSON.stringify(req.body);
@@ -50,8 +34,8 @@ router.post("/webhooks/ingest", async (req, res) => {
       return;
     }
 
-    const body = IngestWebhookBody.parse(req.body) as unknown as WebhookBodyWithTenant;
-    const { source, data } = body;
+    const body = IngestWebhookBody.parse(req.body);
+    const { source, tenantId, data } = body;
 
     const hashedPhone = data.phone ? hashValue(normalizePhone(data.phone)) : null;
     const hashedEmail = data.email ? hashValue(data.email) : null;
@@ -59,8 +43,6 @@ router.post("/webhooks/ingest", async (req, res) => {
     let eventType: "click" | "call" | "form_fill" = "form_fill";
     if (source === "callrail") eventType = "call";
     else if (source === "manual") eventType = "click";
-
-    const tenantId = body.tenantId ?? 1;
 
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,

@@ -98,17 +98,36 @@ router.post("/attribution/reconcile", async (req, res) => {
 
     if (matched) continue;
 
-    const [addressEvent] = await db.select().from(attributionEventsTable)
-      .where(and(
-        eq(attributionEventsTable.tenantId, job.tenantId),
-        eq(attributionEventsTable.matchLevel, "bronze")
-      ))
-      .limit(1);
-    if (addressEvent) {
-      await db.update(jobsTable).set({ matchLevel: "bronze", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
-      results.bronze++;
-      continue;
+    const nameParts2 = job.customerName.split(" ");
+    const jobLastName = nameParts2.slice(1).join(" ") || nameParts2[0] || "";
+    const addressLeads = await db.select().from(leadsTable)
+      .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.lastName, jobLastName)))
+      .limit(10);
+
+    let bronzeMatched = false;
+    for (const addrLead of addressLeads) {
+      const addressEvents = await db.select().from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, job.tenantId),
+          eq(attributionEventsTable.matchLevel, "bronze")
+        ))
+        .limit(10);
+
+      for (const addrEvent of addressEvents) {
+        if (addrEvent.billingAddress) {
+          await db.update(jobsTable).set({
+            matchLevel: "bronze",
+            matchedGclid: null,
+            updatedAt: new Date()
+          }).where(eq(jobsTable.id, job.id));
+          results.bronze++;
+          bronzeMatched = true;
+          break;
+        }
+      }
+      if (bronzeMatched) break;
     }
+    if (bronzeMatched) continue;
 
     await db.update(jobsTable).set({ matchLevel: "unmatched", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
     results.unmatched++;

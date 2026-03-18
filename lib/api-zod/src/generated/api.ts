@@ -319,6 +319,7 @@ export const ListJobsResponse = zod.object({
  */
 export const IngestWebhookBody = zod.object({
   source: zod.enum(["callrail", "ghl", "form", "manual"]),
+  tenantId: zod.number().describe("Target tenant for this webhook event"),
   data: zod.object({
     phone: zod.string().optional(),
     email: zod.string().optional(),

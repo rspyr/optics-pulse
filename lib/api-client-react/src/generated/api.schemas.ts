@@ -228,6 +228,8 @@ export type WebhookIngestPayloadData = {
 
 export interface WebhookIngestPayload {
   source: WebhookIngestPayloadSource;
+  /** Target tenant for this webhook event */
+  tenantId: number;
   data: WebhookIngestPayloadData;
 }
 

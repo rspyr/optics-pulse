@@ -726,6 +726,9 @@ components:
         source:
           type: string
           enum: [callrail, ghl, form, manual]
+        tenantId:
+          type: integer
+          description: Target tenant for this webhook event
         data:
           type: object
           properties:
@@ -748,7 +751,7 @@ components:
             utmMedium:
               type: string
           additionalProperties: true
-      required: [source, data]
+      required: [source, tenantId, data]
 
     WebhookIngestResponse:
       type: object
