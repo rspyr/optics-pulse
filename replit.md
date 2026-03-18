@@ -50,7 +50,7 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`
 Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
 User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
 
@@ -92,7 +92,9 @@ All under `/api` prefix:
 - `GET /leads`, `GET /leads/:leadId`, `PATCH /leads/:leadId` — leads with filtering
 - `GET /campaigns`, `GET /campaigns/stats` — campaigns and daily stats
 - `GET /attribution/events` — attribution events with match level filtering
-- `POST /attribution/reconcile` — run waterfall reconciliation
+- `POST /attribution/reconcile` — run waterfall reconciliation engine (records run history, generates OCI payloads)
+- `GET /attribution/reconciliation-status` — get latest/recent reconciliation runs and next scheduled time
+- `GET /attribution/oci-payloads` — generate OCI payloads for Google Ads upload (agency only)
 - `GET /jobs` — jobs with status filtering
 - `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification
 
@@ -112,6 +114,13 @@ All under `/api` prefix:
 3. **Silver** — hashedEmail match (confidence: 0.8)
 4. **Bronze** — billingAddress household match (confidence: 0.6)
 5. **Unmatched** — no match found
+
+### Reconciliation Engine
+- Extracted waterfall logic into `artifacts/api-server/src/services/reconciliation.ts`
+- Records each run in `reconciliation_runs` table with per-level match counts, match rate, trigger type (manual/scheduled), status, and timing
+- Generates OCI (Offline Conversion Import) payloads for matched jobs with GCLIDs — ready for Google Ads API upload
+- Nightly cron scheduler (`services/cron.ts`) runs at 3:00 AM daily, processing all tenants sequentially
+- Command Center UI panel shows latest run breakdown (Diamond/Golden/Silver/Bronze/Match Rate), run history with trigger badges, next scheduled time, and manual "Run Now" button
 
 ## Frontend Pages
 

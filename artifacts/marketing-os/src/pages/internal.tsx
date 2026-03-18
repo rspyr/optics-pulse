@@ -1,8 +1,8 @@
 import { useState, useMemo } from "react";
-import { useGetAdminDashboardStats, useListLeads } from "@workspace/api-client-react";
+import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
-import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter } from "lucide-react";
+import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
 type SortDir = "asc" | "desc";
@@ -14,6 +14,8 @@ export default function Internal() {
   const endDate = now.toISOString().split("T")[0];
 
   const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate });
+  const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus();
+  const reconMutation = useRunReconciliation();
 
   const [sortKey, setSortKey] = useState<SortKey>("roas");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -149,6 +151,95 @@ export default function Internal() {
           </PremiumCard>
         </div>
       )}
+
+      <PremiumCard className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Zap className="w-5 h-5 text-primary" />
+            <h3 className="font-display text-lg text-white">Attribution Reconciliation Engine</h3>
+          </div>
+          <div className="flex items-center gap-3">
+            {reconStatus?.nextScheduledRun && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Next: {new Date(reconStatus.nextScheduledRun).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                reconMutation.mutate({ data: {} }, {
+                  onSuccess: () => refetchRecon(),
+                });
+              }}
+              disabled={reconMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-primary/20 hover:bg-primary/30 border border-primary/40 rounded-lg text-primary text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${reconMutation.isPending ? "animate-spin" : ""}`} />
+              {reconMutation.isPending ? "Running..." : "Run Now"}
+            </button>
+          </div>
+        </div>
+
+        {reconMutation.data && (
+          <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+            <p className="text-emerald-400 text-sm">{reconMutation.data.message}</p>
+            <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+              <span>Match Rate: {reconMutation.data.matchRate}%</span>
+              <span>OCI Payloads: {reconMutation.data.ociPayloadsGenerated}</span>
+            </div>
+          </div>
+        )}
+
+        {reconStatus?.latestRun && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="p-3 bg-white/[0.03] rounded-lg text-center">
+              <Diamond className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
+              <p className="text-lg font-display text-cyan-400">{reconStatus.latestRun.diamondMatches}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Diamond</p>
+            </div>
+            <div className="p-3 bg-white/[0.03] rounded-lg text-center">
+              <Award className="w-4 h-4 text-amber-400 mx-auto mb-1" />
+              <p className="text-lg font-display text-amber-400">{reconStatus.latestRun.goldenMatches}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Golden</p>
+            </div>
+            <div className="p-3 bg-white/[0.03] rounded-lg text-center">
+              <Award className="w-4 h-4 text-gray-300 mx-auto mb-1" />
+              <p className="text-lg font-display text-gray-300">{reconStatus.latestRun.silverMatches}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Silver</p>
+            </div>
+            <div className="p-3 bg-white/[0.03] rounded-lg text-center">
+              <Award className="w-4 h-4 text-orange-400 mx-auto mb-1" />
+              <p className="text-lg font-display text-orange-400">{reconStatus.latestRun.bronzeMatches}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Bronze</p>
+            </div>
+            <div className="p-3 bg-white/[0.03] rounded-lg text-center">
+              <p className="text-lg font-display text-white mt-5">{reconStatus.latestRun.matchRate}%</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Match Rate</p>
+            </div>
+          </div>
+        )}
+
+        {reconStatus?.recentRuns && reconStatus.recentRuns.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Runs</p>
+            <div className="space-y-1">
+              {reconStatus.recentRuns.slice(0, 5).map((run: any) => (
+                <div key={run.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02]">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full ${run.status === "completed" ? "bg-emerald-400" : "bg-red-400"}`} />
+                    <span className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</span>
+                    <Badge variant={run.triggerType === "scheduled" ? "neutral" : "default"}>{run.triggerType}</Badge>
+                  </div>
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    <span>{run.jobsProcessed} jobs</span>
+                    <span>{run.matchRate}% matched</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </PremiumCard>
 
       <PremiumCard className="p-0 overflow-hidden">
         <div className="overflow-x-auto">

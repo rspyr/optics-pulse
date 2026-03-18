@@ -451,6 +451,63 @@ export interface HudStats {
   nextBonusAt: number;
 }
 
+export type ReconciliationResultBreakdown = {
+  diamond?: number;
+  golden?: number;
+  silver?: number;
+  bronze?: number;
+  unmatched?: number;
+};
+
+export interface ReconciliationResult {
+  success: boolean;
+  reconciled: number;
+  breakdown: ReconciliationResultBreakdown;
+  matchRate: number;
+  ociPayloadsGenerated: number;
+  message: string;
+}
+
+export type ReconciliationRunTriggerType =
+  (typeof ReconciliationRunTriggerType)[keyof typeof ReconciliationRunTriggerType];
+
+export const ReconciliationRunTriggerType = {
+  manual: "manual",
+  scheduled: "scheduled",
+} as const;
+
+export type ReconciliationRunStatus =
+  (typeof ReconciliationRunStatus)[keyof typeof ReconciliationRunStatus];
+
+export const ReconciliationRunStatus = {
+  completed: "completed",
+  error: "error",
+} as const;
+
+export interface ReconciliationRun {
+  id?: number;
+  tenantId?: number | null;
+  jobsProcessed?: number;
+  diamondMatches?: number;
+  goldenMatches?: number;
+  silverMatches?: number;
+  bronzeMatches?: number;
+  unmatchedCount?: number;
+  matchRate?: number;
+  triggerType?: ReconciliationRunTriggerType;
+  status?: ReconciliationRunStatus;
+  errorMessage?: string | null;
+  startedAt?: string;
+  completedAt?: string | null;
+  createdAt?: string;
+}
+
+export interface ReconciliationStatusResponse {
+  latestRun: ReconciliationRun | null;
+  recentRuns: ReconciliationRun[];
+  nextScheduledRun: string;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -520,6 +577,14 @@ export const ListAttributionEventsMatchLevel = {
   bronze: "bronze",
   unmatched: "unmatched",
 } as const;
+
+export type RunReconciliationBody = {
+  tenantId?: number;
+};
+
+export type GetReconciliationStatusParams = {
+  tenantId?: number;
+};
 
 export type ListJobsParams = {
   tenantId?: number;

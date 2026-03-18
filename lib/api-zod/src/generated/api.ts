@@ -385,6 +385,77 @@ export const ListAttributionEventsResponse = zod.object({
 });
 
 /**
+ * @summary Run attribution reconciliation engine
+ */
+export const RunReconciliationBody = zod.object({
+  tenantId: zod.number().optional(),
+});
+
+export const RunReconciliationResponse = zod.object({
+  success: zod.boolean(),
+  reconciled: zod.number(),
+  breakdown: zod.object({
+    diamond: zod.number().optional(),
+    golden: zod.number().optional(),
+    silver: zod.number().optional(),
+    bronze: zod.number().optional(),
+    unmatched: zod.number().optional(),
+  }),
+  matchRate: zod.number(),
+  ociPayloadsGenerated: zod.number(),
+  message: zod.string(),
+});
+
+/**
+ * @summary Get reconciliation engine status and history
+ */
+export const GetReconciliationStatusQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetReconciliationStatusResponse = zod.object({
+  latestRun: zod
+    .object({
+      id: zod.number().optional(),
+      tenantId: zod.number().nullish(),
+      jobsProcessed: zod.number().optional(),
+      diamondMatches: zod.number().optional(),
+      goldenMatches: zod.number().optional(),
+      silverMatches: zod.number().optional(),
+      bronzeMatches: zod.number().optional(),
+      unmatchedCount: zod.number().optional(),
+      matchRate: zod.number().optional(),
+      triggerType: zod.enum(["manual", "scheduled"]).optional(),
+      status: zod.enum(["completed", "error"]).optional(),
+      errorMessage: zod.string().nullish(),
+      startedAt: zod.date().optional(),
+      completedAt: zod.date().nullish(),
+      createdAt: zod.date().optional(),
+    })
+    .nullable(),
+  recentRuns: zod.array(
+    zod.object({
+      id: zod.number().optional(),
+      tenantId: zod.number().nullish(),
+      jobsProcessed: zod.number().optional(),
+      diamondMatches: zod.number().optional(),
+      goldenMatches: zod.number().optional(),
+      silverMatches: zod.number().optional(),
+      bronzeMatches: zod.number().optional(),
+      unmatchedCount: zod.number().optional(),
+      matchRate: zod.number().optional(),
+      triggerType: zod.enum(["manual", "scheduled"]).optional(),
+      status: zod.enum(["completed", "error"]).optional(),
+      errorMessage: zod.string().nullish(),
+      startedAt: zod.date().optional(),
+      completedAt: zod.date().nullish(),
+      createdAt: zod.date().optional(),
+    }),
+  ),
+  nextScheduledRun: zod.date(),
+});
+
+/**
  * @summary List jobs/revenue records
  */
 export const listJobsQueryLimitDefault = 50;

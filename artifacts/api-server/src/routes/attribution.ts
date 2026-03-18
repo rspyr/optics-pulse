@@ -1,14 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, jobsTable } from "@workspace/db";
-import { eq, and, count, desc, isNull, SQL } from "drizzle-orm";
+import { db, attributionEventsTable, reconciliationRunsTable } from "@workspace/db";
+import { eq, and, count, desc, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
-import crypto from "crypto";
+import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
+import { requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
-
-function hashValue(value: string): string {
-  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
-}
 
 router.get("/attribution/events", async (req, res) => {
   const query = ListAttributionEventsQueryParams.parse(req.query);
@@ -32,121 +29,56 @@ router.get("/attribution/events", async (req, res) => {
   res.json({ events, total: totalResult.count });
 });
 
-router.post("/attribution/reconcile", async (req, res) => {
-  const role = req.session.userRole;
-  let tenantId: number | null = req.body.tenantId ? Number(req.body.tenantId) : null;
-  if (role !== "super_admin" && role !== "agency_user") {
-    tenantId = req.session.tenantId ?? null;
-    if (!tenantId) {
-      res.status(403).json({ error: "No tenant assigned" });
-      return;
-    }
+router.post("/attribution/reconcile", requireRole("super_admin", "agency_user"), async (req, res) => {
+  try {
+    const tenantId: number | null = req.body.tenantId ? Number(req.body.tenantId) : null;
+
+    const result = await runReconciliation(tenantId, "manual");
+
+    res.json({
+      success: true,
+      reconciled: result.jobsProcessed,
+      breakdown: {
+        diamond: result.diamond,
+        golden: result.golden,
+        silver: result.silver,
+        bronze: result.bronze,
+        unmatched: result.unmatched,
+      },
+      matchRate: result.matchRate,
+      ociPayloadsGenerated: result.ociPayloads.length,
+      message: `Reconciled ${result.jobsProcessed} jobs: ${result.diamond} diamond, ${result.golden} golden, ${result.silver} silver, ${result.bronze} bronze, ${result.unmatched} unmatched`,
+    });
+  } catch (error) {
+    console.error("[Reconciliation] Error:", error);
+    res.status(500).json({ error: "Reconciliation failed", details: error instanceof Error ? error.message : "Unknown error" });
   }
-  const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, unmatched: 0 };
+});
 
-  const jobConditions: SQL[] = [];
-  jobConditions.push(isNull(jobsTable.matchLevel));
-  if (tenantId) jobConditions.push(eq(jobsTable.tenantId, tenantId));
-  const unmatchedJobs = await db.select().from(jobsTable).where(and(...jobConditions));
-
-  for (const job of unmatchedJobs) {
-    let matched = false;
-
-    if (job.matchedGclid) {
-      const [event] = await db.select().from(attributionEventsTable)
-        .where(and(eq(attributionEventsTable.gclid, job.matchedGclid), eq(attributionEventsTable.tenantId, job.tenantId)))
-        .limit(1);
-      if (event) {
-        await db.update(jobsTable).set({ matchLevel: "diamond", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
-        results.diamond++;
-        continue;
-      }
-    }
-
-    const nameParts = job.customerName.split(" ");
-    const firstName = nameParts[0] || "";
-    const lastName = nameParts.slice(1).join(" ") || "";
-    const leads = await db.select().from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)))
-      .limit(10);
-
-    for (const lead of leads) {
-      if (lead.phone) {
-        const hashedPhone = hashValue(lead.phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, ""));
-        const [phoneEvent] = await db.select().from(attributionEventsTable)
-          .where(and(
-            eq(attributionEventsTable.tenantId, job.tenantId),
-            eq(attributionEventsTable.hashedPhone, hashedPhone)
-          ))
-          .limit(1);
-        if (phoneEvent) {
-          await db.update(jobsTable).set({ matchLevel: "golden", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
-          results.golden++;
-          matched = true;
-          break;
-        }
-      }
-
-      if (lead.email) {
-        const hashedEmail = hashValue(lead.email);
-        const [emailEvent] = await db.select().from(attributionEventsTable)
-          .where(and(
-            eq(attributionEventsTable.tenantId, job.tenantId),
-            eq(attributionEventsTable.hashedEmail, hashedEmail)
-          ))
-          .limit(1);
-        if (emailEvent) {
-          await db.update(jobsTable).set({ matchLevel: "silver", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
-          results.silver++;
-          matched = true;
-          break;
-        }
-      }
-    }
-
-    if (matched) continue;
-
-    const nameParts2 = job.customerName.split(" ");
-    const jobLastName = nameParts2.slice(1).join(" ") || nameParts2[0] || "";
-    const addressLeads = await db.select().from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.lastName, jobLastName)))
-      .limit(10);
-
-    let bronzeMatched = false;
-    for (const addrLead of addressLeads) {
-      const addressEvents = await db.select().from(attributionEventsTable)
-        .where(and(
-          eq(attributionEventsTable.tenantId, job.tenantId),
-          eq(attributionEventsTable.matchLevel, "bronze")
-        ))
-        .limit(10);
-
-      for (const addrEvent of addressEvents) {
-        if (addrEvent.billingAddress) {
-          await db.update(jobsTable).set({
-            matchLevel: "bronze",
-            matchedGclid: null,
-            updatedAt: new Date()
-          }).where(eq(jobsTable.id, job.id));
-          results.bronze++;
-          bronzeMatched = true;
-          break;
-        }
-      }
-      if (bronzeMatched) break;
-    }
-    if (bronzeMatched) continue;
-
-    await db.update(jobsTable).set({ matchLevel: "unmatched", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
-    results.unmatched++;
+router.get("/attribution/reconciliation-status", async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+    const status = await getReconciliationStatus(tenantId);
+    res.json(status);
+  } catch (error) {
+    console.error("[Reconciliation Status] Error:", error);
+    res.status(500).json({ error: "Failed to get reconciliation status" });
   }
+});
 
-  res.json({
-    success: true,
-    reconciled: unmatchedJobs.length,
-    breakdown: results,
-    message: `Reconciled ${unmatchedJobs.length} jobs: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.unmatched} unmatched`,
-  });
+router.get("/attribution/oci-payloads", requireRole("super_admin", "agency_user"), async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+    const result = await runReconciliation(tenantId, "manual");
+    res.json({
+      payloads: result.ociPayloads,
+      totalPayloads: result.ociPayloads.length,
+      totalValue: result.ociPayloads.reduce((s, p) => s + p.conversionValue, 0),
+    });
+  } catch (error) {
+    console.error("[OCI Payloads] Error:", error);
+    res.status(500).json({ error: "Failed to generate OCI payloads" });
+  }
 });
 
 export default router;

@@ -36,6 +36,7 @@ import type {
   GetDashboardOverviewParams,
   GetHudQueueParams,
   GetHudStatsParams,
+  GetReconciliationStatusParams,
   GetSpendRevenueChartParams,
   GetTenantPerformanceParams,
   HealthStatus,
@@ -51,6 +52,9 @@ import type {
   ListLeadsParams,
   LoginInput,
   Logout200,
+  ReconciliationResult,
+  ReconciliationStatusResponse,
+  RunReconciliationBody,
   SpendRevenueDataPoint,
   Tenant,
   TenantPerformanceRow,
@@ -1293,6 +1297,198 @@ export function useListAttributionEvents<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListAttributionEventsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Run attribution reconciliation engine
+ */
+export const getRunReconciliationUrl = () => {
+  return `/api/attribution/reconcile`;
+};
+
+export const runReconciliation = async (
+  runReconciliationBody: RunReconciliationBody,
+  options?: RequestInit,
+): Promise<ReconciliationResult> => {
+  return customFetch<ReconciliationResult>(getRunReconciliationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(runReconciliationBody),
+  });
+};
+
+export const getRunReconciliationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runReconciliation>>,
+    TError,
+    { data: BodyType<RunReconciliationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runReconciliation>>,
+  TError,
+  { data: BodyType<RunReconciliationBody> },
+  TContext
+> => {
+  const mutationKey = ["runReconciliation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runReconciliation>>,
+    { data: BodyType<RunReconciliationBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return runReconciliation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunReconciliationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runReconciliation>>
+>;
+export type RunReconciliationMutationBody = BodyType<RunReconciliationBody>;
+export type RunReconciliationMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run attribution reconciliation engine
+ */
+export const useRunReconciliation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runReconciliation>>,
+    TError,
+    { data: BodyType<RunReconciliationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runReconciliation>>,
+  TError,
+  { data: BodyType<RunReconciliationBody> },
+  TContext
+> => {
+  return useMutation(getRunReconciliationMutationOptions(options));
+};
+
+/**
+ * @summary Get reconciliation engine status and history
+ */
+export const getGetReconciliationStatusUrl = (
+  params?: GetReconciliationStatusParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/attribution/reconciliation-status?${stringifiedParams}`
+    : `/api/attribution/reconciliation-status`;
+};
+
+export const getReconciliationStatus = async (
+  params?: GetReconciliationStatusParams,
+  options?: RequestInit,
+): Promise<ReconciliationStatusResponse> => {
+  return customFetch<ReconciliationStatusResponse>(
+    getGetReconciliationStatusUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetReconciliationStatusQueryKey = (
+  params?: GetReconciliationStatusParams,
+) => {
+  return [
+    `/api/attribution/reconciliation-status`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetReconciliationStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getReconciliationStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetReconciliationStatusParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReconciliationStatus>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetReconciliationStatusQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getReconciliationStatus>>
+  > = ({ signal }) =>
+    getReconciliationStatus(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getReconciliationStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetReconciliationStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getReconciliationStatus>>
+>;
+export type GetReconciliationStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get reconciliation engine status and history
+ */
+
+export function useGetReconciliationStatus<
+  TData = Awaited<ReturnType<typeof getReconciliationStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetReconciliationStatusParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReconciliationStatus>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetReconciliationStatusQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

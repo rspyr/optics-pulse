@@ -341,6 +341,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/AttributionEventListResponse"
 
+  /attribution/reconcile:
+    post:
+      operationId: runReconciliation
+      tags: [attribution]
+      summary: Run attribution reconciliation engine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenantId:
+                  type: integer
+      responses:
+        "200":
+          description: Reconciliation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationResult"
+
+  /attribution/reconciliation-status:
+    get:
+      operationId: getReconciliationStatus
+      tags: [attribution]
+      summary: Get reconciliation engine status and history
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reconciliation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationStatusResponse"
+
   /jobs:
     get:
       operationId: listJobs
@@ -1333,3 +1372,88 @@ components:
         nextBonusAt:
           type: integer
       required: [callsMadeToday, bookingsToday, bookingRate, commission, newLeadsToday, avgSpeedToLead, soldToday, bonusTier, bonusThreshold, nextBonusAt]
+
+    ReconciliationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        reconciled:
+          type: integer
+        breakdown:
+          type: object
+          properties:
+            diamond:
+              type: integer
+            golden:
+              type: integer
+            silver:
+              type: integer
+            bronze:
+              type: integer
+            unmatched:
+              type: integer
+        matchRate:
+          type: number
+        ociPayloadsGenerated:
+          type: integer
+        message:
+          type: string
+      required: [success, reconciled, breakdown, matchRate, ociPayloadsGenerated, message]
+
+    ReconciliationRun:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+          nullable: true
+        jobsProcessed:
+          type: integer
+        diamondMatches:
+          type: integer
+        goldenMatches:
+          type: integer
+        silverMatches:
+          type: integer
+        bronzeMatches:
+          type: integer
+        unmatchedCount:
+          type: integer
+        matchRate:
+          type: number
+        triggerType:
+          type: string
+          enum: [manual, scheduled]
+        status:
+          type: string
+          enum: [completed, error]
+        errorMessage:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ReconciliationStatusResponse:
+      type: object
+      properties:
+        latestRun:
+          $ref: "#/components/schemas/ReconciliationRun"
+          nullable: true
+        recentRuns:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationRun"
+        nextScheduledRun:
+          type: string
+          format: date-time
+      required: [latestRun, recentRuns, nextScheduledRun]
