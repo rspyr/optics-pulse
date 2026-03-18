@@ -9,8 +9,14 @@ interface TenantForm {
   timezone: string;
   googleAdsApiKey: string;
   callRailApiKey: string;
+  callRailSigningKey: string;
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
+  metaAccessToken: string;
+  metaAdAccountId: string;
+  metaPixelId: string;
+  googleAdsCustomerId: string;
+  googleAdsDeveloperToken: string;
 }
 
 const emptyForm: TenantForm = {
@@ -19,8 +25,14 @@ const emptyForm: TenantForm = {
   timezone: "America/New_York",
   googleAdsApiKey: "",
   callRailApiKey: "",
+  callRailSigningKey: "",
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
+  metaAccessToken: "",
+  metaAdAccountId: "",
+  metaPixelId: "",
+  googleAdsCustomerId: "",
+  googleAdsDeveloperToken: "",
 };
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -39,9 +51,15 @@ export default function AdminTenants() {
   const buildIntegrationConfig = () => {
     const config: Record<string, string> = {};
     if (form.googleAdsApiKey) config.googleAdsApiKey = form.googleAdsApiKey;
+    if (form.googleAdsCustomerId) config.googleAdsCustomerId = form.googleAdsCustomerId;
+    if (form.googleAdsDeveloperToken) config.googleAdsDeveloperToken = form.googleAdsDeveloperToken;
     if (form.callRailApiKey) config.callRailApiKey = form.callRailApiKey;
+    if (form.callRailSigningKey) config.callRailSigningKey = form.callRailSigningKey;
     if (form.serviceTitanClientId) config.serviceTitanClientId = form.serviceTitanClientId;
     if (form.serviceTitanClientSecret) config.serviceTitanClientSecret = form.serviceTitanClientSecret;
+    if (form.metaAccessToken) config.metaAccessToken = form.metaAccessToken;
+    if (form.metaAdAccountId) config.metaAdAccountId = form.metaAdAccountId;
+    if (form.metaPixelId) config.metaPixelId = form.metaPixelId;
     return Object.keys(config).length > 0 ? config : undefined;
   };
 
@@ -99,9 +117,15 @@ export default function AdminTenants() {
       serviceTitanId: (t.serviceTitanId as string) || "",
       timezone: (t.timezone as string) || "America/New_York",
       googleAdsApiKey: "",
+      googleAdsCustomerId: "",
+      googleAdsDeveloperToken: "",
       callRailApiKey: "",
+      callRailSigningKey: "",
       serviceTitanClientId: "",
       serviceTitanClientSecret: "",
+      metaAccessToken: "",
+      metaAdAccountId: "",
+      metaPixelId: "",
     });
     setShowIntegrationConfig(false);
   };
@@ -122,46 +146,66 @@ export default function AdminTenants() {
         {showIntegrationConfig ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
       </button>
       {showIntegrationConfig && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div className="space-y-6 mt-4">
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Google Ads API Key</label>
-            <input
-              type="password"
-              value={form.googleAdsApiKey}
-              onChange={(e) => setForm(f => ({ ...f, googleAdsApiKey: e.target.value }))}
-              placeholder="Enter to update (leave blank to keep current)"
-              className={inputClass + " w-full"}
-            />
+            <h4 className="text-xs font-medium text-blue-400 uppercase tracking-wider mb-3">ServiceTitan</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client ID</label>
+                <input type="password" value={form.serviceTitanClientId} onChange={(e) => setForm(f => ({ ...f, serviceTitanClientId: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client Secret</label>
+                <input type="password" value={form.serviceTitanClientSecret} onChange={(e) => setForm(f => ({ ...f, serviceTitanClientSecret: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+            </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">CallRail API Key</label>
-            <input
-              type="password"
-              value={form.callRailApiKey}
-              onChange={(e) => setForm(f => ({ ...f, callRailApiKey: e.target.value }))}
-              placeholder="Enter to update (leave blank to keep current)"
-              className={inputClass + " w-full"}
-            />
+            <h4 className="text-xs font-medium text-yellow-400 uppercase tracking-wider mb-3">Google Ads</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token / API Key</label>
+                <input type="password" value={form.googleAdsApiKey} onChange={(e) => setForm(f => ({ ...f, googleAdsApiKey: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
+                <input type="password" value={form.googleAdsCustomerId} onChange={(e) => setForm(f => ({ ...f, googleAdsCustomerId: e.target.value }))} placeholder="123-456-7890" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Developer Token</label>
+                <input type="password" value={form.googleAdsDeveloperToken} onChange={(e) => setForm(f => ({ ...f, googleAdsDeveloperToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+            </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">ServiceTitan Client ID</label>
-            <input
-              type="password"
-              value={form.serviceTitanClientId}
-              onChange={(e) => setForm(f => ({ ...f, serviceTitanClientId: e.target.value }))}
-              placeholder="Enter to update (leave blank to keep current)"
-              className={inputClass + " w-full"}
-            />
+            <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider mb-3">Meta (Facebook/Instagram)</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token</label>
+                <input type="password" value={form.metaAccessToken} onChange={(e) => setForm(f => ({ ...f, metaAccessToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Ad Account ID</label>
+                <input type="password" value={form.metaAdAccountId} onChange={(e) => setForm(f => ({ ...f, metaAdAccountId: e.target.value }))} placeholder="act_123456789" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Pixel ID</label>
+                <input type="password" value={form.metaPixelId} onChange={(e) => setForm(f => ({ ...f, metaPixelId: e.target.value }))} placeholder="For CAPI events" className={inputClass + " w-full"} />
+              </div>
+            </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">ServiceTitan Client Secret</label>
-            <input
-              type="password"
-              value={form.serviceTitanClientSecret}
-              onChange={(e) => setForm(f => ({ ...f, serviceTitanClientSecret: e.target.value }))}
-              placeholder="Enter to update (leave blank to keep current)"
-              className={inputClass + " w-full"}
-            />
+            <h4 className="text-xs font-medium text-green-400 uppercase tracking-wider mb-3">CallRail</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Key</label>
+                <input type="password" value={form.callRailApiKey} onChange={(e) => setForm(f => ({ ...f, callRailApiKey: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Webhook Signing Key</label>
+                <input type="password" value={form.callRailSigningKey} onChange={(e) => setForm(f => ({ ...f, callRailSigningKey: e.target.value }))} placeholder="HMAC verification key" className={inputClass + " w-full"} />
+              </div>
+            </div>
           </div>
         </div>
       )}

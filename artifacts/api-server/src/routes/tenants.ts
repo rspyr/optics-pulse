@@ -81,7 +81,20 @@ router.patch("/tenants/:tenantId", requireRole("super_admin", "agency_user"), as
   if (body.timezone !== undefined) updateData.timezone = body.timezone;
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
-    updateData.apiConfig = encryptConfig(req.body.integrationConfig) as unknown as typeof updateData.apiConfig;
+    const [existingTenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    let mergedConfig: Record<string, unknown> = {};
+    if (existingTenant?.apiConfig && typeof existingTenant.apiConfig === "string") {
+      try {
+        mergedConfig = decryptConfig(existingTenant.apiConfig);
+      } catch { /* start fresh if decrypt fails */ }
+    }
+    const newFields = req.body.integrationConfig as Record<string, unknown>;
+    for (const [key, val] of Object.entries(newFields)) {
+      if (val !== undefined && val !== null && val !== "") {
+        mergedConfig[key] = val;
+      }
+    }
+    updateData.apiConfig = encryptConfig(mergedConfig) as unknown as typeof updateData.apiConfig;
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

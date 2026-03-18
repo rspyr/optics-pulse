@@ -50,7 +50,7 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`
 Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
 User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
 
@@ -96,7 +96,12 @@ All under `/api` prefix:
 - `GET /attribution/reconciliation-status` — get latest/recent reconciliation runs and next scheduled time
 - `GET /attribution/oci-payloads` — generate OCI payloads for Google Ads upload (agency only)
 - `GET /jobs` — jobs with status filtering
-- `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification
+- `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification; CallRail-specific signature verification via per-tenant signing key
+
+### Integrations
+- `POST /integrations/sync/:integration` — trigger manual sync (service_titan, google_ads, meta) for a tenant
+- `GET /integrations/sync-status` — sync status dashboard with per-integration last sync time, record counts, error counts
+- `GET /integrations/tenant-config/:tenantId` — check which integrations are configured per tenant
 
 ### Dashboard
 - `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
@@ -121,6 +126,24 @@ All under `/api` prefix:
 - Generates OCI (Offline Conversion Import) payloads for matched jobs with GCLIDs — ready for Google Ads API upload
 - Nightly cron scheduler (`services/cron.ts`) runs at 3:00 AM daily, processing all tenants sequentially
 - Command Center UI panel shows latest run breakdown (Diamond/Golden/Silver/Bronze/Match Rate), run history with trigger badges, next scheduled time, and manual "Run Now" button
+
+## External API Integrations
+
+### API Client Modules (`artifacts/api-server/src/services/integrations/`)
+- **ServiceTitan** — `service-titan.ts`: OAuth2 client credentials auth, token caching, completed job fetch with pagination, custom field PATCH for attribution GCLID writeback, token bucket rate limiter (10 tokens, 5/sec refill)
+- **Google Ads** — `google-ads.ts`: Campaign performance fetch via GAQL, OCI (Offline Conversion Import) upload for matched conversions, uses developer token + access token auth
+- **Meta Marketing** — `meta.ts`: Campaign insights fetch with date range + pagination, CAPI (Conversions API) server-side event upload for lead events, Pixel ID scoped
+- **CallRail** — `callrail.ts`: HMAC-SHA256 webhook signature verification using per-tenant signing key from encrypted config
+- **Rate Limiter** — `rate-limiter.ts`: Generic token bucket rate limiter + exponential backoff retry utility (used by all API clients)
+
+### Sync Scheduler (`artifacts/api-server/src/services/sync-scheduler.ts`)
+- ServiceTitan jobs sync: every 15 minutes (upsert by stJobId)
+- Google Ads + Meta campaign stats sync: every 60 minutes
+- All syncs logged to `integration_sync_logs` table with status, record counts, error messages
+- Per-tenant API credentials stored encrypted in `tenants.apiConfig` (AES-256-GCM)
+
+### Tenant Integration Config Fields
+Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanClientSecret`, `serviceTitanTenantId`, `googleAdsApiKey`, `googleAdsDeveloperToken`, `googleAdsCustomerId`, `googleAdsLoginCustomerId`, `metaAccessToken`, `metaAdAccountId`, `metaPixelId`, `callRailApiKey`, `callRailSigningKey`
 
 ## Frontend Pages
 

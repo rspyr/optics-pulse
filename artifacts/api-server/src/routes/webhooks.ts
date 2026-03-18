@@ -1,8 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, tenantsTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
+import { eq } from "drizzle-orm";
 import { emitNewLead } from "../socket";
+import { verifyCallRailSignature } from "../services/integrations/callrail";
+import { decryptConfig } from "../lib/encryption";
 
 const router: IRouter = Router();
 
@@ -25,19 +28,38 @@ function verifySignature(payload: string, signature: string | undefined): boolea
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
+async function getCallRailSigningKey(tenantId: number): Promise<string | undefined> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant?.apiConfig || typeof tenant.apiConfig !== "string") return undefined;
+  try {
+    const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
+    return config.callRailSigningKey;
+  } catch {
+    return undefined;
+  }
+}
+
 router.post("/webhooks/ingest", async (req, res) => {
   try {
     const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody
       ? (req as typeof req & { rawBody?: Buffer }).rawBody!.toString("utf-8")
       : JSON.stringify(req.body);
     const signature = req.headers["x-mos-signature"] as string | undefined;
+    const callrailSignature = req.headers["x-callrail-signature"] as string | undefined;
 
-    if (!verifySignature(rawBody, signature)) {
+    const body = IngestWebhookBody.parse(req.body);
+
+    if (body.source === "callrail") {
+      const signingKey = await getCallRailSigningKey(body.tenantId);
+      if (!verifyCallRailSignature(rawBody, callrailSignature, signingKey)) {
+        res.status(401).json({ success: false, eventId: 0, message: "Invalid CallRail webhook signature" });
+        return;
+      }
+    } else if (!verifySignature(rawBody, signature)) {
       res.status(401).json({ success: false, eventId: 0, message: "Invalid webhook signature" });
       return;
     }
 
-    const body = IngestWebhookBody.parse(req.body);
     const { source, tenantId, data } = body;
 
     const hashedPhone = data.phone ? hashValue(normalizePhone(data.phone)) : null;

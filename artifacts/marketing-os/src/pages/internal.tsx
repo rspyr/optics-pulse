@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation } from "@workspace/api-client-react";
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
-import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award } from "lucide-react";
+import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
 type SortDir = "asc" | "desc";
@@ -22,6 +22,38 @@ export default function Internal() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [roasFilter, setRoasFilter] = useState<string>("");
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
+
+  interface SyncStatus {
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }>;
+    recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
+  }
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+
+  const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+
+  const fetchSyncStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/integrations/sync-status`, { credentials: "include" });
+      if (res.ok) setSyncStatus(await res.json());
+    } catch { /* ignore */ }
+  }, [API_BASE]);
+
+  useEffect(() => { fetchSyncStatus(); }, [fetchSyncStatus]);
+
+  const triggerSync = async (integration: string, tenantId: number) => {
+    setSyncLoading(true);
+    try {
+      await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId }),
+      });
+      await fetchSyncStatus();
+    } catch { /* ignore */ }
+    setSyncLoading(false);
+  };
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -235,6 +267,73 @@ export default function Internal() {
                     <span>{run.jobsProcessed} jobs</span>
                     <span>{run.matchRate}% matched</span>
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </PremiumCard>
+
+      <PremiumCard className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Plug className="w-5 h-5 text-blue-400" />
+            <h3 className="font-display text-lg text-white">Integration Sync Status</h3>
+          </div>
+          <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
+            <RefreshCw className="w-3 h-3" /> Refresh
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {(["service_titan", "google_ads", "meta"] as const).map((integ) => {
+            const status = syncStatus?.statusByIntegration?.[integ];
+            const label = integ === "service_titan" ? "ServiceTitan" : integ === "google_ads" ? "Google Ads" : "Meta";
+            const color = integ === "service_titan" ? "text-blue-400" : integ === "google_ads" ? "text-yellow-400" : "text-purple-400";
+            return (
+              <div key={integ} className="p-4 bg-white/[0.03] rounded-lg border border-white/5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className={`font-medium text-sm ${color}`}>{label}</span>
+                  {status?.lastStatus === "completed" ? (
+                    <CheckCircle className="w-4 h-4 text-emerald-400" />
+                  ) : status?.lastStatus === "error" ? (
+                    <XCircle className="w-4 h-4 text-red-400" />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Never synced</span>
+                  )}
+                </div>
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p>Last: {status?.lastSync ? new Date(status.lastSync).toLocaleString() : "—"}</p>
+                  <p>Records: {status?.lastRecords ?? 0}</p>
+                  {(status?.errorCount ?? 0) > 0 && (
+                    <p className="text-red-400">{status!.errorCount} errors in recent history</p>
+                  )}
+                </div>
+                {data?.tenants && data.tenants.length > 0 && (
+                  <button
+                    onClick={() => triggerSync(integ, data.tenants[0].tenantId)}
+                    disabled={syncLoading}
+                    className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                  >
+                    {syncLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Sync Now
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {syncStatus?.recentLogs && syncStatus.recentLogs.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Sync Activity</p>
+            <div className="space-y-1">
+              {syncStatus.recentLogs.slice(0, 8).map((log) => (
+                <div key={log.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02]">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full ${log.status === "completed" ? "bg-emerald-400" : log.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
+                    <span className="text-muted-foreground">{log.completedAt ? new Date(log.completedAt).toLocaleString() : "Running..."}</span>
+                    <Badge variant="neutral">{log.integration.replace("_", " ")}</Badge>
+                  </div>
+                  <span className="text-muted-foreground">{log.recordsProcessed} records</span>
                 </div>
               ))}
             </div>

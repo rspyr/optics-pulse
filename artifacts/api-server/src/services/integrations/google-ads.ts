@@ -1,0 +1,154 @@
+import { withRetry } from "./rate-limiter";
+import type { OciPayload } from "../reconciliation";
+
+const GOOGLE_ADS_API_VERSION = "v17";
+const GOOGLE_ADS_BASE = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
+
+interface GoogleAdsConfig {
+  developerToken: string;
+  accessToken: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  customerId: string;
+  loginCustomerId?: string;
+}
+
+interface CampaignPerformanceRow {
+  campaign: {
+    id: string;
+    name: string;
+    status: string;
+  };
+  metrics: {
+    impressions: string;
+    clicks: string;
+    costMicros: string;
+    conversions: number;
+    averageCpc: string;
+  };
+  segments: {
+    date: string;
+  };
+}
+
+interface GoogleAdsSearchResponse {
+  results: CampaignPerformanceRow[];
+  nextPageToken?: string;
+}
+
+async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options: RequestInit = {}): Promise<T> {
+  return withRetry(async () => {
+    const url = `${GOOGLE_ADS_BASE}${path}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${config.accessToken}`,
+      "developer-token": config.developerToken,
+      "Content-Type": "application/json",
+    };
+    if (config.loginCustomerId) {
+      headers["login-customer-id"] = config.loginCustomerId.replace(/-/g, "");
+    }
+
+    const response = await fetch(url, { ...options, headers: { ...headers, ...(options.headers as Record<string, string> || {}) } });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Google Ads API error (${response.status}): ${text}`);
+    }
+    return response.json() as Promise<T>;
+  }, { label: `Google Ads ${path}`, maxRetries: 3 });
+}
+
+export async function fetchCampaignPerformance(
+  config: GoogleAdsConfig,
+  startDate: string,
+  endDate: string,
+): Promise<CampaignPerformanceRow[]> {
+  const customerId = config.customerId.replace(/-/g, "");
+  const query = `
+    SELECT
+      campaign.id,
+      campaign.name,
+      campaign.status,
+      metrics.impressions,
+      metrics.clicks,
+      metrics.cost_micros,
+      metrics.conversions,
+      metrics.average_cpc,
+      segments.date
+    FROM campaign
+    WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
+      AND campaign.status != 'REMOVED'
+    ORDER BY segments.date DESC
+  `;
+
+  const allResults: CampaignPerformanceRow[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const body: Record<string, unknown> = { query, pageSize: 1000 };
+    if (pageToken) body.pageToken = pageToken;
+
+    const response = await googleAdsFetch<GoogleAdsSearchResponse>(
+      config,
+      `/customers/${customerId}/googleAds:search`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+
+    if (response.results) allResults.push(...response.results);
+    pageToken = response.nextPageToken;
+  } while (pageToken);
+
+  return allResults;
+}
+
+export function formatCampaignRow(row: CampaignPerformanceRow) {
+  return {
+    externalId: row.campaign.id,
+    name: row.campaign.name,
+    platform: "google_ads" as const,
+    status: row.campaign.status.toLowerCase() === "enabled" ? "active" : "paused",
+    date: row.segments.date,
+    spend: Number(row.metrics.costMicros) / 1_000_000,
+    impressions: Number(row.metrics.impressions),
+    clicks: Number(row.metrics.clicks),
+    conversions: Math.round(row.metrics.conversions || 0),
+  };
+}
+
+export async function uploadOfflineConversions(
+  config: GoogleAdsConfig,
+  payloads: OciPayload[],
+  conversionActionResourceName: string,
+): Promise<{ successCount: number; errorCount: number; errors: string[] }> {
+  if (payloads.length === 0) return { successCount: 0, errorCount: 0, errors: [] };
+
+  const customerId = config.customerId.replace(/-/g, "");
+  const conversions = payloads.map((p) => ({
+    gclid: p.gclid,
+    conversionAction: conversionActionResourceName,
+    conversionDateTime: p.conversionDateTime,
+    conversionValue: p.conversionValue,
+    currencyCode: p.currencyCode,
+  }));
+
+  try {
+    await googleAdsFetch(
+      config,
+      `/customers/${customerId}/conversionUploads:uploadClickConversions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          conversions,
+          partialFailure: true,
+        }),
+      },
+    );
+
+    console.log(`[Google Ads OCI] Uploaded ${payloads.length} conversions for customer ${customerId}`);
+    return { successCount: payloads.length, errorCount: 0, errors: [] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Google Ads OCI] Upload failed: ${message}`);
+    return { successCount: 0, errorCount: payloads.length, errors: [message] };
+  }
+}

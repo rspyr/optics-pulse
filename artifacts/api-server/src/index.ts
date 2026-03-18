@@ -2,6 +2,7 @@ import { createServer } from "http";
 import app, { sessionMiddleware } from "./app";
 import { initSocketIO } from "./socket";
 import { startReconciliationCron } from "./services/cron";
+import { startSyncScheduler } from "./services/sync-scheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -23,4 +24,5 @@ initSocketIO(httpServer, sessionMiddleware);
 httpServer.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startReconciliationCron(3, 0);
+  startSyncScheduler();
 });

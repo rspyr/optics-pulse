@@ -11,6 +11,7 @@ import webhooksRouter from "./webhooks";
 import dashboardRouter from "./dashboard";
 import adminRouter from "./admin";
 import changeLogsRouter from "./change-logs";
+import integrationsRouter from "./integrations";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(jobsRouter);
 router.use(dashboardRouter);
 router.use(adminRouter);
 router.use(changeLogsRouter);
+router.use(integrationsRouter);
 
 export default router;
