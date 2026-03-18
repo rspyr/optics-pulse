@@ -228,7 +228,7 @@ export default function Internal() {
                 <div key={run.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02]">
                   <div className="flex items-center gap-2">
                     <span className={`w-1.5 h-1.5 rounded-full ${run.status === "completed" ? "bg-emerald-400" : "bg-red-400"}`} />
-                    <span className="text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</span>
+                    <span className="text-muted-foreground">{run.createdAt ? new Date(run.createdAt).toLocaleString() : "—"}</span>
                     <Badge variant={run.triggerType === "scheduled" ? "neutral" : "default"}>{run.triggerType}</Badge>
                   </div>
                   <div className="flex items-center gap-3 text-muted-foreground">

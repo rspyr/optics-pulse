@@ -1,5 +1,5 @@
 import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable } from "@workspace/db";
-import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, desc } from "drizzle-orm";
 import crypto from "crypto";
 
 function hashValue(value: string): string {
@@ -54,9 +54,10 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, unmatched: 0 };
   const ociPayloads: OciPayload[] = [];
 
-  const jobConditions = [isNull(jobsTable.matchLevel), eq(jobsTable.status, "completed")];
-  if (tenantId) jobConditions.push(eq(jobsTable.tenantId, tenantId));
-  const unmatchedJobs = await db.select().from(jobsTable).where(and(...jobConditions));
+  const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
+  const baseConditions = [matchCondition, eq(jobsTable.status, "completed")];
+  if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));
+  const unmatchedJobs = await db.select().from(jobsTable).where(and(...baseConditions));
 
   for (const job of unmatchedJobs) {
     let matched = false;
@@ -91,8 +92,10 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       }
     }
 
+    const leadConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
+    if (lastName) leadConditions.push(eq(leadsTable.lastName, lastName));
     const matchingLeads = await db.select().from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)))
+      .where(and(...leadConditions))
       .limit(20);
 
     let diamondViaLead = false;
