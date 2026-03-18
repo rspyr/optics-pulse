@@ -9,3 +9,4 @@ export * from "./change-logs";
 export * from "./reconciliation-runs";
 export * from "./integration-sync-logs";
 export * from "./saved-questions";
+export * from "./training";

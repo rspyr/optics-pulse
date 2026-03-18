@@ -508,6 +508,81 @@ export interface ReconciliationStatusResponse {
   nextScheduledRun: string;
 }
 
+export type TrainingItemContentType =
+  (typeof TrainingItemContentType)[keyof typeof TrainingItemContentType];
+
+export const TrainingItemContentType = {
+  free_tip: "free_tip",
+  paid_course: "paid_course",
+} as const;
+
+export type TrainingItemMetricTrigger =
+  | (typeof TrainingItemMetricTrigger)[keyof typeof TrainingItemMetricTrigger]
+  | null;
+
+export const TrainingItemMetricTrigger = {
+  booking_rate: "booking_rate",
+  close_rate: "close_rate",
+  cpl: "cpl",
+  roas: "roas",
+  avg_sale_value: "avg_sale_value",
+} as const;
+
+export type TrainingItemThresholdDirection =
+  | (typeof TrainingItemThresholdDirection)[keyof typeof TrainingItemThresholdDirection]
+  | null;
+
+export const TrainingItemThresholdDirection = {
+  below: "below",
+  above: "above",
+} as const;
+
+export interface TrainingItem {
+  id: number;
+  title: string;
+  description: string;
+  category: string;
+  contentType: TrainingItemContentType;
+  metricTrigger?: TrainingItemMetricTrigger;
+  thresholdValue?: number | null;
+  thresholdDirection?: TrainingItemThresholdDirection;
+  price?: number | null;
+  url?: string | null;
+  thumbnailUrl?: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TrainingContextualResponseMetrics = {
+  booking_rate?: number;
+  close_rate?: number;
+  cpl?: number;
+  roas?: number;
+  avg_sale_value?: number;
+};
+
+export interface TrainingContextualResponse {
+  items: TrainingItem[];
+  metrics: TrainingContextualResponseMetrics;
+}
+
+export type TrainingAlertResponseAlertsItem = {
+  tenantId?: number;
+  tenantName?: string;
+  metric?: string;
+  value?: number;
+  threshold?: number;
+  trainingTitle?: string;
+};
+
+export interface TrainingAlertResponse {
+  alertsGenerated: number;
+  alerts: TrainingAlertResponseAlertsItem[];
+  message: string;
+}
+
 export type DeleteTenant200 = {
   success?: boolean;
   message?: string;
@@ -638,4 +713,89 @@ export type GetDashboardBenchmarksParams = {
 export type GetTenantPerformanceParams = {
   startDate?: string;
   endDate?: string;
+};
+
+export type ListTrainingItemsParams = {
+  activeOnly?: string;
+};
+
+export type CreateTrainingItemBodyContentType =
+  (typeof CreateTrainingItemBodyContentType)[keyof typeof CreateTrainingItemBodyContentType];
+
+export const CreateTrainingItemBodyContentType = {
+  free_tip: "free_tip",
+  paid_course: "paid_course",
+} as const;
+
+export type CreateTrainingItemBodyMetricTrigger =
+  | (typeof CreateTrainingItemBodyMetricTrigger)[keyof typeof CreateTrainingItemBodyMetricTrigger]
+  | null;
+
+export const CreateTrainingItemBodyMetricTrigger = {
+  booking_rate: "booking_rate",
+  close_rate: "close_rate",
+  cpl: "cpl",
+  roas: "roas",
+  avg_sale_value: "avg_sale_value",
+} as const;
+
+export type CreateTrainingItemBodyThresholdDirection =
+  (typeof CreateTrainingItemBodyThresholdDirection)[keyof typeof CreateTrainingItemBodyThresholdDirection];
+
+export const CreateTrainingItemBodyThresholdDirection = {
+  below: "below",
+  above: "above",
+} as const;
+
+export type CreateTrainingItemBody = {
+  title: string;
+  description: string;
+  category: string;
+  contentType?: CreateTrainingItemBodyContentType;
+  metricTrigger?: CreateTrainingItemBodyMetricTrigger;
+  thresholdValue?: number | null;
+  thresholdDirection?: CreateTrainingItemBodyThresholdDirection;
+  price?: number | null;
+  url?: string | null;
+  thumbnailUrl?: string | null;
+  sortOrder?: number;
+  isActive?: boolean;
+};
+
+export type UpdateTrainingItemBodyContentType =
+  (typeof UpdateTrainingItemBodyContentType)[keyof typeof UpdateTrainingItemBodyContentType];
+
+export const UpdateTrainingItemBodyContentType = {
+  free_tip: "free_tip",
+  paid_course: "paid_course",
+} as const;
+
+export type UpdateTrainingItemBodyThresholdDirection =
+  (typeof UpdateTrainingItemBodyThresholdDirection)[keyof typeof UpdateTrainingItemBodyThresholdDirection];
+
+export const UpdateTrainingItemBodyThresholdDirection = {
+  below: "below",
+  above: "above",
+} as const;
+
+export type UpdateTrainingItemBody = {
+  title?: string;
+  description?: string;
+  category?: string;
+  contentType?: UpdateTrainingItemBodyContentType;
+  metricTrigger?: string | null;
+  thresholdValue?: number | null;
+  thresholdDirection?: UpdateTrainingItemBodyThresholdDirection;
+  price?: number | null;
+  url?: string | null;
+  sortOrder?: number;
+  isActive?: boolean;
+};
+
+export type DeleteTrainingItem200 = {
+  success?: boolean;
+};
+
+export type DismissTraining200 = {
+  success?: boolean;
 };

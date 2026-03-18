@@ -27,9 +27,12 @@ import type {
   ChangeLog,
   CreateChangeLogInput,
   CreateTenantInput,
+  CreateTrainingItemBody,
   CreateUserInput,
   DashboardOverview,
   DeleteTenant200,
+  DeleteTrainingItem200,
+  DismissTraining200,
   GetAdminDashboardStatsParams,
   GetCampaignStatsParams,
   GetDashboardBenchmarksParams,
@@ -50,6 +53,7 @@ import type {
   ListChangeLogsParams,
   ListJobsParams,
   ListLeadsParams,
+  ListTrainingItemsParams,
   LoginInput,
   Logout200,
   ReconciliationResult,
@@ -58,8 +62,12 @@ import type {
   SpendRevenueDataPoint,
   Tenant,
   TenantPerformanceRow,
+  TrainingAlertResponse,
+  TrainingContextualResponse,
+  TrainingItem,
   UpdateLeadInput,
   UpdateTenantInput,
+  UpdateTrainingItemBody,
   UpdateUserInput,
   WebhookIngestPayload,
   WebhookIngestResponse,
@@ -2848,3 +2856,600 @@ export function useGetTenantPerformance<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary List all training items
+ */
+export const getListTrainingItemsUrl = (params?: ListTrainingItemsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/training/items?${stringifiedParams}`
+    : `/api/training/items`;
+};
+
+export const listTrainingItems = async (
+  params?: ListTrainingItemsParams,
+  options?: RequestInit,
+): Promise<TrainingItem[]> => {
+  return customFetch<TrainingItem[]>(getListTrainingItemsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListTrainingItemsQueryKey = (
+  params?: ListTrainingItemsParams,
+) => {
+  return [`/api/training/items`, ...(params ? [params] : [])] as const;
+};
+
+export const getListTrainingItemsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listTrainingItems>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListTrainingItemsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listTrainingItems>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListTrainingItemsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listTrainingItems>>
+  > = ({ signal }) => listTrainingItems(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listTrainingItems>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListTrainingItemsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listTrainingItems>>
+>;
+export type ListTrainingItemsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all training items
+ */
+
+export function useListTrainingItems<
+  TData = Awaited<ReturnType<typeof listTrainingItems>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListTrainingItemsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listTrainingItems>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListTrainingItemsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a training item (admin only)
+ */
+export const getCreateTrainingItemUrl = () => {
+  return `/api/training/items`;
+};
+
+export const createTrainingItem = async (
+  createTrainingItemBody: CreateTrainingItemBody,
+  options?: RequestInit,
+): Promise<TrainingItem> => {
+  return customFetch<TrainingItem>(getCreateTrainingItemUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createTrainingItemBody),
+  });
+};
+
+export const getCreateTrainingItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createTrainingItem>>,
+    TError,
+    { data: BodyType<CreateTrainingItemBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createTrainingItem>>,
+  TError,
+  { data: BodyType<CreateTrainingItemBody> },
+  TContext
+> => {
+  const mutationKey = ["createTrainingItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createTrainingItem>>,
+    { data: BodyType<CreateTrainingItemBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createTrainingItem(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateTrainingItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createTrainingItem>>
+>;
+export type CreateTrainingItemMutationBody = BodyType<CreateTrainingItemBody>;
+export type CreateTrainingItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a training item (admin only)
+ */
+export const useCreateTrainingItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createTrainingItem>>,
+    TError,
+    { data: BodyType<CreateTrainingItemBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createTrainingItem>>,
+  TError,
+  { data: BodyType<CreateTrainingItemBody> },
+  TContext
+> => {
+  return useMutation(getCreateTrainingItemMutationOptions(options));
+};
+
+/**
+ * @summary Update a training item (admin only)
+ */
+export const getUpdateTrainingItemUrl = (id: number) => {
+  return `/api/training/items/${id}`;
+};
+
+export const updateTrainingItem = async (
+  id: number,
+  updateTrainingItemBody: UpdateTrainingItemBody,
+  options?: RequestInit,
+): Promise<TrainingItem> => {
+  return customFetch<TrainingItem>(getUpdateTrainingItemUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateTrainingItemBody),
+  });
+};
+
+export const getUpdateTrainingItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTrainingItem>>,
+    TError,
+    { id: number; data: BodyType<UpdateTrainingItemBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateTrainingItem>>,
+  TError,
+  { id: number; data: BodyType<UpdateTrainingItemBody> },
+  TContext
+> => {
+  const mutationKey = ["updateTrainingItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateTrainingItem>>,
+    { id: number; data: BodyType<UpdateTrainingItemBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateTrainingItem(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateTrainingItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateTrainingItem>>
+>;
+export type UpdateTrainingItemMutationBody = BodyType<UpdateTrainingItemBody>;
+export type UpdateTrainingItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a training item (admin only)
+ */
+export const useUpdateTrainingItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTrainingItem>>,
+    TError,
+    { id: number; data: BodyType<UpdateTrainingItemBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateTrainingItem>>,
+  TError,
+  { id: number; data: BodyType<UpdateTrainingItemBody> },
+  TContext
+> => {
+  return useMutation(getUpdateTrainingItemMutationOptions(options));
+};
+
+/**
+ * @summary Delete a training item (admin only)
+ */
+export const getDeleteTrainingItemUrl = (id: number) => {
+  return `/api/training/items/${id}`;
+};
+
+export const deleteTrainingItem = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DeleteTrainingItem200> => {
+  return customFetch<DeleteTrainingItem200>(getDeleteTrainingItemUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteTrainingItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteTrainingItem>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteTrainingItem>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteTrainingItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteTrainingItem>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteTrainingItem(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteTrainingItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteTrainingItem>>
+>;
+
+export type DeleteTrainingItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a training item (admin only)
+ */
+export const useDeleteTrainingItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteTrainingItem>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteTrainingItem>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteTrainingItemMutationOptions(options));
+};
+
+/**
+ * @summary Get training items triggered by current tenant metrics
+ */
+export const getGetContextualTrainingUrl = () => {
+  return `/api/training/contextual`;
+};
+
+export const getContextualTraining = async (
+  options?: RequestInit,
+): Promise<TrainingContextualResponse> => {
+  return customFetch<TrainingContextualResponse>(
+    getGetContextualTrainingUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetContextualTrainingQueryKey = () => {
+  return [`/api/training/contextual`] as const;
+};
+
+export const getGetContextualTrainingQueryOptions = <
+  TData = Awaited<ReturnType<typeof getContextualTraining>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getContextualTraining>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetContextualTrainingQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getContextualTraining>>
+  > = ({ signal }) => getContextualTraining({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getContextualTraining>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetContextualTrainingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getContextualTraining>>
+>;
+export type GetContextualTrainingQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get training items triggered by current tenant metrics
+ */
+
+export function useGetContextualTraining<
+  TData = Awaited<ReturnType<typeof getContextualTraining>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getContextualTraining>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetContextualTrainingQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Dismiss a training item for current user
+ */
+export const getDismissTrainingUrl = (id: number) => {
+  return `/api/training/dismiss/${id}`;
+};
+
+export const dismissTraining = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DismissTraining200> => {
+  return customFetch<DismissTraining200>(getDismissTrainingUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDismissTrainingMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissTraining>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof dismissTraining>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["dismissTraining"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof dismissTraining>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return dismissTraining(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DismissTrainingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof dismissTraining>>
+>;
+
+export type DismissTrainingMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Dismiss a training item for current user
+ */
+export const useDismissTraining = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissTraining>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof dismissTraining>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDismissTrainingMutationOptions(options));
+};
+
+/**
+ * @summary Check all tenants for metric threshold breaches (admin only)
+ */
+export const getCheckTrainingAlertsUrl = () => {
+  return `/api/training/check-alerts`;
+};
+
+export const checkTrainingAlerts = async (
+  options?: RequestInit,
+): Promise<TrainingAlertResponse> => {
+  return customFetch<TrainingAlertResponse>(getCheckTrainingAlertsUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getCheckTrainingAlertsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof checkTrainingAlerts>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof checkTrainingAlerts>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["checkTrainingAlerts"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof checkTrainingAlerts>>,
+    void
+  > = () => {
+    return checkTrainingAlerts(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CheckTrainingAlertsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof checkTrainingAlerts>>
+>;
+
+export type CheckTrainingAlertsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Check all tenants for metric threshold breaches (admin only)
+ */
+export const useCheckTrainingAlerts = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof checkTrainingAlerts>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof checkTrainingAlerts>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getCheckTrainingAlertsMutationOptions(options));
+};

@@ -28,6 +28,8 @@ tags:
     description: Authentication
   - name: admin
     description: Admin portal management
+  - name: training
+    description: Training & LMS upsell engine
 
 paths:
   /healthz:
@@ -715,6 +717,200 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/TenantPerformanceRow"
+
+  /training/items:
+    get:
+      operationId: listTrainingItems
+      tags: [training]
+      summary: List all training items
+      parameters:
+        - name: activeOnly
+          in: query
+          schema:
+            type: string
+            default: "true"
+      responses:
+        "200":
+          description: List of training items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrainingItem"
+    post:
+      operationId: createTrainingItem
+      tags: [training]
+      summary: Create a training item (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, category]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                contentType:
+                  type: string
+                  enum: [free_tip, paid_course]
+                metricTrigger:
+                  type: string
+                  enum: [booking_rate, close_rate, cpl, roas, avg_sale_value]
+                  nullable: true
+                thresholdValue:
+                  type: number
+                  nullable: true
+                thresholdDirection:
+                  type: string
+                  enum: [below, above]
+                price:
+                  type: number
+                  nullable: true
+                url:
+                  type: string
+                  nullable: true
+                thumbnailUrl:
+                  type: string
+                  nullable: true
+                sortOrder:
+                  type: integer
+                isActive:
+                  type: boolean
+      responses:
+        "201":
+          description: Created training item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingItem"
+
+  /training/items/{id}:
+    put:
+      operationId: updateTrainingItem
+      tags: [training]
+      summary: Update a training item (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                contentType:
+                  type: string
+                  enum: [free_tip, paid_course]
+                metricTrigger:
+                  type: string
+                  nullable: true
+                thresholdValue:
+                  type: number
+                  nullable: true
+                thresholdDirection:
+                  type: string
+                  enum: [below, above]
+                price:
+                  type: number
+                  nullable: true
+                url:
+                  type: string
+                  nullable: true
+                sortOrder:
+                  type: integer
+                isActive:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated training item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingItem"
+    delete:
+      operationId: deleteTrainingItem
+      tags: [training]
+      summary: Delete a training item (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /training/contextual:
+    get:
+      operationId: getContextualTraining
+      tags: [training]
+      summary: Get training items triggered by current tenant metrics
+      responses:
+        "200":
+          description: Contextual training items and current metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingContextualResponse"
+
+  /training/dismiss/{id}:
+    post:
+      operationId: dismissTraining
+      tags: [training]
+      summary: Dismiss a training item for current user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dismissed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /training/check-alerts:
+    post:
+      operationId: checkTrainingAlerts
+      tags: [training]
+      summary: Check all tenants for metric threshold breaches (admin only)
+      responses:
+        "200":
+          description: Alert check results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingAlertResponse"
 
 components:
   schemas:
@@ -1457,3 +1653,97 @@ components:
           type: string
           format: date-time
       required: [latestRun, recentRuns, nextScheduledRun]
+
+    TrainingItem:
+      type: object
+      required: [id, title, description, category, contentType, sortOrder, isActive, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        contentType:
+          type: string
+          enum: [free_tip, paid_course]
+        metricTrigger:
+          type: string
+          enum: [booking_rate, close_rate, cpl, roas, avg_sale_value]
+          nullable: true
+        thresholdValue:
+          type: number
+          nullable: true
+        thresholdDirection:
+          type: string
+          enum: [below, above]
+          nullable: true
+        price:
+          type: number
+          nullable: true
+        url:
+          type: string
+          nullable: true
+        thumbnailUrl:
+          type: string
+          nullable: true
+        sortOrder:
+          type: integer
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TrainingContextualResponse:
+      type: object
+      required: [items, metrics]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrainingItem"
+        metrics:
+          type: object
+          properties:
+            booking_rate:
+              type: number
+            close_rate:
+              type: number
+            cpl:
+              type: number
+            roas:
+              type: number
+            avg_sale_value:
+              type: number
+
+    TrainingAlertResponse:
+      type: object
+      required: [alertsGenerated, alerts, message]
+      properties:
+        alertsGenerated:
+          type: integer
+        alerts:
+          type: array
+          items:
+            type: object
+            properties:
+              tenantId:
+                type: integer
+              tenantName:
+                type: string
+              metric:
+                type: string
+              value:
+                type: number
+              threshold:
+                type: number
+              trainingTitle:
+                type: string
+        message:
+          type: string

@@ -766,3 +766,172 @@ export const GetTenantPerformanceResponseItem = zod.object({
 export const GetTenantPerformanceResponse = zod.array(
   GetTenantPerformanceResponseItem,
 );
+
+/**
+ * @summary List all training items
+ */
+export const listTrainingItemsQueryActiveOnlyDefault = `true`;
+
+export const ListTrainingItemsQueryParams = zod.object({
+  activeOnly: zod.coerce
+    .string()
+    .default(listTrainingItemsQueryActiveOnlyDefault),
+});
+
+export const ListTrainingItemsResponseItem = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  description: zod.string(),
+  category: zod.string(),
+  contentType: zod.enum(["free_tip", "paid_course"]),
+  metricTrigger: zod
+    .enum(["booking_rate", "close_rate", "cpl", "roas", "avg_sale_value"])
+    .nullish(),
+  thresholdValue: zod.number().nullish(),
+  thresholdDirection: zod.enum(["below", "above"]).nullish(),
+  price: zod.number().nullish(),
+  url: zod.string().nullish(),
+  thumbnailUrl: zod.string().nullish(),
+  sortOrder: zod.number(),
+  isActive: zod.boolean(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+export const ListTrainingItemsResponse = zod.array(
+  ListTrainingItemsResponseItem,
+);
+
+/**
+ * @summary Create a training item (admin only)
+ */
+export const CreateTrainingItemBody = zod.object({
+  title: zod.string(),
+  description: zod.string(),
+  category: zod.string(),
+  contentType: zod.enum(["free_tip", "paid_course"]).optional(),
+  metricTrigger: zod
+    .enum(["booking_rate", "close_rate", "cpl", "roas", "avg_sale_value"])
+    .nullish(),
+  thresholdValue: zod.number().nullish(),
+  thresholdDirection: zod.enum(["below", "above"]).optional(),
+  price: zod.number().nullish(),
+  url: zod.string().nullish(),
+  thumbnailUrl: zod.string().nullish(),
+  sortOrder: zod.number().optional(),
+  isActive: zod.boolean().optional(),
+});
+
+/**
+ * @summary Update a training item (admin only)
+ */
+export const UpdateTrainingItemParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateTrainingItemBody = zod.object({
+  title: zod.string().optional(),
+  description: zod.string().optional(),
+  category: zod.string().optional(),
+  contentType: zod.enum(["free_tip", "paid_course"]).optional(),
+  metricTrigger: zod.string().nullish(),
+  thresholdValue: zod.number().nullish(),
+  thresholdDirection: zod.enum(["below", "above"]).optional(),
+  price: zod.number().nullish(),
+  url: zod.string().nullish(),
+  sortOrder: zod.number().optional(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateTrainingItemResponse = zod.object({
+  id: zod.number(),
+  title: zod.string(),
+  description: zod.string(),
+  category: zod.string(),
+  contentType: zod.enum(["free_tip", "paid_course"]),
+  metricTrigger: zod
+    .enum(["booking_rate", "close_rate", "cpl", "roas", "avg_sale_value"])
+    .nullish(),
+  thresholdValue: zod.number().nullish(),
+  thresholdDirection: zod.enum(["below", "above"]).nullish(),
+  price: zod.number().nullish(),
+  url: zod.string().nullish(),
+  thumbnailUrl: zod.string().nullish(),
+  sortOrder: zod.number(),
+  isActive: zod.boolean(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+
+/**
+ * @summary Delete a training item (admin only)
+ */
+export const DeleteTrainingItemParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteTrainingItemResponse = zod.object({
+  success: zod.boolean().optional(),
+});
+
+/**
+ * @summary Get training items triggered by current tenant metrics
+ */
+export const GetContextualTrainingResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.number(),
+      title: zod.string(),
+      description: zod.string(),
+      category: zod.string(),
+      contentType: zod.enum(["free_tip", "paid_course"]),
+      metricTrigger: zod
+        .enum(["booking_rate", "close_rate", "cpl", "roas", "avg_sale_value"])
+        .nullish(),
+      thresholdValue: zod.number().nullish(),
+      thresholdDirection: zod.enum(["below", "above"]).nullish(),
+      price: zod.number().nullish(),
+      url: zod.string().nullish(),
+      thumbnailUrl: zod.string().nullish(),
+      sortOrder: zod.number(),
+      isActive: zod.boolean(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  metrics: zod.object({
+    booking_rate: zod.number().optional(),
+    close_rate: zod.number().optional(),
+    cpl: zod.number().optional(),
+    roas: zod.number().optional(),
+    avg_sale_value: zod.number().optional(),
+  }),
+});
+
+/**
+ * @summary Dismiss a training item for current user
+ */
+export const DismissTrainingParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DismissTrainingResponse = zod.object({
+  success: zod.boolean().optional(),
+});
+
+/**
+ * @summary Check all tenants for metric threshold breaches (admin only)
+ */
+export const CheckTrainingAlertsResponse = zod.object({
+  alertsGenerated: zod.number(),
+  alerts: zod.array(
+    zod.object({
+      tenantId: zod.number().optional(),
+      tenantName: zod.string().optional(),
+      metric: zod.string().optional(),
+      value: zod.number().optional(),
+      threshold: zod.number().optional(),
+      trainingTitle: zod.string().optional(),
+    }),
+  ),
+  message: zod.string(),
+});

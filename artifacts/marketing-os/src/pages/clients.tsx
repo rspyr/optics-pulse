@@ -1,5 +1,5 @@
-import { useState, useMemo, useCallback } from "react";
-import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks } from "@workspace/api-client-react";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -9,6 +9,7 @@ import {
   AlertTriangle, X, Zap, Bookmark, Plus, Trash2,
 } from "lucide-react";
 import ChatDrawer from "@/components/chat-drawer";
+import TrainingCards from "@/components/training-cards";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ReferenceLine,
@@ -180,6 +181,18 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     startDate,
     endDate,
   });
+
+  const { data: trainingData, refetch: refetchTraining } = useGetContextualTraining();
+  const [dismissedTrainingIds, setDismissedTrainingIds] = useState<Set<number>>(new Set());
+
+  const trainingItems = useMemo(() => {
+    if (!trainingData?.items) return [];
+    return (trainingData.items as any[]).filter((i: any) => !dismissedTrainingIds.has(i.id));
+  }, [trainingData, dismissedTrainingIds]);
+
+  const handleDismissTraining = useCallback((id: number) => {
+    setDismissedTrainingIds(prev => new Set([...prev, id]));
+  }, []);
 
   const leads = leadsData?.leads || [];
   const effectiveSource = activeNlFilter.source || filterSource;
@@ -468,6 +481,14 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </select>
         </div>
       </header>
+
+      {trainingItems.length > 0 && (
+        <TrainingCards
+          items={trainingItems}
+          metrics={(trainingData?.metrics as any) || {}}
+          onDismiss={handleDismissTraining}
+        />
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {metrics.map((metric, i) => (

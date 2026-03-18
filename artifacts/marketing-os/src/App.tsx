@@ -15,6 +15,8 @@ import Attribution from "@/pages/attribution";
 import Settings from "@/pages/settings";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminUsers from "@/pages/admin-users";
+import AdminTraining from "@/pages/admin-training";
+import TrainingResources from "@/pages/training-resources";
 
 import soehneExtra from '@assets/soehne-extrafett_1773849837050.woff2';
 import soehneDrei from '@assets/soehne-dreiviertelfett_1773849837042.woff2';
@@ -59,7 +61,7 @@ function AuthenticatedRoutes() {
     return <Redirect to="/internal" />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <Redirect to="/" />;
   }
@@ -75,6 +77,8 @@ function AuthenticatedRoutes() {
         <Route path="/clients">{() => <AgencyGuard><Clients /></AgencyGuard>}</Route>
         <Route path="/admin/tenants">{() => <AgencyGuard><AdminTenants /></AgencyGuard>}</Route>
         <Route path="/admin/users">{() => <AgencyGuard><AdminUsers /></AgencyGuard>}</Route>
+        <Route path="/admin/training">{() => <AgencyGuard><AdminTraining /></AgencyGuard>}</Route>
+        <Route path="/training" component={TrainingResources} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
