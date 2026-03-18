@@ -311,20 +311,23 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const prevAllCostsROI = prev ? ((prev.totalRevenue || 0) - ((prev.totalSpend || 0) + agencyFee)) / (((prev.totalSpend || 0) + agencyFee) || 1) : null;
   const prevROI = roiMode === "roas" ? prev?.roas : prevAllCostsROI;
 
-  const cplTrend = trendValueInverse(d.cpl, prev?.cpl);
-  const bookingTrend = trendValue(d.bookingRate, prev?.bookingRate);
-  const closeTrend = trendValue(d.closeRate, prev?.closeRate);
-  const avgSaleTrend = trendValue(d.avgSaleValue, prev?.avgSaleValue);
-  const roiTrend = trendValue(displayROI, prevROI);
-
   const benchmarks = benchmarkData || { cpl: 95, bookingRate: 55, closeRate: 45, avgSaleValue: 7500, roas: 8.5 };
 
-  const compLabel = (current: number, benchmark: number, inverse?: boolean) => {
-    if (comparisonMode !== "benchmark") return null;
-    const diff = current - benchmark;
-    const better = inverse ? diff < 0 : diff > 0;
-    return { diff: Math.abs(diff).toFixed(1), better };
-  };
+  const cplTrend = comparisonMode === "benchmark"
+    ? trendValueInverse(d.cpl, benchmarks.cpl)
+    : trendValueInverse(d.cpl, prev?.cpl);
+  const bookingTrend = comparisonMode === "benchmark"
+    ? trendValue(d.bookingRate, benchmarks.bookingRate)
+    : trendValue(d.bookingRate, prev?.bookingRate);
+  const closeTrend = comparisonMode === "benchmark"
+    ? trendValue(d.closeRate, benchmarks.closeRate)
+    : trendValue(d.closeRate, prev?.closeRate);
+  const avgSaleTrend = comparisonMode === "benchmark"
+    ? trendValue(d.avgSaleValue, benchmarks.avgSaleValue)
+    : trendValue(d.avgSaleValue, prev?.avgSaleValue);
+  const roiTrend = comparisonMode === "benchmark"
+    ? trendValue(displayROI, benchmarks.roas)
+    : trendValue(displayROI, prevROI);
 
   const metrics = [
     {
@@ -332,35 +335,30 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       value: formatCurrency(hasActiveFilters && filteredMetrics ? d.totalSpend / (filteredMetrics.totalLeads || 1) : d.cpl),
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : cplTrend,
       icon: Target,
-      benchmark: compLabel(d.cpl, benchmarks.cpl, true),
     },
     {
       label: "Booking Rate",
       value: `${(hasActiveFilters && filteredMetrics ? filteredMetrics.bookingRate : d.bookingRate).toFixed(1)}%`,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : bookingTrend,
       icon: Flame,
-      benchmark: compLabel(d.bookingRate, benchmarks.bookingRate),
     },
     {
       label: "Close Rate",
       value: `${(hasActiveFilters && filteredMetrics ? filteredMetrics.closeRate : d.closeRate).toFixed(1)}%`,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : closeTrend,
       icon: CheckCircle,
-      benchmark: compLabel(d.closeRate, benchmarks.closeRate),
     },
     {
       label: "Avg Sale Value",
       value: formatCurrency(d.avgSaleValue),
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : avgSaleTrend,
       icon: DollarSign,
-      benchmark: compLabel(d.avgSaleValue, benchmarks.avgSaleValue),
     },
     {
       label: roiLabel,
       value: roiValue,
       trend: comparisonMode === "none" ? { text: "—", isPositive: true, isNeutral: true } : roiTrend,
       icon: TrendingUp,
-      benchmark: compLabel(displayROI, benchmarks.roas),
     },
   ];
 
@@ -490,10 +488,8 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
             </div>
             <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest mb-1">{metric.label}</p>
             <p className="text-2xl font-display text-white">{metric.value}</p>
-            {metric.benchmark && comparisonMode === "benchmark" && (
-              <p className={cn("text-[10px] mt-1", metric.benchmark.better ? "text-emerald-400" : "text-amber-400")}>
-                {metric.benchmark.better ? "▲" : "▼"} {metric.benchmark.diff} vs benchmark
-              </p>
+            {comparisonMode === "benchmark" && !metric.trend.isNeutral && (
+              <p className="text-[10px] mt-1 text-muted-foreground">vs agency benchmark</p>
             )}
           </PremiumCard>
         ))}

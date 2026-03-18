@@ -195,9 +195,13 @@ router.get("/dashboard/benchmarks", async (req, res) => {
       statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
     }
 
+    const jobConditions: SQL[] = [eq(jobsTable.tenantId, tenant.id)];
+    if (startDate) jobConditions.push(gte(jobsTable.createdAt, new Date(startDate)));
+    if (endDate) jobConditions.push(lte(jobsTable.createdAt, new Date(endDate)));
+
     const [leads, jobs, spendResult] = await Promise.all([
       db.select().from(leadsTable).where(and(...leadConditions)),
-      db.select().from(jobsTable).where(eq(jobsTable.tenantId, tenant.id)),
+      db.select().from(jobsTable).where(and(...jobConditions)),
       db.select({
         total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`
       }).from(campaignDailyStatsTable)
