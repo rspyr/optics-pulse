@@ -51,8 +51,8 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
   io.engine.use(sessionMiddleware);
 
   io.on("connection", (socket: Socket) => {
-    const req = socket.request as Record<string, unknown>;
-    const session = req.session as { userId?: number; userRole?: string; tenantId?: number } | undefined;
+    const req = socket.request as { session?: { userId?: number; userRole?: string; tenantId?: number } };
+    const session = req.session;
 
     if (!session?.userId) {
       console.log(`[Socket.IO] Unauthenticated connection rejected: ${socket.id}`);

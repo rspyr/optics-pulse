@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, attributionEventsTable, leadsTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
+import { emitNewLead } from "../socket";
 
 const router: IRouter = Router();
 
@@ -61,7 +62,7 @@ router.post("/webhooks/ingest", async (req, res) => {
     }).returning();
 
     if (data.firstName || data.lastName || data.phone || data.email) {
-      await db.insert(leadsTable).values({
+      const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",
         lastName: data.lastName || "",
@@ -71,7 +72,11 @@ router.post("/webhooks/ingest", async (req, res) => {
         matchedGclid: data.gclid || null,
         interestType: null,
         leadType: source,
-      });
+      }).returning();
+
+      if (newLead) {
+        emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+      }
     }
 
     res.json({ success: true, eventId: event.id, message: `Webhook from ${source} processed successfully` });

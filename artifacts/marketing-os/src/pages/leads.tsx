@@ -1,15 +1,15 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useListLeads, useUpdateLead } from "@workspace/api-client-react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
 import { motion, AnimatePresence } from "framer-motion";
+import { io as socketIOClient, type Socket as IOSocket } from "socket.io-client";
 import {
   Phone, Mail, MessageSquare, Mic,
-  DollarSign, TrendingUp, Clock, Zap,
+  Clock, Zap,
   ChevronDown, AlertTriangle, Target,
   Flame, Award, Calendar, PhoneCall,
-  Star, Volume2
+  Star, Volume2, DollarSign
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -153,11 +153,12 @@ function useHudStats() {
   return { stats, refetch: fetchStats };
 }
 
-function useSocketIO() {
+function useSocketIO(tenantId: number | null, isAgency: boolean) {
   const [newLeadFlash, setNewLeadFlash] = useState(false);
   const [latestLead, setLatestLead] = useState<LeadData | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const socketRef = useRef<IOSocket | null>(null);
 
   useEffect(() => {
     const audio = new Audio("data:audio/wav;base64,UklGRl9vT19teleVlfT0+AU5EIBAAAABkAAAAFAAMAeAAAAAA=");
@@ -166,50 +167,42 @@ function useSocketIO() {
   }, []);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
+    const socket = socketIOClient({
+      path: "/api/socket.io",
+      withCredentials: true,
+      transports: ["websocket", "polling"],
+    });
 
-    const connect = () => {
-      try {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const host = window.location.host;
-        ws = new WebSocket(`${protocol}//${host}/api/socket.io/?EIO=4&transport=websocket`);
+    socketRef.current = socket;
 
-        ws.onmessage = (event) => {
-          const data = event.data as string;
-          if (data.includes('"new-lead"') || data.includes('"new-lead-global"')) {
-            try {
-              const match = data.match(/\[.*$/);
-              if (match) {
-                const parsed = JSON.parse(match[0]);
-                if (parsed[1]) {
-                  setLatestLead(parsed[1]);
-                  setNewLeadFlash(true);
-                  if (soundEnabled && audioRef.current) {
-                    audioRef.current.play().catch(() => {});
-                  }
-                  setTimeout(() => setNewLeadFlash(false), 3000);
-                }
-              }
-            } catch {}
-          }
-        };
-
-        ws.onclose = () => {
-          reconnectTimer = setTimeout(connect, 5000);
-        };
-      } catch {
-        reconnectTimer = setTimeout(connect, 5000);
+    socket.on("connect", () => {
+      console.log("[HUD] Socket.IO connected:", socket.id);
+      if (tenantId) {
+        socket.emit("join-tenant", tenantId);
+      } else if (isAgency) {
+        socket.emit("join-tenant", 1);
+        socket.emit("join-tenant", 2);
       }
-    };
+    });
 
-    connect();
+    socket.on("new-lead", (lead: LeadData) => {
+      setLatestLead(lead);
+      setNewLeadFlash(true);
+      if (soundEnabled && audioRef.current) {
+        audioRef.current.play().catch(() => {});
+      }
+      setTimeout(() => setNewLeadFlash(false), 3000);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("[HUD] Socket.IO disconnected");
+    });
 
     return () => {
-      ws?.close();
-      clearTimeout(reconnectTimer);
+      socket.disconnect();
+      socketRef.current = null;
     };
-  }, [soundEnabled]);
+  }, [tenantId, isAgency, soundEnabled]);
 
   return { newLeadFlash, latestLead, soundEnabled, setSoundEnabled };
 }
@@ -472,9 +465,11 @@ function LeadCard({
 }
 
 export default function Leads() {
+  const { user, isAgency } = useAuth();
+  const tenantId = user?.tenantId ?? null;
   const { queue, loading, refetch } = useHudQueue();
   const { stats, refetch: refetchStats } = useHudStats();
-  const { newLeadFlash, latestLead, soundEnabled, setSoundEnabled } = useSocketIO();
+  const { newLeadFlash, latestLead, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
   const [activeTab, setActiveTab] = useState<"new" | "followup" | "background">("new");
