@@ -191,13 +191,9 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
 
     if (matched) continue;
 
-    const addressLeads = await db.select().from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.lastName, lastName)))
-      .limit(20);
-
     let bronzeMatched = false;
-    if (lastName) {
-      const normalizedLastName = lastName.trim().toLowerCase();
+    if (job.serviceAddress) {
+      const normalizedJobAddr = normalizeAddress(job.serviceAddress);
 
       const addressEvents = await db.select().from(attributionEventsTable)
         .where(and(
@@ -208,33 +204,25 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
 
       for (const addrEvent of addressEvents) {
         if (!addrEvent.billingAddress) continue;
-        const normalizedAddr = normalizeAddress(addrEvent.billingAddress);
-        if (!normalizedAddr.includes(normalizedLastName)) continue;
+        const normalizedEventAddr = normalizeAddress(addrEvent.billingAddress);
+        if (normalizedJobAddr !== normalizedEventAddr) continue;
 
-        for (const addrLead of addressLeads) {
-          if (!addrLead.lastName || addrLead.lastName.toLowerCase() !== normalizedLastName) continue;
-          const leadFullName = `${addrLead.firstName} ${addrLead.lastName}`.toLowerCase();
-          const jobFullName = job.customerName.toLowerCase();
-          if (leadFullName !== jobFullName) continue;
-
-          matchedGclid = addrEvent.gclid || null;
-          await db.update(jobsTable).set({
-            matchLevel: "bronze",
-            matchedGclid: matchedGclid,
-            updatedAt: new Date(),
-          }).where(eq(jobsTable.id, job.id));
-          await db.update(attributionEventsTable).set({
-            matchLevel: "bronze",
-            matchConfidence: 0.6,
-          }).where(eq(attributionEventsTable.id, addrEvent.id));
-          results.bronze++;
-          bronzeMatched = true;
-          if (matchedGclid && job.revenue > 0) {
-            ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
-          }
-          break;
+        matchedGclid = addrEvent.gclid || null;
+        await db.update(jobsTable).set({
+          matchLevel: "bronze",
+          matchedGclid: matchedGclid,
+          updatedAt: new Date(),
+        }).where(eq(jobsTable.id, job.id));
+        await db.update(attributionEventsTable).set({
+          matchLevel: "bronze",
+          matchConfidence: 0.6,
+        }).where(eq(attributionEventsTable.id, addrEvent.id));
+        results.bronze++;
+        bronzeMatched = true;
+        if (matchedGclid && job.revenue > 0) {
+          ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
         }
-        if (bronzeMatched) break;
+        break;
       }
     }
     if (bronzeMatched) continue;

@@ -10,6 +10,7 @@ export const jobsTable = pgTable("jobs", {
   tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
   stJobId: text("st_job_id"),
   customerName: text("customer_name").notNull(),
+  serviceAddress: text("service_address"),
   jobType: text("job_type").notNull(),
   revenue: real("revenue").notNull().default(0),
   status: jobStatusEnum("status").notNull().default("pending"),

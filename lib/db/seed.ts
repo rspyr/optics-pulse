@@ -9,6 +9,8 @@ const LEAD_STATUSES = ["new", "contacted", "booked", "sold", "lost"] as const;
 const JOB_TYPES = ["Install", "Repair", "Maintenance", "Replacement", "Inspection", "Emergency"];
 const MATCH_LEVELS = ["diamond", "golden", "silver", "bronze", "unmatched"] as const;
 const EVENT_TYPES = ["click", "call", "form_fill"] as const;
+const STREETS = ["123 Oak Street", "456 Maple Avenue", "789 Pine Drive", "321 Elm Road", "654 Cedar Boulevard", "987 Birch Lane", "246 Walnut Court", "135 Cherry Street", "864 Spruce Avenue", "753 Ash Drive"];
+const CITIES = ["Phoenix, AZ 85001", "Mesa, AZ 85201", "Scottsdale, AZ 85251", "Tempe, AZ 85281", "Chandler, AZ 85224", "Minneapolis, MN 55401", "St Paul, MN 55101", "Bloomington, MN 55420", "Edina, MN 55424", "Plymouth, MN 55441"];
 
 function randomFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -120,10 +122,12 @@ async function seed() {
     const completedAt = completed ? new Date(lead.createdAt.getTime() + randomBetween(1, 14) * 86400000) : null;
     const matchLevel = lead.matchedGclid ? "diamond" : Math.random() > 0.5 ? "golden" : "silver";
 
+    const serviceAddress = `${randomFrom(STREETS)}, ${randomFrom(CITIES)}`;
     const [job] = await db.insert(jobsTable).values({
       tenantId: lead.tenantId,
       stJobId: `STJ-${randomBetween(10000, 99999)}`,
       customerName: `${lead.firstName} ${lead.lastName}`,
+      serviceAddress,
       jobType: randomFrom(JOB_TYPES),
       revenue,
       status: completed ? "completed" : "in_progress",
@@ -152,7 +156,7 @@ async function seed() {
       gclid,
       hashedPhone,
       hashedEmail,
-      billingAddress: matchLevel === "bronze" ? `${randomBetween(100, 9999)} Main St, Anytown USA` : null,
+      billingAddress: matchLevel === "bronze" ? `${randomFrom(STREETS)}, ${randomFrom(CITIES)}` : null,
       utmSource: eventType === "click" ? randomFrom(["google", "meta", "bing"]) : null,
       utmCampaign: eventType === "click" ? `campaign-${randomBetween(1, 6)}` : null,
       utmMedium: eventType === "click" ? "cpc" : null,
