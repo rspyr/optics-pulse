@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, tenantsTable } from "@workspace/db";
 import { eq, and, gte, lte, count, sum, sql, inArray, SQL, desc } from "drizzle-orm";
+import { requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
 
@@ -75,8 +76,23 @@ router.get("/dashboard/overview", async (req, res) => {
 });
 
 router.get("/dashboard/spend-revenue", async (req, res) => {
-  const stats = await db.select().from(campaignDailyStatsTable).orderBy(campaignDailyStatsTable.date);
-  const jobs = await db.select().from(jobsTable).where(eq(jobsTable.status, "completed"));
+  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+
+  let statsQuery;
+  let jobsQuery;
+  if (tenantId) {
+    const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
+    const campaignIds = tenantCampaigns.map(c => c.id);
+    statsQuery = campaignIds.length > 0
+      ? db.select().from(campaignDailyStatsTable).where(inArray(campaignDailyStatsTable.campaignId, campaignIds)).orderBy(campaignDailyStatsTable.date)
+      : Promise.resolve([]);
+    jobsQuery = db.select().from(jobsTable).where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.status, "completed")));
+  } else {
+    statsQuery = db.select().from(campaignDailyStatsTable).orderBy(campaignDailyStatsTable.date);
+    jobsQuery = db.select().from(jobsTable).where(eq(jobsTable.status, "completed"));
+  }
+
+  const [stats, jobs] = await Promise.all([statsQuery, jobsQuery]);
 
   const dailyMap = new Map<string, { spend: number; revenue: number }>();
 
@@ -107,7 +123,7 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   res.json(result);
 });
 
-router.get("/dashboard/tenant-performance", async (req, res) => {
+router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
 
   const results = await Promise.all(tenants.map(async (tenant) => {

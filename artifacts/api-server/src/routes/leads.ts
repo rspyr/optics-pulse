@@ -35,11 +35,30 @@ router.get("/leads/:leadId", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (lead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
   res.json(lead);
 });
 
 router.patch("/leads/:leadId", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+  const [existingLead] = await db.select({ tenantId: leadsTable.tenantId }).from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!existingLead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (existingLead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
   const body = UpdateLeadBody.parse(req.body);
   const updateData: Partial<typeof leadsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
   if (body.status) {

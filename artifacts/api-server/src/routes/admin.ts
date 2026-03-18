@@ -6,9 +6,9 @@ import { requireAuth, requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
 
-router.use("/admin/{*path}", requireAuth, requireRole("super_admin", "agency_user"));
+const agencyOnly = [requireRole("super_admin", "agency_user")];
 
-router.get("/admin/users", async (req, res) => {
+router.get("/admin/users", ...agencyOnly, async (req, res) => {
   try {
     const users = await db.select({
       id: usersTable.id,
@@ -27,7 +27,7 @@ router.get("/admin/users", async (req, res) => {
   }
 });
 
-router.post("/admin/users", async (req, res) => {
+router.post("/admin/users", ...agencyOnly, async (req, res) => {
   try {
     const { email, name, password, role, tenantId } = req.body as {
       email: string;
@@ -66,9 +66,9 @@ router.post("/admin/users", async (req, res) => {
   }
 });
 
-router.patch("/admin/users/:userId", async (req, res) => {
+router.patch("/admin/users/:userId", ...agencyOnly, async (req, res) => {
   try {
-    const userId = parseInt(req.params.userId);
+    const userId = parseInt(String(req.params.userId));
     const updates: Record<string, unknown> = {};
     const body = req.body as Record<string, unknown>;
 
@@ -101,7 +101,7 @@ router.patch("/admin/users/:userId", async (req, res) => {
   }
 });
 
-router.get("/admin/dashboard-stats", async (req, res) => {
+router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
   try {
     const startDate = req.query.startDate as string | undefined;
     const endDate = req.query.endDate as string | undefined;
