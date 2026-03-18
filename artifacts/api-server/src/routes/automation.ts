@@ -56,7 +56,7 @@ router.post("/automation/rules", ...agencyOnly, async (req, res) => {
       conditionValue: Number(conditionValue),
       actionType: actionType,
       lookbackDays: parsedLookback,
-      platform: platform?.trim() || null,
+      platform: platform?.trim().toLowerCase() || null,
       tenantId: tenantId ? Number(tenantId) : null,
       createdBy: userId,
     };
@@ -99,7 +99,7 @@ router.put("/automation/rules/:id", ...agencyOnly, async (req, res) => {
       ...(conditionValue !== undefined && { conditionValue: Number(conditionValue) }),
       ...(actionType !== undefined && { actionType }),
       ...(lookbackDays !== undefined && { lookbackDays: Number(lookbackDays) }),
-      ...(platform !== undefined && { platform: platform?.trim() || null }),
+      ...(platform !== undefined && { platform: platform?.trim().toLowerCase() || null }),
       ...(tenantId !== undefined && { tenantId: tenantId ? Number(tenantId) : null }),
       ...(isEnabled !== undefined && { isEnabled }),
       updatedAt: new Date(),

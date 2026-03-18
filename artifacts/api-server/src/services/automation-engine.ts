@@ -193,7 +193,7 @@ export async function evaluateAutomationRules(): Promise<{ alertsGenerated: numb
 
     const applicableCampaigns = campaignMetrics.filter(m => {
       if (rule.tenantId && m.tenantId !== rule.tenantId) return false;
-      if (rule.platform && m.platform !== rule.platform) return false;
+      if (rule.platform && m.platform.toLowerCase() !== rule.platform.toLowerCase()) return false;
       return true;
     });
 
