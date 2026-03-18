@@ -121,6 +121,19 @@ router.put("/training/items/:id", requireRole("super_admin", "agency_user"), asy
     return;
   }
 
+  if (thresholdValue !== undefined && thresholdValue !== null && !Number.isFinite(Number(thresholdValue))) {
+    res.status(400).json({ error: "thresholdValue must be a valid number" });
+    return;
+  }
+  if (price !== undefined && price !== null && (!Number.isFinite(Number(price)) || Number(price) < 0)) {
+    res.status(400).json({ error: "price must be a valid non-negative number" });
+    return;
+  }
+  if (sortOrder !== undefined && !Number.isFinite(Number(sortOrder))) {
+    res.status(400).json({ error: "sortOrder must be a valid number" });
+    return;
+  }
+
   const [item] = await db.update(trainingItemsTable)
     .set({
       ...(title !== undefined && { title: String(title).trim() }),

@@ -124,21 +124,31 @@ export default function TrainingCards({ items, metrics, onDismiss }: TrainingCar
                           <DollarSign className="w-3.5 h-3.5 text-primary" />{item.price}
                         </span>
                       )}
-                      {item.url && (
+                      {item.url && item.contentType === "free_tip" && (
                         <a
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className={cn(
-                            "inline-flex items-center gap-1.5 text-xs font-medium transition-colors",
-                            item.contentType === "free_tip"
-                              ? "text-emerald-400 hover:text-emerald-300"
-                              : "px-3 py-1.5 rounded-lg bg-primary text-white hover:bg-primary/90"
-                          )}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
                         >
-                          {item.contentType === "free_tip" ? "Read More" : "Get Course"}
+                          Read More
                           <ExternalLink className="w-3 h-3" />
                         </a>
+                      )}
+                      {item.contentType === "paid_course" && (
+                        <button
+                          onClick={async () => {
+                            await fetch(`${API_BASE}/api/training/purchase/${item.id}`, {
+                              method: "POST",
+                              credentials: "include",
+                            });
+                            if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+                          }}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+                        >
+                          Get Course
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
                       )}
                     </div>
                   </div>

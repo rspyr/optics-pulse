@@ -250,13 +250,15 @@ export async function runTrainingAlertCheck(): Promise<{ alertsGenerated: number
             trainingPrice: item.price,
           });
 
-          await db.insert(trainingEmailLogsTable).values({
-            tenantId: tenant.id,
-            trainingItemId: item.id,
-            metricTrigger: item.metricTrigger,
-            metricValue: roundedValue,
-            thresholdValue: item.thresholdValue,
-          });
+          if (emailSent) {
+            await db.insert(trainingEmailLogsTable).values({
+              tenantId: tenant.id,
+              trainingItemId: item.id,
+              metricTrigger: item.metricTrigger,
+              metricValue: roundedValue,
+              thresholdValue: item.thresholdValue,
+            });
+          }
 
           alerts.push({
             tenantId: tenant.id,
