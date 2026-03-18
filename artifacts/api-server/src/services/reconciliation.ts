@@ -1,6 +1,10 @@
-import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable } from "@workspace/db";
+import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, desc } from "drizzle-orm";
 import crypto from "crypto";
+import { decryptConfig } from "../lib/encryption";
+import { uploadOfflineConversions } from "./integrations/google-ads";
+import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
+import { patchJobCustomField } from "./integrations/service-titan";
 
 function hashValue(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
@@ -250,14 +254,15 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     completedAt: new Date(),
   });
 
-  for (const payload of ociPayloads) {
-    console.log(`[OCI] Conversion ready for upload: GCLID=${payload.gclid}, Value=$${payload.conversionValue}, Job=${payload.jobId}`);
-  }
-
   console.log(`[Reconciliation] ${triggerType} run complete: ${jobsProcessed} jobs processed, ${totalMatched} matched (${matchRate}% rate)`);
   console.log(`[Reconciliation] Breakdown: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.unmatched} unmatched`);
-  if (ociPayloads.length > 0) {
-    console.log(`[OCI] ${ociPayloads.length} conversion payload(s) ready for Google Ads upload`);
+
+  if (ociPayloads.length > 0 && tenantId) {
+    const matchedJobIds = ociPayloads.map((p) => p.jobId);
+    const matchedJobRows = await db.select().from(jobsTable).where(
+      and(eq(jobsTable.tenantId, tenantId), or(...matchedJobIds.map((id) => eq(jobsTable.id, id)))),
+    );
+    await pushConversionsToExternalAPIs(tenantId, ociPayloads, matchedJobRows);
   }
 
   return {
@@ -267,6 +272,148 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     matchRate,
     ociPayloads,
   };
+}
+
+interface TenantApiConfig {
+  serviceTitanClientId?: string;
+  serviceTitanClientSecret?: string;
+  serviceTitanTenantId?: string;
+  googleAdsApiKey?: string;
+  googleAdsDeveloperToken?: string;
+  googleAdsCustomerId?: string;
+  googleAdsLoginCustomerId?: string;
+  metaAccessToken?: string;
+  metaAdAccountId?: string;
+  metaPixelId?: string;
+}
+
+function getTenantApiConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiConfig | null {
+  if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") return null;
+  try {
+    return decryptConfig(tenant.apiConfig) as TenantApiConfig;
+  } catch {
+    return null;
+  }
+}
+
+async function pushConversionsToExternalAPIs(
+  tenantId: number,
+  ociPayloads: OciPayload[],
+  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number }>,
+): Promise<void> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return;
+
+  const config = getTenantApiConfig(tenant);
+  if (!config) {
+    console.log(`[Outbound] No API config for tenant ${tenantId}, skipping outbound push`);
+    return;
+  }
+
+  if (config.googleAdsApiKey && config.googleAdsCustomerId && ociPayloads.length > 0) {
+    const startedAt = new Date();
+    try {
+      const gaConfig = {
+        developerToken: config.googleAdsDeveloperToken || "",
+        accessToken: config.googleAdsApiKey,
+        customerId: config.googleAdsCustomerId,
+        loginCustomerId: config.googleAdsLoginCustomerId,
+      };
+      const conversionAction = `customers/${config.googleAdsCustomerId.replace(/-/g, "")}/conversionActions/ServiceTitan_Installation_Revenue`;
+      const result = await uploadOfflineConversions(gaConfig, ociPayloads, conversionAction);
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId,
+        integration: "google_ads",
+        syncType: "oci_upload",
+        status: result.errorCount > 0 ? "partial" : "completed",
+        recordsProcessed: result.successCount,
+        errorMessage: result.errors.length > 0 ? result.errors.join("; ") : null,
+        startedAt,
+        completedAt: new Date(),
+      });
+      console.log(`[Outbound] Google Ads OCI: ${result.successCount} uploaded, ${result.errorCount} errors for tenant ${tenantId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId,
+        integration: "google_ads",
+        syncType: "oci_upload",
+        status: "error",
+        recordsProcessed: 0,
+        errorMessage: message,
+        startedAt,
+        completedAt: new Date(),
+      });
+      console.error(`[Outbound] Google Ads OCI error for tenant ${tenantId}:`, message);
+    }
+  }
+
+  if (config.metaAccessToken && config.metaPixelId) {
+    const startedAt = new Date();
+    try {
+      const capiEvents = ociPayloads.map((p) =>
+        buildCAPILeadEvent(null, null, p.conversionValue, new Date(p.conversionDateTime)),
+      );
+      const result = await sendCAPIEvents(
+        { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "", pixelId: config.metaPixelId },
+        capiEvents,
+      );
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId,
+        integration: "meta",
+        syncType: "capi_upload",
+        status: "completed",
+        recordsProcessed: result.eventsReceived,
+        startedAt,
+        completedAt: new Date(),
+      });
+      console.log(`[Outbound] Meta CAPI: ${result.eventsReceived} events sent for tenant ${tenantId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId,
+        integration: "meta",
+        syncType: "capi_upload",
+        status: "error",
+        recordsProcessed: 0,
+        errorMessage: message,
+        startedAt,
+        completedAt: new Date(),
+      });
+      console.error(`[Outbound] Meta CAPI error for tenant ${tenantId}:`, message);
+    }
+  }
+
+  if (config.serviceTitanClientId && config.serviceTitanClientSecret) {
+    const stConfig = {
+      clientId: config.serviceTitanClientId,
+      clientSecret: config.serviceTitanClientSecret,
+      tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+    };
+    let patchCount = 0;
+    for (const job of matchedJobs) {
+      if (job.stJobId && job.matchedGclid) {
+        try {
+          await patchJobCustomField(stConfig, Number(job.stJobId), "Attribution_GCLID", job.matchedGclid);
+          patchCount++;
+        } catch (err) {
+          console.error(`[Outbound] ServiceTitan PATCH error for job ${job.stJobId}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    }
+    if (patchCount > 0) {
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId,
+        integration: "service_titan",
+        syncType: "attribution_writeback",
+        status: "completed",
+        recordsProcessed: patchCount,
+        startedAt: new Date(),
+        completedAt: new Date(),
+      });
+      console.log(`[Outbound] ServiceTitan: patched ${patchCount} jobs with GCLID for tenant ${tenantId}`);
+    }
+  }
 }
 
 function buildOciPayload(gclid: string, jobId: number, tenantId: number, revenue: number, completedAt: Date | null): OciPayload {
