@@ -662,6 +662,208 @@ export const UpdateUserResponse = zod.object({
 });
 
 /**
+ * @summary List all automation rules
+ */
+export const ListAutomationRulesResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  description: zod.string().nullish(),
+  conditionType: zod.enum([
+    "spend_below",
+    "spend_above",
+    "days_active_above",
+    "conversions_below",
+    "cpl_above",
+    "roas_below",
+  ]),
+  conditionValue: zod.number(),
+  actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  platform: zod.string().nullish(),
+  tenantId: zod.number().nullish(),
+  isEnabled: zod.boolean(),
+  createdBy: zod.number(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+export const ListAutomationRulesResponse = zod.array(
+  ListAutomationRulesResponseItem,
+);
+
+/**
+ * @summary Create an automation rule
+ */
+export const CreateAutomationRuleBody = zod.object({
+  name: zod.string(),
+  description: zod.string().optional(),
+  conditionType: zod.enum([
+    "spend_below",
+    "spend_above",
+    "days_active_above",
+    "conversions_below",
+    "cpl_above",
+    "roas_below",
+  ]),
+  conditionValue: zod.number(),
+  actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  platform: zod.string().optional(),
+  tenantId: zod.number().optional(),
+});
+
+/**
+ * @summary Update an automation rule
+ */
+export const UpdateAutomationRuleParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateAutomationRuleBody = zod.object({
+  name: zod.string().optional(),
+  description: zod.string().optional(),
+  conditionType: zod
+    .enum([
+      "spend_below",
+      "spend_above",
+      "days_active_above",
+      "conversions_below",
+      "cpl_above",
+      "roas_below",
+    ])
+    .optional(),
+  conditionValue: zod.number().optional(),
+  actionType: zod
+    .enum(["send_alert", "flag_for_review", "auto_pause"])
+    .optional(),
+  platform: zod.string().optional(),
+  tenantId: zod.number().optional(),
+  isEnabled: zod.boolean().optional(),
+});
+
+export const UpdateAutomationRuleResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  description: zod.string().nullish(),
+  conditionType: zod.enum([
+    "spend_below",
+    "spend_above",
+    "days_active_above",
+    "conversions_below",
+    "cpl_above",
+    "roas_below",
+  ]),
+  conditionValue: zod.number(),
+  actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  platform: zod.string().nullish(),
+  tenantId: zod.number().nullish(),
+  isEnabled: zod.boolean(),
+  createdBy: zod.number(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
+ * @summary Delete an automation rule
+ */
+export const DeleteAutomationRuleParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteAutomationRuleResponse = zod.object({
+  success: zod.boolean().optional(),
+});
+
+/**
+ * @summary Toggle automation rule enabled/disabled
+ */
+export const ToggleAutomationRuleParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ToggleAutomationRuleResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  description: zod.string().nullish(),
+  conditionType: zod.enum([
+    "spend_below",
+    "spend_above",
+    "days_active_above",
+    "conversions_below",
+    "cpl_above",
+    "roas_below",
+  ]),
+  conditionValue: zod.number(),
+  actionType: zod.enum(["send_alert", "flag_for_review", "auto_pause"]),
+  platform: zod.string().nullish(),
+  tenantId: zod.number().nullish(),
+  isEnabled: zod.boolean(),
+  createdBy: zod.number(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
+ * @summary List automation alerts
+ */
+export const listAutomationAlertsQueryLimitDefault = 50;
+
+export const ListAutomationAlertsQueryParams = zod.object({
+  acknowledged: zod.enum(["true", "false"]).optional(),
+  limit: zod.coerce.number().default(listAutomationAlertsQueryLimitDefault),
+});
+
+export const ListAutomationAlertsResponseItem = zod.object({
+  id: zod.number(),
+  ruleId: zod.number(),
+  tenantId: zod.number(),
+  campaignId: zod.number().nullish(),
+  campaignName: zod.string().nullish(),
+  tenantName: zod.string().nullish(),
+  conditionType: zod.string(),
+  conditionValue: zod.number(),
+  actualValue: zod.number(),
+  actionType: zod.string(),
+  actionTaken: zod.string().nullish(),
+  isAcknowledged: zod.boolean(),
+  acknowledgedBy: zod.number().nullish(),
+  acknowledgedAt: zod.string().nullish(),
+  createdAt: zod.string(),
+});
+export const ListAutomationAlertsResponse = zod.array(
+  ListAutomationAlertsResponseItem,
+);
+
+/**
+ * @summary Acknowledge an automation alert
+ */
+export const AcknowledgeAutomationAlertParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const AcknowledgeAutomationAlertResponse = zod.object({
+  id: zod.number(),
+  ruleId: zod.number(),
+  tenantId: zod.number(),
+  campaignId: zod.number().nullish(),
+  campaignName: zod.string().nullish(),
+  tenantName: zod.string().nullish(),
+  conditionType: zod.string(),
+  conditionValue: zod.number(),
+  actualValue: zod.number(),
+  actionType: zod.string(),
+  actionTaken: zod.string().nullish(),
+  isAcknowledged: zod.boolean(),
+  acknowledgedBy: zod.number().nullish(),
+  acknowledgedAt: zod.string().nullish(),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Get count of unacknowledged alerts
+ */
+export const GetAutomationAlertCountResponse = zod.object({
+  unacknowledged: zod.number().optional(),
+});
+
+/**
  * @summary Get cross-client leaderboard with ranked performance and trends
  */
 export const getAdminLeaderboardQueryMetricDefault = `closeRate`;

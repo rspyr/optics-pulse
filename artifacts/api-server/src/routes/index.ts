@@ -14,6 +14,7 @@ import changeLogsRouter from "./change-logs";
 import integrationsRouter from "./integrations";
 import chatRouter from "./chat";
 import trainingRouter from "./training";
+import automationRouter from "./automation";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(changeLogsRouter);
 router.use(integrationsRouter);
 router.use(chatRouter);
 router.use(trainingRouter);
+router.use(automationRouter);
 
 export default router;

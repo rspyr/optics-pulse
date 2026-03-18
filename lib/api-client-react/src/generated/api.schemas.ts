@@ -605,6 +605,123 @@ export interface LeaderboardProduct {
   purchasedAt?: string | null;
 }
 
+export type AutomationRuleConditionType =
+  (typeof AutomationRuleConditionType)[keyof typeof AutomationRuleConditionType];
+
+export const AutomationRuleConditionType = {
+  spend_below: "spend_below",
+  spend_above: "spend_above",
+  days_active_above: "days_active_above",
+  conversions_below: "conversions_below",
+  cpl_above: "cpl_above",
+  roas_below: "roas_below",
+} as const;
+
+export type AutomationRuleActionType =
+  (typeof AutomationRuleActionType)[keyof typeof AutomationRuleActionType];
+
+export const AutomationRuleActionType = {
+  send_alert: "send_alert",
+  flag_for_review: "flag_for_review",
+  auto_pause: "auto_pause",
+} as const;
+
+export interface AutomationRule {
+  id: number;
+  name: string;
+  description?: string | null;
+  conditionType: AutomationRuleConditionType;
+  conditionValue: number;
+  actionType: AutomationRuleActionType;
+  platform?: string | null;
+  tenantId?: number | null;
+  isEnabled: boolean;
+  createdBy: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CreateAutomationRuleBodyConditionType =
+  (typeof CreateAutomationRuleBodyConditionType)[keyof typeof CreateAutomationRuleBodyConditionType];
+
+export const CreateAutomationRuleBodyConditionType = {
+  spend_below: "spend_below",
+  spend_above: "spend_above",
+  days_active_above: "days_active_above",
+  conversions_below: "conversions_below",
+  cpl_above: "cpl_above",
+  roas_below: "roas_below",
+} as const;
+
+export type CreateAutomationRuleBodyActionType =
+  (typeof CreateAutomationRuleBodyActionType)[keyof typeof CreateAutomationRuleBodyActionType];
+
+export const CreateAutomationRuleBodyActionType = {
+  send_alert: "send_alert",
+  flag_for_review: "flag_for_review",
+  auto_pause: "auto_pause",
+} as const;
+
+export interface CreateAutomationRuleBody {
+  name: string;
+  description?: string;
+  conditionType: CreateAutomationRuleBodyConditionType;
+  conditionValue: number;
+  actionType: CreateAutomationRuleBodyActionType;
+  platform?: string;
+  tenantId?: number;
+}
+
+export type UpdateAutomationRuleBodyConditionType =
+  (typeof UpdateAutomationRuleBodyConditionType)[keyof typeof UpdateAutomationRuleBodyConditionType];
+
+export const UpdateAutomationRuleBodyConditionType = {
+  spend_below: "spend_below",
+  spend_above: "spend_above",
+  days_active_above: "days_active_above",
+  conversions_below: "conversions_below",
+  cpl_above: "cpl_above",
+  roas_below: "roas_below",
+} as const;
+
+export type UpdateAutomationRuleBodyActionType =
+  (typeof UpdateAutomationRuleBodyActionType)[keyof typeof UpdateAutomationRuleBodyActionType];
+
+export const UpdateAutomationRuleBodyActionType = {
+  send_alert: "send_alert",
+  flag_for_review: "flag_for_review",
+  auto_pause: "auto_pause",
+} as const;
+
+export interface UpdateAutomationRuleBody {
+  name?: string;
+  description?: string;
+  conditionType?: UpdateAutomationRuleBodyConditionType;
+  conditionValue?: number;
+  actionType?: UpdateAutomationRuleBodyActionType;
+  platform?: string;
+  tenantId?: number;
+  isEnabled?: boolean;
+}
+
+export interface AutomationAlert {
+  id: number;
+  ruleId: number;
+  tenantId: number;
+  campaignId?: number | null;
+  campaignName?: string | null;
+  tenantName?: string | null;
+  conditionType: string;
+  conditionValue: number;
+  actualValue: number;
+  actionType: string;
+  actionTaken?: string | null;
+  isAcknowledged: boolean;
+  acknowledgedBy?: number | null;
+  acknowledgedAt?: string | null;
+  createdAt: string;
+}
+
 export interface LeaderboardEntry {
   tenantId: number;
   tenantName: string;
@@ -751,6 +868,27 @@ export type GetSpendRevenueChartParams = {
 
 export type Logout200 = {
   success?: boolean;
+};
+
+export type DeleteAutomationRule200 = {
+  success?: boolean;
+};
+
+export type ListAutomationAlertsParams = {
+  acknowledged?: ListAutomationAlertsAcknowledged;
+  limit?: number;
+};
+
+export type ListAutomationAlertsAcknowledged =
+  (typeof ListAutomationAlertsAcknowledged)[keyof typeof ListAutomationAlertsAcknowledged];
+
+export const ListAutomationAlertsAcknowledged = {
+  true: "true",
+  false: "false",
+} as const;
+
+export type GetAutomationAlertCount200 = {
+  unacknowledged?: number;
 };
 
 export type GetAdminLeaderboardParams = {

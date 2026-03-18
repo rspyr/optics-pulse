@@ -597,6 +597,163 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminUser"
 
+  /automation/rules:
+    get:
+      operationId: listAutomationRules
+      tags: [automation]
+      summary: List all automation rules
+      responses:
+        "200":
+          description: List of automation rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AutomationRule"
+    post:
+      operationId: createAutomationRule
+      tags: [automation]
+      summary: Create an automation rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAutomationRuleBody"
+      responses:
+        "201":
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationRule"
+
+  /automation/rules/{id}:
+    put:
+      operationId: updateAutomationRule
+      tags: [automation]
+      summary: Update an automation rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAutomationRuleBody"
+      responses:
+        "200":
+          description: Rule updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationRule"
+    delete:
+      operationId: deleteAutomationRule
+      tags: [automation]
+      summary: Delete an automation rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Rule deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /automation/rules/{id}/toggle:
+    patch:
+      operationId: toggleAutomationRule
+      tags: [automation]
+      summary: Toggle automation rule enabled/disabled
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Rule toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationRule"
+
+  /automation/alerts:
+    get:
+      operationId: listAutomationAlerts
+      tags: [automation]
+      summary: List automation alerts
+      parameters:
+        - name: acknowledged
+          in: query
+          schema:
+            type: string
+            enum: ["true", "false"]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of automation alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AutomationAlert"
+
+  /automation/alerts/{id}/acknowledge:
+    patch:
+      operationId: acknowledgeAutomationAlert
+      tags: [automation]
+      summary: Acknowledge an automation alert
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alert acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationAlert"
+
+  /automation/alerts/count:
+    get:
+      operationId: getAutomationAlertCount
+      tags: [automation]
+      summary: Get count of unacknowledged alerts
+      responses:
+        "200":
+          description: Alert count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unacknowledged:
+                    type: integer
+
   /admin/leaderboard:
     get:
       operationId: getAdminLeaderboard
@@ -1871,6 +2028,124 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    AutomationRule:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        conditionType:
+          type: string
+          enum: [spend_below, spend_above, days_active_above, conversions_below, cpl_above, roas_below]
+        conditionValue:
+          type: number
+        actionType:
+          type: string
+          enum: [send_alert, flag_for_review, auto_pause]
+        platform:
+          type: string
+          nullable: true
+        tenantId:
+          type: integer
+          nullable: true
+        isEnabled:
+          type: boolean
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, name, conditionType, conditionValue, actionType, isEnabled, createdBy, createdAt, updatedAt]
+
+    CreateAutomationRuleBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        conditionType:
+          type: string
+          enum: [spend_below, spend_above, days_active_above, conversions_below, cpl_above, roas_below]
+        conditionValue:
+          type: number
+        actionType:
+          type: string
+          enum: [send_alert, flag_for_review, auto_pause]
+        platform:
+          type: string
+        tenantId:
+          type: integer
+      required: [name, conditionType, conditionValue, actionType]
+
+    UpdateAutomationRuleBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        conditionType:
+          type: string
+          enum: [spend_below, spend_above, days_active_above, conversions_below, cpl_above, roas_below]
+        conditionValue:
+          type: number
+        actionType:
+          type: string
+          enum: [send_alert, flag_for_review, auto_pause]
+        platform:
+          type: string
+        tenantId:
+          type: integer
+        isEnabled:
+          type: boolean
+
+    AutomationAlert:
+      type: object
+      properties:
+        id:
+          type: integer
+        ruleId:
+          type: integer
+        tenantId:
+          type: integer
+        campaignId:
+          type: integer
+          nullable: true
+        campaignName:
+          type: string
+          nullable: true
+        tenantName:
+          type: string
+          nullable: true
+        conditionType:
+          type: string
+        conditionValue:
+          type: number
+        actualValue:
+          type: number
+        actionType:
+          type: string
+        actionTaken:
+          type: string
+          nullable: true
+        isAcknowledged:
+          type: boolean
+        acknowledgedBy:
+          type: integer
+          nullable: true
+        acknowledgedAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, ruleId, tenantId, conditionType, conditionValue, actualValue, actionType, isAcknowledged, createdAt]
 
     LeaderboardEntry:
       type: object

@@ -14,6 +14,7 @@ import {
   GraduationCap,
   BookOpen,
   Trophy,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -27,6 +28,7 @@ const AGENCY_NAV = [
   { href: "/admin/tenants", label: "Tenants", icon: Building },
   { href: "/admin/users", label: "Users", icon: UserCog },
   { href: "/leaderboards", label: "Leaderboards", icon: Trophy },
+  { href: "/automation", label: "Automation", icon: Zap },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

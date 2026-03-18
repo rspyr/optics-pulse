@@ -50,8 +50,8 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`, `saved_questions`
-Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`
+Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`, `saved_questions`, `training_items`, `training_dismissals`, `training_email_logs`, `training_purchases`, `automation_rules`, `automation_alerts`
+Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`, `automation_condition`, `automation_action`
 User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
 
 ## Authentication
@@ -113,6 +113,19 @@ All under `/api` prefix:
 ### Leaderboards
 - `GET /admin/leaderboard?metric=closeRate|revenue|cpl|bookingRate` — cross-client ranked leaderboard with period-over-period trends, agency average benchmark, outlier detection (1.5σ), and per-tenant product purchases
 
+### Media Buying Automation
+- `GET /automation/rules` — list all automation rules (agency only)
+- `POST /automation/rules` — create automation rule (name, conditionType, conditionValue, actionType, platform?, tenantId?)
+- `PUT /automation/rules/:id` — update rule
+- `PATCH /automation/rules/:id/toggle` — toggle rule enabled/disabled
+- `DELETE /automation/rules/:id` — delete rule and its alerts
+- `GET /automation/alerts` — list alerts (filter by acknowledged=true|false)
+- `PATCH /automation/alerts/:id/acknowledge` — acknowledge alert
+- `GET /automation/alerts/count` — unacknowledged alert count
+- Condition types: `spend_below`, `spend_above`, `days_active_above`, `conversions_below`, `cpl_above`, `roas_below`
+- Action types: `send_alert`, `flag_for_review`, `auto_pause` (v1: alert-only, no direct API actioning)
+- Scheduled evaluation engine runs every 60 minutes; deduplicates alerts within 24-hour windows
+
 ### Dashboard
 - `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
 - `GET /dashboard/spend-revenue` — daily spend vs revenue chart data (supports date range filtering)
@@ -165,6 +178,7 @@ Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanCl
 - `/attribution` — Attribution Log (event ingestion & matching waterfall)
 - `/admin/tenants` — Tenant management (CRUD with inline edit)
 - `/admin/users` — User management (CRUD with role assignment)
+- `/automation` — Media Buying Automation: rule management (create/edit/toggle/delete), alerts feed with acknowledge flow, scheduled engine evaluation
 - `/settings` — System configuration
 
 ### Client Portal (client_admin, client_user) — "Searchlight Killer"

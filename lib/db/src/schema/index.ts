@@ -10,3 +10,4 @@ export * from "./reconciliation-runs";
 export * from "./integration-sync-logs";
 export * from "./saved-questions";
 export * from "./training";
+export * from "./automation";
