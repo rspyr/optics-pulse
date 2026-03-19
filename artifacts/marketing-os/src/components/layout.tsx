@@ -34,7 +34,6 @@ const AGENCY_NAV = [
   { href: "/admin/change-logs", label: "Change Log", icon: ClipboardList },
   { href: "/admin/funnels", label: "Funnels & Scripts", icon: GitBranch },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
-  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 const CLIENT_NAV = [
@@ -42,7 +41,7 @@ const CLIENT_NAV = [
   { href: "/leads", label: "Leads", icon: Users },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", label: "Client Settings", icon: Settings },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {

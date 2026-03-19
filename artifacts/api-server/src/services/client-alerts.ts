@@ -124,9 +124,13 @@ interface TenantAlertConfig {
   enabled?: boolean;
   recipients?: string[];
   agencySenderEmail?: string;
+  leadDropEnabled?: boolean;
   leadDropThreshold?: number;
+  bookingRateEnabled?: boolean;
   bookingRateThreshold?: number;
+  roasEnabled?: boolean;
   roasThreshold?: number;
+  spendSpikeEnabled?: boolean;
   spendSpikeThreshold?: number;
 }
 
@@ -145,6 +149,11 @@ export async function runClientAlertCheck(): Promise<AlertResult[]> {
     const cfg = getAlertConfig(tenant);
     if (cfg.enabled === false) continue;
 
+    const leadDropEnabled = cfg.leadDropEnabled !== false;
+    const bookingRateEnabled = cfg.bookingRateEnabled !== false;
+    const roasEnabled = cfg.roasEnabled !== false;
+    const spendSpikeEnabled = cfg.spendSpikeEnabled !== false;
+
     const leadDropThreshold = cfg.leadDropThreshold ?? 30;
     const bookingRateThreshold = cfg.bookingRateThreshold ?? 30;
     const roasThreshold = cfg.roasThreshold ?? 3;
@@ -153,7 +162,7 @@ export async function runClientAlertCheck(): Promise<AlertResult[]> {
     const metrics = await getTenantMetrics(tenant.id);
     const alerts: { type: string; message: string }[] = [];
 
-    if (metrics.previousLeadCount > 0) {
+    if (leadDropEnabled && metrics.previousLeadCount > 0) {
       const leadDrop = ((metrics.previousLeadCount - metrics.recentLeadCount) / metrics.previousLeadCount) * 100;
       if (leadDrop >= leadDropThreshold) {
         alerts.push({
@@ -163,21 +172,21 @@ export async function runClientAlertCheck(): Promise<AlertResult[]> {
       }
     }
 
-    if (metrics.recentBookingRate < bookingRateThreshold && metrics.recentLeadCount > 5) {
+    if (bookingRateEnabled && metrics.recentBookingRate < bookingRateThreshold && metrics.recentLeadCount > 5) {
       alerts.push({
         type: "Low Booking Rate",
         message: `Booking rate is ${metrics.recentBookingRate.toFixed(1)}%, which is below the ${bookingRateThreshold}% threshold.`,
       });
     }
 
-    if (metrics.recentROAS > 0 && metrics.recentROAS < roasThreshold) {
+    if (roasEnabled && metrics.recentROAS > 0 && metrics.recentROAS < roasThreshold) {
       alerts.push({
         type: "Low ROAS",
         message: `Return on Ad Spend is ${metrics.recentROAS.toFixed(2)}x, below the ${roasThreshold}x target.`,
       });
     }
 
-    if (metrics.previousSpend > 0) {
+    if (spendSpikeEnabled && metrics.previousSpend > 0) {
       const spendIncrease = ((metrics.recentSpend - metrics.previousSpend) / metrics.previousSpend) * 100;
       if (spendIncrease > spendSpikeThreshold) {
         alerts.push({

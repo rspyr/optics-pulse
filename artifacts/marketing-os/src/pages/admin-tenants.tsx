@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2 } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -25,9 +25,13 @@ interface AlertConfig {
   enabled: boolean;
   recipients: string[];
   agencySenderEmail: string;
+  leadDropEnabled: boolean;
   leadDropThreshold: number;
+  bookingRateEnabled: boolean;
   bookingRateThreshold: number;
+  roasEnabled: boolean;
   roasThreshold: number;
+  spendSpikeEnabled: boolean;
   spendSpikeThreshold: number;
 }
 
@@ -35,9 +39,13 @@ const defaultAlertConfig: AlertConfig = {
   enabled: true,
   recipients: [],
   agencySenderEmail: "",
+  leadDropEnabled: true,
   leadDropThreshold: 30,
+  bookingRateEnabled: true,
   bookingRateThreshold: 30,
+  roasEnabled: true,
   roasThreshold: 3,
+  spendSpikeEnabled: true,
   spendSpikeThreshold: 50,
 };
 
@@ -466,6 +474,7 @@ export default function AdminTenants() {
       )}
 
       <AlertConfigSection tenants={tenants || []} apiBase={API_BASE} />
+      <CaptureScriptSection tenants={tenants || []} apiBase={API_BASE} />
     </div>
   );
 }
@@ -603,46 +612,46 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
 
             <div className="border border-white/10 rounded-lg p-4 bg-background/30">
               <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider mb-3">Alert Thresholds</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Lead Drop %</label>
-                  <input
-                    type="number"
-                    min="0" max="100"
-                    value={config.leadDropThreshold}
-                    onChange={(e) => setConfig(c => ({ ...c, leadDropThreshold: Number(e.target.value) }))}
-                    className={inputClass + " w-full"}
-                  />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className={`space-y-1 p-3 rounded-lg border ${config.leadDropEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-muted-foreground">Lead Drop %</label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={config.leadDropEnabled} onChange={(e) => setConfig(c => ({ ...c, leadDropEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                      <span className="text-[10px] text-muted-foreground uppercase">{config.leadDropEnabled ? "On" : "Off"}</span>
+                    </label>
+                  </div>
+                  <input type="number" min="0" max="100" value={config.leadDropThreshold} onChange={(e) => setConfig(c => ({ ...c, leadDropThreshold: Number(e.target.value) }))} disabled={!config.leadDropEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Min Booking Rate %</label>
-                  <input
-                    type="number"
-                    min="0" max="100"
-                    value={config.bookingRateThreshold}
-                    onChange={(e) => setConfig(c => ({ ...c, bookingRateThreshold: Number(e.target.value) }))}
-                    className={inputClass + " w-full"}
-                  />
+                <div className={`space-y-1 p-3 rounded-lg border ${config.bookingRateEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-muted-foreground">Min Booking Rate %</label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={config.bookingRateEnabled} onChange={(e) => setConfig(c => ({ ...c, bookingRateEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                      <span className="text-[10px] text-muted-foreground uppercase">{config.bookingRateEnabled ? "On" : "Off"}</span>
+                    </label>
+                  </div>
+                  <input type="number" min="0" max="100" value={config.bookingRateThreshold} onChange={(e) => setConfig(c => ({ ...c, bookingRateThreshold: Number(e.target.value) }))} disabled={!config.bookingRateEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Min ROAS (x)</label>
-                  <input
-                    type="number"
-                    min="0" step="0.1"
-                    value={config.roasThreshold}
-                    onChange={(e) => setConfig(c => ({ ...c, roasThreshold: Number(e.target.value) }))}
-                    className={inputClass + " w-full"}
-                  />
+                <div className={`space-y-1 p-3 rounded-lg border ${config.roasEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-muted-foreground">Min ROAS (x)</label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={config.roasEnabled} onChange={(e) => setConfig(c => ({ ...c, roasEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                      <span className="text-[10px] text-muted-foreground uppercase">{config.roasEnabled ? "On" : "Off"}</span>
+                    </label>
+                  </div>
+                  <input type="number" min="0" step="0.1" value={config.roasThreshold} onChange={(e) => setConfig(c => ({ ...c, roasThreshold: Number(e.target.value) }))} disabled={!config.roasEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Spend Spike %</label>
-                  <input
-                    type="number"
-                    min="0" max="500"
-                    value={config.spendSpikeThreshold}
-                    onChange={(e) => setConfig(c => ({ ...c, spendSpikeThreshold: Number(e.target.value) }))}
-                    className={inputClass + " w-full"}
-                  />
+                <div className={`space-y-1 p-3 rounded-lg border ${config.spendSpikeEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-muted-foreground">Spend Spike %</label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={config.spendSpikeEnabled} onChange={(e) => setConfig(c => ({ ...c, spendSpikeEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                      <span className="text-[10px] text-muted-foreground uppercase">{config.spendSpikeEnabled ? "On" : "Off"}</span>
+                    </label>
+                  </div>
+                  <input type="number" min="0" max="500" value={config.spendSpikeThreshold} onChange={(e) => setConfig(c => ({ ...c, spendSpikeThreshold: Number(e.target.value) }))} disabled={!config.spendSpikeEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
                 </div>
               </div>
             </div>
@@ -658,6 +667,80 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
           </>
         )}
         {loading && <div className="text-sm text-muted-foreground">Loading alert config...</div>}
+      </div>
+    </PremiumCard>
+  );
+}
+
+function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
+  const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
+  const [scriptTag, setScriptTag] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!selectedTenantId) { setScriptTag(""); return; }
+    setLoading(true);
+    fetch(`${apiBase}/api/funnel-types/script/${selectedTenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setScriptTag(data.script || ""))
+      .catch(() => setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${selectedTenantId}"></script>`))
+      .finally(() => setLoading(false));
+  }, [selectedTenantId, apiBase]);
+
+  const handleCopy = async () => {
+    if (!scriptTag) return;
+    try {
+      await navigator.clipboard.writeText(scriptTag);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  };
+
+  const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
+
+  return (
+    <PremiumCard className="p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <Code className="w-5 h-5 text-emerald-400" />
+        <h3 className="font-display text-lg text-white">Capture Scripts</h3>
+      </div>
+
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Select Tenant</label>
+          <select
+            value={selectedTenantId}
+            onChange={(e) => setSelectedTenantId(e.target.value ? Number(e.target.value) : "")}
+            className={inputClass + " w-full md:w-1/2"}
+          >
+            <option value="">Choose tenant...</option>
+            {tenants.map((t) => {
+              const tenant = t as Record<string, unknown>;
+              return <option key={tenant.id as number} value={tenant.id as number}>{tenant.name as string}</option>;
+            })}
+          </select>
+        </div>
+
+        {selectedTenantId && !loading && scriptTag && (
+          <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-muted-foreground">Install this script in the &lt;head&gt; of the client's website to enable GCLID capture and heartbeat monitoring.</p>
+              <button
+                onClick={handleCopy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
+              <pre>{scriptTag}</pre>
+            </div>
+          </div>
+        )}
+        {loading && <div className="text-sm text-muted-foreground">Loading script...</div>}
+        {!selectedTenantId && <p className="text-sm text-muted-foreground">Select a tenant to view their capture script tag.</p>}
       </div>
     </PremiumCard>
   );

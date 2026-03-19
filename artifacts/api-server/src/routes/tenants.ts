@@ -73,8 +73,20 @@ router.get("/tenants/:tenantId", async (req, res) => {
   res.json(sanitizeTenant(tenant));
 });
 
-router.patch("/tenants/:tenantId", requireRole("super_admin", "agency_user"), async (req, res) => {
+router.patch("/tenants/:tenantId", async (req, res) => {
+  const role = req.session.userRole;
   const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
+
+  if (role === "client_admin") {
+    if (req.session.tenantId !== tenantId) {
+      res.status(403).json({ error: "Cannot modify another tenant" });
+      return;
+    }
+  } else if (role !== "super_admin" && role !== "agency_user") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
   const body = UpdateTenantBody.parse(req.body);
   const updateData: Partial<typeof tenantsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
   if (body.name !== undefined) updateData.name = body.name;

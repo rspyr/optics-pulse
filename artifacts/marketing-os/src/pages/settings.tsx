@@ -78,8 +78,8 @@ export default function Settings() {
   return (
     <div className="space-y-6 max-w-4xl">
       <header>
-        <GradientHeading className="text-3xl md:text-4xl mb-2">Settings</GradientHeading>
-        <p className="font-sub text-muted-foreground text-sm tracking-wide">SYSTEM CONFIGURATION</p>
+        <GradientHeading className="text-3xl md:text-4xl mb-2">Client Settings</GradientHeading>
+        <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR ACCOUNT CONFIGURATION</p>
       </header>
 
       <PremiumCard>

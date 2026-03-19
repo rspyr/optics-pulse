@@ -70,6 +70,10 @@ function AuthenticatedRoutes() {
     return <Redirect to="/" />;
   }
 
+  if (isAgency && location === "/settings") {
+    return <Redirect to="/admin/tenants" />;
+  }
+
   return (
     <AppLayout>
       <Switch>
