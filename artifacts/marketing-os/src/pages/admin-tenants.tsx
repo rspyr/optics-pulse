@@ -698,27 +698,30 @@ interface FunnelScript {
 }
 
 function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
-  const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
-  const [scriptTag, setScriptTag] = useState("");
-  const [funnelScripts, setFunnelScripts] = useState<FunnelScript[]>([]);
+  const [allScriptData, setAllScriptData] = useState<Record<number, { tenantName: string; script: string; funnelScripts: FunnelScript[] }>>({});
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedTenantId) { setScriptTag(""); setFunnelScripts([]); return; }
+    if (!tenants.length) return;
     setLoading(true);
-    fetch(`${apiBase}/api/funnel-types/script/${selectedTenantId}`, { credentials: "include" })
-      .then(r => { if (!r.ok) throw new Error("Failed to fetch script"); return r.json(); })
-      .then(data => {
-        setScriptTag(data.script || "");
-        setFunnelScripts(data.funnelScripts || []);
-      })
-      .catch(() => {
-        setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${selectedTenantId}"></script>`);
-        setFunnelScripts([]);
-      })
-      .finally(() => setLoading(false));
-  }, [selectedTenantId, apiBase]);
+    const fetches = tenants.map(t => {
+      const tenant = t as Record<string, unknown>;
+      const tid = tenant.id as number;
+      return fetch(`${apiBase}/api/funnel-types/script/${tid}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => data ? { tid, tenantName: data.tenantName || (tenant.name as string), script: data.script, funnelScripts: data.funnelScripts || [] } : null)
+        .catch(() => null);
+    });
+    Promise.all(fetches).then(results => {
+      const data: Record<number, { tenantName: string; script: string; funnelScripts: FunnelScript[] }> = {};
+      for (const r of results) {
+        if (r) data[r.tid] = { tenantName: r.tenantName, script: r.script, funnelScripts: r.funnelScripts };
+      }
+      setAllScriptData(data);
+      setLoading(false);
+    });
+  }, [tenants, apiBase]);
 
   const handleCopy = async (text: string, id: string) => {
     if (!text) return;
@@ -729,7 +732,11 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
     } catch {}
   };
 
-  const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
+  const tenantEntries = tenants.map(t => {
+    const tenant = t as Record<string, unknown>;
+    const tid = tenant.id as number;
+    return { tid, data: allScriptData[tid] };
+  }).filter(e => e.data);
 
   return (
     <PremiumCard className="p-6">
@@ -738,56 +745,45 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
         <h3 className="font-display text-lg text-white">Capture Scripts</h3>
       </div>
 
-      <div className="space-y-4">
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wider">Select Tenant</label>
-          <select
-            value={selectedTenantId}
-            onChange={(e) => setSelectedTenantId(e.target.value ? Number(e.target.value) : "")}
-            className={inputClass + " w-full md:w-1/2"}
-          >
-            <option value="">Choose tenant...</option>
-            {tenants.map((t) => {
-              const tenant = t as Record<string, unknown>;
-              return <option key={tenant.id as number} value={tenant.id as number}>{tenant.name as string}</option>;
-            })}
-          </select>
-        </div>
+      {loading && <div className="text-sm text-muted-foreground">Loading scripts...</div>}
 
-        {selectedTenantId && !loading && scriptTag && (
-          <div className="space-y-4">
+      <div className="space-y-6">
+        {tenantEntries.map(({ tid, data }) => (
+          <div key={tid} className="space-y-3">
+            <h4 className="text-sm font-medium text-white border-b border-white/10 pb-2">{data.tenantName}</h4>
+
             <div className="border border-white/10 rounded-lg p-4 bg-background/30">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
                 <button
-                  onClick={() => handleCopy(scriptTag, "base")}
+                  onClick={() => handleCopy(data.script, `base-${tid}`)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
                 >
-                  {copiedId === "base" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedId === "base" ? "Copied!" : "Copy"}
+                  {copiedId === `base-${tid}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedId === `base-${tid}` ? "Copied!" : "Copy"}
                 </button>
               </div>
               <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
-                <pre>{scriptTag}</pre>
+                <pre>{data.script}</pre>
               </div>
             </div>
 
-            {funnelScripts.length > 0 && (
+            {data.funnelScripts.length > 0 && (
               <div className="border border-white/10 rounded-lg p-4 bg-background/30">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Per-Funnel Scripts</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Per-Funnel Scripts ({data.funnelScripts.length})</p>
                 <div className="space-y-2">
-                  {funnelScripts.map(fs => (
+                  {data.funnelScripts.map(fs => (
                     <div key={fs.id} className="flex items-start gap-3">
                       <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
                         <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
                         {fs.script}
                       </div>
                       <button
-                        onClick={() => handleCopy(fs.script, `funnel-${fs.id}`)}
+                        onClick={() => handleCopy(fs.script, `funnel-${tid}-${fs.id}`)}
                         className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
                         title="Copy"
                       >
-                        {copiedId === `funnel-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                        {copiedId === `funnel-${tid}-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                       </button>
                     </div>
                   ))}
@@ -795,9 +791,8 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
               </div>
             )}
           </div>
-        )}
-        {loading && <div className="text-sm text-muted-foreground">Loading script...</div>}
-        {!selectedTenantId && <p className="text-sm text-muted-foreground">Select a tenant to view their capture script tag.</p>}
+        ))}
+        {tenantEntries.length === 0 && !loading && <p className="text-sm text-muted-foreground">No tenants found.</p>}
       </div>
     </PremiumCard>
   );
