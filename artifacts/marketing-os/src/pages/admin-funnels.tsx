@@ -79,6 +79,7 @@ export default function AdminFunnels() {
       const params = filterTenant ? `?tenantId=${filterTenant}` : "";
       const data = await fetch(`${API}/api/funnel-types${params}`, { credentials: "include" }).then(r => r.json());
       setFunnels(data);
+      fetch(`${API}/api/funnel-types`, { credentials: "include" }).then(r => r.json()).then(setAllFunnels).catch(() => {});
     }
   }
 
@@ -86,6 +87,7 @@ export default function AdminFunnels() {
     if (!confirm("Delete this funnel type?")) return;
     await fetch(`${API}/api/funnel-types/${id}`, { method: "DELETE", credentials: "include" });
     setFunnels(funnels.filter(f => f.id !== id));
+    setAllFunnels(allFunnels.filter(f => f.id !== id));
   }
 
   async function copyScript(tenantId: number) {

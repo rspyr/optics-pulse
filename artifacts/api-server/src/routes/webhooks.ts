@@ -35,7 +35,7 @@ async function resolveFunnelType(tenantId: number, funnelSlug: string | null | u
   if (!funnelSlug) return null;
   const [ft] = await db.select().from(funnelTypesTable)
     .where(and(eq(funnelTypesTable.tenantId, tenantId), eq(funnelTypesTable.slug, funnelSlug)));
-  return ft ? ft.name : funnelSlug;
+  return ft ? ft.name : null;
 }
 
 async function getCallRailSigningKey(tenantId: number): Promise<string | undefined> {
