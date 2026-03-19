@@ -98,20 +98,25 @@ export default function AdminTenants() {
     }
   }, [expandedSyncTenant, tenantSyncStatuses, fetchTenantSyncStatus]);
 
+  const trackFieldChange = (field: string) => {
+    setDirtyFields(prev => new Set(prev).add(field));
+  };
+
   const buildIntegrationConfig = () => {
     const config: Record<string, string> = {};
-    if (form.googleAdsApiKey) config.googleAdsApiKey = form.googleAdsApiKey;
-    if (form.googleAdsCustomerId) config.googleAdsCustomerId = form.googleAdsCustomerId;
-    if (form.googleAdsDeveloperToken) config.googleAdsDeveloperToken = form.googleAdsDeveloperToken;
-    if (form.callRailApiKey) config.callRailApiKey = form.callRailApiKey;
-    if (form.callRailSigningKey) config.callRailSigningKey = form.callRailSigningKey;
-    if (form.serviceTitanClientId) config.serviceTitanClientId = form.serviceTitanClientId;
-    if (form.serviceTitanClientSecret) config.serviceTitanClientSecret = form.serviceTitanClientSecret;
-    if (form.metaAccessToken) config.metaAccessToken = form.metaAccessToken;
-    if (form.metaAdAccountId) config.metaAdAccountId = form.metaAdAccountId;
-    if (form.metaPixelId) config.metaPixelId = form.metaPixelId;
-    if (form.podiumApiToken) config.podiumApiToken = form.podiumApiToken;
-    if (form.podiumLocationId) config.podiumLocationId = form.podiumLocationId;
+    const integrationKeys: (keyof TenantForm)[] = [
+      "googleAdsApiKey", "googleAdsCustomerId", "googleAdsDeveloperToken",
+      "callRailApiKey", "callRailSigningKey",
+      "serviceTitanClientId", "serviceTitanClientSecret",
+      "metaAccessToken", "metaAdAccountId", "metaPixelId",
+      "podiumApiToken", "podiumLocationId",
+    ];
+    for (const key of integrationKeys) {
+      const val = form[key];
+      if (!val) continue;
+      if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
+      config[key] = val;
+    }
     return Object.keys(config).length > 0 ? config : undefined;
   };
 
@@ -161,26 +166,30 @@ export default function AdminTenants() {
     refetch();
   };
 
+  const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
+
   const startEdit = (tenant: unknown) => {
     const t = tenant as Record<string, unknown>;
+    const lc = (t.loadableConfig || {}) as Record<string, string>;
     setEditId(t.id as number);
     setForm({
       name: (t.name as string) || "",
       serviceTitanId: (t.serviceTitanId as string) || "",
       timezone: (t.timezone as string) || "America/New_York",
-      googleAdsApiKey: "",
-      googleAdsCustomerId: "",
-      googleAdsDeveloperToken: "",
-      callRailApiKey: "",
-      callRailSigningKey: "",
-      serviceTitanClientId: "",
-      serviceTitanClientSecret: "",
-      metaAccessToken: "",
-      metaAdAccountId: "",
-      metaPixelId: "",
-      podiumApiToken: "",
-      podiumLocationId: "",
+      googleAdsApiKey: lc.googleAdsApiKey || "",
+      googleAdsCustomerId: lc.googleAdsCustomerId || "",
+      googleAdsDeveloperToken: lc.googleAdsDeveloperToken || "",
+      callRailApiKey: lc.callRailApiKey || "",
+      callRailSigningKey: lc.callRailSigningKey || "",
+      serviceTitanClientId: lc.serviceTitanClientId || "",
+      serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
+      metaAccessToken: lc.metaAccessToken || "",
+      metaAdAccountId: lc.metaAdAccountId || "",
+      metaPixelId: lc.metaPixelId || "",
+      podiumApiToken: lc.podiumApiToken || "",
+      podiumLocationId: lc.podiumLocationId || "",
     });
+    setDirtyFields(new Set());
     setShowIntegrationConfig(false);
   };
 
@@ -206,11 +215,11 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client ID</label>
-                <input type="password" value={form.serviceTitanClientId} onChange={(e) => setForm(f => ({ ...f, serviceTitanClientId: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.serviceTitanClientId} onChange={(e) => { trackFieldChange("serviceTitanClientId"); setForm(f => ({ ...f, serviceTitanClientId: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client Secret</label>
-                <input type="password" value={form.serviceTitanClientSecret} onChange={(e) => setForm(f => ({ ...f, serviceTitanClientSecret: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.serviceTitanClientSecret} onChange={(e) => { trackFieldChange("serviceTitanClientSecret"); setForm(f => ({ ...f, serviceTitanClientSecret: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>
@@ -219,15 +228,15 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token / API Key</label>
-                <input type="password" value={form.googleAdsApiKey} onChange={(e) => setForm(f => ({ ...f, googleAdsApiKey: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.googleAdsApiKey} onChange={(e) => { trackFieldChange("googleAdsApiKey"); setForm(f => ({ ...f, googleAdsApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
-                <input type="password" value={form.googleAdsCustomerId} onChange={(e) => setForm(f => ({ ...f, googleAdsCustomerId: e.target.value }))} placeholder="123-456-7890" className={inputClass + " w-full"} />
+                <input type="text" value={form.googleAdsCustomerId} onChange={(e) => { trackFieldChange("googleAdsCustomerId"); setForm(f => ({ ...f, googleAdsCustomerId: e.target.value })); }} placeholder="123-456-7890" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Developer Token</label>
-                <input type="password" value={form.googleAdsDeveloperToken} onChange={(e) => setForm(f => ({ ...f, googleAdsDeveloperToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.googleAdsDeveloperToken} onChange={(e) => { trackFieldChange("googleAdsDeveloperToken"); setForm(f => ({ ...f, googleAdsDeveloperToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>
@@ -236,15 +245,15 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token</label>
-                <input type="password" value={form.metaAccessToken} onChange={(e) => setForm(f => ({ ...f, metaAccessToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.metaAccessToken} onChange={(e) => { trackFieldChange("metaAccessToken"); setForm(f => ({ ...f, metaAccessToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Ad Account ID</label>
-                <input type="password" value={form.metaAdAccountId} onChange={(e) => setForm(f => ({ ...f, metaAdAccountId: e.target.value }))} placeholder="act_123456789" className={inputClass + " w-full"} />
+                <input type="text" value={form.metaAdAccountId} onChange={(e) => { trackFieldChange("metaAdAccountId"); setForm(f => ({ ...f, metaAdAccountId: e.target.value })); }} placeholder="act_123456789" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Pixel ID</label>
-                <input type="password" value={form.metaPixelId} onChange={(e) => setForm(f => ({ ...f, metaPixelId: e.target.value }))} placeholder="For CAPI events" className={inputClass + " w-full"} />
+                <input type="text" value={form.metaPixelId} onChange={(e) => { trackFieldChange("metaPixelId"); setForm(f => ({ ...f, metaPixelId: e.target.value })); }} placeholder="For CAPI events" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>
@@ -253,11 +262,11 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Key</label>
-                <input type="password" value={form.callRailApiKey} onChange={(e) => setForm(f => ({ ...f, callRailApiKey: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.callRailApiKey} onChange={(e) => { trackFieldChange("callRailApiKey"); setForm(f => ({ ...f, callRailApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Webhook Signing Key</label>
-                <input type="password" value={form.callRailSigningKey} onChange={(e) => setForm(f => ({ ...f, callRailSigningKey: e.target.value }))} placeholder="HMAC verification key" className={inputClass + " w-full"} />
+                <input type="password" value={form.callRailSigningKey} onChange={(e) => { trackFieldChange("callRailSigningKey"); setForm(f => ({ ...f, callRailSigningKey: e.target.value })); }} placeholder="HMAC verification key" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>
@@ -266,11 +275,11 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Token</label>
-                <input type="password" value={form.podiumApiToken} onChange={(e) => setForm(f => ({ ...f, podiumApiToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+                <input type="password" value={form.podiumApiToken} onChange={(e) => { trackFieldChange("podiumApiToken"); setForm(f => ({ ...f, podiumApiToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Location ID</label>
-                <input type="text" value={form.podiumLocationId} onChange={(e) => setForm(f => ({ ...f, podiumLocationId: e.target.value }))} placeholder="e.g. loc_abc123" className={inputClass + " w-full"} />
+                <input type="text" value={form.podiumLocationId} onChange={(e) => { trackFieldChange("podiumLocationId"); setForm(f => ({ ...f, podiumLocationId: e.target.value })); }} placeholder="e.g. loc_abc123" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>

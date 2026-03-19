@@ -35,7 +35,8 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 **System Design Choices:**
 - **Modularity:** The monorepo structure with pnpm workspaces promotes code reuse and separation of concerns.
 - **Scalability:** The architecture supports multi-tenancy, allowing for efficient management of multiple client accounts.
-- **Data Security:** API credentials and sensitive tenant configurations are stored encrypted (AES-256-GCM).
+- **Data Security:** API credentials and sensitive tenant configurations are stored encrypted (AES-256-GCM). The `sanitizeTenant` function classifies fields into SECRET_FIELDS (API keys/tokens masked as `••••last4`) and non-secret IDs (returned in full via `loadableConfig`). Frontend dirty-field tracking ensures masked placeholders are never sent back in PATCH requests.
+- **Funnel-Aware Tracking:** tracker.js reads `data-funnel` attribute from its script tag, stores the funnel slug in localStorage UTM data, and injects `_mos_funnel` hidden fields into forms. Webhook ingestion resolves funnel slugs to funnel type names via `funnel_types` table lookup. GHL webhooks parse `_mos_funnel` from custom fields.
 
 ## External Dependencies
 

@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, tenantsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { verifyCallRailSignature } from "../services/integrations/callrail";
 import { parseGHLWebhookPayload } from "../services/integrations/ghl";
@@ -29,6 +29,13 @@ function verifySignature(payload: string, signature: string | undefined): boolea
   const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   if (signature.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
+async function resolveFunnelType(tenantId: number, funnelSlug: string | null | undefined): Promise<string | null> {
+  if (!funnelSlug) return null;
+  const [ft] = await db.select().from(funnelTypesTable)
+    .where(and(eq(funnelTypesTable.tenantId, tenantId), eq(funnelTypesTable.slug, funnelSlug)));
+  return ft ? ft.name : funnelSlug;
 }
 
 async function getCallRailSigningKey(tenantId: number): Promise<string | undefined> {
@@ -87,6 +94,7 @@ router.post("/webhooks/ingest", async (req, res) => {
     }).returning();
 
     if (data.firstName || data.lastName || data.phone || data.email) {
+      const resolvedLeadType = await resolveFunnelType(tenantId, data.funnel) || source;
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",
@@ -96,7 +104,7 @@ router.post("/webhooks/ingest", async (req, res) => {
         source: data.utmSource || source,
         matchedGclid: data.gclid || null,
         interestType: null,
-        leadType: source,
+        leadType: resolvedLeadType,
       }).returning();
 
       if (newLead) {
@@ -137,6 +145,8 @@ router.post("/webhooks/ghl", async (req, res) => {
       matchConfidence: parsed.gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
     }).returning();
 
+    const ghlFunnelSlug = (parsed as Record<string, unknown>).funnelSlug as string | undefined;
+    const ghlLeadType = await resolveFunnelType(tenantId, ghlFunnelSlug) || "ghl";
     const [newLead] = await db.insert(leadsTable).values({
       tenantId,
       firstName: parsed.firstName,
@@ -145,7 +155,7 @@ router.post("/webhooks/ghl", async (req, res) => {
       email: parsed.email || null,
       source: "ghl",
       matchedGclid: parsed.gclid || null,
-      leadType: "ghl",
+      leadType: ghlLeadType,
     }).returning();
 
     if (newLead) {

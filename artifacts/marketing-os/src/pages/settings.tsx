@@ -5,6 +5,8 @@ import { Copy, Check, Save, Loader2 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
+const SECRET_KEYS = new Set(["ghlApiKey", "podiumApiToken"]);
+
 export default function Settings() {
   const { user, isAgency } = useAuth();
   const tenantId = user?.tenantId;
@@ -12,6 +14,7 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [scriptTag, setScriptTag] = useState("");
+  const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
   const [form, setForm] = useState({
     serviceTitanId: "",
     googleAdsCustomerId: "",
@@ -27,7 +30,18 @@ export default function Settings() {
     fetch(`${API}/api/tenants/${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
-        if (data.serviceTitanId) setForm(f => ({ ...f, serviceTitanId: data.serviceTitanId || "" }));
+        const lc = data.loadableConfig || {};
+        setForm(f => ({
+          ...f,
+          serviceTitanId: data.serviceTitanId || "",
+          googleAdsCustomerId: lc.googleAdsCustomerId || "",
+          metaAdAccountId: lc.metaAdAccountId || "",
+          callRailAccountId: lc.callRailAccountId || "",
+          ghlApiKey: lc.ghlApiKey || "",
+          podiumApiToken: lc.podiumApiToken || "",
+          podiumLocationId: lc.podiumLocationId || "",
+        }));
+        setDirtyFields(new Set());
       })
       .catch(() => {});
 
@@ -39,28 +53,35 @@ export default function Settings() {
       });
   }, [tenantId]);
 
+  function trackField(field: string) {
+    setDirtyFields(prev => new Set(prev).add(field));
+  }
+
   async function handleSave() {
     if (!tenantId) return;
     setSaving(true);
     try {
+      const integrationConfig: Record<string, string | null> = {};
+      const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "podiumApiToken", "podiumLocationId"] as const;
+      for (const key of configKeys) {
+        const val = form[key];
+        if (!val) continue;
+        if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
+        integrationConfig[key] = val;
+      }
+
       const res = await fetch(`${API}/api/tenants/${tenantId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           serviceTitanId: form.serviceTitanId || null,
-          integrationConfig: {
-            googleAdsCustomerId: form.googleAdsCustomerId || null,
-            metaAdAccountId: form.metaAdAccountId || null,
-            ghlApiKey: form.ghlApiKey || null,
-            callRailAccountId: form.callRailAccountId || null,
-            podiumApiToken: form.podiumApiToken || null,
-            podiumLocationId: form.podiumLocationId || null,
-          },
+          ...(Object.keys(integrationConfig).length > 0 ? { integrationConfig } : {}),
         }),
       });
       if (res.ok) {
         setSaved(true);
+        setDirtyFields(new Set());
         setTimeout(() => setSaved(false), 2000);
       }
     } catch {}
@@ -74,6 +95,8 @@ export default function Settings() {
       setTimeout(() => setCopied(false), 2000);
     } catch {}
   }
+
+  const inputClass = "w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all";
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -90,8 +113,8 @@ export default function Settings() {
             <input
               type="text"
               value={form.serviceTitanId}
-              onChange={e => setForm({ ...form, serviceTitanId: e.target.value })}
-              className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+              onChange={e => { trackField("serviceTitanId"); setForm({ ...form, serviceTitanId: e.target.value }); }}
+              className={inputClass}
               placeholder="e.g. 123456"
             />
           </div>
@@ -102,8 +125,8 @@ export default function Settings() {
                 <input
                   type="text"
                   value={form.googleAdsCustomerId}
-                  onChange={e => setForm({ ...form, googleAdsCustomerId: e.target.value })}
-                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                  onChange={e => { trackField("googleAdsCustomerId"); setForm({ ...form, googleAdsCustomerId: e.target.value }); }}
+                  className={inputClass}
                   placeholder="e.g. 123-456-7890"
                 />
               </div>
@@ -112,8 +135,8 @@ export default function Settings() {
                 <input
                   type="text"
                   value={form.metaAdAccountId}
-                  onChange={e => setForm({ ...form, metaAdAccountId: e.target.value })}
-                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                  onChange={e => { trackField("metaAdAccountId"); setForm({ ...form, metaAdAccountId: e.target.value }); }}
+                  className={inputClass}
                   placeholder="e.g. act_123456789"
                 />
               </div>
@@ -122,9 +145,9 @@ export default function Settings() {
                 <input
                   type="password"
                   value={form.ghlApiKey}
-                  onChange={e => setForm({ ...form, ghlApiKey: e.target.value })}
-                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                  placeholder="••••••••••••••••••••••••"
+                  onChange={e => { trackField("ghlApiKey"); setForm({ ...form, ghlApiKey: e.target.value }); }}
+                  className={inputClass}
+                  placeholder="Enter to update"
                 />
               </div>
               <div className="space-y-2">
@@ -132,9 +155,9 @@ export default function Settings() {
                 <input
                   type="password"
                   value={form.podiumApiToken}
-                  onChange={e => setForm({ ...form, podiumApiToken: e.target.value })}
-                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                  placeholder="••••••••••••••••••••••••"
+                  onChange={e => { trackField("podiumApiToken"); setForm({ ...form, podiumApiToken: e.target.value }); }}
+                  className={inputClass}
+                  placeholder="Enter to update"
                 />
               </div>
               <div className="space-y-2">
@@ -142,8 +165,8 @@ export default function Settings() {
                 <input
                   type="text"
                   value={form.podiumLocationId}
-                  onChange={e => setForm({ ...form, podiumLocationId: e.target.value })}
-                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                  onChange={e => { trackField("podiumLocationId"); setForm({ ...form, podiumLocationId: e.target.value }); }}
+                  className={inputClass}
                   placeholder="e.g. loc_abc123"
                 />
               </div>

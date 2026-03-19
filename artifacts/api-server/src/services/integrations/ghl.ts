@@ -67,6 +67,7 @@ export function parseGHLWebhookPayload(body: Record<string, unknown>): {
   utmCampaign: string | null;
   utmMedium: string | null;
   landingPage: string | null;
+  funnelSlug: string | null;
 } {
   const customFields = (body.customData || body.custom_fields || {}) as Record<string, string>;
 
@@ -81,5 +82,6 @@ export function parseGHLWebhookPayload(body: Record<string, unknown>): {
     utmCampaign: customFields._mos_utmCampaign || customFields.utm_campaign || null,
     utmMedium: customFields._mos_utmMedium || customFields.utm_medium || null,
     landingPage: customFields._mos_landingPage || (body.landing_page as string) || null,
+    funnelSlug: customFields._mos_funnel || customFields.funnel || null,
   };
 }

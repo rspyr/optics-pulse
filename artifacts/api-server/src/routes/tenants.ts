@@ -7,27 +7,50 @@ import { encryptConfig, decryptConfig } from "../lib/encryption";
 
 const router: IRouter = Router();
 
+const SECRET_FIELDS = new Set([
+  "googleAdsApiKey",
+  "googleAdsDeveloperToken",
+  "callRailApiKey",
+  "callRailSigningKey",
+  "serviceTitanClientId",
+  "serviceTitanClientSecret",
+  "metaAccessToken",
+  "ghlApiKey",
+  "podiumApiToken",
+]);
+
 function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
   const result: Record<string, unknown> = { ...tenant };
   if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
     try {
       const decrypted = decryptConfig(tenant.apiConfig);
       const masked: Record<string, unknown> = {};
+      const loadable: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(decrypted)) {
-        if (typeof val === "string" && val.length > 4) {
-          masked[key] = `****${val.slice(-4)}`;
+        if (SECRET_FIELDS.has(key)) {
+          if (typeof val === "string" && val.length > 0) {
+            masked[key] = `****${val.slice(-4)}`;
+            loadable[key] = `••••${val.slice(-4)}`;
+          } else {
+            masked[key] = val;
+            loadable[key] = val;
+          }
         } else {
           masked[key] = val;
+          loadable[key] = val;
         }
       }
       result.apiConfig = masked;
+      result.loadableConfig = loadable;
       result.hasIntegrationConfig = true;
     } catch {
       result.apiConfig = null;
+      result.loadableConfig = {};
       result.hasIntegrationConfig = false;
     }
   } else {
     result.hasIntegrationConfig = false;
+    result.loadableConfig = {};
   }
   result.alertConfig = tenant.alertConfig || null;
   return result;
@@ -104,6 +127,8 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     const newFields = req.body.integrationConfig as Record<string, unknown>;
     for (const [key, val] of Object.entries(newFields)) {
       if (val !== undefined && val !== null && val !== "") {
+        const strVal = String(val);
+        if (strVal.startsWith("••••") || strVal.startsWith("****")) continue;
         mergedConfig[key] = val;
       }
     }

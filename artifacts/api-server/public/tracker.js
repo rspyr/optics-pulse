@@ -7,6 +7,7 @@
 
   var scriptTag = document.currentScript;
   var tenantId = scriptTag ? scriptTag.getAttribute("data-tenant") : null;
+  var funnelSlug = scriptTag ? scriptTag.getAttribute("data-funnel") : null;
   var apiBase = scriptTag ? scriptTag.src.replace(/\/tracker\.js.*$/, "") : "";
 
   function getParam(name) {
@@ -60,6 +61,7 @@
     utmSource: utmSource,
     utmMedium: utmMedium,
     utmCampaign: utmCampaign,
+    funnel: funnelSlug || null,
     landingPage: location.href,
     timestamp: new Date().toISOString(),
     expiresAt: new Date(Date.now() + LS_TTL_MS).toISOString()
@@ -73,7 +75,7 @@
     if (form.dataset.mosInjected) return;
     form.dataset.mosInjected = "1";
     var stored = purgeStaleStorage() || {};
-    var fields = ["gclid", "wbraid", "utmSource", "utmMedium", "utmCampaign", "landingPage"];
+    var fields = ["gclid", "wbraid", "utmSource", "utmMedium", "utmCampaign", "funnel", "landingPage"];
     fields.forEach(function(f) {
       if (stored[f]) {
         var input = document.createElement("input");
