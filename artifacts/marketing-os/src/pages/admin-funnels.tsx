@@ -35,6 +35,7 @@ export default function AdminFunnels() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ tenantId: "", name: "", slug: "", description: "" });
+  const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [tab, setTab] = useState<"funnels" | "scripts" | "health">("funnels");
 
@@ -52,20 +53,23 @@ export default function AdminFunnels() {
   function openNew() {
     setForm({ tenantId: "", name: "", slug: "", description: "" });
     setEditingId(null);
+    setFormError(null);
     setShowForm(true);
   }
 
   function openEdit(ft: FunnelType) {
     setForm({ tenantId: String(ft.tenantId), name: ft.name, slug: ft.slug, description: ft.description || "" });
     setEditingId(ft.id);
+    setFormError(null);
     setShowForm(true);
   }
 
   async function handleSave() {
+    setFormError(null);
     const method = editingId ? "PUT" : "POST";
     const url = editingId ? `${API}/api/funnel-types/${editingId}` : `${API}/api/funnel-types`;
     const body = editingId
-      ? { name: form.name, slug: form.slug, description: form.description }
+      ? { name: form.name, description: form.description }
       : { tenantId: Number(form.tenantId), name: form.name, slug: form.slug, description: form.description };
 
     const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body) });
@@ -74,6 +78,9 @@ export default function AdminFunnels() {
       const params = filterTenant ? `?tenantId=${filterTenant}` : "";
       const data = await fetch(`${API}/api/funnel-types${params}`, { credentials: "include" }).then(r => r.json());
       setFunnels(data);
+    } else {
+      const err = await res.json().catch(() => ({ error: "Save failed" }));
+      setFormError(err.error || "Save failed");
     }
   }
 
@@ -142,17 +149,19 @@ export default function AdminFunnels() {
                 )}
                 <div className="space-y-1">
                   <label className="text-sm text-gray-300">Name</label>
-                  <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value, slug: e.target.value.toLowerCase().replace(/\s+/g, "-")})} placeholder="e.g., Fit Funnel" className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5" />
+                  <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value, ...(!editingId ? { slug: e.target.value.toLowerCase().replace(/\s+/g, "-") } : {})})} placeholder="e.g., Fit Funnel" className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm text-gray-300">Slug</label>
-                  <input type="text" value={form.slug} onChange={e => setForm({...form, slug: e.target.value})} placeholder="e.g., fit-funnel" className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5" />
+                  <label className="text-sm text-gray-300">Slug {editingId && <span className="text-xs text-amber-400 ml-1">(locked)</span>}</label>
+                  <input type="text" value={form.slug} onChange={e => setForm({...form, slug: e.target.value})} placeholder="e.g., fit-funnel" disabled={!!editingId} className={`w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5 ${editingId ? "opacity-50 cursor-not-allowed" : ""}`} />
+                  {editingId && <p className="text-xs text-amber-400/70 mt-1">Slugs cannot be changed after creation to protect installed tracking tags</p>}
                 </div>
                 <div className="space-y-1 md:col-span-2">
                   <label className="text-sm text-gray-300">Description</label>
                   <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} rows={2} placeholder="Describe this funnel type..." className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5 resize-none" />
                 </div>
               </div>
+              {formError && <p className="mt-3 text-sm text-red-400">{formError}</p>}
               <div className="mt-4 flex justify-end">
                 <button onClick={handleSave} className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-2.5 rounded-lg flex items-center gap-2"><Save className="w-4 h-4" /> {editingId ? "Update" : "Create"}</button>
               </div>

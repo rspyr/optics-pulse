@@ -19,10 +19,17 @@ router.post("/funnel-types", requireRole("super_admin", "agency_user"), async (r
     res.status(400).json({ error: "tenantId, name, and slug are required" });
     return;
   }
+  const normalizedSlug = slug.toLowerCase().replace(/\s+/g, "-");
+  const [existing] = await db.select({ id: funnelTypesTable.id }).from(funnelTypesTable)
+    .where(and(eq(funnelTypesTable.tenantId, tenantId), eq(funnelTypesTable.slug, normalizedSlug)));
+  if (existing) {
+    res.status(409).json({ error: `A funnel type with slug "${normalizedSlug}" already exists for this tenant` });
+    return;
+  }
   const [ft] = await db.insert(funnelTypesTable).values({
     tenantId,
     name,
-    slug: slug.toLowerCase().replace(/\s+/g, "-"),
+    slug: normalizedSlug,
     description: description || null,
   }).returning();
   res.status(201).json(ft);
@@ -30,10 +37,9 @@ router.post("/funnel-types", requireRole("super_admin", "agency_user"), async (r
 
 router.put("/funnel-types/:id", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id));
-  const { name, slug, description, isActive } = req.body;
+  const { name, description, isActive } = req.body;
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (name !== undefined) updates.name = name;
-  if (slug !== undefined) updates.slug = slug.toLowerCase().replace(/\s+/g, "-");
   if (description !== undefined) updates.description = description;
   if (isActive !== undefined) updates.isActive = isActive;
 
