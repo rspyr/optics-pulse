@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -69,6 +69,8 @@ const emptyForm: TenantForm = {
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
+type EditTab = "integrations" | "alerts" | "scripts";
+
 export default function AdminTenants() {
   const { data: tenants, isLoading, refetch } = useListTenants();
   const createTenant = useCreateTenant();
@@ -77,10 +79,12 @@ export default function AdminTenants() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [editTenantName, setEditTenantName] = useState("");
   const [form, setForm] = useState<TenantForm>(emptyForm);
   const [showIntegrationConfig, setShowIntegrationConfig] = useState(false);
   const [expandedSyncTenant, setExpandedSyncTenant] = useState<number | null>(null);
   const [tenantSyncStatuses, setTenantSyncStatuses] = useState<Record<number, { statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }> }>>({});
+  const [editTab, setEditTab] = useState<EditTab>("integrations");
 
   const fetchTenantSyncStatus = useCallback(async (tenantId: number) => {
     try {
@@ -172,6 +176,7 @@ export default function AdminTenants() {
     const t = tenant as Record<string, unknown>;
     const lc = (t.loadableConfig || {}) as Record<string, string>;
     setEditId(t.id as number);
+    setEditTenantName(t.name as string);
     setForm({
       name: (t.name as string) || "",
       serviceTitanId: (t.serviceTitanId as string) || "",
@@ -191,6 +196,7 @@ export default function AdminTenants() {
     });
     setDirtyFields(new Set());
     setShowIntegrationConfig(false);
+    setEditTab("integrations");
   };
 
   const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
@@ -297,6 +303,9 @@ export default function AdminTenants() {
     </div>
   );
 
+  const tabClass = (tab: EditTab) =>
+    `px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${editTab === tab ? "bg-white/10 text-white border-b-2 border-primary" : "text-muted-foreground hover:text-white hover:bg-white/5"}`;
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -374,10 +383,10 @@ export default function AdminTenants() {
                 const tid = t.id as number;
                 return (
                   <React.Fragment key={tid}>
-                  <tr className="hover:bg-white/[0.02] transition-colors">
-                    {editId === (t.id as number) ? (
+                  <tr className={`hover:bg-white/[0.02] transition-colors ${editId === tid ? "bg-white/[0.03]" : ""}`}>
+                    {editId === tid ? (
                       <>
-                        <td className="p-4 text-sm text-muted-foreground">{t.id as number}</td>
+                        <td className="p-4 text-sm text-muted-foreground">{tid}</td>
                         <td className="p-4">
                           <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
                             className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" />
@@ -402,13 +411,13 @@ export default function AdminTenants() {
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
                         <td className="p-4 text-right space-x-2">
-                          <button onClick={() => handleUpdate(t.id as number)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-4 h-4 inline" /></button>
+                          <button onClick={() => handleUpdate(tid)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-4 h-4 inline" /></button>
                           <button onClick={() => { setEditId(null); setShowIntegrationConfig(false); }} className="text-muted-foreground hover:text-white"><X className="w-4 h-4 inline" /></button>
                         </td>
                       </>
                     ) : (
                       <>
-                        <td className="p-4 text-sm text-muted-foreground">{t.id as number}</td>
+                        <td className="p-4 text-sm text-muted-foreground">{tid}</td>
                         <td className="p-4 font-medium text-white">{t.name as string}</td>
                         <td className="p-4 text-sm text-muted-foreground">{(t.serviceTitanId as string) || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{t.timezone as string}</td>
@@ -431,19 +440,21 @@ export default function AdminTenants() {
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
                         <td className="p-4 text-right space-x-2">
-                          <button onClick={() => startEdit(t)} className="text-muted-foreground hover:text-white"><Edit2 className="w-4 h-4 inline" /></button>
-                          <button onClick={() => handleDelete(t.id as number)} className="text-muted-foreground hover:text-red-400"><Trash2 className="w-4 h-4 inline" /></button>
+                          <button onClick={() => startEdit(t)} className="text-muted-foreground hover:text-white" title="Edit tenant">
+                            <Settings className="w-4 h-4 inline" />
+                          </button>
+                          <button onClick={() => handleDelete(tid)} className="text-muted-foreground hover:text-red-400"><Trash2 className="w-4 h-4 inline" /></button>
                         </td>
                       </>
                     )}
                   </tr>
-                  {expandedSyncTenant === (t.id as number) && (
+                  {expandedSyncTenant === tid && !editId && (
                     <tr className="bg-white/[0.01]">
                       <td colSpan={7} className="px-6 py-4">
                         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Integration Sync Status</div>
-                        {tenantSyncStatuses[t.id as number] ? (
+                        {tenantSyncStatuses[tid] ? (
                           <div className="grid grid-cols-3 gap-4">
-                            {Object.entries(tenantSyncStatuses[t.id as number].statusByIntegration).map(([key, status]) => (
+                            {Object.entries(tenantSyncStatuses[tid].statusByIntegration).map(([key, status]) => (
                               <div key={key} className="bg-background/50 border border-white/5 rounded-lg p-3">
                                 <div className="flex items-center justify-between mb-2">
                                   <span className="text-sm font-medium text-white capitalize">{key.replace(/_/g, " ")}</span>
@@ -479,26 +490,57 @@ export default function AdminTenants() {
       </PremiumCard>
 
       {editId && (
-        <PremiumCard className="p-6">
-          <h3 className="font-display text-lg text-white mb-2">Update Integration Config</h3>
-          <p className="text-sm text-muted-foreground mb-4">Fill in only the fields you want to update. Leave blank to keep existing values.</p>
-          <IntegrationFields />
-          <div className="flex gap-2 mt-4">
-            <button onClick={() => handleUpdate(editId)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm">
-              <Check className="w-4 h-4" /> Save Changes
-            </button>
+        <PremiumCard className="p-0 overflow-hidden">
+          <div className="px-6 pt-5 pb-0">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-lg text-white">
+                Editing: <span className="text-primary">{editTenantName}</span>
+              </h3>
+              <button
+                onClick={() => { setEditId(null); setShowIntegrationConfig(false); }}
+                className="text-muted-foreground hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex gap-1 border-b border-white/10">
+              <button onClick={() => setEditTab("integrations")} className={tabClass("integrations")}>
+                <Key className="w-3.5 h-3.5 inline mr-1.5" />Integrations
+              </button>
+              <button onClick={() => setEditTab("alerts")} className={tabClass("alerts")}>
+                <Bell className="w-3.5 h-3.5 inline mr-1.5" />Client Alerts
+              </button>
+              <button onClick={() => setEditTab("scripts")} className={tabClass("scripts")}>
+                <Code className="w-3.5 h-3.5 inline mr-1.5" />Capture Scripts
+              </button>
+            </div>
+          </div>
+          <div className="p-6">
+            {editTab === "integrations" && (
+              <div>
+                <p className="text-sm text-muted-foreground mb-4">Fill in only the fields you want to update. Leave blank to keep existing values.</p>
+                <IntegrationFields />
+                <div className="flex gap-2 mt-4">
+                  <button onClick={() => handleUpdate(editId)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm">
+                    <Check className="w-4 h-4" /> Save Changes
+                  </button>
+                </div>
+              </div>
+            )}
+            {editTab === "alerts" && (
+              <TenantAlertConfig tenantId={editId} apiBase={API_BASE} />
+            )}
+            {editTab === "scripts" && (
+              <TenantCaptureScripts tenantId={editId} tenantName={editTenantName} apiBase={API_BASE} />
+            )}
           </div>
         </PremiumCard>
       )}
-
-      <AlertConfigSection tenants={tenants || []} apiBase={API_BASE} />
-      <CaptureScriptSection tenants={tenants || []} apiBase={API_BASE} />
     </div>
   );
 }
 
-function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
-  const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
+function TenantAlertConfig({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
   const [config, setConfig] = useState<AlertConfig>({ ...defaultAlertConfig });
   const [newEmail, setNewEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -506,9 +548,8 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (!selectedTenantId) return;
     setLoading(true);
-    fetch(`${apiBase}/api/tenants/${selectedTenantId}`, { credentials: "include" })
+    fetch(`${apiBase}/api/tenants/${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then((data: Record<string, unknown>) => {
         const ac = data.alertConfig as AlertConfig | null;
@@ -516,13 +557,12 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
       })
       .catch(() => setConfig({ ...defaultAlertConfig }))
       .finally(() => setLoading(false));
-  }, [selectedTenantId, apiBase]);
+  }, [tenantId, apiBase]);
 
   const handleSave = async () => {
-    if (!selectedTenantId) return;
     setSaving(true);
     try {
-      const res = await fetch(`${apiBase}/api/tenants/${selectedTenantId}`, {
+      const res = await fetch(`${apiBase}/api/tenants/${tenantId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -549,144 +589,118 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
 
   const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
 
+  if (loading) return <div className="text-sm text-muted-foreground">Loading alert config...</div>;
+
   return (
-    <PremiumCard className="p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <Bell className="w-5 h-5 text-amber-400" />
-        <h3 className="font-display text-lg text-white">Client Alert Configuration</h3>
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={config.enabled}
+            onChange={(e) => setConfig(c => ({ ...c, enabled: e.target.checked }))}
+            className="w-4 h-4 rounded border-white/20 accent-primary"
+          />
+          <span className="text-sm text-white">Alerts Enabled</span>
+        </label>
       </div>
 
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground uppercase tracking-wider">Select Tenant</label>
-            <select
-              value={selectedTenantId}
-              onChange={(e) => setSelectedTenantId(e.target.value ? Number(e.target.value) : "")}
-              className={inputClass + " w-full"}
-            >
-              <option value="">Choose tenant...</option>
-              {tenants.map((t) => {
-                const tenant = t as Record<string, unknown>;
-                return <option key={tenant.id as number} value={tenant.id as number}>{tenant.name as string}</option>;
-              })}
-            </select>
+      <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
+        <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center gap-2">
+          <Mail className="w-3.5 h-3.5" /> Email Recipients
+        </h4>
+        <div className="flex gap-2">
+          <input
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addRecipient()}
+            placeholder="Add email address"
+            className={inputClass + " flex-1"}
+          />
+          <button onClick={addRecipient} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm">
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+        {config.recipients.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {config.recipients.map((email) => (
+              <span key={email} className="inline-flex items-center gap-1 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-sm text-white">
+                {email}
+                <button onClick={() => removeRecipient(email)} className="text-muted-foreground hover:text-red-400">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
           </div>
-          <div className="flex items-end">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={config.enabled}
-                onChange={(e) => setConfig(c => ({ ...c, enabled: e.target.checked }))}
-                className="w-4 h-4 rounded border-white/20 accent-primary"
-              />
-              <span className="text-sm text-white">Alerts Enabled</span>
-            </label>
+        ) : (
+          <p className="text-xs text-muted-foreground">No recipients — alerts will be sent to tenant client_admin users by default.</p>
+        )}
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Agency Sender Email</label>
+          <input
+            value={config.agencySenderEmail}
+            onChange={(e) => setConfig(c => ({ ...c, agencySenderEmail: e.target.value }))}
+            placeholder="e.g. alerts@hvaclaunch.com (defaults to SMTP_FROM)"
+            className={inputClass + " w-full"}
+          />
+        </div>
+      </div>
+
+      <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+        <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider mb-3">Alert Thresholds</h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className={`space-y-1 p-3 rounded-lg border ${config.leadDropEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted-foreground">Lead Drop %</label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={config.leadDropEnabled} onChange={(e) => setConfig(c => ({ ...c, leadDropEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                <span className="text-[10px] text-muted-foreground uppercase">{config.leadDropEnabled ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <input type="number" min="0" max="100" value={config.leadDropThreshold} onChange={(e) => setConfig(c => ({ ...c, leadDropThreshold: Number(e.target.value) }))} disabled={!config.leadDropEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
+          </div>
+          <div className={`space-y-1 p-3 rounded-lg border ${config.bookingRateEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted-foreground">Min Booking Rate %</label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={config.bookingRateEnabled} onChange={(e) => setConfig(c => ({ ...c, bookingRateEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                <span className="text-[10px] text-muted-foreground uppercase">{config.bookingRateEnabled ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <input type="number" min="0" max="100" value={config.bookingRateThreshold} onChange={(e) => setConfig(c => ({ ...c, bookingRateThreshold: Number(e.target.value) }))} disabled={!config.bookingRateEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
+          </div>
+          <div className={`space-y-1 p-3 rounded-lg border ${config.roasEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted-foreground">Min ROAS (x)</label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={config.roasEnabled} onChange={(e) => setConfig(c => ({ ...c, roasEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                <span className="text-[10px] text-muted-foreground uppercase">{config.roasEnabled ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <input type="number" min="0" step="0.1" value={config.roasThreshold} onChange={(e) => setConfig(c => ({ ...c, roasThreshold: Number(e.target.value) }))} disabled={!config.roasEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
+          </div>
+          <div className={`space-y-1 p-3 rounded-lg border ${config.spendSpikeEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted-foreground">Spend Spike %</label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={config.spendSpikeEnabled} onChange={(e) => setConfig(c => ({ ...c, spendSpikeEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
+                <span className="text-[10px] text-muted-foreground uppercase">{config.spendSpikeEnabled ? "On" : "Off"}</span>
+              </label>
+            </div>
+            <input type="number" min="0" max="500" value={config.spendSpikeThreshold} onChange={(e) => setConfig(c => ({ ...c, spendSpikeThreshold: Number(e.target.value) }))} disabled={!config.spendSpikeEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
           </div>
         </div>
-
-        {selectedTenantId && !loading && (
-          <>
-            <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
-              <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center gap-2">
-                <Mail className="w-3.5 h-3.5" /> Email Recipients
-              </h4>
-              <div className="flex gap-2">
-                <input
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addRecipient()}
-                  placeholder="Add email address"
-                  className={inputClass + " flex-1"}
-                />
-                <button onClick={addRecipient} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm">
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-              {config.recipients.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {config.recipients.map((email) => (
-                    <span key={email} className="inline-flex items-center gap-1 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-sm text-white">
-                      {email}
-                      <button onClick={() => removeRecipient(email)} className="text-muted-foreground hover:text-red-400">
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">No recipients — alerts will be sent to tenant client_admin users by default.</p>
-              )}
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground uppercase tracking-wider">Agency Sender Email</label>
-                <input
-                  value={config.agencySenderEmail}
-                  onChange={(e) => setConfig(c => ({ ...c, agencySenderEmail: e.target.value }))}
-                  placeholder="e.g. alerts@hvaclaunch.com (defaults to SMTP_FROM)"
-                  className={inputClass + " w-full"}
-                />
-              </div>
-            </div>
-
-            <div className="border border-white/10 rounded-lg p-4 bg-background/30">
-              <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider mb-3">Alert Thresholds</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className={`space-y-1 p-3 rounded-lg border ${config.leadDropEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-muted-foreground">Lead Drop %</label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input type="checkbox" checked={config.leadDropEnabled} onChange={(e) => setConfig(c => ({ ...c, leadDropEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
-                      <span className="text-[10px] text-muted-foreground uppercase">{config.leadDropEnabled ? "On" : "Off"}</span>
-                    </label>
-                  </div>
-                  <input type="number" min="0" max="100" value={config.leadDropThreshold} onChange={(e) => setConfig(c => ({ ...c, leadDropThreshold: Number(e.target.value) }))} disabled={!config.leadDropEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
-                </div>
-                <div className={`space-y-1 p-3 rounded-lg border ${config.bookingRateEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-muted-foreground">Min Booking Rate %</label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input type="checkbox" checked={config.bookingRateEnabled} onChange={(e) => setConfig(c => ({ ...c, bookingRateEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
-                      <span className="text-[10px] text-muted-foreground uppercase">{config.bookingRateEnabled ? "On" : "Off"}</span>
-                    </label>
-                  </div>
-                  <input type="number" min="0" max="100" value={config.bookingRateThreshold} onChange={(e) => setConfig(c => ({ ...c, bookingRateThreshold: Number(e.target.value) }))} disabled={!config.bookingRateEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
-                </div>
-                <div className={`space-y-1 p-3 rounded-lg border ${config.roasEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-muted-foreground">Min ROAS (x)</label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input type="checkbox" checked={config.roasEnabled} onChange={(e) => setConfig(c => ({ ...c, roasEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
-                      <span className="text-[10px] text-muted-foreground uppercase">{config.roasEnabled ? "On" : "Off"}</span>
-                    </label>
-                  </div>
-                  <input type="number" min="0" step="0.1" value={config.roasThreshold} onChange={(e) => setConfig(c => ({ ...c, roasThreshold: Number(e.target.value) }))} disabled={!config.roasEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
-                </div>
-                <div className={`space-y-1 p-3 rounded-lg border ${config.spendSpikeEnabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-muted-foreground">Spend Spike %</label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input type="checkbox" checked={config.spendSpikeEnabled} onChange={(e) => setConfig(c => ({ ...c, spendSpikeEnabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-white/20 accent-amber-400" />
-                      <span className="text-[10px] text-muted-foreground uppercase">{config.spendSpikeEnabled ? "On" : "Off"}</span>
-                    </label>
-                  </div>
-                  <input type="number" min="0" max="500" value={config.spendSpikeThreshold} onChange={(e) => setConfig(c => ({ ...c, spendSpikeThreshold: Number(e.target.value) }))} disabled={!config.spendSpikeEnabled} className={inputClass + " w-full disabled:opacity-40 disabled:cursor-not-allowed"} />
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
-              {saved ? "Saved!" : "Save Alert Config"}
-            </button>
-          </>
-        )}
-        {loading && <div className="text-sm text-muted-foreground">Loading alert config...</div>}
       </div>
-    </PremiumCard>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm disabled:opacity-50"
+      >
+        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+        {saved ? "Saved!" : "Save Alert Config"}
+      </button>
+    </div>
   );
 }
 
@@ -697,31 +711,22 @@ interface FunnelScript {
   script: string;
 }
 
-function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
-  const [allScriptData, setAllScriptData] = useState<Record<number, { tenantName: string; script: string; funnelScripts: FunnelScript[] }>>({});
+function TenantCaptureScripts({ tenantId, tenantName, apiBase }: { tenantId: number; tenantName: string; apiBase: string }) {
+  const [scriptData, setScriptData] = useState<{ script: string; funnelScripts: FunnelScript[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!tenants.length) return;
     setLoading(true);
-    const fetches = tenants.map(t => {
-      const tenant = t as Record<string, unknown>;
-      const tid = tenant.id as number;
-      return fetch(`${apiBase}/api/funnel-types/script/${tid}`, { credentials: "include" })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => data ? { tid, tenantName: data.tenantName || (tenant.name as string), script: data.script, funnelScripts: data.funnelScripts || [] } : null)
-        .catch(() => null);
-    });
-    Promise.all(fetches).then(results => {
-      const data: Record<number, { tenantName: string; script: string; funnelScripts: FunnelScript[] }> = {};
-      for (const r of results) {
-        if (r) data[r.tid] = { tenantName: r.tenantName, script: r.script, funnelScripts: r.funnelScripts };
-      }
-      setAllScriptData(data);
-      setLoading(false);
-    });
-  }, [tenants, apiBase]);
+    fetch(`${apiBase}/api/funnel-types/script/${tenantId}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) setScriptData({ script: data.script, funnelScripts: data.funnelScripts || [] });
+        else setScriptData(null);
+      })
+      .catch(() => setScriptData(null))
+      .finally(() => setLoading(false));
+  }, [tenantId, apiBase]);
 
   const handleCopy = async (text: string, id: string) => {
     if (!text) return;
@@ -732,68 +737,53 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
     } catch {}
   };
 
-  const tenantEntries = tenants.map(t => {
-    const tenant = t as Record<string, unknown>;
-    const tid = tenant.id as number;
-    return { tid, data: allScriptData[tid] };
-  }).filter(e => e.data);
+  if (loading) return <div className="text-sm text-muted-foreground">Loading capture scripts...</div>;
+  if (!scriptData) return <p className="text-sm text-muted-foreground">No script data available for this tenant.</p>;
 
   return (
-    <PremiumCard className="p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <Code className="w-5 h-5 text-emerald-400" />
-        <h3 className="font-display text-lg text-white">Capture Scripts</h3>
+    <div className="space-y-4">
+      <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
+          <button
+            onClick={() => handleCopy(scriptData.script, `base-${tenantId}`)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
+          >
+            {copiedId === `base-${tenantId}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            {copiedId === `base-${tenantId}` ? "Copied!" : "Copy"}
+          </button>
+        </div>
+        <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
+          <pre>{scriptData.script}</pre>
+        </div>
       </div>
 
-      {loading && <div className="text-sm text-muted-foreground">Loading scripts...</div>}
-
-      <div className="space-y-6">
-        {tenantEntries.map(({ tid, data }) => (
-          <div key={tid} className="space-y-3">
-            <h4 className="text-sm font-medium text-white border-b border-white/10 pb-2">{data.tenantName}</h4>
-
-            <div className="border border-white/10 rounded-lg p-4 bg-background/30">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
+      {scriptData.funnelScripts.length > 0 && (
+        <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Per-Funnel Scripts ({scriptData.funnelScripts.length})</p>
+          <div className="space-y-2">
+            {scriptData.funnelScripts.map(fs => (
+              <div key={fs.id} className="flex items-start gap-3">
+                <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
+                  <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
+                  {fs.script}
+                </div>
                 <button
-                  onClick={() => handleCopy(data.script, `base-${tid}`)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
+                  onClick={() => handleCopy(fs.script, `funnel-${tenantId}-${fs.id}`)}
+                  className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
+                  title="Copy"
                 >
-                  {copiedId === `base-${tid}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedId === `base-${tid}` ? "Copied!" : "Copy"}
+                  {copiedId === `funnel-${tenantId}-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                 </button>
               </div>
-              <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
-                <pre>{data.script}</pre>
-              </div>
-            </div>
-
-            {data.funnelScripts.length > 0 && (
-              <div className="border border-white/10 rounded-lg p-4 bg-background/30">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Per-Funnel Scripts ({data.funnelScripts.length})</p>
-                <div className="space-y-2">
-                  {data.funnelScripts.map(fs => (
-                    <div key={fs.id} className="flex items-start gap-3">
-                      <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
-                        <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
-                        {fs.script}
-                      </div>
-                      <button
-                        onClick={() => handleCopy(fs.script, `funnel-${tid}-${fs.id}`)}
-                        className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
-                        title="Copy"
-                      >
-                        {copiedId === `funnel-${tid}-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            ))}
           </div>
-        ))}
-        {tenantEntries.length === 0 && !loading && <p className="text-sm text-muted-foreground">No tenants found.</p>}
-      </div>
-    </PremiumCard>
+        </div>
+      )}
+
+      {scriptData.funnelScripts.length === 0 && (
+        <p className="text-sm text-muted-foreground">No funnels assigned to this tenant. Assign funnels on the Funnels page.</p>
+      )}
+    </div>
   );
 }
