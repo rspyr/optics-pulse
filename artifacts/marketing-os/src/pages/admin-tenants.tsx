@@ -682,7 +682,7 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
     if (!selectedTenantId) { setScriptTag(""); return; }
     setLoading(true);
     fetch(`${apiBase}/api/funnel-types/script/${selectedTenantId}`, { credentials: "include" })
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error("Failed to fetch script"); return r.json(); })
       .then(data => setScriptTag(data.script || ""))
       .catch(() => setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${selectedTenantId}"></script>`))
       .finally(() => setLoading(false));
