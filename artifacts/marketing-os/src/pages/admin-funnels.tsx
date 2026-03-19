@@ -43,11 +43,6 @@ export default function AdminFunnels() {
     fetch(`${API}/api/tracker/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
   }, []);
 
-  const [allFunnels, setAllFunnels] = useState<FunnelType[]>([]);
-
-  useEffect(() => {
-    fetch(`${API}/api/funnel-types`, { credentials: "include" }).then(r => r.json()).then(setAllFunnels).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const params = filterTenant ? `?tenantId=${filterTenant}` : "";
@@ -79,7 +74,6 @@ export default function AdminFunnels() {
       const params = filterTenant ? `?tenantId=${filterTenant}` : "";
       const data = await fetch(`${API}/api/funnel-types${params}`, { credentials: "include" }).then(r => r.json());
       setFunnels(data);
-      fetch(`${API}/api/funnel-types`, { credentials: "include" }).then(r => r.json()).then(setAllFunnels).catch(() => {});
     }
   }
 
@@ -87,7 +81,6 @@ export default function AdminFunnels() {
     if (!confirm("Delete this funnel type?")) return;
     await fetch(`${API}/api/funnel-types/${id}`, { method: "DELETE", credentials: "include" });
     setFunnels(funnels.filter(f => f.id !== id));
-    setAllFunnels(allFunnels.filter(f => f.id !== id));
   }
 
   async function copyScript(tenantId: number) {
@@ -207,55 +200,7 @@ export default function AdminFunnels() {
       )}
 
       {tab === "scripts" && (
-        <div className="space-y-4">
-          {tenants.map(t => {
-            const tenantFunnels = allFunnels.filter(f => f.tenantId === t.id && f.isActive);
-            return (
-              <PremiumCard key={t.id} className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-display text-lg text-white">{t.name}</h3>
-                  <button onClick={() => copyScript(t.id)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all">
-                    {copiedId === t.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    {copiedId === t.id ? "Copied!" : "Copy Base Script"}
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Base Script (no funnel)</p>
-                    <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
-                      {`<script src="${window.location.origin}/tracker.js" data-tenant="${t.id}"></script>`}
-                    </div>
-                  </div>
-                  {tenantFunnels.length > 0 && (
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts</p>
-                      <div className="space-y-2">
-                        {tenantFunnels.map(ft => {
-                          const scriptText = `<script src="${window.location.origin}/tracker.js" data-tenant="${t.id}" data-funnel="${ft.slug}"></script>`;
-                          return (
-                            <div key={ft.id} className="flex items-start gap-3">
-                              <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
-                                <span className="text-muted-foreground text-[10px] block mb-1">{ft.name}</span>
-                                {scriptText}
-                              </div>
-                              <button
-                                onClick={() => { navigator.clipboard.writeText(scriptText); setCopiedId(ft.id); setTimeout(() => setCopiedId(null), 2000); }}
-                                className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
-                                title="Copy"
-                              >
-                                {copiedId === ft.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </PremiumCard>
-            );
-          })}
-        </div>
+        <ScriptTagsTab tenants={tenants} copiedId={copiedId} setCopiedId={setCopiedId} />
       )}
 
       {tab === "health" && (
@@ -288,6 +233,85 @@ export default function AdminFunnels() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+interface ScriptData {
+  script: string;
+  funnelScripts: { id: number; name: string; slug: string; script: string }[];
+}
+
+function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; copiedId: number | null; setCopiedId: (id: number | null) => void }) {
+  const [scriptData, setScriptData] = useState<Record<number, ScriptData>>({});
+
+  useEffect(() => {
+    tenants.forEach(t => {
+      fetch(`${API}/api/funnel-types/script/${t.id}`, { credentials: "include" })
+        .then(r => r.json())
+        .then(data => setScriptData(prev => ({ ...prev, [t.id]: { script: data.script, funnelScripts: data.funnelScripts || [] } })))
+        .catch(() => {});
+    });
+  }, [tenants]);
+
+  const handleCopy = (text: string, id: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  return (
+    <div className="space-y-4">
+      {tenants.map(t => {
+        const data = scriptData[t.id];
+        if (!data) return (
+          <PremiumCard key={t.id} className="p-5">
+            <h3 className="font-display text-lg text-white">{t.name}</h3>
+            <p className="text-sm text-muted-foreground mt-2">Loading scripts...</p>
+          </PremiumCard>
+        );
+        return (
+          <PremiumCard key={t.id} className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display text-lg text-white">{t.name}</h3>
+              <button onClick={() => handleCopy(data.script, t.id)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all">
+                {copiedId === t.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                {copiedId === t.id ? "Copied!" : "Copy Base Script"}
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Base Script (no funnel)</p>
+                <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
+                  {data.script}
+                </div>
+              </div>
+              {data.funnelScripts.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts</p>
+                  <div className="space-y-2">
+                    {data.funnelScripts.map(fs => (
+                      <div key={fs.id} className="flex items-start gap-3">
+                        <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
+                          <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
+                          {fs.script}
+                        </div>
+                        <button
+                          onClick={() => handleCopy(fs.script, fs.id)}
+                          className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
+                          title="Copy"
+                        >
+                          {copiedId === fs.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </PremiumCard>
+        );
+      })}
     </div>
   );
 }
