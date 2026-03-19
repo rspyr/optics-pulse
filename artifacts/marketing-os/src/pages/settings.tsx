@@ -5,8 +5,6 @@ import { Copy, Check, Save, Loader2 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
-const SECRET_KEYS = new Set(["ghlApiKey", "podiumApiToken"]);
-
 export default function Settings() {
   const { user } = useAuth();
   const tenantId = user?.tenantId;
