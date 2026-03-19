@@ -12,6 +12,7 @@ export * from "./saved-questions";
 export * from "./training";
 export * from "./automation";
 export * from "./funnel-types";
+export * from "./tenant-funnel-types";
 export * from "./call-attempts";
 export * from "./reviews";
 export * from "./tracker-heartbeats";

@@ -1,12 +1,11 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
 interface FunnelType {
   id: number;
-  tenantId: number;
   name: string;
   slug: string;
   description: string | null;
@@ -31,34 +30,33 @@ export default function AdminFunnels() {
   const [funnels, setFunnels] = useState<FunnelType[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [health, setHealth] = useState<TrackerHealth[]>([]);
-  const [filterTenant, setFilterTenant] = useState<number | "">("");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ tenantId: "", name: "", slug: "", description: "" });
+  const [form, setForm] = useState({ name: "", slug: "", description: "" });
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [tab, setTab] = useState<"funnels" | "scripts" | "health">("funnels");
+  const [tab, setTab] = useState<"funnels" | "assignments" | "scripts" | "health">("funnels");
 
   useEffect(() => {
     fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
     fetch(`${API}/api/tracker/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
   }, []);
 
+  const loadFunnels = () => {
+    fetch(`${API}/api/funnel-types`, { credentials: "include" }).then(r => r.json()).then(setFunnels).catch(() => {});
+  };
 
-  useEffect(() => {
-    const params = filterTenant ? `?tenantId=${filterTenant}` : "";
-    fetch(`${API}/api/funnel-types${params}`, { credentials: "include" }).then(r => r.json()).then(setFunnels).catch(() => {});
-  }, [filterTenant]);
+  useEffect(() => { loadFunnels(); }, []);
 
   function openNew() {
-    setForm({ tenantId: "", name: "", slug: "", description: "" });
+    setForm({ name: "", slug: "", description: "" });
     setEditingId(null);
     setFormError(null);
     setShowForm(true);
   }
 
   function openEdit(ft: FunnelType) {
-    setForm({ tenantId: String(ft.tenantId), name: ft.name, slug: ft.slug, description: ft.description || "" });
+    setForm({ name: ft.name, slug: ft.slug, description: ft.description || "" });
     setEditingId(ft.id);
     setFormError(null);
     setShowForm(true);
@@ -70,14 +68,12 @@ export default function AdminFunnels() {
     const url = editingId ? `${API}/api/funnel-types/${editingId}` : `${API}/api/funnel-types`;
     const body = editingId
       ? { name: form.name, description: form.description }
-      : { tenantId: Number(form.tenantId), name: form.name, slug: form.slug, description: form.description };
+      : { name: form.name, slug: form.slug, description: form.description };
 
     const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body) });
     if (res.ok) {
       setShowForm(false);
-      const params = filterTenant ? `?tenantId=${filterTenant}` : "";
-      const data = await fetch(`${API}/api/funnel-types${params}`, { credentials: "include" }).then(r => r.json());
-      setFunnels(data);
+      loadFunnels();
     } else {
       const err = await res.json().catch(() => ({ error: "Save failed" }));
       setFormError(err.error || "Save failed");
@@ -85,36 +81,24 @@ export default function AdminFunnels() {
   }
 
   async function handleDelete(id: number) {
-    if (!confirm("Delete this funnel type?")) return;
+    if (!confirm("Delete this funnel type? This will remove it from all tenant assignments.")) return;
     await fetch(`${API}/api/funnel-types/${id}`, { method: "DELETE", credentials: "include" });
     setFunnels(funnels.filter(f => f.id !== id));
   }
-
-  async function copyScript(tenantId: number) {
-    try {
-      const res = await fetch(`${API}/api/funnel-types/script/${tenantId}`, { credentials: "include" });
-      const data = await res.json();
-      await navigator.clipboard.writeText(data.script);
-      setCopiedId(tenantId);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {}
-  }
-
-  const tenantMap = new Map(tenants.map(t => [t.id, t.name]));
 
   return (
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Funnel & Script Management</GradientHeading>
-          <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE FUNNEL TYPES, TRACKING SCRIPTS & HEARTBEAT HEALTH</p>
+          <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE FUNNEL TYPES, TENANT ASSIGNMENTS, TRACKING SCRIPTS & HEALTH</p>
         </div>
       </header>
 
       <div className="flex gap-2">
-        {(["funnels", "scripts", "health"] as const).map(t => (
+        {(["funnels", "assignments", "scripts", "health"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-white/10 text-white" : "text-muted-foreground hover:text-white"}`}>
-            {t === "funnels" ? "Funnel Types" : t === "scripts" ? "Script Tags" : "Tracker Health"}
+            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "scripts" ? "Script Tags" : "Tracker Health"}
           </button>
         ))}
       </div>
@@ -122,10 +106,6 @@ export default function AdminFunnels() {
       {tab === "funnels" && (
         <>
           <div className="flex items-center gap-3">
-            <select value={filterTenant} onChange={e => setFilterTenant(e.target.value ? Number(e.target.value) : "")} className="bg-card border border-white/10 text-white text-sm rounded-lg px-4 py-2">
-              <option value="">All Tenants</option>
-              {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
             <button onClick={openNew} className="bg-primary hover:bg-primary/90 text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(242,5,5,0.3)]">
               <Plus className="w-4 h-4" /> Add Funnel Type
             </button>
@@ -138,15 +118,6 @@ export default function AdminFunnels() {
                 <button onClick={() => setShowForm(false)} className="text-muted-foreground hover:text-white"><X className="w-5 h-5" /></button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {!editingId && (
-                  <div className="space-y-1">
-                    <label className="text-sm text-gray-300">Tenant</label>
-                    <select value={form.tenantId} onChange={e => setForm({...form, tenantId: e.target.value})} className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5">
-                      <option value="">Select tenant</option>
-                      {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                )}
                 <div className="space-y-1">
                   <label className="text-sm text-gray-300">Name</label>
                   <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value, ...(!editingId ? { slug: e.target.value.toLowerCase().replace(/\s+/g, "-") } : {})})} placeholder="e.g., Fit Funnel" className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5" />
@@ -175,19 +146,17 @@ export default function AdminFunnels() {
                   <tr className="border-b border-white/10 text-left">
                     <th className="py-3 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
                     <th className="py-3 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Slug</th>
-                    <th className="py-3 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Tenant</th>
                     <th className="py-3 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                     <th className="py-3 px-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {funnels.length === 0 ? (
-                    <tr><td colSpan={5} className="py-12 text-center text-muted-foreground">No funnel types yet.</td></tr>
+                    <tr><td colSpan={4} className="py-12 text-center text-muted-foreground">No funnel types yet.</td></tr>
                   ) : funnels.map(ft => (
                     <tr key={ft.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                       <td className="py-3 px-4 text-sm text-white font-medium">{ft.name}</td>
                       <td className="py-3 px-4 text-sm text-muted-foreground font-mono">{ft.slug}</td>
-                      <td className="py-3 px-4 text-sm text-muted-foreground">{tenantMap.get(ft.tenantId) || ft.tenantId}</td>
                       <td className="py-3 px-4">
                         <span className={`px-2 py-1 text-xs rounded-full ${ft.isActive ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
                           {ft.isActive ? "Active" : "Inactive"}
@@ -206,6 +175,10 @@ export default function AdminFunnels() {
             </div>
           </PremiumCard>
         </>
+      )}
+
+      {tab === "assignments" && (
+        <TenantAssignmentsTab tenants={tenants} funnels={funnels} />
       )}
 
       {tab === "scripts" && (
@@ -242,6 +215,84 @@ export default function AdminFunnels() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels: FunnelType[] }) {
+  const [assignments, setAssignments] = useState<Record<number, number[]>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    const fetches = tenants.map(t =>
+      fetch(`${API}/api/tenants/${t.id}/funnel-types`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : [])
+        .then((types: FunnelType[]) => ({ tid: t.id, ids: types.map((ft: FunnelType) => ft.id) }))
+        .catch(() => ({ tid: t.id, ids: [] as number[] }))
+    );
+    Promise.all(fetches).then(results => {
+      const map: Record<number, number[]> = {};
+      for (const r of results) map[r.tid] = r.ids;
+      setAssignments(map);
+      setLoading(false);
+    });
+  }, [tenants]);
+
+  async function toggleAssignment(tenantId: number, funnelTypeId: number) {
+    const current = assignments[tenantId] || [];
+    const isAssigned = current.includes(funnelTypeId);
+
+    if (isAssigned) {
+      await fetch(`${API}/api/tenants/${tenantId}/funnel-types/${funnelTypeId}`, { method: "DELETE", credentials: "include" });
+      setAssignments(prev => ({ ...prev, [tenantId]: prev[tenantId].filter(id => id !== funnelTypeId) }));
+    } else {
+      await fetch(`${API}/api/tenants/${tenantId}/funnel-types`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ funnelTypeId }),
+      });
+      setAssignments(prev => ({ ...prev, [tenantId]: [...(prev[tenantId] || []), funnelTypeId] }));
+    }
+  }
+
+  if (loading) return <PremiumCard className="p-12 text-center"><p className="text-muted-foreground">Loading assignments...</p></PremiumCard>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">Assign funnel types to tenants. Only assigned funnels will generate tracking scripts for that tenant.</p>
+      {tenants.map(t => {
+        const tenantFunnelIds = assignments[t.id] || [];
+        return (
+          <PremiumCard key={t.id} className="p-5">
+            <h3 className="font-display text-lg text-white mb-3">{t.name}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {funnels.filter(f => f.isActive).map(ft => {
+                const isAssigned = tenantFunnelIds.includes(ft.id);
+                return (
+                  <button
+                    key={ft.id}
+                    onClick={() => toggleAssignment(t.id, ft.id)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all border ${
+                      isAssigned
+                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                        : "bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    {isAssigned ? <Link className="w-4 h-4" /> : <Unlink className="w-4 h-4" />}
+                    <span className="font-medium">{ft.name}</span>
+                    <span className="text-xs opacity-60 font-mono ml-auto">{ft.slug}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {funnels.filter(f => f.isActive).length === 0 && (
+              <p className="text-sm text-muted-foreground">No active funnel types available. Create some in the Funnel Types tab first.</p>
+            )}
+          </PremiumCard>
+        );
+      })}
     </div>
   );
 }
@@ -297,7 +348,7 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
               </div>
               {data.funnelScripts.length > 0 && (
                 <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts ({data.funnelScripts.length})</p>
                   <div className="space-y-2">
                     {data.funnelScripts.map(fs => (
                       <div key={fs.id} className="flex items-start gap-3">
@@ -316,6 +367,9 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
                     ))}
                   </div>
                 </div>
+              )}
+              {data.funnelScripts.length === 0 && (
+                <p className="text-sm text-muted-foreground">No funnel types assigned to this tenant. Go to Tenant Assignments to add some.</p>
               )}
             </div>
           </PremiumCard>

@@ -1,6 +1,6 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
+import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
 import { eq, and, count, sql, avg } from "drizzle-orm";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
@@ -124,8 +124,12 @@ export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>)
 
 async function loadFunnelTypesCache(): Promise<void> {
   try {
-    const rows = await db.select({ tenantId: funnelTypesTable.tenantId, name: funnelTypesTable.name })
-      .from(funnelTypesTable)
+    const rows = await db.select({
+      tenantId: tenantFunnelTypesTable.tenantId,
+      name: funnelTypesTable.name,
+    })
+      .from(tenantFunnelTypesTable)
+      .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
       .where(eq(funnelTypesTable.isActive, true));
     const grouped: Record<number, string[]> = {};
     for (const r of rows) {

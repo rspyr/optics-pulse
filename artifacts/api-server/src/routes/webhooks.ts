@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { eq, and } from "drizzle-orm";
@@ -34,8 +34,12 @@ function verifySignature(payload: string, signature: string | undefined): boolea
 async function resolveFunnelType(tenantId: number, funnelSlug: string | null | undefined): Promise<string | null> {
   if (!funnelSlug) return null;
   const [ft] = await db.select().from(funnelTypesTable)
-    .where(and(eq(funnelTypesTable.tenantId, tenantId), eq(funnelTypesTable.slug, funnelSlug)));
-  return ft ? ft.name : null;
+    .where(eq(funnelTypesTable.slug, funnelSlug));
+  if (!ft) return null;
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, ft.id)));
+  if (!assoc) return null;
+  return ft.name;
 }
 
 async function getCallRailSigningKey(tenantId: number): Promise<string | undefined> {
