@@ -94,7 +94,10 @@ router.post("/webhooks/ingest", async (req, res) => {
     }).returning();
 
     if (data.firstName || data.lastName || data.phone || data.email) {
-      const resolvedLeadType = await resolveFunnelType(tenantId, data.funnel) || source;
+      const rawBody = req.body as Record<string, unknown>;
+      const rawData = (rawBody.data || {}) as Record<string, unknown>;
+      const funnelSlug = data.funnel || (rawData._mos_funnel as string) || null;
+      const resolvedLeadType = await resolveFunnelType(tenantId, funnelSlug) || source;
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",

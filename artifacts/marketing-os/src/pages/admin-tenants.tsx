@@ -681,28 +681,42 @@ function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase:
   );
 }
 
+interface FunnelScript {
+  id: number;
+  name: string;
+  slug: string;
+  script: string;
+}
+
 function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
   const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
   const [scriptTag, setScriptTag] = useState("");
+  const [funnelScripts, setFunnelScripts] = useState<FunnelScript[]>([]);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedTenantId) { setScriptTag(""); return; }
+    if (!selectedTenantId) { setScriptTag(""); setFunnelScripts([]); return; }
     setLoading(true);
     fetch(`${apiBase}/api/funnel-types/script/${selectedTenantId}`, { credentials: "include" })
       .then(r => { if (!r.ok) throw new Error("Failed to fetch script"); return r.json(); })
-      .then(data => setScriptTag(data.script || ""))
-      .catch(() => setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${selectedTenantId}"></script>`))
+      .then(data => {
+        setScriptTag(data.script || "");
+        setFunnelScripts(data.funnelScripts || []);
+      })
+      .catch(() => {
+        setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${selectedTenantId}"></script>`);
+        setFunnelScripts([]);
+      })
       .finally(() => setLoading(false));
   }, [selectedTenantId, apiBase]);
 
-  const handleCopy = async () => {
-    if (!scriptTag) return;
+  const handleCopy = async (text: string, id: string) => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(scriptTag);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
     } catch {}
   };
 
@@ -732,20 +746,45 @@ function CaptureScriptSection({ tenants, apiBase }: { tenants: unknown[]; apiBas
         </div>
 
         {selectedTenantId && !loading && scriptTag && (
-          <div className="border border-white/10 rounded-lg p-4 bg-background/30">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-muted-foreground">Install this script in the &lt;head&gt; of the client's website to enable GCLID capture and heartbeat monitoring.</p>
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? "Copied!" : "Copy"}
-              </button>
+          <div className="space-y-4">
+            <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
+                <button
+                  onClick={() => handleCopy(scriptTag, "base")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0 ml-4"
+                >
+                  {copiedId === "base" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedId === "base" ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
+                <pre>{scriptTag}</pre>
+              </div>
             </div>
-            <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
-              <pre>{scriptTag}</pre>
-            </div>
+
+            {funnelScripts.length > 0 && (
+              <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Per-Funnel Scripts</p>
+                <div className="space-y-2">
+                  {funnelScripts.map(fs => (
+                    <div key={fs.id} className="flex items-start gap-3">
+                      <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
+                        <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
+                        {fs.script}
+                      </div>
+                      <button
+                        onClick={() => handleCopy(fs.script, `funnel-${fs.id}`)}
+                        className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
+                        title="Copy"
+                      >
+                        {copiedId === `funnel-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {loading && <div className="text-sm text-muted-foreground">Loading script...</div>}

@@ -58,8 +58,20 @@ router.get("/funnel-types/script/:tenantId", async (req, res) => {
     ? `https://${process.env.REPLIT_DEV_DOMAIN}`
     : "https://api.marketingos.app";
 
-  const script = `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}"></script>`;
-  res.json({ tenantId, tenantName: tenant.name, script });
+  const baseScript = `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}"></script>`;
+
+  const funnels = await db.select().from(funnelTypesTable)
+    .where(and(eq(funnelTypesTable.tenantId, tenantId), eq(funnelTypesTable.isActive, true)))
+    .orderBy(funnelTypesTable.name);
+
+  const funnelScripts = funnels.map(f => ({
+    id: f.id,
+    name: f.name,
+    slug: f.slug,
+    script: `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}" data-funnel="${f.slug}"></script>`,
+  }));
+
+  res.json({ tenantId, tenantName: tenant.name, script: baseScript, funnelScripts });
 });
 
 export default router;

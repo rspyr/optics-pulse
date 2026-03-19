@@ -8,7 +8,7 @@ const API = import.meta.env.VITE_API_URL || "";
 const SECRET_KEYS = new Set(["ghlApiKey", "podiumApiToken"]);
 
 export default function Settings() {
-  const { user, isAgency } = useAuth();
+  const { user } = useAuth();
   const tenantId = user?.tenantId;
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -118,60 +118,56 @@ export default function Settings() {
               placeholder="e.g. 123456"
             />
           </div>
-          {isAgency && (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Google Ads Customer ID</label>
-                <input
-                  type="text"
-                  value={form.googleAdsCustomerId}
-                  onChange={e => { trackField("googleAdsCustomerId"); setForm({ ...form, googleAdsCustomerId: e.target.value }); }}
-                  className={inputClass}
-                  placeholder="e.g. 123-456-7890"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Meta Ad Account ID</label>
-                <input
-                  type="text"
-                  value={form.metaAdAccountId}
-                  onChange={e => { trackField("metaAdAccountId"); setForm({ ...form, metaAdAccountId: e.target.value }); }}
-                  className={inputClass}
-                  placeholder="e.g. act_123456789"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
-                <input
-                  type="password"
-                  value={form.ghlApiKey}
-                  onChange={e => { trackField("ghlApiKey"); setForm({ ...form, ghlApiKey: e.target.value }); }}
-                  className={inputClass}
-                  placeholder="Enter to update"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Podium API Token</label>
-                <input
-                  type="password"
-                  value={form.podiumApiToken}
-                  onChange={e => { trackField("podiumApiToken"); setForm({ ...form, podiumApiToken: e.target.value }); }}
-                  className={inputClass}
-                  placeholder="Enter to update"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Podium Location ID</label>
-                <input
-                  type="text"
-                  value={form.podiumLocationId}
-                  onChange={e => { trackField("podiumLocationId"); setForm({ ...form, podiumLocationId: e.target.value }); }}
-                  className={inputClass}
-                  placeholder="e.g. loc_abc123"
-                />
-              </div>
-            </>
-          )}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Google Ads Customer ID</label>
+            <input
+              type="text"
+              value={form.googleAdsCustomerId}
+              onChange={e => { trackField("googleAdsCustomerId"); setForm({ ...form, googleAdsCustomerId: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. 123-456-7890"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Meta Ad Account ID</label>
+            <input
+              type="text"
+              value={form.metaAdAccountId}
+              onChange={e => { trackField("metaAdAccountId"); setForm({ ...form, metaAdAccountId: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. act_123456789"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
+            <input
+              type="password"
+              value={form.ghlApiKey}
+              onChange={e => { trackField("ghlApiKey"); setForm({ ...form, ghlApiKey: e.target.value }); }}
+              className={inputClass}
+              placeholder="Enter to update"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Podium API Token</label>
+            <input
+              type="password"
+              value={form.podiumApiToken}
+              onChange={e => { trackField("podiumApiToken"); setForm({ ...form, podiumApiToken: e.target.value }); }}
+              className={inputClass}
+              placeholder="Enter to update"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Podium Location ID</label>
+            <input
+              type="text"
+              value={form.podiumLocationId}
+              onChange={e => { trackField("podiumLocationId"); setForm({ ...form, podiumLocationId: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. loc_abc123"
+            />
+          </div>
           <button
             onClick={handleSave}
             disabled={saving}
