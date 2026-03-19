@@ -18,6 +18,8 @@ export default function Settings() {
     metaAdAccountId: "",
     callRailAccountId: "",
     ghlApiKey: "",
+    podiumApiToken: "",
+    podiumLocationId: "",
   });
 
   useEffect(() => {
@@ -52,6 +54,8 @@ export default function Settings() {
             metaAdAccountId: form.metaAdAccountId || null,
             ghlApiKey: form.ghlApiKey || null,
             callRailAccountId: form.callRailAccountId || null,
+            podiumApiToken: form.podiumApiToken || null,
+            podiumLocationId: form.podiumLocationId || null,
           },
         }),
       });
@@ -121,6 +125,26 @@ export default function Settings() {
                   onChange={e => setForm({ ...form, ghlApiKey: e.target.value })}
                   className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
                   placeholder="••••••••••••••••••••••••"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-300">Podium API Token</label>
+                <input
+                  type="password"
+                  value={form.podiumApiToken}
+                  onChange={e => setForm({ ...form, podiumApiToken: e.target.value })}
+                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                  placeholder="••••••••••••••••••••••••"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-300">Podium Location ID</label>
+                <input
+                  type="text"
+                  value={form.podiumLocationId}
+                  onChange={e => setForm({ ...form, podiumLocationId: e.target.value })}
+                  className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                  placeholder="e.g. loc_abc123"
                 />
               </div>
             </>

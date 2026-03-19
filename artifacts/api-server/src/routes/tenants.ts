@@ -29,6 +29,7 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
   } else {
     result.hasIntegrationConfig = false;
   }
+  result.alertConfig = tenant.alertConfig || null;
   return result;
 }
 
@@ -95,6 +96,9 @@ router.patch("/tenants/:tenantId", requireRole("super_admin", "agency_user"), as
       }
     }
     updateData.apiConfig = encryptConfig(mergedConfig) as unknown as typeof updateData.apiConfig;
+  }
+  if (req.body.alertConfig && typeof req.body.alertConfig === "object") {
+    updateData.alertConfig = req.body.alertConfig as typeof updateData.alertConfig;
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

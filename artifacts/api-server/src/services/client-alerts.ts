@@ -74,6 +74,7 @@ async function sendClientAlertEmail(
   to: string,
   tenantName: string,
   alerts: { type: string; message: string }[],
+  senderOverride?: string,
 ): Promise<boolean> {
   const transporter = createTransporter();
   if (!transporter) {
@@ -81,7 +82,7 @@ async function sendClientAlertEmail(
     return false;
   }
 
-  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@hvaclaunch.com";
+  const fromEmail = senderOverride || process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@hvaclaunch.com";
 
   const alertRows = alerts.map(a => `
     <tr>
@@ -119,17 +120,42 @@ async function sendClientAlertEmail(
   }
 }
 
+interface TenantAlertConfig {
+  enabled?: boolean;
+  recipients?: string[];
+  agencySenderEmail?: string;
+  leadDropThreshold?: number;
+  bookingRateThreshold?: number;
+  roasThreshold?: number;
+  spendSpikeThreshold?: number;
+}
+
+function getAlertConfig(tenant: { alertConfig: unknown }): TenantAlertConfig {
+  if (tenant.alertConfig && typeof tenant.alertConfig === "object") {
+    return tenant.alertConfig as TenantAlertConfig;
+  }
+  return {};
+}
+
 export async function runClientAlertCheck(): Promise<AlertResult[]> {
   const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
   const results: AlertResult[] = [];
 
   for (const tenant of tenants) {
+    const cfg = getAlertConfig(tenant);
+    if (cfg.enabled === false) continue;
+
+    const leadDropThreshold = cfg.leadDropThreshold ?? 30;
+    const bookingRateThreshold = cfg.bookingRateThreshold ?? 30;
+    const roasThreshold = cfg.roasThreshold ?? 3;
+    const spendSpikeThreshold = cfg.spendSpikeThreshold ?? 50;
+
     const metrics = await getTenantMetrics(tenant.id);
     const alerts: { type: string; message: string }[] = [];
 
     if (metrics.previousLeadCount > 0) {
       const leadDrop = ((metrics.previousLeadCount - metrics.recentLeadCount) / metrics.previousLeadCount) * 100;
-      if (leadDrop >= 30) {
+      if (leadDrop >= leadDropThreshold) {
         alerts.push({
           type: "Lead Volume Drop",
           message: `Lead volume dropped ${leadDrop.toFixed(0)}% this week (${metrics.recentLeadCount} vs ${metrics.previousLeadCount} prior week).`,
@@ -137,23 +163,23 @@ export async function runClientAlertCheck(): Promise<AlertResult[]> {
       }
     }
 
-    if (metrics.recentBookingRate < 30 && metrics.recentLeadCount > 5) {
+    if (metrics.recentBookingRate < bookingRateThreshold && metrics.recentLeadCount > 5) {
       alerts.push({
         type: "Low Booking Rate",
-        message: `Booking rate is ${metrics.recentBookingRate.toFixed(1)}%, which is below the 30% threshold.`,
+        message: `Booking rate is ${metrics.recentBookingRate.toFixed(1)}%, which is below the ${bookingRateThreshold}% threshold.`,
       });
     }
 
-    if (metrics.recentROAS > 0 && metrics.recentROAS < 3) {
+    if (metrics.recentROAS > 0 && metrics.recentROAS < roasThreshold) {
       alerts.push({
         type: "Low ROAS",
-        message: `Return on Ad Spend is ${metrics.recentROAS.toFixed(2)}x, below the 3x target.`,
+        message: `Return on Ad Spend is ${metrics.recentROAS.toFixed(2)}x, below the ${roasThreshold}x target.`,
       });
     }
 
     if (metrics.previousSpend > 0) {
       const spendIncrease = ((metrics.recentSpend - metrics.previousSpend) / metrics.previousSpend) * 100;
-      if (spendIncrease > 50) {
+      if (spendIncrease > spendSpikeThreshold) {
         alerts.push({
           type: "Spend Spike",
           message: `Ad spend increased ${spendIncrease.toFixed(0)}% week-over-week ($${metrics.recentSpend.toFixed(0)} vs $${metrics.previousSpend.toFixed(0)}).`,
@@ -162,12 +188,20 @@ export async function runClientAlertCheck(): Promise<AlertResult[]> {
     }
 
     if (alerts.length > 0) {
-      const owners = await db.select().from(usersTable)
-        .where(and(eq(usersTable.tenantId, tenant.id), eq(usersTable.role, "client_admin")));
+      const recipientEmails: string[] = [];
+
+      if (cfg.recipients && cfg.recipients.length > 0) {
+        recipientEmails.push(...cfg.recipients);
+      } else {
+        const owners = await db.select().from(usersTable)
+          .where(and(eq(usersTable.tenantId, tenant.id), eq(usersTable.role, "client_admin")));
+        recipientEmails.push(...owners.map(o => o.email));
+      }
 
       let emailSent = false;
-      for (const owner of owners) {
-        const sent = await sendClientAlertEmail(owner.email, tenant.name, alerts);
+      const senderOverride = cfg.agencySenderEmail || undefined;
+      for (const email of recipientEmails) {
+        const sent = await sendClientAlertEmail(email, tenant.name, alerts, senderOverride);
         if (sent) emailSent = true;
       }
 

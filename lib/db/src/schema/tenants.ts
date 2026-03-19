@@ -8,6 +8,7 @@ export const tenantsTable = pgTable("tenants", {
   serviceTitanId: text("service_titan_id"),
   timezone: text("timezone").notNull().default("America/New_York"),
   apiConfig: jsonb("api_config"),
+  alertConfig: jsonb("alert_config"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

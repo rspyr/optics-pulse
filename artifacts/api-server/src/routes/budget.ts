@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, tenantsTable, campaignsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { decryptConfig } from "../lib/encryption";
 import { updateGoogleAdsCampaignBudget } from "../services/integrations/google-ads";
@@ -39,7 +39,8 @@ router.post("/budget/adjust", ...agencyOnly, async (req, res): Promise<void> => 
     return;
   }
 
-  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, campaignId));
+  const [campaign] = await db.select().from(campaignsTable)
+    .where(and(eq(campaignsTable.externalId, String(campaignId)), eq(campaignsTable.tenantId, tenantId)));
 
   try {
     if (platform.toLowerCase() === "google_ads" || platform.toLowerCase() === "google") {

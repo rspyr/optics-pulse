@@ -1,13 +1,15 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable, tenantsTable } from "@workspace/db";
+import { db, leadsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, count, sql, avg } from "drizzle-orm";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
 const DEMO_SOURCES = ["Google Ads", "Meta Leads", "CallRail", "Organic Search"];
 const DEMO_INTEREST_TYPES = ["Heat Pump", "AC Repair", "Full System", "Furnace", "Ductless Mini-Split", "Maintenance"];
-const DEMO_LEAD_TYPES = ["Fit Funnel", "Quiz", "Pop-up", "Direct"];
+const DEMO_LEAD_TYPES_FALLBACK = ["Fit Funnel", "Quiz", "Pop-up", "Direct"];
+
+let cachedFunnelTypes: Record<number, string[]> = {};
 
 function randomFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -120,6 +122,20 @@ export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>)
   }
 }
 
+async function loadFunnelTypesCache(): Promise<void> {
+  try {
+    const rows = await db.select({ tenantId: funnelTypesTable.tenantId, name: funnelTypesTable.name })
+      .from(funnelTypesTable)
+      .where(eq(funnelTypesTable.isActive, true));
+    const grouped: Record<number, string[]> = {};
+    for (const r of rows) {
+      if (!grouped[r.tenantId]) grouped[r.tenantId] = [];
+      grouped[r.tenantId].push(r.name);
+    }
+    cachedFunnelTypes = grouped;
+  } catch { /* ignore */ }
+}
+
 async function createDemoLead(): Promise<void> {
   try {
     const firstName = randomFrom(DEMO_FIRST_NAMES);
@@ -129,6 +145,11 @@ async function createDemoLead(): Promise<void> {
     if (allTenants.length === 0) return;
     const tenantId = randomFrom(allTenants).id;
 
+    const tenantFunnels = cachedFunnelTypes[tenantId];
+    const leadType = tenantFunnels && tenantFunnels.length > 0
+      ? randomFrom(tenantFunnels)
+      : randomFrom(DEMO_LEAD_TYPES_FALLBACK);
+
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
       firstName,
@@ -136,7 +157,7 @@ async function createDemoLead(): Promise<void> {
       phone: fakePhone(),
       email: fakeEmail(firstName, lastName),
       source,
-      leadType: randomFrom(DEMO_LEAD_TYPES),
+      leadType,
       interestType: randomFrom(DEMO_INTEREST_TYPES),
       status: "new",
       isNewCustomer: Math.random() > 0.3,
@@ -153,8 +174,10 @@ async function createDemoLead(): Promise<void> {
   }
 }
 
-function startDemoMode() {
+async function startDemoMode() {
   if (demoTimer) clearTimeout(demoTimer);
+
+  await loadFunnelTypesCache();
 
   const scheduleNext = () => {
     const delay = 30000 + Math.random() * 30000;
@@ -168,6 +191,8 @@ function startDemoMode() {
     createDemoLead();
     scheduleNext();
   }, 10000);
+
+  setInterval(() => loadFunnelTypesCache(), 5 * 60 * 1000);
 
   console.log("[Demo] Demo mode started — new leads every 30-60s");
 }

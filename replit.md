@@ -2,262 +2,58 @@
 
 ## Overview
 
-Full-stack Marketing OS platform for HVAC marketing agencies. Features a proprietary Attribution Engine, multi-tenant admin portal, client portal ("Searchlight Killer"), and gamified leads HUD. Built as a pnpm workspace monorepo using TypeScript.
+Marketing OS is a full-stack, monorepo platform designed for HVAC marketing agencies. Its primary purpose is to provide a comprehensive solution for managing client marketing efforts, with a strong focus on lead attribution, performance monitoring, and client reporting. Key capabilities include a proprietary Attribution Engine, a multi-tenant administration portal, a client-facing portal ("Searchlight Killer"), and a gamified leads management system. The platform aims to streamline agency operations, enhance marketing effectiveness through data-driven insights, and improve client transparency and satisfaction.
 
-## Brand System
+## User Preferences
 
-- **Midnight Sky** `#0A0F1F` — primary background
-- **Stratos** `#002D5E` — secondary blue
-- **Rebel Red** `#F20505` — accent/CTA
-- **Circuit White** `#FFFFFF` — text
-- **Steel** `#879199` — muted text
-- **Ice** `#C0D4E6` — light accent
-- **Fonts**: Söhne Extrafett (headlines, all caps) + Söhne Dreiviertelfett (subheadings) + Inter (body)
-- Dark mode only
+I prefer iterative development with clear communication on significant changes. Please ask before making major architectural decisions or introducing new external dependencies. I also prefer detailed explanations for complex features or logic.
 
-## Stack
+## System Architecture
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Frontend**: React + Vite + TailwindCSS v4 + Wouter + TanStack React Query
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
-- **Auth**: express-session + connect-pg-simple + bcryptjs
+The Marketing OS is built as a pnpm workspace monorepo using Node.js 24 and TypeScript 5.9.
 
-## Structure
+**UI/UX Decisions:**
+The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack React Query, adheres to a dark-mode-only design system. It uses a specific brand palette (Midnight Sky, Stratos, Rebel Red, Circuit White, Steel, Ice) and typography (Söhne Extrafett, Söhne Dreiviertelfett, Inter) to maintain a consistent and branded user experience.
 
-```text
-artifacts-monorepo/
-├── artifacts/
-│   ├── api-server/         # Express API server (port 8080)
-│   └── marketing-os/       # React + Vite frontend (artifact path: /)
-├── lib/
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
-│   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection + seed files
-├── attached_assets/        # PRD, Product Map, Attribution Strategy, Brand Guidelines, fonts
-├── scripts/                # Utility scripts
-├── pnpm-workspace.yaml
-├── tsconfig.base.json
-└── package.json
-```
+**Technical Implementations:**
+- **API:** An Express 5 server handles all API requests.
+- **Database:** PostgreSQL is used as the primary database, managed with Drizzle ORM.
+- **Authentication:** Session-based authentication is implemented using `express-session` with a PostgreSQL store and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) governs portal access.
+- **Real-time Features:** Socket.IO is integrated for real-time lead notifications and other interactive elements, ensuring tenant isolation.
+- **API Codegen:** OpenAPI specifications are used with Orval for generating TypeScript API clients (`api-client-react`) and Zod schemas (`api-zod`), promoting type safety and consistency.
+- **Monorepo Structure:** The project is organized into `artifacts` (containing `api-server` and `marketing-os` applications) and `lib` (for shared code like `api-spec`, `api-client-react`, `api-zod`, and `db`).
 
-## Database Schema
+**Feature Specifications:**
+- **Attribution Engine:** A 4-level waterfall attribution model (Diamond, Golden, Silver, Bronze) tracks lead sources with varying confidence levels. It includes a Reconciliation Engine that records run history, generates OCI payloads for Google Ads, and supports Enhanced Conversions.
+- **Leads HUD:** A gamified interface for lead management with real-time queues, quick actions, disposition logging, and performance statistics. Lead types are now seeded from the `funnel_types` table and the demo lead generator uses DB-backed funnel types per tenant.
+- **Media Buying Automation:** Rules-based system for managing marketing campaigns, including condition-based alerts and actions.
+- **Budget Controls:** Campaign dropdown in Agency God View fetches campaigns from DB filtered by tenant + platform (uses `externalId` for budget API calls).
+- **Client Alerts:** Per-tenant configurable alert thresholds (lead drop %, booking rate %, ROAS, spend spike %), custom email recipients with add/delete, and agency sender email override. Config stored in `tenants.alert_config` (JSONB). Falls back to `client_admin` users when no custom recipients set.
+- **Chat Analytics:** Natural language querying for data insights and contextual suggestions.
+- **Client Portal:** A "Searchlight Killer" dashboard providing clients with KPIs, financial transparency, bottleneck identification, and chat analytics.
 
-Tables: `tenants`, `users`, `leads`, `jobs`, `campaigns`, `campaign_daily_stats`, `attribution_events`, `session`, `change_logs`, `reconciliation_runs`, `integration_sync_logs`, `saved_questions`, `training_items`, `training_dismissals`, `training_email_logs`, `training_purchases`, `automation_rules`, `automation_alerts`
-Enums: `lead_status`, `job_status`, `event_type`, `match_level`, `user_role`, `automation_condition`, `automation_action`
-User roles: `super_admin`, `agency_user`, `client_admin`, `client_user`
+**System Design Choices:**
+- **Modularity:** The monorepo structure with pnpm workspaces promotes code reuse and separation of concerns.
+- **Scalability:** The architecture supports multi-tenancy, allowing for efficient management of multiple client accounts.
+- **Data Security:** API credentials and sensitive tenant configurations are stored encrypted (AES-256-GCM).
 
-## Authentication
+## External Dependencies
 
-- Session-based auth using `express-session` with PostgreSQL session store (`connect-pg-simple`)
-- Passwords hashed with `bcryptjs`
-- Session cookie name: `mos.sid` (7-day expiry)
-- Role-based access: super_admin/agency_user see full admin portal; client_admin/client_user see limited portal
-- Demo users seeded via `npx tsx lib/db/seed-users.ts` (password: demo1234)
-
-## API Endpoints
-
-All under `/api` prefix:
-
-### Auth
-- `POST /auth/login` — login with email/password, returns user
-- `POST /auth/logout` — destroy session
-- `GET /auth/me` — get current authenticated user
-
-### Admin
-- `GET /admin/users` — list all users
-- `POST /admin/users` — create user (email, name, password, role, tenantId)
-- `PATCH /admin/users/:userId` — update user
-- `GET /admin/dashboard-stats` — aggregated per-tenant stats with budget pacing and agency averages
-
-### Tenants
-- `GET /tenants` — list tenants
-- `POST /tenants` — create tenant
-- `GET /tenants/:tenantId` — get tenant
-- `PATCH /tenants/:tenantId` — update tenant
-- `DELETE /tenants/:tenantId` — soft-delete (deactivate)
-
-### Leads HUD
-- `GET /leads/hud/queue` — categorized lead queue (new, follow-ups, background) for HUD focus queue
-- `GET /leads/hud/stats` — coordinator performance stats (calls, bookings, booking rate, commission, speed-to-lead)
-
-### Data
-- `GET /leads`, `GET /leads/:leadId`, `PATCH /leads/:leadId` — leads with filtering
-- `GET /campaigns`, `GET /campaigns/stats` — campaigns and daily stats
-- `GET /attribution/events` — attribution events with match level filtering
-- `POST /attribution/reconcile` — run waterfall reconciliation engine (records run history, generates OCI payloads)
-- `GET /attribution/reconciliation-status` — get latest/recent reconciliation runs and next scheduled time
-- `GET /attribution/oci-payloads` — generate OCI payloads for Google Ads upload (agency only)
-- `GET /jobs` — jobs with status filtering
-- `POST /webhooks/ingest` — webhook ingestion (CallRail, GHL, form, manual) with HMAC verification; CallRail-specific signature verification via per-tenant signing key
-
-### Integrations
-- `POST /integrations/sync/:integration` — trigger manual sync (service_titan, google_ads, meta) for a tenant
-- `GET /integrations/sync-status` — sync status dashboard with per-integration last sync time, record counts, error counts
-- `GET /integrations/tenant-config/:tenantId` — check which integrations are configured per tenant
-
-### Chat Analytics
-- `POST /chat/ask` — submit a natural language question, returns formatted answer with data
-- `GET /chat/suggestions` — contextual suggested questions based on data patterns (CPL changes, booking rates, etc.)
-- `GET /chat/saved-questions` — list user's saved questions
-- `POST /chat/saved-questions` — save a question
-- `DELETE /chat/saved-questions/:id` — remove a saved question
-
-### Leaderboards
-- `GET /admin/leaderboard?metric=closeRate|revenue|cpl|bookingRate` — cross-client ranked leaderboard with period-over-period trends, agency average benchmark, outlier detection (1.5σ), and per-tenant product purchases
-
-### Media Buying Automation
-- `GET /automation/rules` — list all automation rules (agency only)
-- `POST /automation/rules` — create automation rule (name, conditionType, conditionValue, actionType, platform?, tenantId?)
-- `PUT /automation/rules/:id` — update rule
-- `PATCH /automation/rules/:id/toggle` — toggle rule enabled/disabled
-- `DELETE /automation/rules/:id` — delete rule and its alerts
-- `GET /automation/alerts` — list alerts (filter by acknowledged=true|false)
-- `PATCH /automation/alerts/:id/acknowledge` — acknowledge alert
-- `GET /automation/alerts/count` — unacknowledged alert count
-- Condition types: `spend_below`, `spend_above`, `days_active_above`, `conversions_below`, `cpl_above`, `roas_below`
-- Action types: `send_alert`, `flag_for_review`, `auto_pause` (v1: alert-only, no direct API actioning)
-- Scheduled evaluation engine runs every 60 minutes; deduplicates alerts within 24-hour windows
-
-### Dashboard
-- `GET /dashboard/overview` — KPI overview with previousPeriod comparison data
-- `GET /dashboard/spend-revenue` — daily spend vs revenue chart data (supports date range filtering)
-- `GET /dashboard/tenant-performance` — cross-client benchmarking
-
-### Change Logs
-- `GET /change-logs` — list change log entries (by tenantId + date range)
-- `POST /change-logs` — create change log entry (agency only)
-
-## Attribution Engine (4-Level Waterfall)
-
-1. **Diamond** — GCLID/WBRAID direct match (confidence: 1.0)
-2. **Golden** — hashedPhone + timestamp fuzzy (confidence: 0.9)
-3. **Silver** — hashedEmail match (confidence: 0.8)
-4. **Bronze** — billingAddress household match (confidence: 0.6)
-5. **Unmatched** — no match found
-
-### Reconciliation Engine
-- Extracted waterfall logic into `artifacts/api-server/src/services/reconciliation.ts`
-- Records each run in `reconciliation_runs` table with per-level match counts, match rate, trigger type (manual/scheduled), status, and timing
-- Generates OCI (Offline Conversion Import) payloads for matched jobs with GCLIDs — ready for Google Ads API upload
-- Nightly cron scheduler (`services/cron.ts`) runs at 3:00 AM daily, processing all tenants sequentially
-- Command Center UI panel shows latest run breakdown (Diamond/Golden/Silver/Bronze/Match Rate), run history with trigger badges, next scheduled time, and manual "Run Now" button
-
-## External API Integrations
-
-### API Client Modules (`artifacts/api-server/src/services/integrations/`)
-- **ServiceTitan** — `service-titan.ts`: OAuth2 client credentials auth, token caching, completed job fetch with pagination, custom field PATCH for attribution GCLID writeback, token bucket rate limiter (10 tokens, 5/sec refill)
-- **Google Ads** — `google-ads.ts`: Campaign performance fetch via GAQL, OCI (Offline Conversion Import) upload for matched conversions, uses developer token + access token auth
-- **Meta Marketing** — `meta.ts`: Campaign insights fetch with date range + pagination, CAPI (Conversions API) server-side event upload for lead events, Pixel ID scoped
-- **CallRail** — `callrail.ts`: HMAC-SHA256 webhook signature verification using per-tenant signing key from encrypted config
-- **Rate Limiter** — `rate-limiter.ts`: Generic token bucket rate limiter + exponential backoff retry utility (used by all API clients)
-
-### Sync Scheduler (`artifacts/api-server/src/services/sync-scheduler.ts`)
-- ServiceTitan jobs sync: every 15 minutes (upsert by stJobId)
-- Google Ads + Meta campaign stats sync: every 60 minutes
-- All syncs logged to `integration_sync_logs` table with status, record counts, error messages
-- Per-tenant API credentials stored encrypted in `tenants.apiConfig` (AES-256-GCM)
-
-### Enhanced Conversions Fallback
-- For jobs matched at golden/silver/bronze level without GCLID, the reconciliation engine builds Enhanced Conversions payloads using hashed email/phone from matching leads
-- Uploaded via Google Ads `uploadEnhancedConversions()` as a fallback to standard OCI (which requires GCLID)
-- Logged to `integration_sync_logs` with syncType `enhanced_conversions`
-
-### Budget Controls
-- `POST /budget/adjust` — adjust Google Ads campaign or Meta ad set daily budget (agency only)
-- Server-side validation: `newDailyBudget` must be a finite non-negative number
-- Budget Controls UI section in Agency God View (`/internal`)
-
-### Podium Integration
-- `artifacts/api-server/src/services/integrations/podium.ts` — Podium API client for review sync
-- `GET /reviews`, `GET /reviews/stats`, `GET /reviews/leaderboard` — review data endpoints
-- `POST /webhooks/podium?tenantId=X` — Podium webhook handler
-- Review sync scheduled every 6 hours via sync-scheduler
-
-### Proactive Client Alerts
-- `artifacts/api-server/src/services/client-alerts.ts` — weekly Monday scheduler
-- Monitors lead drop, booking rate, ROAS, spend spikes per tenant
-- Sends branded email alerts to client users
-
-### Training Purchase Flow
-- `POST /training/purchase/:id` — purchase a paid training course (records to DB)
-- `GET /training/purchases` — list current user's purchases
-- Training Resources page shows purchase state and allows direct purchase
-
-### Tenant Integration Config Fields
-Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanClientSecret`, `serviceTitanTenantId`, `googleAdsApiKey`, `googleAdsAccessToken`, `googleAdsDeveloperToken`, `googleAdsCustomerId`, `googleAdsLoginCustomerId`, `metaAccessToken`, `metaAdAccountId`, `metaPixelId`, `callRailApiKey`, `callRailSigningKey`, `ghlApiKey`
-
-## Frontend Pages
-
-### Agency Portal (super_admin, agency_user)
-- `/` — Command Center dashboard (KPI cards + spend vs revenue chart)
-- `/internal` — Agency God View: sortable cross-client table with conditional red/green formatting, ROAS filter, budget pacing bars, benchmarking vs agency average, click-to-drill-down lead modal
-- `/leads` — Gamified Leads HUD: Focus Queue with real-time lead cards (countdown timers, source badges, priority sorting), Quick Actions (click-to-dial, SMS, email, voicemail script), disposition logging (Booked, Never Answered, Out of Area, etc.), commission ticker (+$20 animation on booking), performance stats (calls, bookings, booking rate, speed-to-lead, earned), smart queue tabs (New Leads / Touch These / Background), AI scheduling hints, screen flash + ding on new lead arrival via WebSocket
-- `/clients` — Client Portal preview
-- `/attribution` — Attribution Log (event ingestion & matching waterfall)
-- `/admin/tenants` — Tenant management (CRUD with inline edit)
-- `/admin/users` — User management (CRUD with role assignment)
-- `/admin/change-logs` — Change Log CRUD management
-- `/admin/funnels` — Funnel Type management + Script Generator + Heartbeat Health
-- `/automation` — Media Buying Automation: rule management (create/edit/toggle/delete), alerts feed with acknowledge flow, scheduled engine evaluation
-- `/settings` — System configuration (integration API keys, GHL config, capture script with clipboard copy)
-- `/training` — Training & Resources with purchase flow
-
-### Client Portal (client_admin, client_user) — "Searchlight Killer"
-- `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart, Chat Analytics drawer ("Ask Your Data")
-- `/leads` — Leads HUD (same gamified interface as agency, scoped to client's tenant)
-- `/attribution` — Attribution Log
-- `/settings` — Settings
-
-## Seed Data
-
-Run `npx tsx lib/db/seed.ts` to populate demo data, then `npx tsx lib/db/seed-users.ts` for users:
-- 2 tenants (Apex HVAC, Nordic Climate Solutions)
-- 7 demo users (3 agency, 4 client)
-- 6 campaigns (Google + Meta per tenant)
-- 31 days of daily stats (186 rows)
-- 80 leads with varied statuses
-- 28 jobs linked to booked/sold leads
-- 120 attribution events across all match levels
-- 10 change log entries (marketing changes with dates + descriptions)
-
-## TypeScript & Composite Projects
-
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. Run `pnpm run typecheck` from root.
-
-## Packages
-
-## WebSocket (Socket.IO)
-
-- Socket.IO server attached to the HTTP server via `src/socket.ts`
-- Path: `/api/socket.io`
-- Session middleware shared with Express for authentication
-- Unauthenticated connections are rejected
-- Tenant isolation: clients can only join their own tenant room; agency/admin can join any
-- Events: `new-lead` (emitted to tenant room when new lead arrives), `join-tenant` (client joins tenant room)
-- Demo mode: in development (`NODE_ENV !== 'production'`), auto-creates new leads every 30-60s
-
-### `artifacts/api-server` (`@workspace/api-server`)
-Express 5 API server. Routes in `src/routes/`. Uses `@workspace/api-zod` for validation and `@workspace/db` for persistence. Session middleware with PostgreSQL store. Socket.IO for real-time lead notifications.
-
-### `artifacts/marketing-os` (`@workspace/marketing-os`)
-React + Vite frontend. Dark mode only, branded with Söhne fonts. Uses `@workspace/api-client-react` for API calls. Auth context provides role-based routing.
-
-### `lib/db` (`@workspace/db`)
-Drizzle ORM with PostgreSQL. Exports db client, pool, and schema models. Seed scripts at `lib/db/seed.ts` and `lib/db/seed-users.ts`.
-
-### `lib/api-spec` (`@workspace/api-spec`)
-OpenAPI 3.1 spec and Orval codegen config. Run `pnpm --filter @workspace/api-spec run codegen`.
-
-### `lib/api-zod` (`@workspace/api-zod`)
-Generated Zod schemas from OpenAPI spec.
-
-### `lib/api-client-react` (`@workspace/api-client-react`)
-Generated React Query hooks and fetch client from OpenAPI spec.
+- **ServiceTitan:** OAuth2 client for fetching completed jobs, applying custom field patches, and utilizing a token bucket rate limiter.
+- **Google Ads API:** Used for campaign performance data (GAQL), Offline Conversion Import (OCI), and Enhanced Conversions uploads. Requires developer token and access token authentication.
+- **Meta Marketing API:** For fetching campaign insights and server-side event uploads via Conversions API (CAPI).
+- **CallRail API:** Webhook ingestion with HMAC-SHA256 signature verification using tenant-specific signing keys.
+- **Podium API:** For review data synchronization and webhook handling.
+- **PostgreSQL:** Primary database.
+- **Express:** Web application framework for the API server.
+- **React:** Frontend library.
+- **Vite:** Frontend build tool.
+- **TailwindCSS:** Utility-first CSS framework.
+- **Wouter:** Lightweight React router.
+- **TanStack React Query:** Data fetching and caching library.
+- **Zod:** Schema declaration and validation library.
+- **Drizzle ORM:** TypeScript ORM for PostgreSQL.
+- **Orval:** OpenAPI client code generator.
+- **Socket.IO:** WebSocket library for real-time communication.
+- **bcryptjs:** Library for hashing passwords.
+- **express-session & connect-pg-simple:** For session management and PostgreSQL session store.

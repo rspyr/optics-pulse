@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2 } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -17,7 +17,29 @@ interface TenantForm {
   metaPixelId: string;
   googleAdsCustomerId: string;
   googleAdsDeveloperToken: string;
+  podiumApiToken: string;
+  podiumLocationId: string;
 }
+
+interface AlertConfig {
+  enabled: boolean;
+  recipients: string[];
+  agencySenderEmail: string;
+  leadDropThreshold: number;
+  bookingRateThreshold: number;
+  roasThreshold: number;
+  spendSpikeThreshold: number;
+}
+
+const defaultAlertConfig: AlertConfig = {
+  enabled: true,
+  recipients: [],
+  agencySenderEmail: "",
+  leadDropThreshold: 30,
+  bookingRateThreshold: 30,
+  roasThreshold: 3,
+  spendSpikeThreshold: 50,
+};
 
 const emptyForm: TenantForm = {
   name: "",
@@ -33,6 +55,8 @@ const emptyForm: TenantForm = {
   metaPixelId: "",
   googleAdsCustomerId: "",
   googleAdsDeveloperToken: "",
+  podiumApiToken: "",
+  podiumLocationId: "",
 };
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -78,6 +102,8 @@ export default function AdminTenants() {
     if (form.metaAccessToken) config.metaAccessToken = form.metaAccessToken;
     if (form.metaAdAccountId) config.metaAdAccountId = form.metaAdAccountId;
     if (form.metaPixelId) config.metaPixelId = form.metaPixelId;
+    if (form.podiumApiToken) config.podiumApiToken = form.podiumApiToken;
+    if (form.podiumLocationId) config.podiumLocationId = form.podiumLocationId;
     return Object.keys(config).length > 0 ? config : undefined;
   };
 
@@ -144,6 +170,8 @@ export default function AdminTenants() {
       metaAccessToken: "",
       metaAdAccountId: "",
       metaPixelId: "",
+      podiumApiToken: "",
+      podiumLocationId: "",
     });
     setShowIntegrationConfig(false);
   };
@@ -222,6 +250,19 @@ export default function AdminTenants() {
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Webhook Signing Key</label>
                 <input type="password" value={form.callRailSigningKey} onChange={(e) => setForm(f => ({ ...f, callRailSigningKey: e.target.value }))} placeholder="HMAC verification key" className={inputClass + " w-full"} />
+              </div>
+            </div>
+          </div>
+          <div>
+            <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3">Podium</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Token</label>
+                <input type="password" value={form.podiumApiToken} onChange={(e) => setForm(f => ({ ...f, podiumApiToken: e.target.value }))} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Location ID</label>
+                <input type="text" value={form.podiumLocationId} onChange={(e) => setForm(f => ({ ...f, podiumLocationId: e.target.value }))} placeholder="e.g. loc_abc123" className={inputClass + " w-full"} />
               </div>
             </div>
           </div>
@@ -423,6 +464,201 @@ export default function AdminTenants() {
           </div>
         </PremiumCard>
       )}
+
+      <AlertConfigSection tenants={tenants || []} apiBase={API_BASE} />
     </div>
+  );
+}
+
+function AlertConfigSection({ tenants, apiBase }: { tenants: unknown[]; apiBase: string }) {
+  const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
+  const [config, setConfig] = useState<AlertConfig>({ ...defaultAlertConfig });
+  const [newEmail, setNewEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!selectedTenantId) return;
+    setLoading(true);
+    fetch(`${apiBase}/api/tenants/${selectedTenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then((data: Record<string, unknown>) => {
+        const ac = data.alertConfig as AlertConfig | null;
+        setConfig(ac ? { ...defaultAlertConfig, ...ac } : { ...defaultAlertConfig });
+      })
+      .catch(() => setConfig({ ...defaultAlertConfig }))
+      .finally(() => setLoading(false));
+  }, [selectedTenantId, apiBase]);
+
+  const handleSave = async () => {
+    if (!selectedTenantId) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${apiBase}/api/tenants/${selectedTenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alertConfig: config }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
+  const addRecipient = () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email || !email.includes("@") || config.recipients.includes(email)) return;
+    setConfig(c => ({ ...c, recipients: [...c.recipients, email] }));
+    setNewEmail("");
+  };
+
+  const removeRecipient = (email: string) => {
+    setConfig(c => ({ ...c, recipients: c.recipients.filter(e => e !== email) }));
+  };
+
+  const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
+
+  return (
+    <PremiumCard className="p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <Bell className="w-5 h-5 text-amber-400" />
+        <h3 className="font-display text-lg text-white">Client Alert Configuration</h3>
+      </div>
+
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground uppercase tracking-wider">Select Tenant</label>
+            <select
+              value={selectedTenantId}
+              onChange={(e) => setSelectedTenantId(e.target.value ? Number(e.target.value) : "")}
+              className={inputClass + " w-full"}
+            >
+              <option value="">Choose tenant...</option>
+              {tenants.map((t) => {
+                const tenant = t as Record<string, unknown>;
+                return <option key={tenant.id as number} value={tenant.id as number}>{tenant.name as string}</option>;
+              })}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.enabled}
+                onChange={(e) => setConfig(c => ({ ...c, enabled: e.target.checked }))}
+                className="w-4 h-4 rounded border-white/20 accent-primary"
+              />
+              <span className="text-sm text-white">Alerts Enabled</span>
+            </label>
+          </div>
+        </div>
+
+        {selectedTenantId && !loading && (
+          <>
+            <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
+              <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                <Mail className="w-3.5 h-3.5" /> Email Recipients
+              </h4>
+              <div className="flex gap-2">
+                <input
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addRecipient()}
+                  placeholder="Add email address"
+                  className={inputClass + " flex-1"}
+                />
+                <button onClick={addRecipient} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm">
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+              {config.recipients.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {config.recipients.map((email) => (
+                    <span key={email} className="inline-flex items-center gap-1 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-sm text-white">
+                      {email}
+                      <button onClick={() => removeRecipient(email)} className="text-muted-foreground hover:text-red-400">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No recipients — alerts will be sent to tenant client_admin users by default.</p>
+              )}
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground uppercase tracking-wider">Agency Sender Email</label>
+                <input
+                  value={config.agencySenderEmail}
+                  onChange={(e) => setConfig(c => ({ ...c, agencySenderEmail: e.target.value }))}
+                  placeholder="e.g. alerts@hvaclaunch.com (defaults to SMTP_FROM)"
+                  className={inputClass + " w-full"}
+                />
+              </div>
+            </div>
+
+            <div className="border border-white/10 rounded-lg p-4 bg-background/30">
+              <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider mb-3">Alert Thresholds</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Lead Drop %</label>
+                  <input
+                    type="number"
+                    min="0" max="100"
+                    value={config.leadDropThreshold}
+                    onChange={(e) => setConfig(c => ({ ...c, leadDropThreshold: Number(e.target.value) }))}
+                    className={inputClass + " w-full"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Min Booking Rate %</label>
+                  <input
+                    type="number"
+                    min="0" max="100"
+                    value={config.bookingRateThreshold}
+                    onChange={(e) => setConfig(c => ({ ...c, bookingRateThreshold: Number(e.target.value) }))}
+                    className={inputClass + " w-full"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Min ROAS (x)</label>
+                  <input
+                    type="number"
+                    min="0" step="0.1"
+                    value={config.roasThreshold}
+                    onChange={(e) => setConfig(c => ({ ...c, roasThreshold: Number(e.target.value) }))}
+                    className={inputClass + " w-full"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Spend Spike %</label>
+                  <input
+                    type="number"
+                    min="0" max="500"
+                    value={config.spendSpikeThreshold}
+                    onChange={(e) => setConfig(c => ({ ...c, spendSpikeThreshold: Number(e.target.value) }))}
+                    className={inputClass + " w-full"}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+              {saved ? "Saved!" : "Save Alert Config"}
+            </button>
+          </>
+        )}
+        {loading && <div className="text-sm text-muted-foreground">Loading alert config...</div>}
+      </div>
+    </PremiumCard>
   );
 }

@@ -468,6 +468,20 @@ function BudgetControlsSection({ tenants, apiBase }: { tenants: Array<{ tenantId
   const [newBudget, setNewBudget] = useState("");
   const [adjusting, setAdjusting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [campaigns, setCampaigns] = useState<Array<{ id: number; name: string; externalId: string; platform: string }>>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedTenant) { setCampaigns([]); setCampaignId(""); return; }
+    setCampaignsLoading(true);
+    setCampaignId("");
+    const platformParam = platform === "google_ads" ? "google" : "meta";
+    fetch(`${apiBase}/api/campaigns?tenantId=${selectedTenant}&platform=${platformParam}`, { credentials: "include" })
+      .then(r => r.json())
+      .then((data: Array<{ id: number; name: string; externalId: string; platform: string }>) => setCampaigns(Array.isArray(data) ? data : []))
+      .catch(() => setCampaigns([]))
+      .finally(() => setCampaignsLoading(false));
+  }, [selectedTenant, platform, apiBase]);
 
   const handleAdjust = async () => {
     if (!selectedTenant || !campaignId || !newBudget) return;
@@ -525,13 +539,18 @@ function BudgetControlsSection({ tenants, apiBase }: { tenants: Array<{ tenantId
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground uppercase tracking-wider">Campaign / Ad Set ID</label>
-          <input
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Campaign</label>
+          <select
             value={campaignId}
             onChange={(e) => setCampaignId(e.target.value)}
-            placeholder="e.g. 12345678"
-            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-          />
+            disabled={!selectedTenant || campaignsLoading}
+            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
+          >
+            <option value="">{campaignsLoading ? "Loading..." : !selectedTenant ? "Select client first" : campaigns.length === 0 ? "No campaigns" : "Select campaign"}</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.externalId}>{c.name} ({c.externalId})</option>
+            ))}
+          </select>
         </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground uppercase tracking-wider">New Daily Budget ($)</label>

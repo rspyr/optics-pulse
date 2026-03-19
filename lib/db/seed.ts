@@ -1,4 +1,4 @@
-import { db, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, changeLogsTable } from "./src";
+import { db, tenantsTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, changeLogsTable, funnelTypesTable } from "./src";
 import crypto from "crypto";
 
 const FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher", "Ashley", "Matthew", "Nicole", "Andrew", "Stephanie"];
@@ -82,6 +82,26 @@ async function seed() {
   await db.insert(campaignDailyStatsTable).values(dailyStats);
   console.log(`Created ${dailyStats.length} daily stat rows`);
 
+  const funnelTypeDefs = [
+    { tenantId: t1.id, name: "Fit Funnel", slug: "fit-funnel", description: "Multi-step quiz funnel qualifying homeowner HVAC needs" },
+    { tenantId: t1.id, name: "Emergency Repair", slug: "emergency-repair", description: "Direct high-intent emergency service landing page" },
+    { tenantId: t1.id, name: "Financing Quiz", slug: "financing-quiz", description: "Monthly payment calculator with pre-qualification" },
+    { tenantId: t1.id, name: "Seasonal Promo", slug: "seasonal-promo", description: "Limited-time seasonal discount offer funnel" },
+    { tenantId: t2.id, name: "Fit Funnel", slug: "fit-funnel", description: "Multi-step quiz funnel qualifying homeowner HVAC needs" },
+    { tenantId: t2.id, name: "Home Assessment", slug: "home-assessment", description: "Full-home energy audit and HVAC assessment request" },
+    { tenantId: t2.id, name: "Referral Program", slug: "referral-program", description: "Customer referral incentive landing page" },
+    { tenantId: t2.id, name: "AC Tune-Up", slug: "ac-tune-up", description: "Spring AC maintenance special offer" },
+  ];
+  const funnelTypes = [];
+  for (const ft of funnelTypeDefs) {
+    const [ftype] = await db.insert(funnelTypesTable).values(ft).returning();
+    funnelTypes.push(ftype);
+  }
+  console.log(`Created ${funnelTypes.length} funnel types`);
+
+  const t1FunnelTypes = funnelTypes.filter(ft => ft.tenantId === t1.id);
+  const t2FunnelTypes = funnelTypes.filter(ft => ft.tenantId === t2.id);
+
   const tenantIds = [t1.id, t2.id];
   const leads = [];
   for (let i = 0; i < 80; i++) {
@@ -94,6 +114,8 @@ async function seed() {
     const status = randomFrom(LEAD_STATUSES);
     const gclid = source === "Google Ads" ? fakeGclid() : null;
     const createdAt = randomDate(30);
+    const tenantFunnels = tenantId === t1.id ? t1FunnelTypes : t2FunnelTypes;
+    const funnelType = randomFrom(tenantFunnels);
 
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
@@ -102,7 +124,7 @@ async function seed() {
       phone,
       email,
       source,
-      leadType: source.includes("Ads") ? "paid" : "organic",
+      leadType: funnelType.name,
       interestType: randomFrom(INTEREST_TYPES),
       status,
       isNewCustomer: Math.random() > 0.3,
@@ -170,16 +192,16 @@ async function seed() {
   console.log(`Created ${events.length} attribution events`);
 
   const changeLogEntries = [
-    { tenantId: tenant1.id, date: new Date(Date.now() - 25 * 86400000).toISOString().split("T")[0], title: "Launched Google Performance Max", description: "Switched from standard search to Performance Max campaign targeting HVAC install keywords across Google properties.", category: "campaign" },
-    { tenantId: tenant1.id, date: new Date(Date.now() - 20 * 86400000).toISOString().split("T")[0], title: "Updated Meta Lead Form", description: "Reduced lead form fields from 8 to 4. Added instant form pre-fill for returning visitors.", category: "creative" },
-    { tenantId: tenant1.id, date: new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0], title: "Budget Increase: Google Ads", description: "Increased daily budget from $150 to $250 based on strong ROAS performance over last 14 days.", category: "budget" },
-    { tenantId: tenant1.id, date: new Date(Date.now() - 10 * 86400000).toISOString().split("T")[0], title: "New Landing Page: Heat Pump", description: "Deployed dedicated heat pump landing page with video testimonial and financing calculator.", category: "creative" },
-    { tenantId: tenant1.id, date: new Date(Date.now() - 5 * 86400000).toISOString().split("T")[0], title: "Paused Low-Performing Ad Sets", description: "Paused 3 Meta ad sets with CPL above $200. Reallocated budget to top-performing lookalike audiences.", category: "campaign" },
-    { tenantId: tenant2.id, date: new Date(Date.now() - 22 * 86400000).toISOString().split("T")[0], title: "Launched Fit Funnel Campaign", description: "Deployed new multi-step quiz funnel targeting homeowners with aging HVAC systems.", category: "campaign" },
-    { tenantId: tenant2.id, date: new Date(Date.now() - 18 * 86400000).toISOString().split("T")[0], title: "Google Ads: Negative Keywords Update", description: "Added 45 negative keywords to eliminate commercial/DIY search traffic waste.", category: "campaign" },
-    { tenantId: tenant2.id, date: new Date(Date.now() - 12 * 86400000).toISOString().split("T")[0], title: "New Video Creative", description: "Launched 3 new 15-second video ads featuring customer testimonials for Meta placement.", category: "creative" },
-    { tenantId: tenant2.id, date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased overall ad budget by 20% ahead of spring HVAC season.", category: "budget" },
-    { tenantId: tenant2.id, date: new Date(Date.now() - 3 * 86400000).toISOString().split("T")[0], title: "A/B Test: Landing Page CTAs", description: "Started A/B test comparing 'Get Free Estimate' vs 'Schedule Your Consultation' CTAs.", category: "creative" },
+    { tenantId: t1.id, date: new Date(Date.now() - 25 * 86400000).toISOString().split("T")[0], title: "Launched Google Performance Max", description: "Switched from standard search to Performance Max campaign targeting HVAC install keywords across Google properties.", category: "campaign" },
+    { tenantId: t1.id, date: new Date(Date.now() - 20 * 86400000).toISOString().split("T")[0], title: "Updated Meta Lead Form", description: "Reduced lead form fields from 8 to 4. Added instant form pre-fill for returning visitors.", category: "creative" },
+    { tenantId: t1.id, date: new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0], title: "Budget Increase: Google Ads", description: "Increased daily budget from $150 to $250 based on strong ROAS performance over last 14 days.", category: "budget" },
+    { tenantId: t1.id, date: new Date(Date.now() - 10 * 86400000).toISOString().split("T")[0], title: "New Landing Page: Heat Pump", description: "Deployed dedicated heat pump landing page with video testimonial and financing calculator.", category: "creative" },
+    { tenantId: t1.id, date: new Date(Date.now() - 5 * 86400000).toISOString().split("T")[0], title: "Paused Low-Performing Ad Sets", description: "Paused 3 Meta ad sets with CPL above $200. Reallocated budget to top-performing lookalike audiences.", category: "campaign" },
+    { tenantId: t2.id, date: new Date(Date.now() - 22 * 86400000).toISOString().split("T")[0], title: "Launched Fit Funnel Campaign", description: "Deployed new multi-step quiz funnel targeting homeowners with aging HVAC systems.", category: "campaign" },
+    { tenantId: t2.id, date: new Date(Date.now() - 18 * 86400000).toISOString().split("T")[0], title: "Google Ads: Negative Keywords Update", description: "Added 45 negative keywords to eliminate commercial/DIY search traffic waste.", category: "campaign" },
+    { tenantId: t2.id, date: new Date(Date.now() - 12 * 86400000).toISOString().split("T")[0], title: "New Video Creative", description: "Launched 3 new 15-second video ads featuring customer testimonials for Meta placement.", category: "creative" },
+    { tenantId: t2.id, date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased overall ad budget by 20% ahead of spring HVAC season.", category: "budget" },
+    { tenantId: t2.id, date: new Date(Date.now() - 3 * 86400000).toISOString().split("T")[0], title: "A/B Test: Landing Page CTAs", description: "Started A/B test comparing 'Get Free Estimate' vs 'Schedule Your Consultation' CTAs.", category: "creative" },
   ];
   await db.insert(changeLogsTable).values(changeLogEntries);
   console.log(`Created ${changeLogEntries.length} change log entries`);
