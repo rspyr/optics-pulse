@@ -132,10 +132,10 @@ router.patch("/tenants/:tenantId", async (req, res) => {
         mergedConfig[key] = val;
       }
     }
-    updateData.apiConfig = encryptConfig(mergedConfig) as unknown as typeof updateData.apiConfig;
+    (updateData as Record<string, unknown>).apiConfig = encryptConfig(mergedConfig);
   }
   if (req.body.alertConfig && typeof req.body.alertConfig === "object") {
-    updateData.alertConfig = req.body.alertConfig as typeof updateData.alertConfig;
+    (updateData as Record<string, unknown>).alertConfig = req.body.alertConfig;
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

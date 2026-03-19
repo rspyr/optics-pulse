@@ -75,7 +75,7 @@ export default function Settings() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          serviceTitanId: form.serviceTitanId || null,
+          ...(form.serviceTitanId ? { serviceTitanId: form.serviceTitanId } : {}),
           ...(Object.keys(integrationConfig).length > 0 ? { integrationConfig } : {}),
         }),
       });
@@ -141,8 +141,9 @@ export default function Settings() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
             <input
-              type="password"
+              type={dirtyFields.has("ghlApiKey") ? "password" : "text"}
               value={form.ghlApiKey}
+              onFocus={() => { if (!dirtyFields.has("ghlApiKey") && form.ghlApiKey.startsWith("••••")) { setForm({ ...form, ghlApiKey: "" }); trackField("ghlApiKey"); } }}
               onChange={e => { trackField("ghlApiKey"); setForm({ ...form, ghlApiKey: e.target.value }); }}
               className={inputClass}
               placeholder="Enter to update"
@@ -151,8 +152,9 @@ export default function Settings() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">Podium API Token</label>
             <input
-              type="password"
+              type={dirtyFields.has("podiumApiToken") ? "password" : "text"}
               value={form.podiumApiToken}
+              onFocus={() => { if (!dirtyFields.has("podiumApiToken") && form.podiumApiToken.startsWith("••••")) { setForm({ ...form, podiumApiToken: "" }); trackField("podiumApiToken"); } }}
               onChange={e => { trackField("podiumApiToken"); setForm({ ...form, podiumApiToken: e.target.value }); }}
               className={inputClass}
               placeholder="Enter to update"
