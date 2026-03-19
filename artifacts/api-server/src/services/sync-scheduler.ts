@@ -4,6 +4,7 @@ import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
+import { syncPodiumReviews } from "./integrations/podium";
 
 interface TenantApiConfig {
   serviceTitanClientId?: string;
@@ -13,11 +14,14 @@ interface TenantApiConfig {
   googleAdsDeveloperToken?: string;
   googleAdsCustomerId?: string;
   googleAdsLoginCustomerId?: string;
+  googleAdsAccessToken?: string;
   metaAccessToken?: string;
   metaAdAccountId?: string;
   metaPixelId?: string;
   callRailApiKey?: string;
   callRailSigningKey?: string;
+  podiumApiToken?: string;
+  podiumLocationId?: string;
 }
 
 function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiConfig | null {
@@ -267,8 +271,23 @@ export function startSyncScheduler() {
     }
   }, campaignSyncInterval);
 
-  syncTimers = [jobsTimer, campaignTimer];
-  console.log("[SyncScheduler] Started: jobs every 15min, campaigns every 60min");
+  const reviewSyncInterval = 6 * 60 * 60 * 1000;
+  const reviewTimer = setInterval(async () => {
+    console.log("[SyncScheduler] Starting Podium review sync for all tenants");
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      const config = getTenantConfig(tenant);
+      if (config?.podiumApiToken && config?.podiumLocationId) {
+        await syncPodiumReviews(tenant.id, {
+          apiToken: config.podiumApiToken,
+          locationId: config.podiumLocationId,
+        });
+      }
+    }
+  }, reviewSyncInterval);
+
+  syncTimers = [jobsTimer, campaignTimer, reviewTimer];
+  console.log("[SyncScheduler] Started: jobs every 15min, campaigns every 60min, reviews every 6hr");
 }
 
 export function stopSyncScheduler() {

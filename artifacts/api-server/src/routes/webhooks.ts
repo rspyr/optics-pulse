@@ -5,7 +5,10 @@ import crypto from "crypto";
 import { eq } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { verifyCallRailSignature } from "../services/integrations/callrail";
+import { parseGHLWebhookPayload } from "../services/integrations/ghl";
+import { parsePodiumWebhookPayload } from "../services/integrations/podium";
 import { decryptConfig } from "../lib/encryption";
+import { reviewsTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -105,6 +108,87 @@ router.post("/webhooks/ingest", async (req, res) => {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to process webhook";
     res.status(400).json({ success: false, eventId: 0, message });
+  }
+});
+
+router.post("/webhooks/ghl", async (req, res) => {
+  try {
+    const tenantId = req.body.tenantId ? Number(req.body.tenantId) : (req.query.tenantId ? Number(req.query.tenantId) : null);
+    if (!tenantId) {
+      res.status(400).json({ success: false, message: "tenantId is required" });
+      return;
+    }
+
+    const parsed = parseGHLWebhookPayload(req.body);
+    const hashedPhone = parsed.phone ? hashValue(normalizePhone(parsed.phone)) : null;
+    const hashedEmail = parsed.email ? hashValue(parsed.email) : null;
+
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId,
+      eventType: "form_fill",
+      gclid: parsed.gclid || null,
+      hashedPhone,
+      hashedEmail,
+      utmSource: parsed.utmSource || "ghl",
+      utmCampaign: parsed.utmCampaign || null,
+      utmMedium: parsed.utmMedium || null,
+      landingPage: parsed.landingPage || null,
+      matchLevel: parsed.gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched",
+      matchConfidence: parsed.gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
+    }).returning();
+
+    const [newLead] = await db.insert(leadsTable).values({
+      tenantId,
+      firstName: parsed.firstName,
+      lastName: parsed.lastName,
+      phone: parsed.phone || null,
+      email: parsed.email || null,
+      source: "ghl",
+      matchedGclid: parsed.gclid || null,
+      leadType: "ghl",
+    }).returning();
+
+    if (newLead) {
+      emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+    }
+
+    res.json({ success: true, eventId: event.id, leadId: newLead?.id });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process GHL webhook";
+    res.status(400).json({ success: false, message });
+  }
+});
+
+router.post("/webhooks/podium", async (req, res): Promise<void> => {
+  try {
+    const tenantId = Number(req.query.tenantId || req.body.tenantId);
+    if (!tenantId) { res.status(400).json({ success: false, message: "tenantId required" }); return; }
+
+    const parsed = parsePodiumWebhookPayload(req.body);
+    if (!parsed) { res.status(400).json({ success: false, message: "Invalid payload" }); return; }
+
+    const existing = await db.select().from(reviewsTable)
+      .where(eq(reviewsTable.tenantId, tenantId));
+
+    const alreadyExists = existing.some(r => r.externalId === parsed.externalId);
+    if (!alreadyExists) {
+      const sentiment = parsed.rating >= 4 ? "positive" : parsed.rating <= 2 ? "negative" : "neutral";
+      await db.insert(reviewsTable).values({
+        tenantId,
+        platform: "podium",
+        externalId: parsed.externalId,
+        reviewerName: parsed.reviewerName,
+        rating: parsed.rating,
+        body: parsed.reviewBody,
+        sentiment,
+        reviewDate: parsed.reviewDate,
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process Podium webhook";
+    res.status(400).json({ success: false, message });
   }
 });
 

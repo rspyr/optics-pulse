@@ -1,17 +1,45 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useListTrainingItems } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import {
   BookOpen, ExternalLink, DollarSign, Search,
-  GraduationCap, Lightbulb, Filter,
+  GraduationCap, Lightbulb, Filter, CheckCircle, Loader2, ShoppingCart,
 } from "lucide-react";
+
+const API = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
 export default function TrainingResources() {
   const { data: items, isLoading } = useListTrainingItems({ activeOnly: "true" });
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState<"" | "free_tip" | "paid_course">("");
+  const [purchasedIds, setPurchasedIds] = useState<Set<number>>(new Set());
+  const [purchasingId, setPurchasingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/training/purchases`, { credentials: "include" })
+      .then(r => r.json())
+      .then((data: Array<{ trainingItemId: number }>) => {
+        if (Array.isArray(data)) setPurchasedIds(new Set(data.map(p => p.trainingItemId)));
+      })
+      .catch(() => {});
+  }, []);
+
+  const handlePurchase = async (itemId: number) => {
+    setPurchasingId(itemId);
+    try {
+      const res = await fetch(`${API}/api/training/purchase/${itemId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPurchasedIds(prev => new Set([...prev, itemId]));
+      }
+    } catch {}
+    setPurchasingId(null);
+  };
 
   const categories = useMemo(() => {
     if (!items) return [];
@@ -172,15 +200,19 @@ export default function TrainingResources() {
                       <DollarSign className="w-4 h-4 text-primary" />{item.price}
                     </span>
                   )}
-                  {item.url ? (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+                  {purchasedIds.has(item.id) ? (
+                    <span className="px-4 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20 flex items-center gap-1.5">
+                      <CheckCircle className="w-3 h-3" /> Purchased
+                    </span>
+                  ) : item.url || item.price ? (
+                    <button
+                      onClick={() => handlePurchase(item.id)}
+                      disabled={purchasingId === item.id}
+                      className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary/90 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                     >
-                      Get Course <ExternalLink className="w-3 h-3" />
-                    </a>
+                      {purchasingId === item.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShoppingCart className="w-3 h-3" />}
+                      {purchasingId === item.id ? "Processing..." : "Purchase"}
+                    </button>
                   ) : (
                     <span className="px-4 py-2 rounded-lg bg-white/5 text-muted-foreground text-xs border border-white/10">Coming Soon</span>
                   )}

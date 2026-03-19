@@ -103,6 +103,26 @@ export function formatMetaInsight(insight: MetaCampaignInsight) {
   };
 }
 
+export async function updateMetaAdSetBudget(
+  config: MetaConfig,
+  adSetId: string,
+  newDailyBudgetDollars: number,
+): Promise<void> {
+  const budgetCents = Math.round(newDailyBudgetDollars * 100);
+
+  await metaFetch(
+    config.accessToken,
+    `/${adSetId}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daily_budget: budgetCents }),
+    },
+  );
+
+  console.log(`[Meta] Updated budget for ad set ${adSetId} to $${newDailyBudgetDollars}/day`);
+}
+
 export async function sendCAPIEvents(
   config: MetaConfig,
   events: CAPIEvent[],

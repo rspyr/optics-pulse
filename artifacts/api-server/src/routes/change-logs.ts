@@ -40,4 +40,37 @@ router.post("/change-logs", requireRole("super_admin", "agency_user"), async (re
   res.status(201).json(log);
 });
 
+router.put("/change-logs/:id", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id));
+  const { date, title, description, category } = req.body;
+
+  const updates: Record<string, unknown> = {};
+  if (date) updates.date = date;
+  if (title) updates.title = title;
+  if (description) updates.description = description;
+  if (category) updates.category = category;
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update" });
+    return;
+  }
+
+  const [log] = await db.update(changeLogsTable).set(updates).where(eq(changeLogsTable.id, id)).returning();
+  if (!log) {
+    res.status(404).json({ error: "Change log not found" });
+    return;
+  }
+  res.json(log);
+});
+
+router.delete("/change-logs/:id", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id));
+  const [log] = await db.delete(changeLogsTable).where(eq(changeLogsTable.id, id)).returning();
+  if (!log) {
+    res.status(404).json({ error: "Change log not found" });
+    return;
+  }
+  res.json({ success: true });
+});
+
 export default router;

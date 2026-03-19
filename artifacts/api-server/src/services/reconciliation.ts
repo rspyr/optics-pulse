@@ -2,7 +2,7 @@ import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconc
 import { eq, and, or, isNull, isNotNull, desc } from "drizzle-orm";
 import crypto from "crypto";
 import { decryptConfig } from "../lib/encryption";
-import { uploadOfflineConversions } from "./integrations/google-ads";
+import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrations/google-ads";
 import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
 import { patchJobCustomField } from "./integrations/service-titan";
 
@@ -57,6 +57,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const startedAt = new Date();
   const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, unmatched: 0 };
   const ociPayloads: OciPayload[] = [];
+  const allMatchedJobIds: number[] = [];
 
   const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
   const baseConditions = [matchCondition, eq(jobsTable.status, "completed")];
@@ -89,6 +90,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
           matchConfidence: 1.0,
         }).where(eq(attributionEventsTable.id, event.id));
         results.diamond++;
+        allMatchedJobIds.push(job.id);
         if (matchedGclid && job.revenue > 0) {
           ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
         }
@@ -123,6 +125,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
           matchConfidence: 1.0,
         }).where(eq(attributionEventsTable.id, gclidEvent.id));
         results.diamond++;
+        allMatchedJobIds.push(job.id);
         diamondViaLead = true;
         if (matchedGclid && job.revenue > 0) {
           ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
@@ -156,6 +159,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
             matchConfidence: 0.9,
           }).where(eq(attributionEventsTable.id, phoneEvent.id));
           results.golden++;
+          allMatchedJobIds.push(job.id);
           matched = true;
           if (matchedGclid && job.revenue > 0) {
             ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
@@ -184,6 +188,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
             matchConfidence: 0.8,
           }).where(eq(attributionEventsTable.id, emailEvent.id));
           results.silver++;
+          allMatchedJobIds.push(job.id);
           matched = true;
           if (matchedGclid && job.revenue > 0) {
             ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
@@ -222,6 +227,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
           matchConfidence: 0.6,
         }).where(eq(attributionEventsTable.id, addrEvent.id));
         results.bronze++;
+        allMatchedJobIds.push(job.id);
         bronzeMatched = true;
         if (matchedGclid && job.revenue > 0) {
           ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
@@ -257,10 +263,10 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   console.log(`[Reconciliation] ${triggerType} run complete: ${jobsProcessed} jobs processed, ${totalMatched} matched (${matchRate}% rate)`);
   console.log(`[Reconciliation] Breakdown: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.unmatched} unmatched`);
 
-  if (ociPayloads.length > 0 && tenantId) {
-    const matchedJobIds = ociPayloads.map((p) => p.jobId);
+  if ((ociPayloads.length > 0 || allMatchedJobIds.length > 0) && tenantId) {
+    const jobIdsToFetch = [...new Set([...ociPayloads.map((p) => p.jobId), ...allMatchedJobIds])];
     const matchedJobRows = await db.select().from(jobsTable).where(
-      and(eq(jobsTable.tenantId, tenantId), or(...matchedJobIds.map((id) => eq(jobsTable.id, id)))),
+      and(eq(jobsTable.tenantId, tenantId), or(...jobIdsToFetch.map((id) => eq(jobsTable.id, id)))),
     );
     await pushConversionsToExternalAPIs(tenantId, ociPayloads, matchedJobRows);
   }
@@ -279,6 +285,7 @@ interface TenantApiConfig {
   serviceTitanClientSecret?: string;
   serviceTitanTenantId?: string;
   googleAdsApiKey?: string;
+  googleAdsAccessToken?: string;
   googleAdsDeveloperToken?: string;
   googleAdsCustomerId?: string;
   googleAdsLoginCustomerId?: string;
@@ -299,7 +306,7 @@ function getTenantApiConfig(tenant: typeof tenantsTable.$inferSelect): TenantApi
 async function pushConversionsToExternalAPIs(
   tenantId: number,
   ociPayloads: OciPayload[],
-  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number }>,
+  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number; customerName: string; completedAt: Date | null }>,
 ): Promise<void> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return;
@@ -345,6 +352,76 @@ async function pushConversionsToExternalAPIs(
         completedAt: new Date(),
       });
       console.error(`[Outbound] Google Ads OCI error for tenant ${tenantId}:`, message);
+    }
+  }
+
+  const accessToken = config.googleAdsAccessToken || config.googleAdsApiKey;
+  if (accessToken && config.googleAdsCustomerId && config.googleAdsDeveloperToken) {
+    const nonGclidJobs = matchedJobs.filter(j => !j.matchedGclid && j.revenue > 0);
+    if (nonGclidJobs.length > 0) {
+      const startedAt = new Date();
+      try {
+        const gaConfig = {
+          developerToken: config.googleAdsDeveloperToken,
+          accessToken,
+          customerId: config.googleAdsCustomerId,
+          loginCustomerId: config.googleAdsLoginCustomerId,
+        };
+
+        const enhancedPayloads: Array<{
+          conversionAction: string;
+          conversionDateTime: string;
+          conversionValue: number;
+          currencyCode: string;
+          hashedEmail?: string;
+          hashedPhone?: string;
+        }> = [];
+        for (const job of nonGclidJobs) {
+          const nameParts = (job.customerName || "").split(" ");
+          const leads = await db.select().from(leadsTable)
+            .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.firstName, nameParts[0] || "")))
+            .limit(1);
+          const lead = leads[0];
+          if (lead && (lead.email || lead.phone)) {
+            enhancedPayloads.push({
+              conversionAction: `customers/${config.googleAdsCustomerId!.replace(/-/g, "")}/conversionActions/ServiceTitan_Installation_Revenue`,
+              conversionDateTime: (job.completedAt || new Date()).toISOString().replace("T", " ").replace("Z", "+00:00"),
+              conversionValue: job.revenue,
+              currencyCode: "USD",
+              ...(lead.email ? { hashedEmail: hashValue(lead.email) } : {}),
+              ...(lead.phone ? { hashedPhone: hashValue(normalizePhone(lead.phone)) } : {}),
+            });
+          }
+        }
+
+        if (enhancedPayloads.length > 0) {
+          const result = await uploadEnhancedConversions(gaConfig, enhancedPayloads);
+          await db.insert(integrationSyncLogsTable).values({
+            tenantId,
+            integration: "google_ads",
+            syncType: "enhanced_conversions",
+            status: result.errorCount > 0 ? "partial" : "completed",
+            recordsProcessed: result.successCount,
+            errorMessage: result.errors.length > 0 ? result.errors.join("; ") : null,
+            startedAt,
+            completedAt: new Date(),
+          });
+          console.log(`[Outbound] Enhanced Conversions: ${result.successCount} uploaded for tenant ${tenantId}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await db.insert(integrationSyncLogsTable).values({
+          tenantId,
+          integration: "google_ads",
+          syncType: "enhanced_conversions",
+          status: "error",
+          recordsProcessed: 0,
+          errorMessage: message,
+          startedAt,
+          completedAt: new Date(),
+        });
+        console.error(`[Outbound] Enhanced Conversions error for tenant ${tenantId}:`, message);
+      }
     }
   }
 

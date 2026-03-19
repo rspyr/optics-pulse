@@ -15,16 +15,25 @@ import integrationsRouter from "./integrations";
 import chatRouter from "./chat";
 import trainingRouter from "./training";
 import automationRouter from "./automation";
+import funnelTypesRouter from "./funnel-types";
+import trackerRouter from "./tracker";
+import callAttemptsRouter from "./call-attempts";
+import drilldownRouter from "./drilldown";
+import budgetRouter from "./budget";
+import reviewsRouter from "./reviews";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
 router.use(webhooksRouter);
+router.use(trackerRouter);
 
 router.use(requireAuth);
 
 router.use(enforceTenantScope);
+
+router.use(reviewsRouter);
 
 router.use(tenantsRouter);
 router.use(leadsRouter);
@@ -38,5 +47,10 @@ router.use(integrationsRouter);
 router.use(chatRouter);
 router.use(trainingRouter);
 router.use(automationRouter);
+router.use(funnelTypesRouter);
+router.use(callAttemptsRouter);
+router.use(drilldownRouter);
+router.use(budgetRouter);
 
 export default router;
+

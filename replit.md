@@ -165,8 +165,34 @@ All under `/api` prefix:
 - All syncs logged to `integration_sync_logs` table with status, record counts, error messages
 - Per-tenant API credentials stored encrypted in `tenants.apiConfig` (AES-256-GCM)
 
+### Enhanced Conversions Fallback
+- For jobs matched at golden/silver/bronze level without GCLID, the reconciliation engine builds Enhanced Conversions payloads using hashed email/phone from matching leads
+- Uploaded via Google Ads `uploadEnhancedConversions()` as a fallback to standard OCI (which requires GCLID)
+- Logged to `integration_sync_logs` with syncType `enhanced_conversions`
+
+### Budget Controls
+- `POST /budget/adjust` — adjust Google Ads campaign or Meta ad set daily budget (agency only)
+- Server-side validation: `newDailyBudget` must be a finite non-negative number
+- Budget Controls UI section in Agency God View (`/internal`)
+
+### Podium Integration
+- `artifacts/api-server/src/services/integrations/podium.ts` — Podium API client for review sync
+- `GET /reviews`, `GET /reviews/stats`, `GET /reviews/leaderboard` — review data endpoints
+- `POST /webhooks/podium?tenantId=X` — Podium webhook handler
+- Review sync scheduled every 6 hours via sync-scheduler
+
+### Proactive Client Alerts
+- `artifacts/api-server/src/services/client-alerts.ts` — weekly Monday scheduler
+- Monitors lead drop, booking rate, ROAS, spend spikes per tenant
+- Sends branded email alerts to client users
+
+### Training Purchase Flow
+- `POST /training/purchase/:id` — purchase a paid training course (records to DB)
+- `GET /training/purchases` — list current user's purchases
+- Training Resources page shows purchase state and allows direct purchase
+
 ### Tenant Integration Config Fields
-Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanClientSecret`, `serviceTitanTenantId`, `googleAdsApiKey`, `googleAdsDeveloperToken`, `googleAdsCustomerId`, `googleAdsLoginCustomerId`, `metaAccessToken`, `metaAdAccountId`, `metaPixelId`, `callRailApiKey`, `callRailSigningKey`
+Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanClientSecret`, `serviceTitanTenantId`, `googleAdsApiKey`, `googleAdsAccessToken`, `googleAdsDeveloperToken`, `googleAdsCustomerId`, `googleAdsLoginCustomerId`, `metaAccessToken`, `metaAdAccountId`, `metaPixelId`, `callRailApiKey`, `callRailSigningKey`, `ghlApiKey`
 
 ## Frontend Pages
 
@@ -178,8 +204,11 @@ Stored encrypted in `tenants.apiConfig`: `serviceTitanClientId`, `serviceTitanCl
 - `/attribution` — Attribution Log (event ingestion & matching waterfall)
 - `/admin/tenants` — Tenant management (CRUD with inline edit)
 - `/admin/users` — User management (CRUD with role assignment)
+- `/admin/change-logs` — Change Log CRUD management
+- `/admin/funnels` — Funnel Type management + Script Generator + Heartbeat Health
 - `/automation` — Media Buying Automation: rule management (create/edit/toggle/delete), alerts feed with acknowledge flow, scheduled engine evaluation
-- `/settings` — System configuration
+- `/settings` — System configuration (integration API keys, GHL config, capture script with clipboard copy)
+- `/training` — Training & Resources with purchase flow
 
 ### Client Portal (client_admin, client_user) — "Searchlight Killer"
 - `/` — Full Searchlight Killer dashboard: Big 5 KPI cards (CPL, Booking Rate, Close Rate, Avg Sale Value, ROI) with trend arrows, True ROI toggle (ROAS vs All Costs), Recharts spend/revenue bar chart (7/14/30/90 day), Change Log overlay with markers, filter system (source/type/salesperson), NL filter bar, Financial Transparency section, Bottleneck Identifier funnel chart, Chat Analytics drawer ("Ask Your Data")

@@ -418,6 +418,8 @@ export default function Internal() {
         </div>
       </PremiumCard>
 
+      <BudgetControlsSection tenants={data?.tenants || []} apiBase={API_BASE} />
+
       {avg && (
         <div>
           <h3 className="font-display text-lg text-white mb-3">Benchmarking vs Agency Average</h3>
@@ -456,6 +458,110 @@ export default function Internal() {
         />
       )}
     </div>
+  );
+}
+
+function BudgetControlsSection({ tenants, apiBase }: { tenants: Array<{ tenantId: number; tenantName: string }>; apiBase: string }) {
+  const [selectedTenant, setSelectedTenant] = useState<number | "">("");
+  const [platform, setPlatform] = useState<"google_ads" | "meta">("google_ads");
+  const [campaignId, setCampaignId] = useState("");
+  const [newBudget, setNewBudget] = useState("");
+  const [adjusting, setAdjusting] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleAdjust = async () => {
+    if (!selectedTenant || !campaignId || !newBudget) return;
+    setAdjusting(true);
+    setResult(null);
+    try {
+      const res = await fetch(`${apiBase}/api/budget/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          tenantId: selectedTenant,
+          campaignId,
+          platform,
+          newDailyBudget: parseFloat(newBudget),
+        }),
+      });
+      const data = await res.json();
+      setResult({ success: res.ok, message: data.message || data.error || "Done" });
+    } catch (err) {
+      setResult({ success: false, message: err instanceof Error ? err.message : "Request failed" });
+    }
+    setAdjusting(false);
+  };
+
+  return (
+    <PremiumCard className="p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <DollarSign className="w-5 h-5 text-emerald-400" />
+        <h3 className="font-display text-lg text-white">Budget Controls</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Client</label>
+          <select
+            value={selectedTenant}
+            onChange={(e) => setSelectedTenant(e.target.value ? Number(e.target.value) : "")}
+            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            <option value="">Select client</option>
+            {tenants.map((t) => (
+              <option key={t.tenantId} value={t.tenantId}>{t.tenantName}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Platform</label>
+          <select
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value as "google_ads" | "meta")}
+            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            <option value="google_ads">Google Ads</option>
+            <option value="meta">Meta</option>
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">Campaign / Ad Set ID</label>
+          <input
+            value={campaignId}
+            onChange={(e) => setCampaignId(e.target.value)}
+            placeholder="e.g. 12345678"
+            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider">New Daily Budget ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={newBudget}
+            onChange={(e) => setNewBudget(e.target.value)}
+            placeholder="e.g. 150.00"
+            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleAdjust}
+          disabled={adjusting || !selectedTenant || !campaignId || !newBudget}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+        >
+          {adjusting ? <Loader2 className="w-4 h-4 animate-spin" /> : <DollarSign className="w-4 h-4" />}
+          {adjusting ? "Adjusting..." : "Adjust Budget"}
+        </button>
+        {result && (
+          <span className={`text-sm ${result.success ? "text-emerald-400" : "text-red-400"}`}>
+            {result.message}
+          </span>
+        )}
+      </div>
+    </PremiumCard>
   );
 }
 

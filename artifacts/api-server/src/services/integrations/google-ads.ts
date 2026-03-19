@@ -115,6 +115,93 @@ export function formatCampaignRow(row: CampaignPerformanceRow) {
   };
 }
 
+export async function updateGoogleAdsCampaignBudget(
+  config: GoogleAdsConfig,
+  campaignId: string,
+  newDailyBudgetDollars: number,
+): Promise<void> {
+  const customerId = config.customerId.replace(/-/g, "");
+  const budgetMicros = Math.round(newDailyBudgetDollars * 1_000_000);
+
+  const query = `SELECT campaign_budget.resource_name FROM campaign WHERE campaign.id = '${campaignId}'`;
+  const searchResponse = await googleAdsFetch<GoogleAdsSearchResponse>(
+    config,
+    `/customers/${customerId}/googleAds:search`,
+    { method: "POST", body: JSON.stringify({ query, pageSize: 1 }) },
+  );
+
+  if (!searchResponse.results || searchResponse.results.length === 0) {
+    throw new Error(`Campaign ${campaignId} not found in Google Ads`);
+  }
+
+  const budgetResource = (searchResponse.results[0] as unknown as Record<string, Record<string, string>>).campaignBudget?.resourceName;
+  if (!budgetResource) {
+    throw new Error(`No budget resource found for campaign ${campaignId}`);
+  }
+
+  await googleAdsFetch(
+    config,
+    `/customers/${customerId}/campaignBudgets:mutate`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operations: [{
+          update: {
+            resourceName: budgetResource,
+            amountMicros: String(budgetMicros),
+          },
+          updateMask: "amount_micros",
+        }],
+      }),
+    },
+  );
+
+  console.log(`[Google Ads] Updated budget for campaign ${campaignId} to $${newDailyBudgetDollars}/day`);
+}
+
+export async function uploadEnhancedConversions(
+  config: GoogleAdsConfig,
+  conversions: Array<{
+    conversionAction: string;
+    conversionDateTime: string;
+    conversionValue: number;
+    currencyCode: string;
+    hashedEmail?: string;
+    hashedPhone?: string;
+  }>,
+): Promise<{ successCount: number; errorCount: number; errors: string[] }> {
+  if (conversions.length === 0) return { successCount: 0, errorCount: 0, errors: [] };
+  const customerId = config.customerId.replace(/-/g, "");
+
+  const payload = conversions.map(c => ({
+    conversionAction: c.conversionAction,
+    conversionDateTime: c.conversionDateTime,
+    conversionValue: c.conversionValue,
+    currencyCode: c.currencyCode,
+    userIdentifiers: [
+      ...(c.hashedEmail ? [{ hashedEmail: c.hashedEmail }] : []),
+      ...(c.hashedPhone ? [{ hashedPhoneNumber: c.hashedPhone }] : []),
+    ],
+  }));
+
+  try {
+    await googleAdsFetch(
+      config,
+      `/customers/${customerId}:uploadClickConversions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ conversions: payload, partialFailure: true }),
+      },
+    );
+    console.log(`[Google Ads Enhanced] Uploaded ${conversions.length} enhanced conversions`);
+    return { successCount: conversions.length, errorCount: 0, errors: [] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Google Ads Enhanced] Upload failed: ${message}`);
+    return { successCount: 0, errorCount: conversions.length, errors: [message] };
+  }
+}
+
 export async function uploadOfflineConversions(
   config: GoogleAdsConfig,
   payloads: OciPayload[],

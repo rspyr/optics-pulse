@@ -5,6 +5,7 @@ import { startReconciliationCron } from "./services/cron";
 import { startSyncScheduler } from "./services/sync-scheduler";
 import { startTrainingAlertScheduler } from "./services/training-scheduler";
 import { startAutomationScheduler } from "./services/automation-engine";
+import { startClientAlertScheduler } from "./services/client-alerts";
 
 const rawPort = process.env["PORT"];
 
@@ -29,4 +30,5 @@ httpServer.listen(port, () => {
   startSyncScheduler();
   startTrainingAlertScheduler(6);
   startAutomationScheduler();
+  startClientAlertScheduler();
 });
