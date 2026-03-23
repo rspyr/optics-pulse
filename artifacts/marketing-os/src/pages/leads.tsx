@@ -9,7 +9,7 @@ import {
   Clock, Zap,
   ChevronDown, AlertTriangle, Target,
   Flame, Award, Calendar, PhoneCall,
-  Star, Volume2, DollarSign
+  Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -49,7 +49,6 @@ const VOICEMAIL_SCRIPTS: Record<string, string> = {
 function getSchedulingHint(lead: LeadData): string | null {
   if (!lead.updatedAt || !lead.createdAt) return null;
   const created = new Date(lead.createdAt);
-  const updated = new Date(lead.updatedAt);
   const hoursSinceCreated = (Date.now() - created.getTime()) / (1000 * 60 * 60);
   const createdHour = created.getHours();
   const createdDay = created.getDay();
@@ -103,6 +102,35 @@ interface HudStats {
   bonusTier: string;
   bonusThreshold: number;
   nextBonusAt: number;
+}
+
+interface CommConfig {
+  callPlatform: string;
+  textPlatform: string;
+  callReady: boolean;
+  textReady: boolean;
+  callStatusMessage: string;
+  textStatusMessage: string;
+}
+
+function useCommConfig() {
+  const [config, setConfig] = useState<CommConfig>({
+    callPlatform: "native",
+    textPlatform: "native",
+    callReady: true,
+    textReady: true,
+    callStatusMessage: "Using native phone dialer",
+    textStatusMessage: "Using native SMS app",
+  });
+
+  useEffect(() => {
+    fetch(`${API_BASE}/leads/comm-config`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setConfig(data))
+      .catch(() => {});
+  }, []);
+
+  return config;
 }
 
 function useHudQueue() {
@@ -282,20 +310,56 @@ function CommissionTicker({ amount, show }: { amount: number; show: boolean }) {
   );
 }
 
+function PlatformBadge({ platform }: { platform: string }) {
+  if (platform === "native") return null;
+  const colors = platform === "callrail"
+    ? "bg-green-500/10 border-green-500/20 text-green-400"
+    : "bg-blue-500/10 border-blue-500/20 text-blue-400";
+  const label = platform === "callrail" ? "CallRail" : "Podium";
+  return (
+    <span className={cn("text-[9px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wider", colors)}>
+      {label}
+    </span>
+  );
+}
+
+function ActionFeedback({ status, message }: { status: "success" | "error" | null; message: string }) {
+  if (!status) return null;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      className={cn(
+        "mt-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs",
+        status === "success" ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border border-red-500/20 text-red-400"
+      )}
+    >
+      {status === "success" ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+      {message}
+    </motion.div>
+  );
+}
+
 function LeadCard({
   lead,
   isNew,
   onDisposition,
   isProcessing,
+  commConfig,
 }: {
   lead: LeadData;
   isNew: boolean;
   onDisposition: (leadId: number, disposition: string, status: string) => void;
   isProcessing: boolean;
+  commConfig: CommConfig;
 }) {
   const [showDisposition, setShowDisposition] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [showVoicemail, setShowVoicemail] = useState(false);
+  const [callLoading, setCallLoading] = useState(false);
+  const [textLoading, setTextLoading] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{ status: "success" | "error"; message: string } | null>(null);
   const hint = getSchedulingHint(lead);
   const script = SCRIPTS[lead.source] || SCRIPTS["Direct"];
   const vmScript = VOICEMAIL_SCRIPTS[lead.source] || VOICEMAIL_SCRIPTS["default"];
@@ -309,6 +373,78 @@ function LeadCard({
     .replace("[INTEREST]", lead.interestType || "HVAC service")
     .replace("[REP]", "your name")
     .replace("[COMPANY]", "our company");
+
+  const showFeedback = (status: "success" | "error", message: string) => {
+    setActionFeedback({ status, message });
+    setTimeout(() => setActionFeedback(null), 3000);
+  };
+
+  const handleCall = async () => {
+    if (!lead.phone) return;
+
+    if (commConfig.callPlatform === "native") {
+      window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
+      return;
+    }
+
+    setCallLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/leads/${lead.id}/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showFeedback("success", data.message);
+      } else {
+        showFeedback("error", data.message || "Call failed");
+        window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
+      }
+    } catch {
+      showFeedback("error", "Connection error — falling back to native dialer");
+      window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
+    } finally {
+      setCallLoading(false);
+    }
+  };
+
+  const handleText = async () => {
+    if (!lead.phone) return;
+    const msg = TEXT_TEMPLATES[0]
+      .replace("[NAME]", lead.firstName)
+      .replace("[INTEREST]", lead.interestType || "HVAC")
+      .replace("[REP]", "your name")
+      .replace("[COMPANY]", "our company");
+
+    if (commConfig.textPlatform === "native") {
+      window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(msg)}`);
+      return;
+    }
+
+    setTextLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/leads/${lead.id}/text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showFeedback("success", data.message);
+      } else {
+        showFeedback("error", data.message || "Text failed");
+        window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(msg)}`);
+      }
+    } catch {
+      showFeedback("error", "Connection error — falling back to native SMS");
+      window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(msg)}`);
+    } finally {
+      setTextLoading(false);
+    }
+  };
 
   return (
     <motion.div
@@ -383,26 +519,29 @@ function LeadCard({
       )}
 
       <div className="mt-3 flex items-center gap-2 flex-wrap">
-        <a
-          href={lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, "")}` : "#"}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-colors"
-        >
-          <Phone className="w-3.5 h-3.5" /> Call
-        </a>
         <button
-          onClick={() => {
-            if (lead.phone) {
-              const msg = TEXT_TEMPLATES[0]
-                .replace("[NAME]", lead.firstName)
-                .replace("[INTEREST]", lead.interestType || "HVAC")
-                .replace("[REP]", "your name")
-                .replace("[COMPANY]", "our company");
-              window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(msg)}`);
-            }
-          }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium hover:bg-blue-500/20 transition-colors"
+          onClick={handleCall}
+          disabled={!lead.phone || callLoading}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-colors",
+            (!lead.phone || callLoading) && "opacity-50 cursor-not-allowed"
+          )}
         >
-          <MessageSquare className="w-3.5 h-3.5" /> Text
+          {callLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Phone className="w-3.5 h-3.5" />}
+          Call
+          <PlatformBadge platform={commConfig.callPlatform} />
+        </button>
+        <button
+          onClick={handleText}
+          disabled={!lead.phone || textLoading}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium hover:bg-blue-500/20 transition-colors",
+            (!lead.phone || textLoading) && "opacity-50 cursor-not-allowed"
+          )}
+        >
+          {textLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MessageSquare className="w-3.5 h-3.5" />}
+          Text
+          <PlatformBadge platform={commConfig.textPlatform} />
         </button>
         <a
           href={lead.email ? `mailto:${lead.email}?subject=Your HVAC Inquiry&body=${encodeURIComponent(`Hi ${lead.firstName},\n\nThank you for your interest in ${lead.interestType || 'our HVAC services'}. I'd love to schedule a time to discuss your needs.\n\nBest regards`)}` : "#"}
@@ -465,6 +604,10 @@ function LeadCard({
       </div>
 
       <AnimatePresence>
+        {actionFeedback && <ActionFeedback status={actionFeedback.status} message={actionFeedback.message} />}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showScript && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
@@ -512,6 +655,7 @@ export default function Leads() {
   const tenantId = user?.tenantId ?? null;
   const { queue, loading, refetch } = useHudQueue();
   const { stats, refetch: refetchStats } = useHudStats();
+  const commConfig = useCommConfig();
   const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
@@ -597,6 +741,15 @@ export default function Leads() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {commConfig.callPlatform !== "native" && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-card/60 border border-white/5">
+              <span className={cn(
+                "w-2 h-2 rounded-full",
+                commConfig.callReady ? "bg-emerald-400" : "bg-red-400"
+              )} />
+              <span className="text-[10px] text-white/50 uppercase">{commConfig.callPlatform}</span>
+            </div>
+          )}
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
             className={cn(
@@ -686,6 +839,7 @@ export default function Leads() {
                           isNew={lead._priority === "new"}
                           onDisposition={handleDisposition}
                           isProcessing={processingLeads.has(lead.id)}
+                          commConfig={commConfig}
                         />
                       </div>
                     </div>

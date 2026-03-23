@@ -9,6 +9,7 @@ export const tenantsTable = pgTable("tenants", {
   timezone: text("timezone").notNull().default("America/New_York"),
   apiConfig: jsonb("api_config"),
   alertConfig: jsonb("alert_config"),
+  communicationConfig: jsonb("communication_config"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

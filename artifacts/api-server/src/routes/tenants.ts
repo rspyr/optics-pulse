@@ -53,6 +53,7 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
     result.loadableConfig = {};
   }
   result.alertConfig = tenant.alertConfig || null;
+  result.communicationConfig = tenant.communicationConfig || null;
   return result;
 }
 
@@ -136,6 +137,22 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   }
   if (req.body.alertConfig && typeof req.body.alertConfig === "object") {
     (updateData as Record<string, unknown>).alertConfig = req.body.alertConfig;
+  }
+  if (req.body.communicationConfig && typeof req.body.communicationConfig === "object") {
+    const validCallPlatforms = ["native", "callrail", "podium"];
+    const validTextPlatforms = ["native", "podium"];
+    const newComm = req.body.communicationConfig as Record<string, unknown>;
+    if (newComm.callPlatform && !validCallPlatforms.includes(String(newComm.callPlatform))) {
+      res.status(400).json({ error: `Invalid callPlatform. Must be one of: ${validCallPlatforms.join(", ")}` });
+      return;
+    }
+    if (newComm.textPlatform && !validTextPlatforms.includes(String(newComm.textPlatform))) {
+      res.status(400).json({ error: `Invalid textPlatform. Must be one of: ${validTextPlatforms.join(", ")}` });
+      return;
+    }
+    const [existingForComm] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    const existingComm = (existingForComm?.communicationConfig || {}) as Record<string, unknown>;
+    (updateData as Record<string, unknown>).communicationConfig = { ...existingComm, ...newComm };
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

@@ -3,6 +3,7 @@ import { db, leadsTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
+import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
 
 const router: IRouter = Router();
 
@@ -73,6 +74,40 @@ router.get("/leads/hud/stats", async (req, res) => {
   res.json(stats);
 });
 
+router.get("/leads/comm-config", async (req, res) => {
+  const role = req.session.userRole;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
+    : req.session.tenantId ?? null;
+
+  if (!tenantId) {
+    res.json({
+      callPlatform: "native",
+      textPlatform: "native",
+      callReady: true,
+      textReady: true,
+      callStatusMessage: "Using native phone dialer",
+      textStatusMessage: "Using native SMS app",
+    });
+    return;
+  }
+
+  try {
+    const config = await getTenantCommConfig(tenantId);
+    const status = getCommConfigStatus(config);
+    res.json(status);
+  } catch (err) {
+    res.json({
+      callPlatform: "native",
+      textPlatform: "native",
+      callReady: true,
+      textReady: true,
+      callStatusMessage: "Using native phone dialer",
+      textStatusMessage: "Using native SMS app",
+    });
+  }
+});
+
 router.get("/leads/:leadId", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
@@ -119,6 +154,84 @@ router.patch("/leads/:leadId", async (req, res) => {
   }
   emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
   res.json(lead);
+});
+
+router.post("/leads/:leadId/call", async (req, res) => {
+  const leadId = parseInt(String(req.params.leadId));
+  const userId = req.session.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!lead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (lead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  try {
+    const result = await initiateCall(
+      lead.tenantId,
+      leadId,
+      userId,
+      req.body?.callerPhone,
+    );
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to initiate call";
+    res.status(500).json({ success: false, platform: "unknown", message });
+  }
+});
+
+router.post("/leads/:leadId/text", async (req, res) => {
+  const leadId = parseInt(String(req.params.leadId));
+  const userId = req.session.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+
+  const { message: messageBody } = req.body || {};
+  if (!messageBody || typeof messageBody !== "string") {
+    res.status(400).json({ error: "Message body is required" });
+    return;
+  }
+
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!lead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (lead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  try {
+    const result = await initiateText(
+      lead.tenantId,
+      leadId,
+      userId,
+      messageBody,
+    );
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to send text";
+    res.status(500).json({ success: false, platform: "unknown", message });
+  }
 });
 
 export default router;

@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2 } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -13,11 +14,20 @@ export default function Settings() {
   const [copied, setCopied] = useState(false);
   const [scriptTag, setScriptTag] = useState("");
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
+  const [commConfig, setCommConfig] = useState({
+    callPlatform: "native" as string,
+    textPlatform: "native" as string,
+  });
+  const [commStatus, setCommStatus] = useState<{ callReady: boolean; textReady: boolean; callStatusMessage: string; textStatusMessage: string } | null>(null);
+  const [commSaving, setCommSaving] = useState(false);
+  const [commSaved, setCommSaved] = useState(false);
   const [form, setForm] = useState({
     serviceTitanId: "",
     googleAdsCustomerId: "",
     metaAdAccountId: "",
     callRailAccountId: "",
+    callRailApiKey: "",
+    callRailCompanyId: "",
     ghlApiKey: "",
     podiumApiToken: "",
     podiumLocationId: "",
@@ -35,12 +45,24 @@ export default function Settings() {
           googleAdsCustomerId: lc.googleAdsCustomerId || "",
           metaAdAccountId: lc.metaAdAccountId || "",
           callRailAccountId: lc.callRailAccountId || "",
+          callRailApiKey: lc.callRailApiKey || "",
+          callRailCompanyId: lc.callRailCompanyId || "",
           ghlApiKey: lc.ghlApiKey || "",
           podiumApiToken: lc.podiumApiToken || "",
           podiumLocationId: lc.podiumLocationId || "",
         }));
         setDirtyFields(new Set());
+        const cc = data.communicationConfig || {};
+        setCommConfig({
+          callPlatform: cc.callPlatform || "native",
+          textPlatform: cc.textPlatform || "native",
+        });
       })
+      .catch(() => {});
+
+    fetch(`${API}/api/leads/comm-config`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage }))
       .catch(() => {});
 
     fetch(`${API}/api/funnel-types/script/${tenantId}`, { credentials: "include" })
@@ -60,7 +82,7 @@ export default function Settings() {
     setSaving(true);
     try {
       const integrationConfig: Record<string, string | null> = {};
-      const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "podiumApiToken", "podiumLocationId"] as const;
+      const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "callRailApiKey", "callRailCompanyId", "podiumApiToken", "podiumLocationId"] as const;
       for (const key of configKeys) {
         const val = form[key];
         if (!val) continue;
@@ -84,6 +106,29 @@ export default function Settings() {
       }
     } catch {}
     setSaving(false);
+  }
+
+  async function handleCommSave() {
+    if (!tenantId) return;
+    setCommSaving(true);
+    try {
+      const res = await fetch(`${API}/api/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ communicationConfig: commConfig }),
+      });
+      if (res.ok) {
+        setCommSaved(true);
+        setTimeout(() => setCommSaved(false), 2000);
+        const statusRes = await fetch(`${API}/api/leads/comm-config`, { credentials: "include" });
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage });
+        }
+      }
+    } catch {}
+    setCommSaving(false);
   }
 
   async function handleCopyScript() {
@@ -137,6 +182,27 @@ export default function Settings() {
             />
           </div>
           <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">CallRail API Key</label>
+            <input
+              type={dirtyFields.has("callRailApiKey") ? "password" : "text"}
+              value={form.callRailApiKey}
+              onFocus={() => { if (!dirtyFields.has("callRailApiKey") && form.callRailApiKey.startsWith("••••")) { setForm({ ...form, callRailApiKey: "" }); trackField("callRailApiKey"); } }}
+              onChange={e => { trackField("callRailApiKey"); setForm({ ...form, callRailApiKey: e.target.value }); }}
+              className={inputClass}
+              placeholder="Enter to update"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">CallRail Company ID</label>
+            <input
+              type="text"
+              value={form.callRailCompanyId}
+              onChange={e => { trackField("callRailCompanyId"); setForm({ ...form, callRailCompanyId: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. COM123456"
+            />
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
             <input
               type={dirtyFields.has("ghlApiKey") ? "password" : "text"}
@@ -177,6 +243,97 @@ export default function Settings() {
             {saved ? "Saved!" : "Save Configuration"}
           </button>
         </div>
+      </PremiumCard>
+
+      <PremiumCard>
+        <h3 className="text-xl font-display text-white mb-2">Communication Platform</h3>
+        <p className="text-sm text-muted-foreground mb-6">
+          Choose how the Leads HUD routes calls and texts. Configure API credentials above, then select your preferred platforms here.
+        </p>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Phone className="w-4 h-4 text-emerald-400" />
+              <label className="text-sm font-medium text-gray-300">Call Platform</label>
+            </div>
+            <div className="space-y-2">
+              {[
+                { value: "native", label: "Native Phone Dialer", desc: "Opens system phone app" },
+                { value: "callrail", label: "CallRail", desc: "Click-to-call via CallRail API" },
+                { value: "podium", label: "Podium", desc: "Call routing via Podium API" },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setCommConfig(c => ({ ...c, callPlatform: opt.value }))}
+                  className={cn(
+                    "w-full text-left px-4 py-3 rounded-lg border transition-all",
+                    commConfig.callPlatform === opt.value
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-white"
+                      : "bg-white/5 border-white/10 text-gray-400 hover:border-white/20"
+                  )}
+                >
+                  <span className="text-sm font-medium">{opt.label}</span>
+                  <p className="text-xs text-muted-foreground mt-0.5">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+            {commStatus && (
+              <div className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-lg text-xs",
+                commStatus.callReady ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border border-red-500/20 text-red-400"
+              )}>
+                {commStatus.callReady ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+                {commStatus.callStatusMessage}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 mb-2">
+              <MessageSquare className="w-4 h-4 text-blue-400" />
+              <label className="text-sm font-medium text-gray-300">Text Platform</label>
+            </div>
+            <div className="space-y-2">
+              {[
+                { value: "native", label: "Native SMS App", desc: "Opens system messaging app" },
+                { value: "podium", label: "Podium", desc: "Send texts via Podium API" },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setCommConfig(c => ({ ...c, textPlatform: opt.value }))}
+                  className={cn(
+                    "w-full text-left px-4 py-3 rounded-lg border transition-all",
+                    commConfig.textPlatform === opt.value
+                      ? "bg-blue-500/10 border-blue-500/30 text-white"
+                      : "bg-white/5 border-white/10 text-gray-400 hover:border-white/20"
+                  )}
+                >
+                  <span className="text-sm font-medium">{opt.label}</span>
+                  <p className="text-xs text-muted-foreground mt-0.5">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+            {commStatus && (
+              <div className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-lg text-xs",
+                commStatus.textReady ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border border-red-500/20 text-red-400"
+              )}>
+                {commStatus.textReady ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+                {commStatus.textStatusMessage}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <button
+          onClick={handleCommSave}
+          disabled={commSaving}
+          className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-6 flex items-center gap-2 disabled:opacity-50"
+        >
+          {commSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : commSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+          {commSaved ? "Saved!" : "Save Platform Settings"}
+        </button>
       </PremiumCard>
 
       <PremiumCard>
