@@ -1,11 +1,34 @@
 import { Router, type IRouter } from "express";
 import { db, callAttemptsTable, leadsTable } from "@workspace/db";
 import { eq, desc, and, gte, sql } from "drizzle-orm";
+import { analyzeContactPattern } from "../services/lead-scoring";
 
 const router: IRouter = Router();
 
-router.get("/call-attempts/:leadId", async (req, res) => {
+async function verifyLeadTenantAccess(leadId: number, session: any): Promise<boolean> {
+  const role = session.userRole;
+  if (role === "super_admin" || role === "agency_user") return true;
+
+  const tenantId = session.tenantId;
+  if (!tenantId) return false;
+
+  const [lead] = await db.select({ tenantId: leadsTable.tenantId })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId))
+    .limit(1);
+
+  return lead?.tenantId === tenantId;
+}
+
+router.get("/call-attempts/:leadId", async (req, res): Promise<void> => {
   const leadId = parseInt(String(req.params.leadId));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
   const attempts = await db.select().from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))
     .orderBy(desc(callAttemptsTable.attemptedAt));
@@ -21,6 +44,11 @@ router.post("/call-attempts", async (req, res): Promise<void> => {
     return;
   }
 
+  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
   const [attempt] = await db.insert(callAttemptsTable).values({
     leadId,
     userId,
@@ -31,66 +59,21 @@ router.post("/call-attempts", async (req, res): Promise<void> => {
   res.status(201).json(attempt);
 });
 
-router.get("/call-attempts/:leadId/suggest", async (req, res) => {
+router.get("/call-attempts/:leadId/suggest", async (req, res): Promise<void> => {
   const leadId = parseInt(String(req.params.leadId));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
 
   const attempts = await db.select().from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))
     .orderBy(desc(callAttemptsTable.attemptedAt));
 
-  if (attempts.length === 0) {
-    res.json({ suggestion: "New lead — call immediately", bestTimeWindow: null, doubleDial: false });
-    return;
-  }
-
-  const hourCounts = new Map<number, { total: number; noAnswer: number }>();
-  for (const a of attempts) {
-    const hour = new Date(a.attemptedAt).getHours();
-    const entry = hourCounts.get(hour) || { total: 0, noAnswer: 0 };
-    entry.total++;
-    if (a.outcome === "no_answer" || a.outcome === "voicemail") entry.noAnswer++;
-    hourCounts.set(hour, entry);
-  }
-
-  const triedHours = [...hourCounts.entries()];
-  const allNoAnswer = triedHours.every(([_, v]) => v.noAnswer === v.total);
-
-  const lastAttempt = attempts[0];
-  const lastHour = new Date(lastAttempt.attemptedAt).getHours();
-  const lastDay = new Date(lastAttempt.attemptedAt).getDay();
-  const isMorning = lastHour < 12;
-
-  let suggestion = "";
-  let bestTimeWindow = "";
-  let doubleDial = false;
-
-  if (allNoAnswer && triedHours.length >= 3) {
-    const isWeekdayOnly = attempts.every(a => {
-      const d = new Date(a.attemptedAt).getDay();
-      return d >= 1 && d <= 5;
-    });
-    if (isWeekdayOnly) {
-      suggestion = "No answer during weekday business hours — try Saturday 10am-12pm";
-      bestTimeWindow = "Saturday 10:00-12:00";
-    } else {
-      suggestion = "Multiple attempts with no answer — try early evening 5-7pm";
-      bestTimeWindow = "Weekday 17:00-19:00";
-    }
-  } else if (lastAttempt.outcome === "no_answer" || lastAttempt.outcome === "voicemail") {
-    doubleDial = true;
-    if (isMorning) {
-      suggestion = `No answer this morning — try again this afternoon around ${lastHour + 6 > 17 ? 17 : lastHour + 6}:00`;
-      bestTimeWindow = `Today ${lastHour + 6 > 17 ? 17 : lastHour + 6}:00-${lastHour + 7 > 18 ? 18 : lastHour + 7}:00`;
-    } else {
-      suggestion = "No answer this afternoon — try tomorrow morning 9-10am";
-      bestTimeWindow = "Tomorrow 09:00-10:00";
-    }
-  } else {
-    suggestion = "Previous contact made — follow up during similar time window";
-    bestTimeWindow = `${lastHour}:00-${lastHour + 1}:00`;
-  }
-
-  res.json({ suggestion, bestTimeWindow, doubleDial, totalAttempts: attempts.length });
+  const result = analyzeContactPattern(attempts);
+  res.json(result);
 });
 
 export default router;

@@ -9,7 +9,8 @@ import {
   Clock, Zap,
   ChevronDown, AlertTriangle, Target,
   Flame, Award, Calendar, PhoneCall,
-  Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle
+  Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
+  Brain, TrendingUp, PhoneForwarded, Info
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -46,32 +47,17 @@ const VOICEMAIL_SCRIPTS: Record<string, string> = {
   default: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!",
 };
 
-function getSchedulingHint(lead: LeadData): string | null {
-  if (!lead.updatedAt || !lead.createdAt) return null;
-  const created = new Date(lead.createdAt);
-  const hoursSinceCreated = (Date.now() - created.getTime()) / (1000 * 60 * 60);
-  const createdHour = created.getHours();
-  const createdDay = created.getDay();
 
-  if (lead.status === "contacted" && hoursSinceCreated > 48) {
-    if (createdDay >= 1 && createdDay <= 5 && createdHour >= 8 && createdHour <= 17) {
-      return "This lead hasn't answered M-F 8-5. Try Saturday 10-12 or weekday evening 6-7 PM.";
-    }
-    if (createdHour >= 18 || createdHour <= 7) {
-      return "Lead submitted after hours. Try calling during business hours 9-11 AM.";
-    }
-    return "Multiple contact attempts failed. Try a different time of day or send a text first.";
-  }
-
-  if (hoursSinceCreated > 24 && lead.status === "new") {
-    return "This lead is over 24 hours old and hasn't been contacted. Prioritize immediately!";
-  }
-
-  if (lead.disposition === "callback_requested") {
-    return "Callback was requested. Double-dial: try now and again in 2 hours.";
-  }
-
-  return null;
+interface LeadSuggestion {
+  bestTimeWindow: string | null;
+  reason: string;
+  doubleDial: boolean;
+  inOptimalWindow: boolean;
+  priorityScore: number;
+  priorityReason: string;
+  totalAttempts: number;
+  lastAttemptAt: string | null;
+  failedAttempts: number;
 }
 
 interface LeadData {
@@ -89,6 +75,7 @@ interface LeadData {
   createdAt: string;
   updatedAt: string;
   tenantId?: number;
+  _suggestion?: LeadSuggestion;
 }
 
 interface HudStats {
@@ -360,7 +347,8 @@ function LeadCard({
   const [callLoading, setCallLoading] = useState(false);
   const [textLoading, setTextLoading] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ status: "success" | "error"; message: string } | null>(null);
-  const hint = getSchedulingHint(lead);
+  const [showWhyOrder, setShowWhyOrder] = useState(false);
+  const suggestion = lead._suggestion;
   const script = SCRIPTS[lead.source] || SCRIPTS["Direct"];
   const vmScript = VOICEMAIL_SCRIPTS[lead.source] || VOICEMAIL_SCRIPTS["default"];
   const personalizedVm = vmScript
@@ -511,10 +499,76 @@ function LeadCard({
         </div>
       </div>
 
-      {hint && (
-        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-          <Calendar className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-          <p className="text-xs text-amber-300">{hint}</p>
+      {suggestion && (
+        <div className="mt-3 space-y-1.5">
+          <div className={cn(
+            "flex items-start gap-2 px-3 py-2 rounded-lg border",
+            suggestion.inOptimalWindow
+              ? "bg-emerald-500/10 border-emerald-500/20"
+              : suggestion.doubleDial
+                ? "bg-orange-500/10 border-orange-500/20"
+                : "bg-amber-500/10 border-amber-500/20"
+          )}>
+            <Brain className={cn(
+              "w-4 h-4 mt-0.5 shrink-0",
+              suggestion.inOptimalWindow ? "text-emerald-400" : suggestion.doubleDial ? "text-orange-400" : "text-amber-400"
+            )} />
+            <div className="flex-1 min-w-0">
+              <p className={cn(
+                "text-xs font-medium",
+                suggestion.inOptimalWindow ? "text-emerald-300" : suggestion.doubleDial ? "text-orange-300" : "text-amber-300"
+              )}>
+                {suggestion.reason}
+              </p>
+              <div className="flex items-center gap-3 mt-1">
+                {suggestion.bestTimeWindow && (
+                  <span className="flex items-center gap-1 text-[10px] text-white/50">
+                    <Calendar className="w-3 h-3" /> {suggestion.bestTimeWindow}
+                  </span>
+                )}
+                {suggestion.doubleDial && (
+                  <span className="flex items-center gap-1 text-[10px] text-orange-400/80">
+                    <PhoneForwarded className="w-3 h-3" /> Double-dial recommended
+                  </span>
+                )}
+                {suggestion.totalAttempts > 0 && (
+                  <span className="text-[10px] text-white/40">
+                    {suggestion.totalAttempts} attempt{suggestion.totalAttempts !== 1 ? "s" : ""}
+                    {suggestion.failedAttempts > 0 && ` · ${suggestion.failedAttempts} missed`}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setShowWhyOrder(!showWhyOrder)}
+              className="shrink-0 p-1 rounded hover:bg-white/5 transition-colors"
+              title="Why this position?"
+            >
+              <Info className="w-3.5 h-3.5 text-white/30 hover:text-white/60" />
+            </button>
+          </div>
+          <AnimatePresence>
+            {showWhyOrder && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5">
+                  <TrendingUp className="w-3.5 h-3.5 text-white/40 shrink-0" />
+                  <span className="text-[10px] text-white/40">
+                    Priority: {suggestion.priorityScore}/100 — {suggestion.priorityReason}
+                  </span>
+                  {suggestion.inOptimalWindow && (
+                    <span className="ml-auto text-[10px] text-emerald-400/70 flex items-center gap-1">
+                      <Zap className="w-3 h-3" /> Optimal window
+                    </span>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 
