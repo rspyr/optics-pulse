@@ -63,8 +63,11 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/leaderboards", "/automation"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/automation"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
+    return <Redirect to="/" />;
+  }
+  if (!isAgency && location === "/leaderboards" && !user?.leaderboardConfig?.visible) {
     return <Redirect to="/" />;
   }
 
@@ -84,7 +87,7 @@ function AuthenticatedRoutes() {
         <Route path="/admin/tenants">{() => <AgencyGuard><AdminTenants /></AgencyGuard>}</Route>
         <Route path="/admin/users">{() => <AgencyGuard><AdminUsers /></AgencyGuard>}</Route>
         <Route path="/admin/training">{() => <AgencyGuard><AdminTraining /></AgencyGuard>}</Route>
-        <Route path="/leaderboards">{() => <AgencyGuard><Leaderboards /></AgencyGuard>}</Route>
+        <Route path="/leaderboards" component={Leaderboards} />
         <Route path="/automation">{() => <AgencyGuard><Automation /></AgencyGuard>}</Route>
         <Route path="/admin/change-logs">{() => <AgencyGuard><AdminChangeLogs /></AgencyGuard>}</Route>
         <Route path="/admin/funnels">{() => <AgencyGuard><AdminFunnels /></AgencyGuard>}</Route>

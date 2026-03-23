@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -69,7 +69,7 @@ const emptyForm: TenantForm = {
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
-type EditTab = "integrations" | "alerts" | "scripts";
+type EditTab = "integrations" | "alerts" | "scripts" | "leaderboard";
 
 export default function AdminTenants() {
   const { data: tenants, isLoading, refetch } = useListTenants();
@@ -513,6 +513,9 @@ export default function AdminTenants() {
               <button onClick={() => setEditTab("scripts")} className={tabClass("scripts")}>
                 <Code className="w-3.5 h-3.5 inline mr-1.5" />Capture Scripts
               </button>
+              <button onClick={() => setEditTab("leaderboard")} className={tabClass("leaderboard")}>
+                <Trophy className="w-3.5 h-3.5 inline mr-1.5" />Leaderboard
+              </button>
             </div>
           </div>
           <div className="p-6">
@@ -532,6 +535,9 @@ export default function AdminTenants() {
             )}
             {editTab === "scripts" && (
               <TenantCaptureScripts tenantId={editId} tenantName={editTenantName} apiBase={API_BASE} />
+            )}
+            {editTab === "leaderboard" && (
+              <TenantLeaderboardConfig tenantId={editId} apiBase={API_BASE} />
             )}
           </div>
         </PremiumCard>
@@ -784,6 +790,135 @@ function TenantCaptureScripts({ tenantId, tenantName, apiBase }: { tenantId: num
       {scriptData.funnelScripts.length === 0 && (
         <p className="text-sm text-muted-foreground">No funnels assigned to this tenant. Assign funnels on the Funnels page.</p>
       )}
+    </div>
+  );
+}
+
+interface LeaderboardConfigData {
+  visible: boolean;
+  displayMode: "named" | "anonymized";
+}
+
+function TenantLeaderboardConfig({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
+  const [config, setConfig] = useState<LeaderboardConfigData>({ visible: false, displayMode: "anonymized" });
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${apiBase}/api/tenants/${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then((data: Record<string, unknown>) => {
+        const lc = data.leaderboardConfig as LeaderboardConfigData | null;
+        if (lc) {
+          setConfig({ visible: Boolean(lc.visible), displayMode: lc.displayMode === "named" ? "named" : "anonymized" });
+        } else {
+          setConfig({ visible: false, displayMode: "anonymized" });
+        }
+      })
+      .catch(() => setConfig({ visible: false, displayMode: "anonymized" }))
+      .finally(() => setLoading(false));
+  }, [tenantId, apiBase]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${apiBase}/api/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ leaderboardConfig: config }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch {}
+    setSaving(false);
+  };
+
+  if (loading) return <div className="text-sm text-muted-foreground">Loading leaderboard config...</div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
+        <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center gap-2">
+          <Trophy className="w-3.5 h-3.5" /> Client Portal Visibility
+        </h4>
+        <p className="text-sm text-muted-foreground">
+          Control whether this client can see the cross-client performance leaderboard in their portal.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={config.visible}
+            onChange={(e) => setConfig(c => ({ ...c, visible: e.target.checked }))}
+            className="w-4 h-4 rounded border-white/20 accent-primary"
+          />
+          <span className="text-sm text-white">Show Leaderboard in Client Portal</span>
+        </label>
+      </div>
+
+      {config.visible && (
+        <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
+          <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider">Display Mode</h4>
+          <p className="text-sm text-muted-foreground">
+            Choose whether this client sees real company names or anonymized labels on the leaderboard.
+          </p>
+          <div className="flex gap-3">
+            <label
+              className={`flex-1 flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                config.displayMode === "named"
+                  ? "border-primary/40 bg-primary/10"
+                  : "border-white/10 bg-white/[0.02] hover:border-white/20"
+              }`}
+            >
+              <input
+                type="radio"
+                name="displayMode"
+                value="named"
+                checked={config.displayMode === "named"}
+                onChange={() => setConfig(c => ({ ...c, displayMode: "named" }))}
+                className="accent-primary"
+              />
+              <div>
+                <p className="text-sm text-white font-medium">Named</p>
+                <p className="text-xs text-muted-foreground">Real company names visible</p>
+              </div>
+            </label>
+            <label
+              className={`flex-1 flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                config.displayMode === "anonymized"
+                  ? "border-primary/40 bg-primary/10"
+                  : "border-white/10 bg-white/[0.02] hover:border-white/20"
+              }`}
+            >
+              <input
+                type="radio"
+                name="displayMode"
+                value="anonymized"
+                checked={config.displayMode === "anonymized"}
+                onChange={() => setConfig(c => ({ ...c, displayMode: "anonymized" }))}
+                className="accent-primary"
+              />
+              <div>
+                <p className="text-sm text-white font-medium">Anonymized</p>
+                <p className="text-xs text-muted-foreground">Names replaced with "Client A", "Client B", etc.</p>
+              </div>
+            </label>
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm disabled:opacity-50"
+      >
+        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Trophy className="w-4 h-4" />}
+        {saved ? "Saved!" : "Save Leaderboard Settings"}
+      </button>
     </div>
   );
 }

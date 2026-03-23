@@ -10,6 +10,7 @@ export const tenantsTable = pgTable("tenants", {
   apiConfig: jsonb("api_config"),
   alertConfig: jsonb("alert_config"),
   communicationConfig: jsonb("communication_config"),
+  leaderboardConfig: jsonb("leaderboard_config"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

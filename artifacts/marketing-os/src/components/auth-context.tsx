@@ -1,5 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 
+interface LeaderboardConfig {
+  visible: boolean;
+  displayMode: "named" | "anonymized";
+}
+
 interface AuthUser {
   id: number;
   email: string;
@@ -7,6 +12,7 @@ interface AuthUser {
   role: "super_admin" | "agency_user" | "client_admin" | "client_user";
   tenantId: number | null;
   tenantName: string | null;
+  leaderboardConfig: LeaderboardConfig | null;
 }
 
 interface AuthContextType {

@@ -8,6 +8,7 @@ import {
   DollarSign, Target, BarChart3, Users, Eye, EyeOff, ShoppingBag, Crown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/components/auth-context";
 
 type MetricKey = "closeRate" | "revenue" | "cpl" | "bookingRate";
 
@@ -41,12 +42,19 @@ export default function Leaderboards() {
   const [activeMetric, setActiveMetric] = useState<MetricKey>("closeRate");
   const [anonymized, setAnonymized] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<LeaderboardEntry | null>(null);
+  const { isAgency } = useAuth();
 
   const { data, isLoading, error, refetch } = useGetAdminLeaderboard({ metric: activeMetric });
 
   const tab = METRIC_TABS.find(t => t.key === activeMetric)!;
 
-  const getDisplayName = (name: string, index: number) => anonymized ? `Client ${String.fromCharCode(65 + index)}` : name;
+  const serverAnonymized = (data as Record<string, unknown> | undefined)?.forceAnonymized === true;
+  const effectiveAnonymized = serverAnonymized || anonymized;
+
+  const getDisplayName = (entry: LeaderboardEntry, index: number) => {
+    if ((entry as Record<string, unknown>).isOwnTenant) return entry.tenantName;
+    return effectiveAnonymized ? `Client ${String.fromCharCode(65 + index)}` : entry.tenantName;
+  };
 
   if (isLoading) {
     return (
@@ -84,18 +92,20 @@ export default function Leaderboards() {
           <GradientHeading className="text-3xl md:text-4xl mb-2">Leaderboards</GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-wide">CROSS-CLIENT PERFORMANCE RANKINGS</p>
         </div>
-        <button
-          onClick={() => setAnonymized(!anonymized)}
-          className={cn(
-            "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors",
-            anonymized
-              ? "bg-primary/20 border-primary/40 text-primary"
-              : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
-          )}
-        >
-          {anonymized ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          {anonymized ? "Anonymized" : "Named View"}
-        </button>
+        {isAgency && (
+          <button
+            onClick={() => setAnonymized(!anonymized)}
+            className={cn(
+              "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors",
+              anonymized
+                ? "bg-primary/20 border-primary/40 text-primary"
+                : "bg-white/5 border-white/10 text-muted-foreground hover:text-white"
+            )}
+          >
+            {anonymized ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            {anonymized ? "Anonymized" : "Named View"}
+          </button>
+        )}
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -154,6 +164,7 @@ export default function Leaderboards() {
                 const vsAvg = agencyAvg > 0 ? ((entry.metricValue - agencyAvg) / agencyAvg) * 100 : 0;
                 const higherIsBetter = activeMetric !== "cpl";
                 const isGood = higherIsBetter ? vsAvg > 0 : vsAvg < 0;
+                const isOwn = (entry as Record<string, unknown>).isOwnTenant === true;
 
                 return (
                   <tr
@@ -161,13 +172,17 @@ export default function Leaderboards() {
                     onClick={() => setSelectedEntry(entry)}
                     className={cn(
                       "group hover:bg-white/[0.03] transition-colors cursor-pointer",
-                      entry.isOutlier && entry.outlierDirection === "underperforming" && "bg-red-500/[0.03]"
+                      isOwn && "bg-primary/[0.06] ring-1 ring-inset ring-primary/30 shadow-[inset_0_0_20px_rgba(242,5,5,0.06)]",
+                      !isOwn && entry.isOutlier && entry.outlierDirection === "underperforming" && "bg-red-500/[0.03]"
                     )}
                   >
                     <td className="p-4"><RankBadge rank={entry.rank} /></td>
                     <td className="p-4">
                       <div className="flex items-center gap-3">
-                        <span className="font-medium text-white">{getDisplayName(entry.tenantName, idx)}</span>
+                        <span className="font-medium text-white">{getDisplayName(entry, idx)}</span>
+                        {isOwn && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary/20 text-primary border border-primary/30">Your Company</span>
+                        )}
                         {entry.isOutlier && (
                           <Badge variant={entry.outlierDirection === "underperforming" ? "danger" : "success"}>
                             <AlertTriangle className="w-3 h-3 mr-1" />
@@ -205,7 +220,7 @@ export default function Leaderboards() {
       {selectedEntry && (
         <ClientDetailModal
           entry={selectedEntry}
-          displayName={getDisplayName(selectedEntry.tenantName, rankings.findIndex(r => r.tenantId === selectedEntry.tenantId))}
+          displayName={getDisplayName(selectedEntry, rankings.findIndex(r => r.tenantId === selectedEntry.tenantId))}
           agencyAverage={agencyAvg}
           metricTab={tab}
           onClose={() => setSelectedEntry(null)}

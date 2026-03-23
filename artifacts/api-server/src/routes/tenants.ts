@@ -58,6 +58,11 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
     callPlatform: rawCommConfig.callPlatform || "native",
     textPlatform: rawCommConfig.textPlatform || "native",
   };
+  const rawLbConfig = (tenant.leaderboardConfig || {}) as Record<string, unknown>;
+  result.leaderboardConfig = {
+    visible: rawLbConfig.visible !== undefined ? Boolean(rawLbConfig.visible) : false,
+    displayMode: rawLbConfig.displayMode === "named" ? "named" : "anonymized",
+  };
   return result;
 }
 
@@ -160,6 +165,18 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     if (rawComm.callPlatform) sanitizedComm.callPlatform = rawComm.callPlatform;
     if (rawComm.textPlatform) sanitizedComm.textPlatform = rawComm.textPlatform;
     (updateData as Record<string, unknown>).communicationConfig = sanitizedComm;
+  }
+  if (req.body.leaderboardConfig && typeof req.body.leaderboardConfig === "object") {
+    const rawLb = req.body.leaderboardConfig as Record<string, unknown>;
+    const validDisplayModes = ["named", "anonymized"];
+    const lbConfig: Record<string, unknown> = {};
+    if (rawLb.visible !== undefined) lbConfig.visible = Boolean(rawLb.visible);
+    if (rawLb.displayMode && validDisplayModes.includes(String(rawLb.displayMode))) {
+      lbConfig.displayMode = rawLb.displayMode;
+    }
+    const [existingForLb] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    const existingLb = (existingForLb?.leaderboardConfig || {}) as Record<string, unknown>;
+    (updateData as Record<string, unknown>).leaderboardConfig = { ...existingLb, ...lbConfig };
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

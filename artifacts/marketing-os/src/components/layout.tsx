@@ -44,7 +44,7 @@ const AGENCY_NAV = [
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
 ];
 
-const CLIENT_NAV_ADMIN = [
+const CLIENT_NAV_ADMIN_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/leads", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
@@ -53,7 +53,7 @@ const CLIENT_NAV_ADMIN = [
   { href: "/settings", label: "Client Settings", icon: Settings },
 ];
 
-const CLIENT_NAV = [
+const CLIENT_NAV_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/leads", label: "Pulse", icon: PulseIcon },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
@@ -61,12 +61,22 @@ const CLIENT_NAV = [
   { href: "/settings", label: "Client Settings", icon: Settings },
 ];
 
+function getClientNav(isAdmin: boolean, leaderboardVisible: boolean) {
+  const base = isAdmin ? [...CLIENT_NAV_ADMIN_BASE] : [...CLIENT_NAV_BASE];
+  if (leaderboardVisible) {
+    const settingsIdx = base.findIndex(item => item.href === "/settings");
+    base.splice(settingsIdx >= 0 ? settingsIdx : base.length, 0, { href: "/leaderboards", label: "Leaderboards", icon: Trophy });
+  }
+  return base;
+}
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
   const { user, logout, isAgency } = useAuth();
 
-  const navItems = isAgency ? AGENCY_NAV : (user?.role === "client_admin" ? CLIENT_NAV_ADMIN : CLIENT_NAV);
+  const leaderboardVisible = user?.leaderboardConfig?.visible ?? false;
+  const navItems = isAgency ? AGENCY_NAV : getClientNav(user?.role === "client_admin", leaderboardVisible);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

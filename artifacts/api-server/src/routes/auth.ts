@@ -28,9 +28,17 @@ router.post("/auth/login", async (req, res) => {
     }
 
     let tenantName: string | null = null;
+    let leaderboardConfig: { visible: boolean; displayMode: string } | null = null;
     if (user.tenantId) {
       const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
       tenantName = tenant?.name || null;
+      if (tenant?.leaderboardConfig) {
+        const lbRaw = tenant.leaderboardConfig as Record<string, unknown>;
+        leaderboardConfig = {
+          visible: Boolean(lbRaw.visible),
+          displayMode: lbRaw.displayMode === "named" ? "named" : "anonymized",
+        };
+      }
     }
 
     req.session.userId = user.id;
@@ -44,6 +52,7 @@ router.post("/auth/login", async (req, res) => {
         role: user.role,
         tenantId: user.tenantId,
         tenantName,
+        leaderboardConfig,
       });
     });
   } catch (error: unknown) {
@@ -77,9 +86,17 @@ router.get("/auth/me", async (req, res) => {
   }
 
   let tenantName: string | null = null;
+  let leaderboardConfig: { visible: boolean; displayMode: string } | null = null;
   if (user.tenantId) {
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
     tenantName = tenant?.name || null;
+    if (tenant?.leaderboardConfig) {
+      const lbRaw = tenant.leaderboardConfig as Record<string, unknown>;
+      leaderboardConfig = {
+        visible: Boolean(lbRaw.visible),
+        displayMode: lbRaw.displayMode === "named" ? "named" : "anonymized",
+      };
+    }
   }
 
   res.json({
@@ -89,6 +106,7 @@ router.get("/auth/me", async (req, res) => {
     role: user.role,
     tenantId: user.tenantId,
     tenantName,
+    leaderboardConfig,
   });
 });
 

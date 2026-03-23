@@ -259,13 +259,34 @@ async function computeTenantMetrics(tenantId: number, startDate?: string, endDat
   };
 }
 
-router.get("/admin/leaderboard", ...agencyOnly, async (req, res) => {
+router.get("/admin/leaderboard", requireAuth, async (req, res) => {
   try {
     const metric = (req.query.metric as string) || "closeRate";
     const validMetrics = ["closeRate", "revenue", "cpl", "bookingRate"];
     if (!validMetrics.includes(metric)) {
       res.status(400).json({ error: `metric must be one of: ${validMetrics.join(", ")}` });
       return;
+    }
+
+    const role = req.session.userRole;
+    const isAgency = role === "super_admin" || role === "agency_user";
+    let forceAnonymize = false;
+
+    if (!isAgency) {
+      const callerTenantId = req.session.tenantId;
+      if (!callerTenantId) {
+        res.status(403).json({ error: "No tenant associated with user" });
+        return;
+      }
+      const [callerTenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, callerTenantId));
+      const lbConfig = (callerTenant?.leaderboardConfig || {}) as Record<string, unknown>;
+      if (!lbConfig.visible) {
+        res.status(403).json({ error: "Leaderboard is not enabled for your account" });
+        return;
+      }
+      if (lbConfig.displayMode !== "named") {
+        forceAnonymize = true;
+      }
     }
 
     const now = new Date();
@@ -345,12 +366,22 @@ router.get("/admin/leaderboard", ...agencyOnly, async (req, res) => {
       return { ...e, isOutlier, outlierDirection: isOutlier ? direction : null };
     });
 
+    const callerTenantId = req.session.tenantId;
+    const finalRankings = forceAnonymize
+      ? flagged.map((e, i) => ({
+          ...e,
+          tenantName: e.tenantId === callerTenantId ? e.tenantName : `Client ${String.fromCharCode(65 + i)}`,
+          isOwnTenant: e.tenantId === callerTenantId,
+        }))
+      : flagged.map(e => ({ ...e, isOwnTenant: !isAgency && e.tenantId === callerTenantId }));
+
     res.json({
       metric,
       period: { start: startDate, end: endDate },
       previousPeriod: { start: prevStartDate, end: prevEndDate },
       agencyAverage,
-      rankings: flagged,
+      rankings: finalRankings,
+      forceAnonymized: forceAnonymize,
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to get leaderboard";
