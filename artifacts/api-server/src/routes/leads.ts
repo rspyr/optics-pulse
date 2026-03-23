@@ -5,6 +5,7 @@ import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
 import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
 import { getSmartQueue } from "../services/lead-scoring";
+import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";
 
 const router: IRouter = Router();
 
@@ -81,6 +82,77 @@ router.get("/leads/hud/stats", async (req, res) => {
 
   const stats = await getHudStats(tenantId);
   res.json(stats);
+});
+
+router.get("/leads/hud/comparison", async (req, res) => {
+  const userId = req.session.userId ?? null;
+  const role = req.session.userRole;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
+    : req.session.tenantId ?? null;
+
+  const baseline = (req.query.baseline as string) || "yesterday";
+  const validBaselines = ["yesterday", "last_week", "monthly_avg", "all_time_best"];
+  if (!validBaselines.includes(baseline)) {
+    res.status(400).json({ error: `Invalid baseline. Must be one of: ${validBaselines.join(", ")}` });
+    return;
+  }
+
+  const queryUserId = req.query.userId ? Number(req.query.userId) : userId;
+
+  try {
+    const result = await getComparisonStats(
+      queryUserId,
+      tenantId,
+      baseline as "yesterday" | "last_week" | "monthly_avg" | "all_time_best",
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("[HUD Comparison]", err);
+    res.status(500).json({ error: "Failed to fetch comparison stats" });
+  }
+});
+
+router.get("/leads/hud/historical", async (req, res) => {
+  const userId = req.session.userId ?? null;
+  const role = req.session.userRole;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
+    : req.session.tenantId ?? null;
+
+  const range = (req.query.range as string) || "30";
+  const days = parseInt(range);
+  const endDate = new Date().toISOString().split("T")[0];
+  const startDateObj = new Date();
+  startDateObj.setDate(startDateObj.getDate() - (isNaN(days) ? 30 : days));
+  const startDate = (req.query.startDate as string) || startDateObj.toISOString().split("T")[0];
+  const endDateParam = (req.query.endDate as string) || endDate;
+
+  const queryUserId = req.query.userId ? Number(req.query.userId) : userId;
+
+  try {
+    const result = await getHistoricalStats(queryUserId, tenantId, startDate, endDateParam);
+    res.json(result);
+  } catch (err) {
+    console.error("[HUD Historical]", err);
+    res.status(500).json({ error: "Failed to fetch historical stats" });
+  }
+});
+
+router.post("/leads/hud/aggregate", async (req, res) => {
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    res.status(403).json({ error: "Admin only" });
+    return;
+  }
+  const dateStr = (req.body.date as string) || new Date().toISOString().split("T")[0];
+  try {
+    const count = await aggregateDailyStats(dateStr);
+    res.json({ success: true, coordinatorsProcessed: count, date: dateStr });
+  } catch (err) {
+    console.error("[Aggregate]", err);
+    res.status(500).json({ error: "Aggregation failed" });
+  }
 });
 
 router.get("/leads/comm-config", async (req, res) => {

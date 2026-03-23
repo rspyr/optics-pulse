@@ -15,5 +15,6 @@ export * from "./funnel-types";
 export * from "./tenant-funnel-types";
 export * from "./call-attempts";
 export * from "./scheduled-followups";
+export * from "./coordinator-daily-stats";
 export * from "./reviews";
 export * from "./tracker-heartbeats";
