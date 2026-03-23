@@ -70,13 +70,14 @@ export async function initiateCall(
   if (!lead.phone) throw new Error("Lead has no phone number");
 
   const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
-  const coordinatorPhone = await getCoordinatorPhone(userId);
   let result: CallResult;
 
   switch (config.callPlatform) {
-    case "callrail":
+    case "callrail": {
+      const coordinatorPhone = await getCoordinatorPhone(userId);
       result = await initiateCallRailCall(config, customerPhone, coordinatorPhone);
       break;
+    }
     case "podium":
       result = await initiatePodiumCall(config, customerPhone);
       break;
