@@ -23,10 +23,14 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
 
+const PulseIcon = ({ className }: { className?: string }) => (
+  <img src="/pulse-logo.png" alt="" className={className} style={{ objectFit: "contain" }} />
+);
+
 const AGENCY_NAV = [
   { href: "/", label: "Command Center", icon: LayoutDashboard },
   { href: "/internal", label: "God View", icon: Shield },
-  { href: "/leads", label: "Pulse", icon: Users },
+  { href: "/leads", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/clients", label: "Client Portal", icon: Building2 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
