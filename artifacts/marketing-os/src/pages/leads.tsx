@@ -64,6 +64,7 @@ function useScripts() {
 }
 
 function findScript(scripts: ScriptRecord[], type: string, source: string, stage?: string): string | null {
+  if (!scripts || !Array.isArray(scripts)) return null;
   const active = scripts.filter(s => s.type === type && s.isActive);
   const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null));
   if (bySourceAndStage) return bySourceAndStage.content;

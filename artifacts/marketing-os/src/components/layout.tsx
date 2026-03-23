@@ -17,6 +17,7 @@ import {
   Zap,
   ClipboardList,
   GitBranch,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -31,6 +32,7 @@ const AGENCY_NAV = [
   { href: "/admin/users", label: "Users", icon: UserCog },
   { href: "/leaderboards", label: "Leaderboards", icon: Trophy },
   { href: "/automation", label: "Automation", icon: Zap },
+  { href: "/admin/scripts", label: "Scripts", icon: FileText },
   { href: "/admin/change-logs", label: "Change Log", icon: ClipboardList },
   { href: "/admin/funnels", label: "Funnels & Scripts", icon: GitBranch },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },

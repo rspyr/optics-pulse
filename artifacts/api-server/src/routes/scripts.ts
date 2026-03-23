@@ -45,9 +45,20 @@ async function seedDefaultScripts(tenantId: number, userId: number | null) {
   }
 }
 
+function resolveTenantId(req: import("express").Request): number | null {
+  const sessionTid = req.session.tenantId;
+  if (sessionTid) return sessionTid;
+  const role = req.session.userRole;
+  if ((role === "super_admin" || role === "agency_user") && req.query.tenantId) {
+    const parsed = parseInt(req.query.tenantId as string);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
 router.get("/scripts", async (req, res) => {
-  const tenantId = req.session.tenantId;
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant — select a client or pass ?tenantId=" }); return; }
 
   await seedDefaultScripts(tenantId, req.session.userId ?? null);
 
@@ -64,7 +75,7 @@ router.get("/scripts", async (req, res) => {
 
 router.get("/scripts/:id", async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const [script] = await db.select().from(scriptsTable)
@@ -76,7 +87,7 @@ router.get("/scripts/:id", async (req, res) => {
 
 router.get("/scripts/:id/versions", async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const [script] = await db.select().from(scriptsTable)
@@ -91,7 +102,7 @@ router.get("/scripts/:id/versions", async (req, res) => {
 });
 
 router.post("/scripts", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const { type, name, sourceFilter, stageFilter, content } = req.body;
@@ -125,7 +136,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user"), async (req, r
 
 router.put("/scripts/:id", requireRole("super_admin", "agency_user"), async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const [existing] = await db.select().from(scriptsTable)
@@ -183,7 +194,7 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user"), async (req
 router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_user"), async (req, res) => {
   const id = parseInt(req.params.id);
   const versionId = parseInt(req.params.versionId);
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const [existing] = await db.select().from(scriptsTable)
@@ -227,7 +238,7 @@ router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_
 
 router.delete("/scripts/:id", requireRole("super_admin", "agency_user"), async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const [script] = await db.select().from(scriptsTable)

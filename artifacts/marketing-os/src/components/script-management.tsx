@@ -58,7 +58,7 @@ function substitutePreview(content: string) {
     .replace(/\[INTEREST\]/g, "AC repair");
 }
 
-export default function ScriptManagement() {
+export default function ScriptManagement({ tenantId }: { tenantId?: number | null }) {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeType, setActiveType] = useState<string>("call");
@@ -76,15 +76,19 @@ export default function ScriptManagement() {
   const [editSource, setEditSource] = useState("");
   const [editStage, setEditStage] = useState("");
 
+  const tq = tenantId ? `?tenantId=${tenantId}` : "";
+
   const fetchScripts = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/scripts`, { credentials: "include" });
+      const url = `${API_BASE}/scripts${tq}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) { setLoading(false); return; }
       const data = await res.json();
-      setScripts(data);
+      if (Array.isArray(data)) setScripts(data);
     } catch { /* ignore */ }
     setLoading(false);
-  }, []);
+  }, [tq]);
 
   useEffect(() => { fetchScripts(); }, [fetchScripts]);
 
@@ -139,14 +143,14 @@ export default function ScriptManagement() {
 
       let res: Response;
       if (creating) {
-        res = await fetch(`${API_BASE}/scripts`, {
+        res = await fetch(`${API_BASE}/scripts${tq}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify(body),
         });
       } else if (selectedScript) {
-        res = await fetch(`${API_BASE}/scripts/${selectedScript.id}`, {
+        res = await fetch(`${API_BASE}/scripts/${selectedScript.id}${tq}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -174,7 +178,7 @@ export default function ScriptManagement() {
   const handleDelete = async (script: Script) => {
     if (!confirm(`Delete "${script.name}"? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`${API_BASE}/scripts/${script.id}`, {
+      const res = await fetch(`${API_BASE}/scripts/${script.id}${tq}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -193,7 +197,7 @@ export default function ScriptManagement() {
 
   const loadVersions = async (script: Script) => {
     try {
-      const res = await fetch(`${API_BASE}/scripts/${script.id}/versions`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/scripts/${script.id}/versions${tq}`, { credentials: "include" });
       const data = await res.json();
       setVersions(data);
       setShowVersions(true);
@@ -202,7 +206,7 @@ export default function ScriptManagement() {
 
   const handleRevert = async (script: Script, versionId: number) => {
     try {
-      const res = await fetch(`${API_BASE}/scripts/${script.id}/revert/${versionId}`, {
+      const res = await fetch(`${API_BASE}/scripts/${script.id}/revert/${versionId}${tq}`, {
         method: "PUT",
         credentials: "include",
       });

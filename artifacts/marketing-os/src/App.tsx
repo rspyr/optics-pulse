@@ -21,6 +21,7 @@ import Leaderboards from "@/pages/leaderboards";
 import Automation from "@/pages/automation";
 import AdminChangeLogs from "@/pages/admin-change-logs";
 import AdminFunnels from "@/pages/admin-funnels";
+import AdminScripts from "@/pages/admin-scripts";
 
 import soehneExtra from '@assets/soehne-extrafett_1773849837050.woff2';
 import soehneDrei from '@assets/soehne-dreiviertelfett_1773849837042.woff2';
@@ -61,7 +62,7 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/leaderboards", "/automation"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/leaderboards", "/automation"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <Redirect to="/" />;
   }
@@ -86,6 +87,7 @@ function AuthenticatedRoutes() {
         <Route path="/automation">{() => <AgencyGuard><Automation /></AgencyGuard>}</Route>
         <Route path="/admin/change-logs">{() => <AgencyGuard><AdminChangeLogs /></AgencyGuard>}</Route>
         <Route path="/admin/funnels">{() => <AgencyGuard><AdminFunnels /></AgencyGuard>}</Route>
+        <Route path="/admin/scripts">{() => <AgencyGuard><AdminScripts /></AgencyGuard>}</Route>
         <Route path="/training" component={TrainingResources} />
         <Route component={NotFound} />
       </Switch>
