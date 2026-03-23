@@ -38,6 +38,9 @@ export async function generateCoachingInsights(tenantId: number): Promise<Coachi
     if (!statsByUser[s.userId]) statsByUser[s.userId] = [];
     statsByUser[s.userId].push(s);
   }
+  for (const uid of Object.keys(statsByUser)) {
+    statsByUser[Number(uid)].sort((a, b) => a.date.localeCompare(b.date));
+  }
 
   for (const userId of userIds) {
     const userStats = statsByUser[userId] || [];
