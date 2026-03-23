@@ -182,6 +182,16 @@ export default function Settings() {
             />
           </div>
           <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">CallRail Account ID</label>
+            <input
+              type="text"
+              value={form.callRailAccountId}
+              onChange={e => { trackField("callRailAccountId"); setForm({ ...form, callRailAccountId: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. 123456789"
+            />
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">CallRail API Key</label>
             <input
               type={dirtyFields.has("callRailApiKey") ? "password" : "text"}

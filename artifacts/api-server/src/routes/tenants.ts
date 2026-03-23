@@ -53,7 +53,11 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
     result.loadableConfig = {};
   }
   result.alertConfig = tenant.alertConfig || null;
-  result.communicationConfig = tenant.communicationConfig || null;
+  const rawCommConfig = (tenant.communicationConfig || {}) as Record<string, unknown>;
+  result.communicationConfig = {
+    callPlatform: rawCommConfig.callPlatform || "native",
+    textPlatform: rawCommConfig.textPlatform || "native",
+  };
   return result;
 }
 
@@ -141,18 +145,21 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   if (req.body.communicationConfig && typeof req.body.communicationConfig === "object") {
     const validCallPlatforms = ["native", "callrail", "podium"];
     const validTextPlatforms = ["native", "podium"];
-    const newComm = req.body.communicationConfig as Record<string, unknown>;
-    if (newComm.callPlatform && !validCallPlatforms.includes(String(newComm.callPlatform))) {
+    const rawComm = req.body.communicationConfig as Record<string, unknown>;
+    if (rawComm.callPlatform && !validCallPlatforms.includes(String(rawComm.callPlatform))) {
       res.status(400).json({ error: `Invalid callPlatform. Must be one of: ${validCallPlatforms.join(", ")}` });
       return;
     }
-    if (newComm.textPlatform && !validTextPlatforms.includes(String(newComm.textPlatform))) {
+    if (rawComm.textPlatform && !validTextPlatforms.includes(String(rawComm.textPlatform))) {
       res.status(400).json({ error: `Invalid textPlatform. Must be one of: ${validTextPlatforms.join(", ")}` });
       return;
     }
     const [existingForComm] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const existingComm = (existingForComm?.communicationConfig || {}) as Record<string, unknown>;
-    (updateData as Record<string, unknown>).communicationConfig = { ...existingComm, ...newComm };
+    const sanitizedComm: Record<string, unknown> = { ...existingComm };
+    if (rawComm.callPlatform) sanitizedComm.callPlatform = rawComm.callPlatform;
+    if (rawComm.textPlatform) sanitizedComm.textPlatform = rawComm.textPlatform;
+    (updateData as Record<string, unknown>).communicationConfig = sanitizedComm;
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

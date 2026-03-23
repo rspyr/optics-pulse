@@ -183,7 +183,6 @@ router.post("/leads/:leadId/call", async (req, res) => {
       lead.tenantId,
       leadId,
       userId,
-      req.body?.callerPhone,
     );
     res.json(result);
   } catch (err) {

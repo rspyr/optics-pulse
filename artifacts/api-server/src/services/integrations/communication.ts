@@ -1,4 +1,4 @@
-import { db, tenantsTable, callAttemptsTable, leadsTable } from "@workspace/db";
+import { db, tenantsTable, callAttemptsTable, leadsTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { decryptConfig } from "../../lib/encryption";
 
@@ -8,6 +8,7 @@ export interface CommunicationConfig {
   callRailAccountId?: string;
   callRailApiKey?: string;
   callRailCompanyId?: string;
+  callRailTrackingNumber?: string;
   podiumApiToken?: string;
   podiumLocationId?: string;
   podiumPhoneNumber?: string;
@@ -43,41 +44,47 @@ export async function getTenantCommConfig(tenantId: number): Promise<Communicati
   return {
     callPlatform: (commConfig.callPlatform as CommunicationConfig["callPlatform"]) || "native",
     textPlatform: (commConfig.textPlatform as CommunicationConfig["textPlatform"]) || "native",
-    callRailAccountId: (apiConfig.callRailAccountId as string) || (commConfig.callRailAccountId as string) || undefined,
-    callRailApiKey: (apiConfig.callRailApiKey as string) || (commConfig.callRailApiKey as string) || undefined,
-    callRailCompanyId: (apiConfig.callRailCompanyId as string) || (commConfig.callRailCompanyId as string) || undefined,
-    podiumApiToken: (apiConfig.podiumApiToken as string) || (commConfig.podiumApiToken as string) || undefined,
-    podiumLocationId: (apiConfig.podiumLocationId as string) || (commConfig.podiumLocationId as string) || undefined,
-    podiumPhoneNumber: (commConfig.podiumPhoneNumber as string) || undefined,
+    callRailAccountId: (apiConfig.callRailAccountId as string) || undefined,
+    callRailApiKey: (apiConfig.callRailApiKey as string) || undefined,
+    callRailCompanyId: (apiConfig.callRailCompanyId as string) || undefined,
+    callRailTrackingNumber: (apiConfig.callRailTrackingNumber as string) || undefined,
+    podiumApiToken: (apiConfig.podiumApiToken as string) || undefined,
+    podiumLocationId: (apiConfig.podiumLocationId as string) || undefined,
+    podiumPhoneNumber: (apiConfig.podiumPhoneNumber as string) || undefined,
   };
+}
+
+async function getCoordinatorPhone(userId: number): Promise<string | null> {
+  const [user] = await db.select({ phone: usersTable.phone }).from(usersTable).where(eq(usersTable.id, userId));
+  return user?.phone || null;
 }
 
 export async function initiateCall(
   tenantId: number,
   leadId: number,
   userId: number,
-  callerPhone?: string,
 ): Promise<CallResult> {
   const config = await getTenantCommConfig(tenantId);
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) throw new Error("Lead not found");
   if (!lead.phone) throw new Error("Lead has no phone number");
 
-  const cleanPhone = lead.phone.replace(/[^0-9+]/g, "");
+  const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
+  const coordinatorPhone = await getCoordinatorPhone(userId);
   let result: CallResult;
 
   switch (config.callPlatform) {
     case "callrail":
-      result = await initiateCallRailCall(config, cleanPhone, callerPhone);
+      result = await initiateCallRailCall(config, customerPhone, coordinatorPhone);
       break;
     case "podium":
-      result = await initiatePodiumCall(config, cleanPhone);
+      result = await initiatePodiumCall(config, customerPhone);
       break;
     default:
       result = {
         success: true,
         platform: "native",
-        message: `Use your phone to call ${cleanPhone}`,
+        message: `Use your phone to call ${customerPhone}`,
       };
   }
 
@@ -104,18 +111,18 @@ export async function initiateText(
   if (!lead) throw new Error("Lead not found");
   if (!lead.phone) throw new Error("Lead has no phone number");
 
-  const cleanPhone = lead.phone.replace(/[^0-9+]/g, "");
+  const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
   let result: TextResult;
 
   switch (config.textPlatform) {
     case "podium":
-      result = await sendPodiumText(config, cleanPhone, messageBody);
+      result = await sendPodiumText(config, customerPhone, messageBody);
       break;
     default:
       result = {
         success: true,
         platform: "native",
-        message: `Use your phone to text ${cleanPhone}`,
+        message: `Use your phone to text ${customerPhone}`,
       };
   }
 
@@ -133,11 +140,15 @@ export async function initiateText(
 
 async function initiateCallRailCall(
   config: CommunicationConfig,
-  targetPhone: string,
-  callerPhone?: string,
+  customerPhone: string,
+  coordinatorPhone: string | null,
 ): Promise<CallResult> {
   if (!config.callRailApiKey || !config.callRailAccountId) {
     return { success: false, platform: "callrail", message: "CallRail not configured — missing API key or account ID" };
+  }
+
+  if (!coordinatorPhone) {
+    return { success: false, platform: "callrail", message: "Your profile has no phone number set — add your phone in settings to use CallRail click-to-call" };
   }
 
   try {
@@ -150,9 +161,9 @@ async function initiateCallRailCall(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          caller_id: callerPhone || undefined,
-          business_phone_number: targetPhone,
-          customer_phone_number: targetPhone,
+          caller_id: coordinatorPhone,
+          customer_phone_number: customerPhone,
+          ...(config.callRailTrackingNumber ? { tracking_phone_number: config.callRailTrackingNumber } : {}),
           ...(config.callRailCompanyId ? { company_id: config.callRailCompanyId } : {}),
         }),
       },
@@ -168,7 +179,7 @@ async function initiateCallRailCall(
     return {
       success: true,
       platform: "callrail",
-      message: "Call initiated through CallRail",
+      message: "Call initiated through CallRail — your phone will ring shortly",
       externalId: String(data.id || ""),
     };
   } catch (err) {
@@ -179,7 +190,7 @@ async function initiateCallRailCall(
 
 async function initiatePodiumCall(
   config: CommunicationConfig,
-  targetPhone: string,
+  customerPhone: string,
 ): Promise<CallResult> {
   if (!config.podiumApiToken || !config.podiumLocationId) {
     return { success: false, platform: "podium", message: "Podium not configured — missing API token or location ID" };
@@ -196,7 +207,7 @@ async function initiatePodiumCall(
         },
         body: JSON.stringify({
           type: "phone",
-          customerPhoneNumber: targetPhone,
+          customerPhoneNumber: customerPhone,
         }),
       },
     );
@@ -222,7 +233,7 @@ async function initiatePodiumCall(
 
 async function sendPodiumText(
   config: CommunicationConfig,
-  targetPhone: string,
+  customerPhone: string,
   messageBody: string,
 ): Promise<TextResult> {
   if (!config.podiumApiToken || !config.podiumLocationId) {
@@ -239,7 +250,7 @@ async function sendPodiumText(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          customerPhoneNumber: targetPhone,
+          customerPhoneNumber: customerPhone,
           body: messageBody,
           ...(config.podiumPhoneNumber ? { sendingPhoneNumber: config.podiumPhoneNumber } : {}),
         }),
@@ -280,15 +291,15 @@ export function getCommConfigStatus(config: CommunicationConfig): {
 
   if (config.callPlatform === "callrail") {
     callReady = !!(config.callRailApiKey && config.callRailAccountId);
-    callStatusMessage = callReady ? "CallRail connected" : "CallRail credentials missing";
+    callStatusMessage = callReady ? "CallRail connected" : "CallRail credentials missing — add API key and account ID in API Integrations above";
   } else if (config.callPlatform === "podium") {
     callReady = !!(config.podiumApiToken && config.podiumLocationId);
-    callStatusMessage = callReady ? "Podium connected" : "Podium credentials missing";
+    callStatusMessage = callReady ? "Podium connected" : "Podium credentials missing — add API token and location ID in API Integrations above";
   }
 
   if (config.textPlatform === "podium") {
     textReady = !!(config.podiumApiToken && config.podiumLocationId);
-    textStatusMessage = textReady ? "Podium connected" : "Podium credentials missing";
+    textStatusMessage = textReady ? "Podium connected" : "Podium credentials missing — add API token and location ID in API Integrations above";
   }
 
   return {
