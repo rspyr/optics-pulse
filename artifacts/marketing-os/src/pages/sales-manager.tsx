@@ -13,7 +13,7 @@ import ScriptManagement from "@/components/script-management";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
-type Tab = "team" | "scripts" | "activity" | "coaching";
+type Tab = "team" | "scripts" | "activity" | "coaching" | "settings";
 
 interface CoordinatorData {
   id: number;
@@ -133,6 +133,73 @@ function useCoachingInsights(tenantId: number | null) {
   }, [tenantId]);
 
   return { insights, loading };
+}
+
+interface ScriptChange {
+  id: number;
+  category: string;
+  action: string;
+  detail: string;
+  user: string | null;
+  date: string;
+}
+
+function useRecentScriptChanges(tenantId: number | null) {
+  const [changes, setChanges] = useState<ScriptChange[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!tenantId) { setLoading(false); setChanges([]); return; }
+    setLoading(true);
+    fetch(`${API_BASE}/sales-manager/recent-script-changes?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setChanges(d.changes || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [tenantId]);
+
+  return { changes, loading };
+}
+
+interface CommunicationConfig {
+  platform: string;
+  apiKey: string;
+  phoneNumber: string;
+}
+
+function useCommunicationConfig(tenantId: number | null) {
+  const [config, setConfig] = useState<CommunicationConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchConfig = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
+    try {
+      const res = await fetch(`${API_BASE}/settings/communication?tenantId=${tenantId}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setConfig(data);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { fetchConfig(); }, [fetchConfig]);
+
+  const saveConfig = async (updates: Partial<CommunicationConfig>) => {
+    if (!tenantId) return;
+    try {
+      const res = await fetch(`${API_BASE}/settings/communication`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ ...updates, tenantId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConfig(data);
+      }
+    } catch {}
+  };
+
+  return { config, loading, saveConfig, refetch: fetchConfig };
 }
 
 interface TenantOption { id: number; name: string; }
@@ -467,6 +534,127 @@ function CoachingInsightsTab({ insights, loading }: {
   );
 }
 
+function ScriptChangesPanel({ changes, loading }: { changes: ScriptChange[]; loading: boolean }) {
+  if (loading) return <Loader2 className="w-4 h-4 text-primary animate-spin" />;
+  if (changes.length === 0) return null;
+
+  return (
+    <PremiumCard className="p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Clock className="w-4 h-4 text-primary" />
+        <span className="text-xs font-display text-white">Recent Script Changes</span>
+      </div>
+      <div className="space-y-2">
+        {changes.map(c => (
+          <div key={c.id} className="flex items-start gap-2 text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
+            <span className="text-[9px] font-mono text-white/20 flex-shrink-0 mt-0.5">{new Date(c.date).toLocaleDateString()}</span>
+            <div className="flex-1 min-w-0">
+              <span className="text-white/70">{c.detail}</span>
+              {c.user && <span className="text-white/20 ml-1">by {c.user}</span>}
+            </div>
+            <Badge variant={c.action === "created" ? "success" : c.action === "deleted" ? "danger" : "default"} className="text-[8px] flex-shrink-0">
+              {c.action}
+            </Badge>
+          </div>
+        ))}
+      </div>
+    </PremiumCard>
+  );
+}
+
+function SettingsTab({ tenantId }: { tenantId: number | null }) {
+  const { config, loading, saveConfig } = useCommunicationConfig(tenantId);
+  const [platform, setPlatform] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (config) {
+      setPlatform(config.platform || "");
+      setApiKey(config.apiKey || "");
+      setPhoneNumber(config.phoneNumber || "");
+    }
+  }, [config]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await saveConfig({ platform, apiKey, phoneNumber });
+    setSaving(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <SettingsIcon className="w-4 h-4 text-primary" />
+        <span className="text-sm font-display text-white">Communication Platform Settings</span>
+      </div>
+
+      <PremiumCard className="p-6 space-y-4">
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Platform</label>
+          <select
+            value={platform}
+            onChange={e => setPlatform(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            <option value="">Select Platform</option>
+            <option value="podium">Podium</option>
+            <option value="callrail">CallRail</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">API Key</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="Enter API key"
+            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Phone Number</label>
+          <input
+            type="text"
+            value={phoneNumber}
+            onChange={e => setPhoneNumber(e.target.value)}
+            placeholder="+1 (555) 123-4567"
+            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+          />
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+          Save Settings
+        </button>
+      </PremiumCard>
+
+      <PremiumCard className="p-4">
+        <p className="text-xs text-white/30">
+          Configure your communication platform integration. This controls how outbound calls and texts
+          are routed through your preferred provider (Podium, CallRail, or manual dialing).
+        </p>
+      </PremiumCard>
+    </div>
+  );
+}
+
 export default function SalesManager() {
   const { user, isAgency } = useAuth();
   const [tab, setTab] = useState<Tab>("team");
@@ -492,12 +680,14 @@ export default function SalesManager() {
   const { coordinators, teamTotals, loading: teamLoading, refetch: refetchTeam } = useTeamData(effectiveTenantId);
   const { activities, loading: activityLoading, refetch: refetchActivity } = useActivityFeed(effectiveTenantId);
   const { insights, loading: insightsLoading } = useCoachingInsights(effectiveTenantId);
+  const { changes: scriptChanges, loading: scriptChangesLoading } = useRecentScriptChanges(effectiveTenantId);
 
   const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; count?: number }[] = [
     { key: "team", label: "Team Overview", icon: Users, count: teamTotals?.activeCoordinators },
     { key: "scripts", label: "Scripts", icon: FileText },
     { key: "activity", label: "Activity Feed", icon: Activity, count: activities.length > 0 ? activities.length : undefined },
     { key: "coaching", label: "Coaching Insights", icon: Brain, count: insights.filter(i => i.type === "warning").length || undefined },
+    { key: "settings", label: "Settings", icon: SettingsIcon },
   ];
 
   if (isClientUser) {
@@ -570,7 +760,10 @@ export default function SalesManager() {
           />
         )}
         {tab === "scripts" && (
-          <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
+          <div className="space-y-4">
+            <ScriptChangesPanel changes={scriptChanges} loading={scriptChangesLoading} />
+            <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
+          </div>
         )}
         {tab === "activity" && (
           <ActivityFeedTab
@@ -584,6 +777,9 @@ export default function SalesManager() {
             insights={insights}
             loading={insightsLoading}
           />
+        )}
+        {tab === "settings" && (
+          <SettingsTab tenantId={effectiveTenantId} />
         )}
       </div>
     </div>

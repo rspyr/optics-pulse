@@ -1,12 +1,12 @@
-import { Router, type IRouter } from "express";
-import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable } from "@workspace/db";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable, scriptsTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, desc, ne } from "drizzle-orm";
 import { generateCoachingInsights } from "../services/coaching-insights";
 
 const router: IRouter = Router();
 
-function requireManagerRole(req: any, res: any, next: any) {
-  const role = req.session?.userRole;
+function requireManagerRole(req: Request, res: Response, next: NextFunction) {
+  const role = (req.session as Record<string, unknown>)?.userRole as string | undefined;
   if (!role || !["super_admin", "agency_user", "client_admin"].includes(role)) {
     res.status(403).json({ error: "Access denied. Requires manager role." });
     return;
@@ -14,12 +14,13 @@ function requireManagerRole(req: any, res: any, next: any) {
   next();
 }
 
-function resolveTenantId(req: any): number | null {
-  const role = req.session?.userRole;
+function resolveTenantId(req: Request): number | null {
+  const session = req.session as Record<string, unknown>;
+  const role = session?.userRole as string | undefined;
   if (role === "super_admin" || role === "agency_user") {
-    return req.query.tenantId ? Number(req.query.tenantId) : req.session.tenantId ?? null;
+    return req.query.tenantId ? Number(req.query.tenantId) : (session.tenantId as number | null) ?? null;
   }
-  return req.session?.tenantId ?? null;
+  return (session?.tenantId as number | null) ?? null;
 }
 
 router.use(requireManagerRole);
