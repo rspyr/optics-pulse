@@ -28,10 +28,8 @@ export default function Login() {
       <div className="relative z-10 w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-[0_0_25px_rgba(242,5,5,0.5)]">
-              <span className="font-display text-white text-2xl leading-none pt-1">M</span>
-            </div>
-            <span className="font-display text-3xl tracking-widest text-white mt-1">MARKETING OS</span>
+            <img src="/optics-logo.png" alt="Optics" className="w-12 h-12" />
+            <span className="font-display text-3xl tracking-widest text-white mt-1">OPTICS</span>
           </div>
           <p className="text-muted-foreground text-sm font-sub tracking-wide">HVAC LAUNCH ATTRIBUTION PLATFORM</p>
         </div>

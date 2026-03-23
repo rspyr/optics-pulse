@@ -68,7 +68,7 @@ async function sendAutomationAlertEmail(params: {
     await transporter.sendMail({
       from: fromEmail,
       to: toEmail,
-      subject: `[Marketing OS] Automation Alert: ${params.ruleName}`,
+      subject: `[Optics] Automation Alert: ${params.ruleName}`,
       html: `
         <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;background:#0A0F1F;color:#fff;padding:32px;border-radius:12px;">
           <h2 style="color:#F20505;margin:0 0 16px;">Automation Rule Triggered</h2>
@@ -79,7 +79,7 @@ async function sendAutomationAlertEmail(params: {
             <tr><td style="padding:8px 0;color:#879199;">Condition</td><td style="padding:8px 0;color:#F20505;">${params.conditionLabel}: ${params.actualValue} (threshold: ${params.conditionValue})</td></tr>
             <tr><td style="padding:8px 0;color:#879199;">Action</td><td style="padding:8px 0;color:#fff;">${actionLabel}</td></tr>
           </table>
-          <p style="margin-top:24px;color:#879199;font-size:12px;">This is an automated alert from Marketing OS.</p>
+          <p style="margin-top:24px;color:#879199;font-size:12px;">This is an automated alert from Optics.</p>
         </div>
       `,
     });

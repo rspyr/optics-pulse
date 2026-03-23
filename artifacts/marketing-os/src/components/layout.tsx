@@ -67,10 +67,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
         <div className="p-6 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(242,5,5,0.5)]">
-            <span className="font-display text-white text-xl leading-none pt-1">M</span>
-          </div>
-          <span className="font-display text-xl tracking-widest text-white mt-1">MARKETING OS</span>
+          <img src="/optics-logo.png" alt="Optics" className="w-8 h-8" />
+          <span className="font-display text-xl tracking-widest text-white mt-1">OPTICS</span>
         </div>
 
         {user && (

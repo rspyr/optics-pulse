@@ -99,17 +99,17 @@ async function sendClientAlertEmail(
     await transporter.sendMail({
       from: fromEmail,
       to,
-      subject: `[Marketing OS] Weekly Performance Alert — ${tenantName}`,
+      subject: `[Optics] Weekly Performance Alert — ${tenantName}`,
       html: `
         <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;background:#0A0F1F;color:#fff;padding:32px;border-radius:12px;">
           <div style="text-align:center;margin-bottom:24px;">
-            <div style="display:inline-block;width:40px;height:40px;background:#F20505;border-radius:8px;line-height:40px;font-weight:bold;font-size:20px;color:#fff;">M</div>
+            <span style="display:inline-block;font-size:20px;font-weight:800;color:#fff;">Optics</span>
           </div>
           <h2 style="color:#fff;margin:0 0 8px;font-size:20px;">Performance Alert for ${tenantName}</h2>
           <p style="color:#879199;margin:0 0 24px;font-size:14px;">Your weekly marketing performance summary shows items needing attention:</p>
           <table style="width:100%;border-collapse:collapse;">${alertRows}</table>
-          <p style="margin-top:24px;color:#879199;font-size:12px;">Log in to Marketing OS for full details and recommendations.</p>
-          <p style="color:#4B5563;font-size:11px;margin-top:16px;">This is an automated alert from Marketing OS by HVAC Launch.</p>
+          <p style="margin-top:24px;color:#879199;font-size:12px;">Log in to Optics for full details and recommendations.</p>
+          <p style="color:#4B5563;font-size:11px;margin-top:16px;">This is an automated alert from Optics by HVAC Launch.</p>
         </div>
       `,
     });

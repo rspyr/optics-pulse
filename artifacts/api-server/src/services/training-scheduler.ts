@@ -113,7 +113,7 @@ async function sendTrainingAlertEmail(params: AlertEmailParams): Promise<boolean
   const htmlBody = `
     <div style="font-family: Inter, sans-serif; max-width: 600px; margin: 0 auto; background: #0A0F1F; color: #ffffff; padding: 32px; border-radius: 12px;">
       <div style="text-align: center; margin-bottom: 24px;">
-        <h1 style="font-size: 24px; font-weight: 800; color: #ffffff; margin: 0;">Marketing OS</h1>
+        <h1 style="font-size: 24px; font-weight: 800; color: #ffffff; margin: 0;">Optics</h1>
         <p style="color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin: 4px 0 0;">Performance Alert</p>
       </div>
 
@@ -141,7 +141,7 @@ async function sendTrainingAlertEmail(params: AlertEmailParams): Promise<boolean
       </div>
 
       <p style="color: #6b7280; font-size: 11px; text-align: center; margin: 0;">
-        This alert was sent by Marketing OS. You will not receive another alert for this metric within 7 days.
+        This alert was sent by Optics. You will not receive another alert for this metric within 7 days.
       </p>
     </div>
   `;
@@ -155,7 +155,7 @@ Recommended Training: ${trainingTitle}
 ${trainingDescription}
 ${trainingUrl ? `\nAccess here: ${trainingUrl}` : ""}
 
-— Marketing OS
+— Optics
   `.trim();
 
   const transporter = createTransporter();
@@ -164,7 +164,7 @@ ${trainingUrl ? `\nAccess here: ${trainingUrl}` : ""}
   if (transporter) {
     try {
       await transporter.sendMail({
-        from: `"Marketing OS" <${fromEmail}>`,
+        from: `"Optics" <${fromEmail}>`,
         to: ownerEmail,
         subject,
         text: textBody,

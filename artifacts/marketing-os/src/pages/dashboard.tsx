@@ -91,7 +91,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `marketing-os-report-${startDate}-${endDate}.csv`;
+    a.download = `optics-report-${startDate}-${endDate}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     setExporting(false);
