@@ -25,6 +25,7 @@ interface CoordinatorData {
     bookings: number;
     bookingRate: number;
     commission: number;
+    speedToLead: number;
   };
   week: {
     avgBookingRate: number;
@@ -173,10 +174,15 @@ function useCommunicationConfig(tenantId: number | null) {
   const fetchConfig = useCallback(async () => {
     if (!tenantId) { setLoading(false); return; }
     try {
-      const res = await fetch(`${API_BASE}/settings/communication?tenantId=${tenantId}`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        setConfig(data);
+        const cc = data.communicationConfig || {};
+        setConfig({
+          platform: cc.platform || "",
+          apiKey: cc.apiKey || "",
+          phoneNumber: cc.phoneNumber || "",
+        });
       }
     } catch {} finally { setLoading(false); }
   }, [tenantId]);
@@ -186,15 +192,20 @@ function useCommunicationConfig(tenantId: number | null) {
   const saveConfig = async (updates: Partial<CommunicationConfig>) => {
     if (!tenantId) return;
     try {
-      const res = await fetch(`${API_BASE}/settings/communication`, {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ ...updates, tenantId }),
+        body: JSON.stringify({ communicationConfig: updates }),
       });
       if (res.ok) {
         const data = await res.json();
-        setConfig(data);
+        const cc = data.communicationConfig || {};
+        setConfig({
+          platform: cc.platform || "",
+          apiKey: cc.apiKey || "",
+          phoneNumber: cc.phoneNumber || "",
+        });
       }
     } catch {}
   };
@@ -239,12 +250,20 @@ function MetricCard({ label, value, icon: Icon, delta, format = "number", classN
   );
 }
 
+function formatSpeed(seconds: number) {
+  if (seconds === 0) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
 function TeamOverviewTab({ coordinators, teamTotals, loading }: {
   coordinators: CoordinatorData[];
   teamTotals: TeamTotals | null;
   loading: boolean;
 }) {
   const [sortBy, setSortBy] = useState<"bookings" | "calls" | "rate" | "commission">("bookings");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const sorted = [...coordinators].sort((a, b) => {
     switch (sortBy) {
@@ -263,14 +282,19 @@ function TeamOverviewTab({ coordinators, teamTotals, loading }: {
     );
   }
 
+  const avgSpeed = coordinators.length > 0
+    ? Math.round(coordinators.reduce((s, c) => s + c.today.speedToLead, 0) / Math.max(coordinators.filter(c => c.today.speedToLead > 0).length, 1))
+    : 0;
+
   return (
     <div className="space-y-6">
       {teamTotals && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <MetricCard label="Team Calls Today" value={teamTotals.callsMade} icon={Phone} />
           <MetricCard label="Team Bookings" value={teamTotals.bookings} icon={Target} />
           <MetricCard label="Team Booking Rate" value={teamTotals.bookingRate} icon={TrendingUp} format="percent" />
           <MetricCard label="Team Commission" value={teamTotals.commission} icon={DollarSign} format="currency" />
+          <MetricCard label="Avg Speed-to-Lead" value={avgSpeed} icon={Zap} format="time" />
         </div>
       )}
 
@@ -308,56 +332,88 @@ function TeamOverviewTab({ coordinators, teamTotals, loading }: {
         ) : (
           <div className="space-y-2">
             {sorted.map((coord, idx) => (
-              <div
-                key={coord.id}
-                className="flex items-center gap-4 p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors"
-              >
-                <div className="w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
-                  {idx < 3 ? (
-                    <Award className={cn(
-                      "w-3.5 h-3.5",
-                      idx === 0 ? "text-amber-400" : idx === 1 ? "text-gray-400" : "text-orange-400"
-                    )} />
-                  ) : (
-                    <span className="text-[10px] text-white/30 font-mono">{idx + 1}</span>
-                  )}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white truncate">{coord.name}</p>
-                  <p className="text-[10px] text-white/30">
-                    {coord.role === "client_admin" ? "Manager" : coord.role === "client_user" ? "Coordinator" : coord.role}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-4 gap-4 text-center flex-shrink-0">
-                  <div>
-                    <p className="text-xs font-mono text-white">{coord.today.callsMade}</p>
-                    <p className="text-[9px] text-white/20 uppercase">Calls</p>
+              <div key={coord.id}>
+                <button
+                  onClick={() => setExpandedId(expandedId === coord.id ? null : coord.id)}
+                  className="w-full flex items-center gap-4 p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors text-left"
+                >
+                  <div className="w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
+                    {idx < 3 ? (
+                      <Award className={cn(
+                        "w-3.5 h-3.5",
+                        idx === 0 ? "text-amber-400" : idx === 1 ? "text-gray-400" : "text-orange-400"
+                      )} />
+                    ) : (
+                      <span className="text-[10px] text-white/30 font-mono">{idx + 1}</span>
+                    )}
                   </div>
-                  <div>
-                    <p className="text-xs font-mono text-emerald-400">{coord.today.bookings}</p>
-                    <p className="text-[9px] text-white/20 uppercase">Booked</p>
-                  </div>
-                  <div>
-                    <p className={cn(
-                      "text-xs font-mono",
-                      coord.today.bookingRate >= 30 ? "text-emerald-400" : coord.today.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
-                    )}>
-                      {coord.today.bookingRate}%
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{coord.name}</p>
+                    <p className="text-[10px] text-white/30">
+                      {coord.role === "client_admin" ? "Manager" : coord.role === "client_user" ? "Coordinator" : coord.role}
                     </p>
-                    <p className="text-[9px] text-white/20 uppercase">Rate</p>
                   </div>
-                  <div>
-                    <p className="text-xs font-mono text-white">${coord.today.commission}</p>
-                    <p className="text-[9px] text-white/20 uppercase">Earned</p>
-                  </div>
-                </div>
 
-                {coord.week.daysActive > 0 && (
-                  <div className="hidden lg:flex items-center gap-1 flex-shrink-0">
-                    <span className="text-[9px] text-white/20">7d avg:</span>
-                    <span className="text-[10px] font-mono text-white/40">{coord.week.avgBookingRate}%</span>
+                  <div className="grid grid-cols-5 gap-3 text-center flex-shrink-0">
+                    <div>
+                      <p className="text-xs font-mono text-white">{coord.today.callsMade}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Calls</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-mono text-emerald-400">{coord.today.bookings}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Booked</p>
+                    </div>
+                    <div>
+                      <p className={cn(
+                        "text-xs font-mono",
+                        coord.today.bookingRate >= 30 ? "text-emerald-400" : coord.today.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
+                      )}>
+                        {coord.today.bookingRate}%
+                      </p>
+                      <p className="text-[9px] text-white/20 uppercase">Rate</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-mono text-white">${coord.today.commission}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Earned</p>
+                    </div>
+                    <div>
+                      <p className={cn(
+                        "text-xs font-mono",
+                        coord.today.speedToLead > 0 && coord.today.speedToLead <= 300 ? "text-emerald-400"
+                          : coord.today.speedToLead <= 900 ? "text-amber-400" : "text-white/40"
+                      )}>
+                        {formatSpeed(coord.today.speedToLead)}
+                      </p>
+                      <p className="text-[9px] text-white/20 uppercase">Speed</p>
+                    </div>
+                  </div>
+                </button>
+
+                {expandedId === coord.id && (
+                  <div className="ml-11 mt-1 p-3 rounded-lg bg-white/[0.01] border border-white/5">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-[9px] text-white/20 uppercase mb-0.5">Email</p>
+                        <p className="text-xs text-white/60 truncate">{coord.email}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Avg Rate</p>
+                        <p className="text-xs font-mono text-white/60">{coord.week.avgBookingRate}%</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Calls</p>
+                        <p className="text-xs font-mono text-white/60">{coord.week.totalCalls}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Bookings</p>
+                        <p className="text-xs font-mono text-white/60">{coord.week.totalBookings}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-white/5">
+                      <p className="text-[9px] text-white/20 uppercase mb-0.5">Days Active (last 7)</p>
+                      <p className="text-xs font-mono text-white/60">{coord.week.daysActive} / 7</p>
+                    </div>
                   </div>
                 )}
               </div>

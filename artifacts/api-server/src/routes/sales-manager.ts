@@ -94,6 +94,24 @@ router.get("/sales-manager/team", async (req, res) => {
     weekStatsByUser[s.userId].push(s);
   }
 
+  let speedToLeadByUser: Record<number, number> = {};
+  if (allLeadIds.length > 0) {
+    const speedRows = await db.select({
+      userId: callAttemptsTable.userId,
+      avgSpeed: sql<number>`avg(extract(epoch from (${callAttemptsTable.attemptedAt} - ${leadsTable.createdAt})))`.as("avg_speed"),
+    })
+      .from(callAttemptsTable)
+      .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+      .where(and(
+        inArray(callAttemptsTable.userId, userIds),
+        gte(callAttemptsTable.attemptedAt, today),
+      ))
+      .groupBy(callAttemptsTable.userId);
+    for (const r of speedRows) {
+      speedToLeadByUser[r.userId] = Math.max(0, Math.round(Number(r.avgSpeed)));
+    }
+  }
+
   const coordinators = users.map(user => {
     const calls = callCountMap[user.id] || 0;
     const userLeadIds = leadIdsByUser[user.id] || [];
@@ -118,6 +136,7 @@ router.get("/sales-manager/team", async (req, res) => {
         bookings,
         bookingRate,
         commission,
+        speedToLead: speedToLeadByUser[user.id] || 0,
       },
       week: {
         avgBookingRate: weekAvgRate,
