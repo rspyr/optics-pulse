@@ -105,7 +105,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
-  const VALID_TYPES = ["call", "voicemail", "text", "objection", "closing", "follow-up", "re-engagement"];
+  const VALID_TYPES = ["call", "voicemail", "text", "email", "objection", "closing", "follow-up", "re-engagement"];
   const { type, name, sourceFilter, stageFilter, content } = req.body;
   if (!type || !name || !content) {
     res.status(400).json({ error: "type, name, and content are required" });
