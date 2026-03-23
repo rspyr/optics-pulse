@@ -1,11 +1,12 @@
-import { Router, type IRouter } from "express";
-import { db, callAttemptsTable, leadsTable } from "@workspace/db";
-import { eq, desc, and, gte, sql } from "drizzle-orm";
+import { Router, type IRouter, type Request } from "express";
+import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
+import { eq, desc, and, lte, gte } from "drizzle-orm";
 import { analyzeContactPattern } from "../services/lead-scoring";
+import type { SessionData } from "express-session";
 
 const router: IRouter = Router();
 
-async function verifyLeadTenantAccess(leadId: number, session: any): Promise<boolean> {
+async function verifyLeadTenantAccess(leadId: number, session: SessionData): Promise<boolean> {
   const role = session.userRole;
   if (role === "super_admin" || role === "agency_user") return true;
 
@@ -20,7 +21,10 @@ async function verifyLeadTenantAccess(leadId: number, session: any): Promise<boo
   return lead?.tenantId === tenantId;
 }
 
-router.get("/call-attempts/:leadId", async (req, res): Promise<void> => {
+const VALID_METHODS = ["call", "text", "email", "voicemail"] as const;
+const VALID_OUTCOMES = ["answered", "voicemail", "no_answer", "busy", "sent"] as const;
+
+router.get("/call-attempts/:leadId", async (req: Request, res): Promise<void> => {
   const leadId = parseInt(String(req.params.leadId));
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
 
@@ -35,12 +39,22 @@ router.get("/call-attempts/:leadId", async (req, res): Promise<void> => {
   res.json(attempts);
 });
 
-router.post("/call-attempts", async (req, res): Promise<void> => {
-  const { leadId, outcome, notes } = req.body;
+router.post("/call-attempts", async (req: Request, res): Promise<void> => {
+  const { leadId, method, outcome, platform, notes, attemptedAt } = req.body;
   const userId = req.session.userId;
 
   if (!leadId || !outcome || !userId) {
     res.status(400).json({ error: "leadId and outcome are required" });
+    return;
+  }
+
+  const resolvedMethod = method || "call";
+  if (!VALID_METHODS.includes(resolvedMethod)) {
+    res.status(400).json({ error: `Invalid method. Must be one of: ${VALID_METHODS.join(", ")}` });
+    return;
+  }
+  if (!VALID_OUTCOMES.includes(outcome)) {
+    res.status(400).json({ error: `Invalid outcome. Must be one of: ${VALID_OUTCOMES.join(", ")}` });
     return;
   }
 
@@ -52,14 +66,92 @@ router.post("/call-attempts", async (req, res): Promise<void> => {
   const [attempt] = await db.insert(callAttemptsTable).values({
     leadId,
     userId,
+    method: resolvedMethod,
     outcome,
+    platform: platform || "native",
+    attemptedAt: attemptedAt ? new Date(attemptedAt) : new Date(),
     notes: notes || null,
   }).returning();
+
+  if (outcome === "voicemail" || outcome === "no_answer" || outcome === "busy") {
+    const now = new Date();
+    const currentHour = now.getHours();
+    let scheduledFor: Date;
+    let reason: string;
+
+    if (currentHour < 12) {
+      scheduledFor = new Date(now);
+      scheduledFor.setHours(currentHour + 4, 0, 0, 0);
+      reason = `Double-dial: missed ${resolvedMethod} this morning — retry this afternoon`;
+    } else {
+      scheduledFor = new Date(now);
+      scheduledFor.setDate(scheduledFor.getDate() + 1);
+      scheduledFor.setHours(9, 0, 0, 0);
+      reason = `Re-engagement: missed ${resolvedMethod} this afternoon — retry tomorrow morning`;
+    }
+
+    await db.insert(scheduledFollowupsTable).values({
+      leadId,
+      userId,
+      reason,
+      scheduledFor,
+    });
+  }
 
   res.status(201).json(attempt);
 });
 
-router.get("/call-attempts/:leadId/suggest", async (req, res): Promise<void> => {
+router.patch("/call-attempts/:id", async (req: Request, res): Promise<void> => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid attempt id" }); return; }
+
+  const [existing] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Attempt not found" }); return; }
+
+  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (req.body.outcome) {
+    if (!VALID_OUTCOMES.includes(req.body.outcome)) {
+      res.status(400).json({ error: `Invalid outcome. Must be one of: ${VALID_OUTCOMES.join(", ")}` });
+      return;
+    }
+    updates.outcome = req.body.outcome;
+  }
+  if (req.body.notes !== undefined) updates.notes = req.body.notes;
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields to update" });
+    return;
+  }
+
+  const [updated] = await db.update(callAttemptsTable)
+    .set(updates)
+    .where(eq(callAttemptsTable.id, id))
+    .returning();
+  res.json(updated);
+});
+
+router.delete("/call-attempts/:id", async (req: Request, res): Promise<void> => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid attempt id" }); return; }
+
+  const [existing] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Attempt not found" }); return; }
+
+  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
+  await db.delete(callAttemptsTable).where(eq(callAttemptsTable.id, id));
+  res.json({ success: true });
+});
+
+router.get("/call-attempts/:leadId/suggest", async (req: Request, res): Promise<void> => {
   const leadId = parseInt(String(req.params.leadId));
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
 
@@ -73,7 +165,61 @@ router.get("/call-attempts/:leadId/suggest", async (req, res): Promise<void> => 
     .orderBy(desc(callAttemptsTable.attemptedAt));
 
   const result = analyzeContactPattern(attempts);
-  res.json(result);
+
+  const pendingFollowups = await db.select().from(scheduledFollowupsTable)
+    .where(and(
+      eq(scheduledFollowupsTable.leadId, leadId),
+      eq(scheduledFollowupsTable.completed, false),
+    ))
+    .orderBy(scheduledFollowupsTable.scheduledFor);
+
+  res.json({
+    ...result,
+    pendingFollowups: pendingFollowups.map(f => ({
+      id: f.id,
+      reason: f.reason,
+      scheduledFor: f.scheduledFor.toISOString(),
+    })),
+  });
+});
+
+router.get("/scheduled-followups", async (req: Request, res): Promise<void> => {
+  const tenantId = req.session.tenantId;
+  const now = new Date();
+
+  const followups = await db.select({
+    id: scheduledFollowupsTable.id,
+    leadId: scheduledFollowupsTable.leadId,
+    reason: scheduledFollowupsTable.reason,
+    scheduledFor: scheduledFollowupsTable.scheduledFor,
+    leadFirstName: leadsTable.firstName,
+    leadLastName: leadsTable.lastName,
+    leadPhone: leadsTable.phone,
+  })
+    .from(scheduledFollowupsTable)
+    .innerJoin(leadsTable, eq(scheduledFollowupsTable.leadId, leadsTable.id))
+    .where(and(
+      eq(scheduledFollowupsTable.completed, false),
+      lte(scheduledFollowupsTable.scheduledFor, now),
+      ...(tenantId ? [eq(leadsTable.tenantId, tenantId)] : []),
+    ))
+    .orderBy(scheduledFollowupsTable.scheduledFor)
+    .limit(50);
+
+  res.json(followups);
+});
+
+router.patch("/scheduled-followups/:id/complete", async (req: Request, res): Promise<void> => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid followup id" }); return; }
+
+  const [updated] = await db.update(scheduledFollowupsTable)
+    .set({ completed: true, completedAt: new Date() })
+    .where(eq(scheduledFollowupsTable.id, id))
+    .returning();
+
+  if (!updated) { res.status(404).json({ error: "Followup not found" }); return; }
+  res.json(updated);
 });
 
 export default router;

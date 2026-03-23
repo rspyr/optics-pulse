@@ -1,5 +1,5 @@
-import { db, callAttemptsTable, leadsTable } from "@workspace/db";
-import { eq, and, desc, sql, inArray, gte } from "drizzle-orm";
+import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
+import { eq, and, desc, sql, inArray, gte, lte } from "drizzle-orm";
 
 interface CallAttemptRecord {
   id: number;
@@ -45,19 +45,6 @@ function getHourBuckets(attempts: CallAttemptRecord[]): Map<number, HourBucket> 
   return buckets;
 }
 
-function getDayBuckets(attempts: CallAttemptRecord[]): Map<number, HourBucket> {
-  const buckets = new Map<number, HourBucket>();
-  for (const a of attempts) {
-    const day = new Date(a.attemptedAt).getDay();
-    const b = buckets.get(day) || { total: 0, answered: 0, voicemail: 0, noAnswer: 0 };
-    b.total++;
-    if (a.outcome === "answered") b.answered++;
-    else if (a.outcome === "voicemail") b.voicemail++;
-    else if (a.outcome === "no_answer" || a.outcome === "busy") b.noAnswer++;
-    buckets.set(day, b);
-  }
-  return buckets;
-}
 
 function formatHourRange(start: number): string {
   const end = Math.min(start + 2, 23);
@@ -106,7 +93,6 @@ export function analyzeContactPattern(attempts: CallAttemptRecord[]): LeadSugges
   }
 
   const hourBuckets = getHourBuckets(attempts);
-  const dayBuckets = getDayBuckets(attempts);
   const failedAttempts = attempts.filter(a =>
     a.outcome === "voicemail" || a.outcome === "no_answer" || a.outcome === "busy"
   ).length;
@@ -296,8 +282,23 @@ export async function getSmartQueue(tenantId: number | null): Promise<{
     } catch {}
   }
 
+  const nowDate = new Date();
+  const pendingFollowups = await db.select().from(scheduledFollowupsTable)
+    .where(and(
+      inArray(scheduledFollowupsTable.leadId, leadIds),
+      eq(scheduledFollowupsTable.completed, false),
+      lte(scheduledFollowupsTable.scheduledFor, nowDate),
+    ));
+
+  const followupsByLead = new Map<number, typeof pendingFollowups>();
+  for (const f of pendingFollowups) {
+    const list = followupsByLead.get(f.leadId) || [];
+    list.push(f);
+    followupsByLead.set(f.leadId, list);
+  }
+
   const now = Date.now();
-  const currentHour = new Date().getHours();
+  const currentHour = nowDate.getHours();
 
   const scoredLeads: ScoredLead[] = leads.map(lead => {
     const attempts = attemptsByLead.get(lead.id) || [];
@@ -329,6 +330,14 @@ export async function getSmartQueue(tenantId: number | null): Promise<{
       }
     }
 
+    const leadFollowups = followupsByLead.get(lead.id) || [];
+    if (leadFollowups.length > 0) {
+      const boost = Math.min(leadFollowups.length * 10, 20);
+      suggestion.priorityScore = Math.min(suggestion.priorityScore + boost, 100);
+      suggestion.priorityReason = `Scheduled follow-up due now — ${suggestion.priorityReason}`;
+      suggestion.doubleDial = true;
+    }
+
     const updatedAt = new Date(lead.updatedAt).getTime();
     const ageSinceUpdate = now - updatedAt;
     const is24HPlus = ageSinceUpdate >= 24 * 60 * 60 * 1000;
@@ -336,10 +345,10 @@ export async function getSmartQueue(tenantId: number | null): Promise<{
     let bucket: "new" | "followup" | "background";
     if (isNew) {
       bucket = "new";
-    } else if (is24HPlus) {
-      bucket = "background";
-    } else {
+    } else if (leadFollowups.length > 0 || !is24HPlus) {
       bucket = "followup";
+    } else {
+      bucket = "background";
     }
 
     return {
