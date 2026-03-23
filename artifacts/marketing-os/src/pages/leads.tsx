@@ -237,17 +237,21 @@ function useComparisonStats(baseline: ComparisonBaseline) {
   return { data, refetch: fetchComparison };
 }
 
-function useHistoricalStats(range: number) {
+function useHistoricalStats(range: number, startDate?: string, endDate?: string) {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/leads/hud/historical?range=${range}`, { credentials: "include" })
+    let url = `${API_BASE}/leads/hud/historical?range=${range}`;
+    if (startDate && endDate) {
+      url = `${API_BASE}/leads/hud/historical?startDate=${startDate}&endDate=${endDate}`;
+    }
+    fetch(url, { credentials: "include" })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [range]);
+  }, [range, startDate, endDate]);
 
   return { data, loading };
 }
