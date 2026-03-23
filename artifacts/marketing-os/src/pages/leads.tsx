@@ -307,9 +307,15 @@ function DeltaIndicator({ delta, invertColor = false, compact = false }: {
 }
 
 function HistoricalView() {
+  const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
   const [range, setRange] = useState(30);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [metric, setMetric] = useState<"callsMade" | "bookingsCount" | "bookingRate" | "commission" | "avgSpeedToLead">("callsMade");
-  const { data, loading } = useHistoricalStats(range);
+
+  const startDate = rangeMode === "custom" && customStart ? customStart : undefined;
+  const endDate = rangeMode === "custom" && customEnd ? customEnd : undefined;
+  const { data, loading } = useHistoricalStats(range, startDate, endDate);
 
   const metricConfig = {
     callsMade: { label: "Calls", color: "#60a5fa", format: (v: number) => `${v}` },
@@ -327,6 +333,11 @@ function HistoricalView() {
     fullDate: d.date,
   }));
 
+  const handlePreset = (r: number) => {
+    setRangeMode("preset");
+    setRange(r);
+  };
+
   if (loading) {
     return (
       <PremiumCard className="p-6">
@@ -339,19 +350,19 @@ function HistoricalView() {
 
   return (
     <PremiumCard className="p-5">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-primary" />
           <span className="text-sm font-display text-white">Performance History</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {[7, 30, 90].map(r => (
             <button
               key={r}
-              onClick={() => setRange(r)}
+              onClick={() => handlePreset(r)}
               className={cn(
                 "px-2 py-0.5 rounded text-[10px] font-mono uppercase transition-colors",
-                range === r
+                rangeMode === "preset" && range === r
                   ? "bg-primary/20 text-primary border border-primary/30"
                   : "text-white/30 hover:text-white/50"
               )}
@@ -359,8 +370,37 @@ function HistoricalView() {
               {r}d
             </button>
           ))}
+          <button
+            onClick={() => setRangeMode(rangeMode === "custom" ? "preset" : "custom")}
+            className={cn(
+              "px-2 py-0.5 rounded text-[10px] font-mono uppercase transition-colors",
+              rangeMode === "custom"
+                ? "bg-primary/20 text-primary border border-primary/30"
+                : "text-white/30 hover:text-white/50"
+            )}
+          >
+            Custom
+          </button>
         </div>
       </div>
+
+      {rangeMode === "custom" && (
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            type="date"
+            value={customStart}
+            onChange={e => setCustomStart(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white/70 font-mono [color-scheme:dark]"
+          />
+          <span className="text-white/20 text-[10px]">to</span>
+          <input
+            type="date"
+            value={customEnd}
+            onChange={e => setCustomEnd(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white/70 font-mono [color-scheme:dark]"
+          />
+        </div>
+      )}
 
       <div className="flex gap-1 mb-4">
         {(Object.keys(metricConfig) as Array<keyof typeof metricConfig>).map(key => (
@@ -1223,7 +1263,7 @@ export default function Leads() {
               <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
+              <p className="text-3xl font-display text-white">{comparison?.today.callsMade ?? stats.callsMadeToday}</p>
               <DeltaIndicator delta={comparison?.deltas.callsMade} compact />
             </div>
             <p className="text-xs text-muted-foreground mt-1">calls made today</p>
@@ -1236,16 +1276,16 @@ export default function Leads() {
               <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Booked</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <p className="text-3xl font-display text-white">{stats.bookingsToday}</p>
+              <p className="text-3xl font-display text-white">{comparison?.today.bookingsCount ?? stats.bookingsToday}</p>
               <DeltaIndicator delta={comparison?.deltas.bookingsCount} compact />
             </div>
             <div className="mt-2 w-full bg-white/5 rounded-full h-1.5">
               <div
                 className="h-full rounded-full bg-emerald-400 transition-all"
-                style={{ width: `${Math.min(stats.bookingRate, 100)}%` }}
+                style={{ width: `${Math.min(comparison?.today.bookingRate ?? stats.bookingRate, 100)}%` }}
               />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
+            <p className="text-xs text-muted-foreground mt-1">{comparison?.today.bookingRate ?? stats.bookingRate}% booking rate</p>
             <DeltaIndicator delta={comparison?.deltas.bookingRate} />
           </PremiumCard>
 
@@ -1255,7 +1295,7 @@ export default function Leads() {
               <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <p className="text-3xl font-display text-white">{stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
+              <p className="text-3xl font-display text-white">{comparison?.today.avgSpeedToLead ?? stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
               <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor compact />
             </div>
             <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
@@ -1273,7 +1313,7 @@ export default function Leads() {
                 <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
               </div>
               <div className="flex items-baseline gap-2">
-                <p className="text-3xl font-display text-emerald-400">${stats.commission}</p>
+                <p className="text-3xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
                 <DeltaIndicator delta={comparison?.deltas.commission} compact />
               </div>
               <p className="text-xs text-muted-foreground mt-2">
@@ -1283,7 +1323,7 @@ export default function Leads() {
                     {stats.bonusTier.toUpperCase()} TIER
                   </span>
                 ) : (
-                  `${stats.nextBonusAt - stats.bookingRate}% to next bonus`
+                  `${stats.nextBonusAt - (comparison?.today.bookingRate ?? stats.bookingRate)}% to next bonus`
                 )}
               </p>
               <DeltaIndicator delta={comparison?.deltas.commission} />
@@ -1312,7 +1352,7 @@ export default function Leads() {
             <span className="text-xs text-blue-400/60 uppercase">Calls</span>
           </div>
           <div className="flex items-baseline gap-1.5">
-            <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
+            <p className="text-xl font-display text-white">{comparison?.today.callsMade ?? stats.callsMadeToday}</p>
             <DeltaIndicator delta={comparison?.deltas.callsMade} compact />
           </div>
         </PremiumCard>
@@ -1322,7 +1362,7 @@ export default function Leads() {
             <span className="text-xs text-emerald-400/60 uppercase">Booked</span>
           </div>
           <div className="flex items-baseline gap-1.5">
-            <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
+            <p className="text-xl font-display text-white">{comparison?.today.bookingsCount ?? stats.bookingsToday} <span className="text-sm text-white/40">({comparison?.today.bookingRate ?? stats.bookingRate}%)</span></p>
             <DeltaIndicator delta={comparison?.deltas.bookingsCount} compact />
           </div>
         </PremiumCard>
@@ -1332,7 +1372,7 @@ export default function Leads() {
             <span className="text-xs text-amber-400/60 uppercase">Speed</span>
           </div>
           <div className="flex items-baseline gap-1.5">
-            <p className="text-xl font-display text-white">{stats.avgSpeedToLead}s</p>
+            <p className="text-xl font-display text-white">{comparison?.today.avgSpeedToLead ?? stats.avgSpeedToLead}s</p>
             <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor compact />
           </div>
         </PremiumCard>
@@ -1344,7 +1384,7 @@ export default function Leads() {
               <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
             </div>
             <div className="flex items-baseline gap-1.5">
-              <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
+              <p className="text-xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
               <DeltaIndicator delta={comparison?.deltas.commission} compact />
             </div>
           </div>
