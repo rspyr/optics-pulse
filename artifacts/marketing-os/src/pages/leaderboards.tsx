@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useGetAdminLeaderboard } from "@workspace/api-client-react";
 import type { LeaderboardEntry } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
@@ -44,7 +44,11 @@ export default function Leaderboards() {
   const [selectedEntry, setSelectedEntry] = useState<LeaderboardEntry | null>(null);
   const { isAgency } = useAuth();
 
-  const { data, isLoading, error, refetch } = useGetAdminLeaderboard({ metric: activeMetric });
+  const { data: rawData, isFetching, error, refetch } = useGetAdminLeaderboard({ metric: activeMetric });
+
+  const dataRef = useRef(rawData);
+  if (rawData !== undefined) dataRef.current = rawData;
+  const data = rawData ?? dataRef.current;
 
   const tab = METRIC_TABS.find(t => t.key === activeMetric)!;
 
@@ -56,7 +60,7 @@ export default function Leaderboards() {
     return effectiveAnonymized ? `Client ${String.fromCharCode(65 + index)}` : entry.tenantName;
   };
 
-  if (isLoading) {
+  if (!data && !dataRef.current) {
     return (
       <div className="animate-pulse space-y-6">
         <div className="h-8 w-64 bg-white/10 rounded" />
@@ -86,7 +90,7 @@ export default function Leaderboards() {
   const agencyAvg = data?.agencyAverage ?? 0;
 
   return (
-    <div className="space-y-6">
+    <div className={cn("space-y-6 transition-opacity duration-300", isFetching && "opacity-80")}>
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Leaderboards</GradientHeading>

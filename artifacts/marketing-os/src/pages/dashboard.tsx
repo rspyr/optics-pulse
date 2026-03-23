@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { cn, formatCurrency, formatPercentage } from "@/lib/utils";
+import { formatCurrency, formatPercentage } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
@@ -36,8 +36,8 @@ export default function Dashboard() {
   const [exporting, setExporting] = useState(false);
   const { startDate, endDate } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
-  const { data: rawOverview, isFetching: overviewFetching } = useGetDashboardOverview({ startDate, endDate });
-  const { data: rawChartData, isFetching: chartFetching } = useGetSpendRevenueChart({ startDate, endDate });
+  const { data: rawOverview } = useGetDashboardOverview({ startDate, endDate });
+  const { data: rawChartData } = useGetSpendRevenueChart({ startDate, endDate });
 
   const overviewRef = useRef(rawOverview);
   const chartDataRef = useRef(rawChartData);
@@ -46,8 +46,6 @@ export default function Dashboard() {
 
   const overview = rawOverview ?? overviewRef.current;
   const chartData = rawChartData ?? chartDataRef.current;
-  const isRefetching = overviewFetching || chartFetching;
-
   if (!overview && !overviewRef.current) {
     return <div className="animate-pulse space-y-8">
       <div className="h-8 w-64 bg-white/10 rounded"></div>
@@ -119,7 +117,7 @@ export default function Dashboard() {
     : [];
 
   return (
-    <div className={cn("space-y-8 transition-opacity duration-200", isRefetching && "opacity-70")}>
+    <div className="space-y-8">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Command Center</GradientHeading>
