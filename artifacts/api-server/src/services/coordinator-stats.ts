@@ -6,7 +6,7 @@ async function getLeadStatsByIds(leadIds: number[]) {
 
   const [bookedResult] = await db.select({ count: count() })
     .from(leadsTable)
-    .where(and(inArray(leadsTable.id, leadIds), sql`${leadsTable.status} IN ('booked', 'sold')`));
+    .where(and(inArray(leadsTable.id, leadIds), eq(leadsTable.status, "booked")));
 
   const [soldResult] = await db.select({ count: count() })
     .from(leadsTable)
