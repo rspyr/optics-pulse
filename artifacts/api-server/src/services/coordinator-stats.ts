@@ -266,13 +266,13 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     avgSpeed: sql<number>`COALESCE(AVG(avg_speed_to_lead), 0)`,
   };
 
-  function rowToStats(row: any): StatSnapshot {
+  function aggToStats(row: { totalCalls: number; totalBookings: number; avgRate: number; totalCommission: number; avgSpeed: number }): StatSnapshot {
     return {
-      callsMade: Number(row.totalCalls ?? row.avgCalls ?? 0),
-      bookingsCount: Number(row.totalBookings ?? row.avgBookings ?? 0),
-      bookingRate: Math.round(Number(row.avgRate ?? 0)),
-      commission: Number(row.totalCommission ?? row.avgCommission ?? 0),
-      avgSpeedToLead: Math.round(Number(row.avgSpeed ?? 0)),
+      callsMade: Number(row.totalCalls),
+      bookingsCount: Number(row.totalBookings),
+      bookingRate: Math.round(Number(row.avgRate)),
+      commission: Number(row.totalCommission),
+      avgSpeedToLead: Math.round(Number(row.avgSpeed)),
     };
   }
 
@@ -281,7 +281,7 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     yesterday.setDate(yesterday.getDate() - 1);
     const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, yesterday.toISOString().split("T")[0])];
     const [row] = await db.select(selectAgg).from(coordinatorDailyStatsTable).where(and(...conds));
-    return row ? rowToStats(row) : { ...ZERO_STATS };
+    return row ? aggToStats(row) : { ...ZERO_STATS };
   }
 
   if (baseline === "last_week") {
@@ -289,7 +289,7 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     lastWeek.setDate(lastWeek.getDate() - 7);
     const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, lastWeek.toISOString().split("T")[0])];
     const [row] = await db.select(selectAgg).from(coordinatorDailyStatsTable).where(and(...conds));
-    return row ? rowToStats(row) : { ...ZERO_STATS };
+    return row ? aggToStats(row) : { ...ZERO_STATS };
   }
 
   if (baseline === "monthly_avg") {
@@ -335,11 +335,9 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
 }
 
 async function getTenantCoordinators(tenantId: number) {
-  const users = await db.select({ id: usersTable.id, name: usersTable.name, role: usersTable.role })
+  return db.select({ id: usersTable.id, name: usersTable.name, role: usersTable.role })
     .from(usersTable)
     .where(eq(usersTable.tenantId, tenantId));
-
-  return users.filter(u => u.role !== "client_admin" && u.role !== "client_user");
 }
 
 export async function getComparisonStats(

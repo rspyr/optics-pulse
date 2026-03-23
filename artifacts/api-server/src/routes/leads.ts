@@ -95,6 +95,8 @@ router.get("/leads/hud/comparison", async (req, res) => {
   let userId: number | null = null;
   if (!isManager) {
     userId = req.session.userId ?? null;
+  } else if (req.query.userId) {
+    userId = Number(req.query.userId);
   }
 
   const baseline = (req.query.baseline as string) || "yesterday";
@@ -127,6 +129,8 @@ router.get("/leads/hud/historical", async (req, res) => {
   let userId: number | null = null;
   if (!isManager) {
     userId = req.session.userId ?? null;
+  } else if (req.query.userId) {
+    userId = Number(req.query.userId);
   }
 
   const range = (req.query.range as string) || "30";
