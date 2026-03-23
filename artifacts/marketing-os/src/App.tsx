@@ -61,10 +61,6 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  if (location === "/" && isAgency) {
-    return <Redirect to="/internal" />;
-  }
-
   const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/leaderboards", "/automation"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <Redirect to="/" />;
