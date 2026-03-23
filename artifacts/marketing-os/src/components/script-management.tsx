@@ -50,6 +50,24 @@ const STAGES = [
   { value: "re-engage-9mo", label: "9 Month Re-engagement" },
 ];
 
+function computeDiff(oldText: string, newText: string): { type: "same" | "added" | "removed"; text: string }[] {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  const result: { type: "same" | "added" | "removed"; text: string }[] = [];
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  for (let i = 0; i < maxLen; i++) {
+    const o = i < oldLines.length ? oldLines[i] : undefined;
+    const n = i < newLines.length ? newLines[i] : undefined;
+    if (o === n) {
+      result.push({ type: "same", text: o! });
+    } else {
+      if (o !== undefined) result.push({ type: "removed", text: o });
+      if (n !== undefined) result.push({ type: "added", text: n });
+    }
+  }
+  return result;
+}
+
 function substitutePreview(content: string) {
   return content
     .replace(/\[NAME\]/g, "John")
@@ -463,25 +481,54 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                   <p className="text-[10px] text-white/30 uppercase tracking-wider">Version History</p>
                   {versions.length === 0 ? (
                     <p className="text-sm text-white/20">No previous versions</p>
-                  ) : versions.map(v => (
-                    <div key={v.id} className="rounded-lg bg-white/[0.02] border border-white/5 p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-white/60 font-mono">v{v.version}</span>
-                          <span className="text-[10px] text-white/20">
-                            {new Date(v.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                          </span>
+                  ) : versions.map((v, idx) => {
+                    const nextContent = idx === 0 ? selectedScript.content : versions[idx - 1].content;
+                    const diffLines = computeDiff(v.content, nextContent);
+                    const hasChanges = diffLines.some(d => d.type !== "same");
+                    return (
+                      <div key={v.id} className="rounded-lg bg-white/[0.02] border border-white/5 p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/60 font-mono">v{v.version}</span>
+                            <span className="text-[10px] text-white/20">
+                              {new Date(v.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            </span>
+                            {hasChanges && (
+                              <span className="text-[9px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded">changed</span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleRevert(selectedScript, v.id)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-400 hover:bg-amber-500/10"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Revert
+                          </button>
                         </div>
-                        <button
-                          onClick={() => handleRevert(selectedScript, v.id)}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-400 hover:bg-amber-500/10"
-                        >
-                          <RotateCcw className="w-3 h-3" /> Revert
-                        </button>
+                        {hasChanges ? (
+                          <div className="font-mono text-xs leading-relaxed space-y-0.5">
+                            {diffLines.map((d, i) => (
+                              <div
+                                key={i}
+                                className={cn(
+                                  "px-2 py-0.5 rounded-sm",
+                                  d.type === "removed" && "bg-red-500/10 text-red-400 line-through",
+                                  d.type === "added" && "bg-emerald-500/10 text-emerald-400",
+                                  d.type === "same" && "text-white/30"
+                                )}
+                              >
+                                <span className="select-none mr-2 text-white/15">
+                                  {d.type === "removed" ? "−" : d.type === "added" ? "+" : " "}
+                                </span>
+                                {d.text || "\u00A0"}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-white/40 leading-relaxed whitespace-pre-wrap">{v.content}</p>
+                        )}
                       </div>
-                      <p className="text-xs text-white/40 leading-relaxed whitespace-pre-wrap">{v.content}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </PremiumCard>

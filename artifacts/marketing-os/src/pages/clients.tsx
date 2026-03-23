@@ -428,11 +428,10 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       {selectedChangeLog && (
         <ChangeLogPopover log={selectedChangeLog} onClose={() => setSelectedChangeLog(null)} />
       )}
-
       <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Client Portal</GradientHeading>
-          <p className="font-sub text-muted-foreground text-sm tracking-wide">THE SEARCHLIGHT KILLER — YOUR MARKETING ROI, TRANSPARENT</p>
+          <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR MARKETING ROI, TRANSPARENT</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1 bg-card border border-white/10 rounded-lg p-1">
@@ -482,7 +481,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </select>
         </div>
       </header>
-
       {trainingItems.length > 0 && (
         <TrainingCards
           items={trainingItems}
@@ -490,7 +488,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           onDismiss={handleDismissTraining}
         />
       )}
-
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {metrics.map((metric, i) => (
           <PremiumCard key={i} className="p-5 relative overflow-hidden group" transition={{ delay: i * 0.05 }}>
@@ -520,7 +517,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </PremiumCard>
         ))}
       </div>
-
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex-1 min-w-[280px] relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -574,7 +570,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </>
         )}
       </div>
-
       {(quickViews.length > 0 || showSaveView) && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mr-1">Quick Views:</span>
@@ -615,7 +610,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           )}
         </div>
       )}
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <PremiumCard className="lg:col-span-2 p-6 flex flex-col" transition={{ delay: 0.3 }}>
           <div className="flex items-center justify-between mb-4">
@@ -796,7 +790,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           )}
         </PremiumCard>
       </div>
-
       <PremiumCard className="p-6" transition={{ delay: 0.5 }}>
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
@@ -902,7 +895,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </div>
         </div>
       </PremiumCard>
-
       <ChatDrawer tenantId={effectiveTenantId} />
     </div>
   );

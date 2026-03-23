@@ -1,4 +1,4 @@
-import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable } from "@workspace/db";
+import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, changeLogsTable } from "@workspace/db";
 import { eq, and, gte, lte, sql, inArray, SQL, desc, count } from "drizzle-orm";
 
 interface ChatContext {
@@ -469,6 +469,56 @@ const queryPatterns: QueryPattern[] = [
         data: rows,
         chartType: "table",
         chartLabel: "Performance by Source",
+      };
+    },
+  },
+  {
+    patterns: [
+      /(?:script|change|update|changelog|change.?log|what.?changed|recent.?changes)/i,
+    ],
+    description: "Script changes and changelog",
+    handler: async (ctx) => {
+      const dateRange = { startDate: ctx.startDate, endDate: ctx.endDate };
+      const conds: SQL[] = [eq(changeLogsTable.tenantId, ctx.tenantId)];
+      if (dateRange.startDate) conds.push(gte(changeLogsTable.date, dateRange.startDate));
+      if (dateRange.endDate) conds.push(lte(changeLogsTable.date, dateRange.endDate));
+
+      const logs = await db.select().from(changeLogsTable)
+        .where(and(...conds))
+        .orderBy(desc(changeLogsTable.date))
+        .limit(20);
+
+      if (logs.length === 0) {
+        return { answer: "No changelog entries found for this period.", chartType: "number" as const };
+      }
+
+      const scriptLogs = logs.filter(l => l.category === "scripts");
+      const otherLogs = logs.filter(l => l.category !== "scripts");
+
+      let answer = `Found **${logs.length}** changelog entries:\n\n`;
+      if (scriptLogs.length > 0) {
+        answer += `**Script Changes (${scriptLogs.length}):**\n`;
+        for (const l of scriptLogs.slice(0, 5)) {
+          answer += `• ${l.date}: ${l.title} — ${l.description}\n`;
+        }
+        answer += "\n";
+      }
+      if (otherLogs.length > 0) {
+        answer += `**Other Changes (${otherLogs.length}):**\n`;
+        for (const l of otherLogs.slice(0, 5)) {
+          answer += `• ${l.date}: ${l.title} (${l.category})\n`;
+        }
+      }
+
+      if (scriptLogs.length > 0) {
+        answer += "\nScript changes are overlaid on your spend vs. revenue chart so you can correlate script updates with performance shifts.";
+      }
+
+      return {
+        answer,
+        data: logs.map(l => ({ date: l.date, title: l.title, category: l.category, description: l.description })),
+        chartType: "table" as const,
+        chartLabel: "Changelog Entries",
       };
     },
   },

@@ -702,8 +702,8 @@ function LeadCard({
   const [actionFeedback, setActionFeedback] = useState<{ status: "success" | "error"; message: string } | null>(null);
   const [showWhyOrder, setShowWhyOrder] = useState(false);
   const suggestion = lead._suggestion;
-  const script = findScript(scripts, "call", lead.source) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
-  const vmScript = findScript(scripts, "voicemail", lead.source) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
+  const script = findScript(scripts, "call", lead.source, lead.status) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
+  const vmScript = findScript(scripts, "voicemail", lead.source, lead.status) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
   const personalizedVm = vmScript
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -753,7 +753,7 @@ function LeadCard({
 
   const handleText = async () => {
     if (!lead.phone) return;
-    const textTemplate = findScript(scripts, "text", lead.source) || FALLBACK_TEXT;
+    const textTemplate = findScript(scripts, "text", lead.source, lead.status) || FALLBACK_TEXT;
     const msg = textTemplate
       .replace("[NAME]", lead.firstName)
       .replace("[INTEREST]", lead.interestType || "HVAC")
