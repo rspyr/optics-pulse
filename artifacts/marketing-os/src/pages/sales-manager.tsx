@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
+import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
 import {
@@ -139,9 +139,8 @@ function useCoachingInsights(tenantId: number | null) {
 interface ScriptChange {
   id: number;
   category: string;
-  action: string;
-  detail: string;
-  user: string | null;
+  title: string;
+  description: string;
   date: string;
 }
 
@@ -162,9 +161,8 @@ function useRecentScriptChanges(tenantId: number | null) {
 }
 
 interface CommunicationConfig {
-  platform: string;
-  apiKey: string;
-  phoneNumber: string;
+  callPlatform: string;
+  textPlatform: string;
 }
 
 function useCommunicationConfig(tenantId: number | null) {
@@ -179,9 +177,8 @@ function useCommunicationConfig(tenantId: number | null) {
         const data = await res.json();
         const cc = data.communicationConfig || {};
         setConfig({
-          platform: cc.platform || "",
-          apiKey: cc.apiKey || "",
-          phoneNumber: cc.phoneNumber || "",
+          callPlatform: cc.callPlatform || "native",
+          textPlatform: cc.textPlatform || "native",
         });
       }
     } catch {} finally { setLoading(false); }
@@ -193,7 +190,7 @@ function useCommunicationConfig(tenantId: number | null) {
     if (!tenantId) return;
     try {
       const res = await fetch(`${API_BASE}/tenants/${tenantId}`, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ communicationConfig: updates }),
@@ -202,9 +199,8 @@ function useCommunicationConfig(tenantId: number | null) {
         const data = await res.json();
         const cc = data.communicationConfig || {};
         setConfig({
-          platform: cc.platform || "",
-          apiKey: cc.apiKey || "",
-          phoneNumber: cc.phoneNumber || "",
+          callPlatform: cc.callPlatform || "native",
+          textPlatform: cc.textPlatform || "native",
         });
       }
     } catch {}
@@ -599,18 +595,16 @@ function ScriptChangesPanel({ changes, loading }: { changes: ScriptChange[]; loa
       <div className="flex items-center gap-2">
         <Clock className="w-4 h-4 text-primary" />
         <span className="text-xs font-display text-white">Recent Script Changes</span>
+        <span className="text-[10px] text-white/20 font-mono">({changes.length})</span>
       </div>
       <div className="space-y-2">
         {changes.map(c => (
           <div key={c.id} className="flex items-start gap-2 text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
             <span className="text-[9px] font-mono text-white/20 flex-shrink-0 mt-0.5">{new Date(c.date).toLocaleDateString()}</span>
             <div className="flex-1 min-w-0">
-              <span className="text-white/70">{c.detail}</span>
-              {c.user && <span className="text-white/20 ml-1">by {c.user}</span>}
+              <p className="text-white/70 font-medium">{c.title}</p>
+              <p className="text-white/40 text-[10px] mt-0.5">{c.description}</p>
             </div>
-            <Badge variant={c.action === "created" ? "success" : c.action === "deleted" ? "danger" : "default"} className="text-[8px] flex-shrink-0">
-              {c.action}
-            </Badge>
           </div>
         ))}
       </div>
@@ -620,23 +614,25 @@ function ScriptChangesPanel({ changes, loading }: { changes: ScriptChange[]; loa
 
 function SettingsTab({ tenantId }: { tenantId: number | null }) {
   const { config, loading, saveConfig } = useCommunicationConfig(tenantId);
-  const [platform, setPlatform] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [callPlatform, setCallPlatform] = useState("native");
+  const [textPlatform, setTextPlatform] = useState("native");
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (config) {
-      setPlatform(config.platform || "");
-      setApiKey(config.apiKey || "");
-      setPhoneNumber(config.phoneNumber || "");
+      setCallPlatform(config.callPlatform || "native");
+      setTextPlatform(config.textPlatform || "native");
     }
   }, [config]);
 
   const handleSave = async () => {
     setSaving(true);
-    await saveConfig({ platform, apiKey, phoneNumber });
+    setSaved(false);
+    await saveConfig({ callPlatform, textPlatform });
     setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   if (loading) {
@@ -656,39 +652,28 @@ function SettingsTab({ tenantId }: { tenantId: number | null }) {
 
       <PremiumCard className="p-6 space-y-4">
         <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Platform</label>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Call Platform</label>
           <select
-            value={platform}
-            onChange={e => setPlatform(e.target.value)}
+            value={callPlatform}
+            onChange={e => setCallPlatform(e.target.value)}
             className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
           >
-            <option value="">Select Platform</option>
+            <option value="native">Native (Browser)</option>
             <option value="podium">Podium</option>
             <option value="callrail">CallRail</option>
-            <option value="manual">Manual</option>
           </select>
         </div>
 
         <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">API Key</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            placeholder="Enter API key"
-            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Phone Number</label>
-          <input
-            type="text"
-            value={phoneNumber}
-            onChange={e => setPhoneNumber(e.target.value)}
-            placeholder="+1 (555) 123-4567"
-            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
-          />
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Text Platform</label>
+          <select
+            value={textPlatform}
+            onChange={e => setTextPlatform(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            <option value="native">Native (Browser)</option>
+            <option value="podium">Podium</option>
+          </select>
         </div>
 
         <button
@@ -696,15 +681,15 @@ function SettingsTab({ tenantId }: { tenantId: number | null }) {
           disabled={saving}
           className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
         >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-          Save Settings
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+          {saved ? "Saved!" : "Save Settings"}
         </button>
       </PremiumCard>
 
       <PremiumCard className="p-4">
         <p className="text-xs text-white/30">
           Configure your communication platform integration. This controls how outbound calls and texts
-          are routed through your preferred provider (Podium, CallRail, or manual dialing).
+          are routed through your preferred provider (Podium, CallRail, or native browser dialing).
         </p>
       </PremiumCard>
     </div>
