@@ -229,7 +229,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
             <Sparkles className="w-5 h-5 text-primary" />
             <h2 className="font-display text-lg text-white">Ask Your Data</h2>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setShowSaved(!showSaved)}
               className={cn(
@@ -239,6 +239,13 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
               title="Saved Questions"
             >
               <Bookmark className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => { setMessages([]); setShowSaved(false); }}
+              className="p-2 text-muted-foreground hover:text-white rounded-lg transition-colors"
+              title="Clear Conversation"
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
             <button onClick={() => setIsOpen(false)} className="p-2 text-muted-foreground hover:text-white rounded-lg">
               <X className="w-4 h-4" />
