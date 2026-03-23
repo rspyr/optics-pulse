@@ -10,8 +10,13 @@ import {
   ChevronDown, AlertTriangle, Target,
   Flame, Award, Calendar, PhoneCall,
   Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
-  Brain, TrendingUp, PhoneForwarded, Info
+  Brain, TrendingUp, TrendingDown, PhoneForwarded, Info,
+  BarChart3, ArrowUpRight, ArrowDownRight, Minus, History
 } from "lucide-react";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+  ResponsiveContainer, BarChart, Bar
+} from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -174,6 +179,274 @@ function useHudStats() {
   }, [fetchStats]);
 
   return { stats, refetch: fetchStats };
+}
+
+type ComparisonBaseline = "yesterday" | "last_week" | "monthly_avg" | "all_time_best";
+
+interface StatDelta {
+  value: number;
+  baseline: number;
+  delta: number;
+  percentChange: number;
+  direction: "up" | "down" | "flat";
+}
+
+interface ComparisonData {
+  baseline: ComparisonBaseline;
+  today: { callsMade: number; bookingsCount: number; bookingRate: number; commission: number; avgSpeedToLead: number };
+  deltas: {
+    callsMade: StatDelta;
+    bookingsCount: StatDelta;
+    bookingRate: StatDelta;
+    commission: StatDelta;
+    avgSpeedToLead: StatDelta;
+  };
+}
+
+interface HistoricalDay {
+  date: string;
+  callsMade: number;
+  bookingsCount: number;
+  bookingRate: number;
+  commission: number;
+  avgSpeedToLead: number;
+}
+
+interface HistoricalData {
+  dailyStats: HistoricalDay[];
+  personalBests: Record<string, { value: number }>;
+  totalDays: number;
+}
+
+function useComparisonStats(baseline: ComparisonBaseline) {
+  const [data, setData] = useState<ComparisonData | null>(null);
+
+  const fetchComparison = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/leads/hud/comparison?baseline=${baseline}`, { credentials: "include" });
+      if (res.ok) setData(await res.json());
+    } catch {}
+  }, [baseline]);
+
+  useEffect(() => {
+    fetchComparison();
+    const interval = setInterval(fetchComparison, 30000);
+    return () => clearInterval(interval);
+  }, [fetchComparison]);
+
+  return { data, refetch: fetchComparison };
+}
+
+function useHistoricalStats(range: number) {
+  const [data, setData] = useState<HistoricalData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/leads/hud/historical?range=${range}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [range]);
+
+  return { data, loading };
+}
+
+const BASELINE_LABELS: Record<ComparisonBaseline, string> = {
+  yesterday: "vs Yesterday",
+  last_week: "vs Last Week",
+  monthly_avg: "vs 30-Day Avg",
+  all_time_best: "vs Best Day",
+};
+
+function DeltaIndicator({ delta, invertColor = false, compact = false }: {
+  delta: StatDelta | undefined;
+  invertColor?: boolean;
+  compact?: boolean;
+}) {
+  if (!delta || (delta.baseline === 0 && delta.value === 0)) return null;
+
+  const isPositive = delta.direction === "up";
+  const isNegative = delta.direction === "down";
+
+  const goodDirection = invertColor ? isNegative : isPositive;
+  const badDirection = invertColor ? isPositive : isNegative;
+
+  const colorClass = goodDirection
+    ? "text-emerald-400"
+    : badDirection
+    ? "text-red-400"
+    : "text-white/40";
+
+  const Icon = isPositive ? ArrowUpRight : isNegative ? ArrowDownRight : Minus;
+
+  if (compact) {
+    return (
+      <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-mono", colorClass)}>
+        <Icon className="w-2.5 h-2.5" />
+        {Math.abs(delta.percentChange)}%
+      </span>
+    );
+  }
+
+  return (
+    <div className={cn("flex items-center gap-1 mt-1", colorClass)}>
+      <Icon className="w-3 h-3" />
+      <span className="text-[11px] font-mono">
+        {delta.delta > 0 ? "+" : ""}{delta.delta}
+      </span>
+      <span className="text-[10px] opacity-60">
+        ({Math.abs(delta.percentChange)}%)
+      </span>
+    </div>
+  );
+}
+
+function HistoricalView() {
+  const [range, setRange] = useState(30);
+  const [metric, setMetric] = useState<"callsMade" | "bookingsCount" | "bookingRate" | "commission">("callsMade");
+  const { data, loading } = useHistoricalStats(range);
+
+  const metricConfig = {
+    callsMade: { label: "Calls Made", color: "#60a5fa", format: (v: number) => `${v}` },
+    bookingsCount: { label: "Bookings", color: "#34d399", format: (v: number) => `${v}` },
+    bookingRate: { label: "Booking Rate", color: "#fbbf24", format: (v: number) => `${v}%` },
+    commission: { label: "Commission", color: "#34d399", format: (v: number) => `$${v}` },
+  };
+
+  const config = metricConfig[metric];
+
+  const chartData = (data?.dailyStats || []).map(d => ({
+    date: new Date(d.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    value: d[metric],
+    fullDate: d.date,
+  }));
+
+  if (loading) {
+    return (
+      <PremiumCard className="p-6">
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-6 h-6 text-primary animate-spin" />
+        </div>
+      </PremiumCard>
+    );
+  }
+
+  return (
+    <PremiumCard className="p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Performance History</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {[7, 14, 30, 90].map(r => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={cn(
+                "px-2 py-0.5 rounded text-[10px] font-mono uppercase transition-colors",
+                range === r
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              {r}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-1 mb-4">
+        {(Object.keys(metricConfig) as Array<keyof typeof metricConfig>).map(key => (
+          <button
+            key={key}
+            onClick={() => setMetric(key)}
+            className={cn(
+              "px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider transition-colors",
+              metric === key
+                ? "bg-white/10 text-white border border-white/10"
+                : "text-white/30 hover:text-white/50"
+            )}
+          >
+            {metricConfig[key].label}
+          </button>
+        ))}
+      </div>
+
+      {chartData.length === 0 ? (
+        <div className="text-center py-12">
+          <History className="w-8 h-8 text-white/10 mx-auto mb-2" />
+          <p className="text-xs text-white/30">No historical data yet</p>
+          <p className="text-[10px] text-white/20 mt-1">Stats are recorded daily — check back tomorrow</p>
+        </div>
+      ) : (
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id={`gradient-${metric}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={config.color} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={config.color} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis
+                dataKey="date"
+                tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 9 }}
+                tickLine={false}
+                axisLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 9 }}
+                tickLine={false}
+                axisLine={false}
+                width={35}
+                tickFormatter={config.format}
+              />
+              <RechartsTooltip
+                contentStyle={{
+                  backgroundColor: "rgba(15,15,25,0.95)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "8px",
+                  fontSize: "11px",
+                  color: "#fff",
+                }}
+                formatter={(value: number) => [config.format(value), config.label]}
+                labelFormatter={(label: string) => label}
+              />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke={config.color}
+                strokeWidth={2}
+                fill={`url(#gradient-${metric})`}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {data && data.personalBests && (
+        <div className="grid grid-cols-4 gap-2 mt-4 pt-3 border-t border-white/5">
+          {([
+            ["callsMade", "Best Calls", ""],
+            ["bookingsCount", "Best Bookings", ""],
+            ["bookingRate", "Best Rate", "%"],
+            ["commission", "Best Earned", "$"],
+          ] as const).map(([key, label, prefix]) => (
+            <div key={key} className="text-center">
+              <p className="text-[10px] text-white/30 uppercase">{label}</p>
+              <p className="text-sm font-mono text-white/70 mt-0.5">
+                {prefix === "$" ? "$" : ""}{data.personalBests[key]?.value ?? 0}{prefix === "%" ? "%" : ""}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </PremiumCard>
+  );
 }
 
 function useSocketIO(tenantId: number | null, isAgency: boolean) {
@@ -715,6 +988,9 @@ export default function Leads() {
   const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
+  const [baseline, setBaseline] = useState<ComparisonBaseline>("yesterday");
+  const [showHistory, setShowHistory] = useState(false);
+  const { data: comparison } = useComparisonStats(baseline);
 
   useEffect(() => {
     if (latestLead) {
@@ -907,13 +1183,39 @@ export default function Leads() {
         </div>
 
         <aside className="hidden lg:flex flex-col gap-3 w-72 shrink-0 sticky top-4 self-start">
+          <div className="flex items-center justify-between mb-1">
+            <select
+              value={baseline}
+              onChange={(e) => setBaseline(e.target.value as ComparisonBaseline)}
+              className="bg-transparent text-[10px] text-white/40 uppercase tracking-wider border-none outline-none cursor-pointer font-mono"
+            >
+              {(Object.keys(BASELINE_LABELS) as ComparisonBaseline[]).map(b => (
+                <option key={b} value={b} className="bg-[#0f0f19]">{BASELINE_LABELS[b]}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={cn(
+                "p-1.5 rounded-md transition-colors",
+                showHistory ? "bg-primary/20 text-primary" : "text-white/30 hover:text-white/50"
+              )}
+              title="Performance History"
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
           <PremiumCard className="p-4">
             <div className="flex items-center justify-between mb-3">
               <PhoneCall className="w-5 h-5 text-blue-400" />
               <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
             </div>
-            <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
+              <DeltaIndicator delta={comparison?.deltas.callsMade} compact />
+            </div>
             <p className="text-xs text-muted-foreground mt-1">calls made today</p>
+            <DeltaIndicator delta={comparison?.deltas.callsMade} />
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -921,7 +1223,10 @@ export default function Leads() {
               <Target className="w-5 h-5 text-emerald-400" />
               <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Booked</span>
             </div>
-            <p className="text-3xl font-display text-white">{stats.bookingsToday}</p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-3xl font-display text-white">{stats.bookingsToday}</p>
+              <DeltaIndicator delta={comparison?.deltas.bookingsCount} compact />
+            </div>
             <div className="mt-2 w-full bg-white/5 rounded-full h-1.5">
               <div
                 className="h-full rounded-full bg-emerald-400 transition-all"
@@ -929,6 +1234,7 @@ export default function Leads() {
               />
             </div>
             <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
+            <DeltaIndicator delta={comparison?.deltas.bookingRate} />
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -936,8 +1242,12 @@ export default function Leads() {
               <Clock className="w-5 h-5 text-amber-400" />
               <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
             </div>
-            <p className="text-3xl font-display text-white">{stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-3xl font-display text-white">{stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
+              <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor compact />
+            </div>
             <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
+            <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor />
           </PremiumCard>
 
           <PremiumCard className={cn("p-4 relative overflow-hidden")}>
@@ -950,7 +1260,10 @@ export default function Leads() {
                 <DollarSign className="w-5 h-5 text-emerald-400" />
                 <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
               </div>
-              <p className="text-3xl font-display text-emerald-400">${stats.commission}</p>
+              <div className="flex items-baseline gap-2">
+                <p className="text-3xl font-display text-emerald-400">${stats.commission}</p>
+                <DeltaIndicator delta={comparison?.deltas.commission} compact />
+              </div>
               <p className="text-xs text-muted-foreground mt-2">
                 {stats.bonusTier !== "none" ? (
                   <span className="text-amber-400">
@@ -961,8 +1274,22 @@ export default function Leads() {
                   `${stats.nextBonusAt - stats.bookingRate}% to next bonus`
                 )}
               </p>
+              <DeltaIndicator delta={comparison?.deltas.commission} />
             </div>
           </PremiumCard>
+
+          <AnimatePresence>
+            {showHistory && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <HistoricalView />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </aside>
       </div>
 
@@ -972,21 +1299,30 @@ export default function Leads() {
             <PhoneCall className="w-4 h-4 text-blue-400" />
             <span className="text-xs text-blue-400/60 uppercase">Calls</span>
           </div>
-          <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
+          <div className="flex items-baseline gap-1.5">
+            <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
+            <DeltaIndicator delta={comparison?.deltas.callsMade} compact />
+          </div>
         </PremiumCard>
         <PremiumCard className="p-3">
           <div className="flex items-center gap-2 mb-1">
             <Target className="w-4 h-4 text-emerald-400" />
             <span className="text-xs text-emerald-400/60 uppercase">Booked</span>
           </div>
-          <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
+          <div className="flex items-baseline gap-1.5">
+            <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
+            <DeltaIndicator delta={comparison?.deltas.bookingsCount} compact />
+          </div>
         </PremiumCard>
         <PremiumCard className="p-3">
           <div className="flex items-center gap-2 mb-1">
             <Clock className="w-4 h-4 text-amber-400" />
             <span className="text-xs text-amber-400/60 uppercase">Speed</span>
           </div>
-          <p className="text-xl font-display text-white">{stats.avgSpeedToLead}s</p>
+          <div className="flex items-baseline gap-1.5">
+            <p className="text-xl font-display text-white">{stats.avgSpeedToLead}s</p>
+            <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor compact />
+          </div>
         </PremiumCard>
         <PremiumCard className={cn("p-3 relative overflow-hidden")}>
           <div className={cn("absolute inset-0 opacity-10 bg-gradient-to-br", tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none)} />
@@ -995,7 +1331,10 @@ export default function Leads() {
               <DollarSign className="w-4 h-4 text-emerald-400" />
               <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
             </div>
-            <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
+            <div className="flex items-baseline gap-1.5">
+              <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
+              <DeltaIndicator delta={comparison?.deltas.commission} compact />
+            </div>
           </div>
         </PremiumCard>
       </div>

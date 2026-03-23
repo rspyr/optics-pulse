@@ -1,9 +1,11 @@
 import { pgTable, serial, integer, real, date, timestamp, unique } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
+import { tenantsTable } from "./tenants";
 
 export const coordinatorDailyStatsTable = pgTable("coordinator_daily_stats", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => usersTable.id),
+  tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
   date: date("date").notNull(),
   callsMade: integer("calls_made").notNull().default(0),
   bookingsCount: integer("bookings_count").notNull().default(0),

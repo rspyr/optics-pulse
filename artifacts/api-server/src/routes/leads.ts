@@ -6,6 +6,7 @@ import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
 import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
 import { getSmartQueue } from "../services/lead-scoring";
 import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";
+import type { ComparisonBaseline } from "../services/coordinator-stats";
 
 const router: IRouter = Router();
 
@@ -85,7 +86,6 @@ router.get("/leads/hud/stats", async (req, res) => {
 });
 
 router.get("/leads/hud/comparison", async (req, res) => {
-  const userId = req.session.userId ?? null;
   const role = req.session.userRole;
   const tenantId = (role === "super_admin" || role === "agency_user")
     ? (req.query.tenantId ? Number(req.query.tenantId) : null)
@@ -98,13 +98,10 @@ router.get("/leads/hud/comparison", async (req, res) => {
     return;
   }
 
-  const queryUserId = req.query.userId ? Number(req.query.userId) : userId;
-
   try {
     const result = await getComparisonStats(
-      queryUserId,
       tenantId,
-      baseline as "yesterday" | "last_week" | "monthly_avg" | "all_time_best",
+      baseline as ComparisonBaseline,
     );
     res.json(result);
   } catch (err) {
@@ -114,7 +111,6 @@ router.get("/leads/hud/comparison", async (req, res) => {
 });
 
 router.get("/leads/hud/historical", async (req, res) => {
-  const userId = req.session.userId ?? null;
   const role = req.session.userRole;
   const tenantId = (role === "super_admin" || role === "agency_user")
     ? (req.query.tenantId ? Number(req.query.tenantId) : null)
@@ -128,10 +124,8 @@ router.get("/leads/hud/historical", async (req, res) => {
   const startDate = (req.query.startDate as string) || startDateObj.toISOString().split("T")[0];
   const endDateParam = (req.query.endDate as string) || endDate;
 
-  const queryUserId = req.query.userId ? Number(req.query.userId) : userId;
-
   try {
-    const result = await getHistoricalStats(queryUserId, tenantId, startDate, endDateParam);
+    const result = await getHistoricalStats(tenantId, startDate, endDateParam);
     res.json(result);
   } catch (err) {
     console.error("[HUD Historical]", err);

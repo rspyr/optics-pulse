@@ -1,0 +1,2 @@
+ALTER TABLE "coordinator_daily_stats" ADD COLUMN "tenant_id" integer NOT NULL;--> statement-breakpoint
+ALTER TABLE "coordinator_daily_stats" ADD CONSTRAINT "coordinator_daily_stats_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;
