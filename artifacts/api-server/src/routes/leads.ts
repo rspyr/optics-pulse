@@ -157,7 +157,7 @@ router.patch("/leads/:leadId", async (req, res) => {
 });
 
 router.post("/leads/:leadId/call", async (req, res) => {
-  const leadId = parseInt(String(req.params.leadId));
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
   const userId = req.session.userId;
   if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
@@ -192,7 +192,7 @@ router.post("/leads/:leadId/call", async (req, res) => {
 });
 
 router.post("/leads/:leadId/text", async (req, res) => {
-  const leadId = parseInt(String(req.params.leadId));
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
   const userId = req.session.userId;
   if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
