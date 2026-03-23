@@ -1,0 +1,243 @@
+import { Router, type IRouter } from "express";
+import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable } from "@workspace/db";
+import { eq, and, sql, gte, lte, count, inArray, desc, ne } from "drizzle-orm";
+import { generateCoachingInsights } from "../services/coaching-insights";
+
+const router: IRouter = Router();
+
+function requireManagerRole(req: any, res: any, next: any) {
+  const role = req.session?.userRole;
+  if (!role || !["super_admin", "agency_user", "client_admin"].includes(role)) {
+    res.status(403).json({ error: "Access denied. Requires manager role." });
+    return;
+  }
+  next();
+}
+
+function resolveTenantId(req: any): number | null {
+  const role = req.session?.userRole;
+  if (role === "super_admin" || role === "agency_user") {
+    return req.query.tenantId ? Number(req.query.tenantId) : req.session.tenantId ?? null;
+  }
+  return req.session?.tenantId ?? null;
+}
+
+router.use(requireManagerRole);
+
+router.get("/sales-manager/team", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ coordinators: [], teamTotals: null });
+    return;
+  }
+
+  const users = await db.select({ id: usersTable.id, name: usersTable.name, role: usersTable.role, email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.tenantId, tenantId));
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const userIds = users.map(u => u.id);
+
+  if (userIds.length === 0) {
+    res.json({ coordinators: [], teamTotals: null });
+    return;
+  }
+
+  const todayAttempts = await db.select({
+    userId: callAttemptsTable.userId,
+    callCount: count(),
+  }).from(callAttemptsTable)
+    .where(and(
+      inArray(callAttemptsTable.userId, userIds),
+      gte(callAttemptsTable.attemptedAt, today),
+    ))
+    .groupBy(callAttemptsTable.userId);
+
+  const callCountMap: Record<number, number> = {};
+  for (const a of todayAttempts) callCountMap[a.userId] = a.callCount;
+
+  const todayLeadIds = await db.selectDistinct({ leadId: callAttemptsTable.leadId, userId: callAttemptsTable.userId })
+    .from(callAttemptsTable)
+    .where(and(
+      inArray(callAttemptsTable.userId, userIds),
+      gte(callAttemptsTable.attemptedAt, today),
+    ));
+
+  const leadIdsByUser: Record<number, number[]> = {};
+  for (const r of todayLeadIds) {
+    if (!leadIdsByUser[r.userId]) leadIdsByUser[r.userId] = [];
+    leadIdsByUser[r.userId].push(r.leadId);
+  }
+
+  const allLeadIds = [...new Set(todayLeadIds.map(r => r.leadId))];
+  let leadStatusMap: Record<number, string> = {};
+  if (allLeadIds.length > 0) {
+    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status })
+      .from(leadsTable).where(inArray(leadsTable.id, allLeadIds));
+    leadStatusMap = Object.fromEntries(leads.map(l => [l.id, l.status]));
+  }
+
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const weekStats = await db.select()
+    .from(coordinatorDailyStatsTable)
+    .where(and(
+      inArray(coordinatorDailyStatsTable.userId, userIds),
+      gte(coordinatorDailyStatsTable.date, sevenDaysAgo.toISOString().split("T")[0]),
+    ));
+
+  const weekStatsByUser: Record<number, typeof weekStats> = {};
+  for (const s of weekStats) {
+    if (!weekStatsByUser[s.userId]) weekStatsByUser[s.userId] = [];
+    weekStatsByUser[s.userId].push(s);
+  }
+
+  const coordinators = users.map(user => {
+    const calls = callCountMap[user.id] || 0;
+    const userLeadIds = leadIdsByUser[user.id] || [];
+    const bookings = userLeadIds.filter(id => ["booked", "sold"].includes(leadStatusMap[id] || "")).length;
+    const bookingRate = calls > 0 ? Math.round((bookings / calls) * 100) : 0;
+    const commission = bookings * 20;
+
+    const ws = weekStatsByUser[user.id] || [];
+    const weekAvgRate = ws.length > 0
+      ? Math.round(ws.reduce((s, r) => s + r.bookingRate, 0) / ws.length)
+      : 0;
+    const weekTotalCalls = ws.reduce((s, r) => s + r.callsMade, 0);
+    const weekTotalBookings = ws.reduce((s, r) => s + r.bookingsCount, 0);
+
+    return {
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      email: user.email,
+      today: {
+        callsMade: calls,
+        bookings,
+        bookingRate,
+        commission,
+      },
+      week: {
+        avgBookingRate: weekAvgRate,
+        totalCalls: weekTotalCalls,
+        totalBookings: weekTotalBookings,
+        daysActive: ws.length,
+      },
+    };
+  });
+
+  coordinators.sort((a, b) => b.today.bookings - a.today.bookings || b.today.callsMade - a.today.callsMade);
+
+  const teamTotals = {
+    callsMade: coordinators.reduce((s, c) => s + c.today.callsMade, 0),
+    bookings: coordinators.reduce((s, c) => s + c.today.bookings, 0),
+    bookingRate: 0,
+    commission: coordinators.reduce((s, c) => s + c.today.commission, 0),
+    activeCoordinators: coordinators.filter(c => c.today.callsMade > 0).length,
+    totalCoordinators: coordinators.length,
+  };
+  teamTotals.bookingRate = teamTotals.callsMade > 0 ? Math.round((teamTotals.bookings / teamTotals.callsMade) * 100) : 0;
+
+  res.json({ coordinators, teamTotals });
+});
+
+router.get("/sales-manager/activity-feed", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ activities: [] });
+    return;
+  }
+
+  const limit = Math.min(Number(req.query.limit) || 50, 100);
+
+  const usersInTenant = await db.select({ id: usersTable.id, name: usersTable.name })
+    .from(usersTable).where(eq(usersTable.tenantId, tenantId));
+  const userIds = usersInTenant.map(u => u.id);
+  const userNameMap = Object.fromEntries(usersInTenant.map(u => [u.id, u.name]));
+
+  if (userIds.length === 0) {
+    res.json({ activities: [] });
+    return;
+  }
+
+  const attempts = await db.select({
+    id: callAttemptsTable.id,
+    leadId: callAttemptsTable.leadId,
+    userId: callAttemptsTable.userId,
+    method: callAttemptsTable.method,
+    outcome: callAttemptsTable.outcome,
+    platform: callAttemptsTable.platform,
+    attemptedAt: callAttemptsTable.attemptedAt,
+    notes: callAttemptsTable.notes,
+  }).from(callAttemptsTable)
+    .where(inArray(callAttemptsTable.userId, userIds))
+    .orderBy(desc(callAttemptsTable.attemptedAt))
+    .limit(limit);
+
+  const leadIds = [...new Set(attempts.map(a => a.leadId))];
+  let leadMap: Record<number, { firstName: string; lastName: string; source: string; status: string }> = {};
+  if (leadIds.length > 0) {
+    const leads = await db.select({
+      id: leadsTable.id,
+      firstName: leadsTable.firstName,
+      lastName: leadsTable.lastName,
+      source: leadsTable.source,
+      status: leadsTable.status,
+    }).from(leadsTable).where(inArray(leadsTable.id, leadIds));
+    leadMap = Object.fromEntries(leads.map(l => [l.id, l]));
+  }
+
+  const activities = attempts.map(a => ({
+    id: a.id,
+    coordinatorName: userNameMap[a.userId] || "Unknown",
+    coordinatorId: a.userId,
+    leadName: leadMap[a.leadId] ? `${leadMap[a.leadId].firstName} ${leadMap[a.leadId].lastName}` : "Unknown",
+    leadSource: leadMap[a.leadId]?.source || "",
+    leadStatus: leadMap[a.leadId]?.status || "",
+    method: a.method,
+    outcome: a.outcome,
+    platform: a.platform,
+    attemptedAt: a.attemptedAt,
+    notes: a.notes,
+  }));
+
+  res.json({ activities });
+});
+
+router.get("/sales-manager/coaching-insights", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ insights: [] });
+    return;
+  }
+
+  try {
+    const insights = await generateCoachingInsights(tenantId);
+    res.json({ insights });
+  } catch (err) {
+    console.error("[SalesManager] Coaching insights error:", err);
+    res.json({ insights: [] });
+  }
+});
+
+router.get("/sales-manager/recent-script-changes", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ changes: [] });
+    return;
+  }
+
+  const changes = await db.select()
+    .from(changeLogsTable)
+    .where(and(
+      eq(changeLogsTable.tenantId, tenantId),
+      eq(changeLogsTable.category, "scripts"),
+    ))
+    .orderBy(desc(changeLogsTable.date))
+    .limit(10);
+
+  res.json({ changes });
+});
+
+export default router;

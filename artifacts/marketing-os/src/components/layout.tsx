@@ -18,6 +18,7 @@ import {
   ClipboardList,
   GitBranch,
   FileText,
+  BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -26,6 +27,7 @@ const AGENCY_NAV = [
   { href: "/", label: "Command Center", icon: LayoutDashboard },
   { href: "/internal", label: "God View", icon: Shield },
   { href: "/leads", label: "Leads HUD", icon: Users },
+  { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/clients", label: "Client Portal", icon: Building2 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/admin/tenants", label: "Tenants", icon: Building },
@@ -36,6 +38,15 @@ const AGENCY_NAV = [
   { href: "/admin/change-logs", label: "Change Log", icon: ClipboardList },
   { href: "/admin/funnels", label: "Funnels & Scripts", icon: GitBranch },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
+];
+
+const CLIENT_NAV_ADMIN = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/leads", label: "Leads", icon: Users },
+  { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
+  { href: "/attribution", label: "Attribution", icon: LinkIcon },
+  { href: "/training", label: "Training", icon: BookOpen },
+  { href: "/settings", label: "Client Settings", icon: Settings },
 ];
 
 const CLIENT_NAV = [
@@ -51,7 +62,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
   const { user, logout, isAgency } = useAuth();
 
-  const navItems = isAgency ? AGENCY_NAV : CLIENT_NAV;
+  const navItems = isAgency ? AGENCY_NAV : (user?.role === "client_admin" ? CLIENT_NAV_ADMIN : CLIENT_NAV);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

@@ -22,6 +22,7 @@ import Automation from "@/pages/automation";
 import AdminChangeLogs from "@/pages/admin-change-logs";
 import AdminFunnels from "@/pages/admin-funnels";
 import AdminScripts from "@/pages/admin-scripts";
+import SalesManager from "@/pages/sales-manager";
 
 import soehneExtra from '@assets/soehne-extrafett_1773849837050.woff2';
 import soehneDrei from '@assets/soehne-dreiviertelfett_1773849837042.woff2';
@@ -88,6 +89,7 @@ function AuthenticatedRoutes() {
         <Route path="/admin/change-logs">{() => <AgencyGuard><AdminChangeLogs /></AgencyGuard>}</Route>
         <Route path="/admin/funnels">{() => <AgencyGuard><AdminFunnels /></AgencyGuard>}</Route>
         <Route path="/admin/scripts">{() => <AgencyGuard><AdminScripts /></AgencyGuard>}</Route>
+        <Route path="/sales-manager" component={SalesManager} />
         <Route path="/training" component={TrainingResources} />
         <Route component={NotFound} />
       </Switch>

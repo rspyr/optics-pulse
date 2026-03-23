@@ -22,6 +22,7 @@ import drilldownRouter from "./drilldown";
 import budgetRouter from "./budget";
 import reviewsRouter from "./reviews";
 import scriptsRouter from "./scripts";
+import salesManagerRouter from "./sales-manager";
 
 const router: IRouter = Router();
 
@@ -53,6 +54,7 @@ router.use(callAttemptsRouter);
 router.use(drilldownRouter);
 router.use(budgetRouter);
 router.use(scriptsRouter);
+router.use(salesManagerRouter);
 
 export default router;
 
