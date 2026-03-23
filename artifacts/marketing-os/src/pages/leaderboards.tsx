@@ -180,9 +180,6 @@ export default function Leaderboards() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <span className="font-medium text-white">{getDisplayName(entry, idx)}</span>
-                        {isOwn && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary/20 text-primary border border-primary/30">Your Company</span>
-                        )}
                         {entry.isOutlier && (
                           <Badge variant={entry.outlierDirection === "underperforming" ? "danger" : "success"}>
                             <AlertTriangle className="w-3 h-3 mr-1" />
