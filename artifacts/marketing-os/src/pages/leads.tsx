@@ -864,16 +864,18 @@ function LeadCard({
 
       {suggestion && (
         <div className="mt-3 space-y-1.5">
-          <div className={cn(
-            "flex items-start gap-2 px-3 py-2 rounded-lg border",
-            suggestion.inOptimalWindow
-              ? "bg-emerald-500/10 border-emerald-500/20"
-              : suggestion.doubleDial
-                ? "bg-orange-500/10 border-orange-500/20"
-                : "bg-amber-500/10 border-amber-500/20"
+          <div
+            onClick={() => setShowWhyOrder(!showWhyOrder)}
+            className={cn(
+              "flex items-center gap-2 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors",
+              suggestion.inOptimalWindow
+                ? "bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/15"
+                : suggestion.doubleDial
+                  ? "bg-orange-500/10 border-orange-500/20 hover:bg-orange-500/15"
+                  : "bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/15"
           )}>
             <Brain className={cn(
-              "w-4 h-4 mt-0.5 shrink-0",
+              "w-4 h-4 shrink-0",
               suggestion.inOptimalWindow ? "text-emerald-400" : suggestion.doubleDial ? "text-orange-400" : "text-amber-400"
             )} />
             <div className="flex-1 min-w-0">
@@ -902,13 +904,10 @@ function LeadCard({
                 )}
               </div>
             </div>
-            <button
-              onClick={() => setShowWhyOrder(!showWhyOrder)}
-              className="shrink-0 p-1 rounded hover:bg-white/5 transition-colors"
-              title="Why this position?"
-            >
-              <Info className="w-3.5 h-3.5 text-white/30 hover:text-white/60" />
-            </button>
+            <Info className={cn(
+              "w-3.5 h-3.5 shrink-0 transition-colors",
+              showWhyOrder ? "text-white/60" : "text-white/30"
+            )} />
           </div>
           <AnimatePresence>
             {showWhyOrder && (
