@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn, formatCurrency, formatPercentage } from "@/lib/utils";
@@ -36,13 +36,19 @@ export default function Dashboard() {
   const [exporting, setExporting] = useState(false);
   const { startDate, endDate } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
-  const { data: overview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({ startDate, endDate }, { query: { placeholderData: (prev: unknown) => prev } });
-  const { data: chartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({ startDate, endDate }, { query: { placeholderData: (prev: unknown) => prev } });
+  const { data: rawOverview, isFetching: overviewFetching } = useGetDashboardOverview({ startDate, endDate });
+  const { data: rawChartData, isFetching: chartFetching } = useGetSpendRevenueChart({ startDate, endDate });
 
-  const isInitialLoad = overviewLoading || chartLoading;
+  const overviewRef = useRef(rawOverview);
+  const chartDataRef = useRef(rawChartData);
+  if (rawOverview !== undefined) overviewRef.current = rawOverview;
+  if (rawChartData !== undefined) chartDataRef.current = rawChartData;
+
+  const overview = rawOverview ?? overviewRef.current;
+  const chartData = rawChartData ?? chartDataRef.current;
   const isRefetching = overviewFetching || chartFetching;
 
-  if (isInitialLoad) {
+  if (!overview && !overviewRef.current) {
     return <div className="animate-pulse space-y-8">
       <div className="h-8 w-64 bg-white/10 rounded"></div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">

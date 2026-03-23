@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
 import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
@@ -155,33 +155,50 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const { startDate, endDate } = parseDateRange(dateRange);
 
-  const { data: overview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({
-    tenantId: effectiveTenantId,
-    startDate,
-    endDate,
-  }, { query: { placeholderData: (prev: unknown) => prev } });
-
-  const { data: chartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({
-    tenantId: effectiveTenantId,
-    startDate,
-    endDate,
-  }, { query: { placeholderData: (prev: unknown) => prev } });
-
-  const { data: changeLogs } = useListChangeLogs({
+  const { data: rawOverview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({
     tenantId: effectiveTenantId,
     startDate,
     endDate,
   });
 
-  const { data: leadsData } = useListLeads({
+  const { data: rawChartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({
+    tenantId: effectiveTenantId,
+    startDate,
+    endDate,
+  });
+
+  const { data: rawChangeLogs } = useListChangeLogs({
+    tenantId: effectiveTenantId,
+    startDate,
+    endDate,
+  });
+
+  const { data: rawLeadsData } = useListLeads({
     tenantId: effectiveTenantId,
     limit: 500,
   });
 
-  const { data: benchmarkData } = useGetDashboardBenchmarks({
+  const { data: rawBenchmarkData } = useGetDashboardBenchmarks({
     startDate,
     endDate,
   });
+
+  const overviewRef = useRef(rawOverview);
+  const chartDataRef = useRef(rawChartData);
+  const changeLogsRef = useRef(rawChangeLogs);
+  const leadsDataRef = useRef(rawLeadsData);
+  const benchmarkDataRef = useRef(rawBenchmarkData);
+  if (rawOverview !== undefined) overviewRef.current = rawOverview;
+  if (rawChartData !== undefined) chartDataRef.current = rawChartData;
+  if (rawChangeLogs !== undefined) changeLogsRef.current = rawChangeLogs;
+  if (rawLeadsData !== undefined) leadsDataRef.current = rawLeadsData;
+  if (rawBenchmarkData !== undefined) benchmarkDataRef.current = rawBenchmarkData;
+
+  const overview = rawOverview ?? overviewRef.current;
+  const chartData = rawChartData ?? chartDataRef.current;
+  const changeLogs = rawChangeLogs ?? changeLogsRef.current;
+  const leadsData = rawLeadsData ?? leadsDataRef.current;
+  const benchmarkData = rawBenchmarkData ?? benchmarkDataRef.current;
 
   const { data: trainingData, refetch: refetchTraining } = useGetContextualTraining();
   const [dismissedTrainingIds, setDismissedTrainingIds] = useState<Set<number>>(new Set());
@@ -298,7 +315,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     return map;
   }, [changeLogs]);
 
-  if (overviewLoading || chartLoading) {
+  if (!overview && !overviewRef.current) {
     return (
       <div className="animate-pulse space-y-8">
         <div className="h-8 w-64 bg-white/10 rounded" />
@@ -423,7 +440,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     b.pct < worst.pct ? b : worst
   );
 
-  const isRefetching = (overviewFetching && !overviewLoading) || (chartFetching && !chartLoading);
+  const isRefetching = overviewFetching || chartFetching;
 
   return (
     <div className={cn("space-y-8 transition-opacity duration-200", isRefetching && "opacity-70")}>
