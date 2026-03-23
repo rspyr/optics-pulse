@@ -46,7 +46,7 @@ const AGENCY_NAV = [
 
 const CLIENT_NAV_ADMIN = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Leads", icon: Users },
+  { href: "/leads", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
@@ -55,7 +55,7 @@ const CLIENT_NAV_ADMIN = [
 
 const CLIENT_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Leads", icon: Users },
+  { href: "/leads", label: "Pulse", icon: PulseIcon },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Client Settings", icon: Settings },
