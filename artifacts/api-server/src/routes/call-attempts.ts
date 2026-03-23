@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
 import { eq, desc, and, lte, gte } from "drizzle-orm";
-import { analyzeContactPattern } from "../services/lead-scoring";
+import { analyzeContactPattern, logAttemptWithFollowup } from "../services/lead-scoring";
 import type { SessionData } from "express-session";
 
 const router: IRouter = Router();
@@ -63,40 +63,20 @@ router.post("/call-attempts", async (req: Request, res): Promise<void> => {
     return;
   }
 
-  const [attempt] = await db.insert(callAttemptsTable).values({
+  await logAttemptWithFollowup(db, {
     leadId,
     userId,
     method: resolvedMethod,
     outcome,
     platform: platform || "native",
-    attemptedAt: attemptedAt ? new Date(attemptedAt) : new Date(),
+    attemptedAt: attemptedAt ? new Date(attemptedAt) : undefined,
     notes: notes || null,
-  }).returning();
+  });
 
-  if (outcome === "voicemail" || outcome === "no_answer" || outcome === "busy") {
-    const now = new Date();
-    const currentHour = now.getHours();
-    let scheduledFor: Date;
-    let reason: string;
-
-    if (currentHour < 12) {
-      scheduledFor = new Date(now);
-      scheduledFor.setHours(currentHour + 4, 0, 0, 0);
-      reason = `Double-dial: missed ${resolvedMethod} this morning — retry this afternoon`;
-    } else {
-      scheduledFor = new Date(now);
-      scheduledFor.setDate(scheduledFor.getDate() + 1);
-      scheduledFor.setHours(9, 0, 0, 0);
-      reason = `Re-engagement: missed ${resolvedMethod} this afternoon — retry tomorrow morning`;
-    }
-
-    await db.insert(scheduledFollowupsTable).values({
-      leadId,
-      userId,
-      reason,
-      scheduledFor,
-    });
-  }
+  const [attempt] = await db.select().from(callAttemptsTable)
+    .where(eq(callAttemptsTable.leadId, leadId))
+    .orderBy(desc(callAttemptsTable.attemptedAt))
+    .limit(1);
 
   res.status(201).json(attempt);
 });

@@ -19,6 +19,7 @@ export interface LeadSuggestion {
   inOptimalWindow: boolean;
   priorityScore: number;
   priorityReason: string;
+  confidenceScore: number;
   totalAttempts: number;
   lastAttemptAt: string | null;
   failedAttempts: number;
@@ -86,6 +87,7 @@ export function analyzeContactPattern(attempts: CallAttemptRecord[]): LeadSugges
       inOptimalWindow: true,
       priorityScore: 100,
       priorityReason: "Brand new lead",
+      confidenceScore: 50,
       totalAttempts: 0,
       lastAttemptAt: null,
       failedAttempts: 0,
@@ -201,6 +203,13 @@ export function analyzeContactPattern(attempts: CallAttemptRecord[]): LeadSugges
     priorityReason = "Many failed attempts — timing critical";
   }
 
+  let confidenceScore = 50;
+  if (attempts.length >= 5) confidenceScore = 85;
+  else if (attempts.length >= 3) confidenceScore = 75;
+  else if (attempts.length >= 2) confidenceScore = 65;
+  else if (attempts.length === 1) confidenceScore = 55;
+  if (answeredAttempts > 0) confidenceScore = Math.min(confidenceScore + 10, 95);
+
   return {
     bestTimeWindow,
     reason,
@@ -208,6 +217,7 @@ export function analyzeContactPattern(attempts: CallAttemptRecord[]): LeadSugges
     inOptimalWindow,
     priorityScore: Math.max(Math.min(priorityScore, 100), 0),
     priorityReason,
+    confidenceScore,
     totalAttempts: attempts.length,
     lastAttemptAt: lastAttempt.attemptedAt.toISOString(),
     failedAttempts,
@@ -376,4 +386,54 @@ export async function getSmartQueue(tenantId: number | null): Promise<{
     backgroundCount: scoredLeads.filter(l => l.bucket === "background").length,
     total: scoredLeads.length,
   };
+}
+
+interface LogAttemptInput {
+  leadId: number;
+  userId: number;
+  method: string;
+  outcome: string;
+  platform: string;
+  notes: string | null;
+  attemptedAt?: Date;
+}
+
+export async function logAttemptWithFollowup(
+  dbInstance: typeof db,
+  input: LogAttemptInput,
+): Promise<void> {
+  await dbInstance.insert(callAttemptsTable).values({
+    leadId: input.leadId,
+    userId: input.userId,
+    method: input.method,
+    outcome: input.outcome,
+    platform: input.platform,
+    attemptedAt: input.attemptedAt || new Date(),
+    notes: input.notes,
+  });
+
+  if (input.outcome === "voicemail" || input.outcome === "no_answer" || input.outcome === "busy") {
+    const now = new Date();
+    const currentHour = now.getHours();
+    let scheduledFor: Date;
+    let reason: string;
+
+    if (currentHour < 12) {
+      scheduledFor = new Date(now);
+      scheduledFor.setHours(currentHour + 4, 0, 0, 0);
+      reason = `Double-dial: missed ${input.method} this morning — retry this afternoon`;
+    } else {
+      scheduledFor = new Date(now);
+      scheduledFor.setDate(scheduledFor.getDate() + 1);
+      scheduledFor.setHours(9, 0, 0, 0);
+      reason = `Re-engagement: missed ${input.method} this afternoon — retry tomorrow morning`;
+    }
+
+    await dbInstance.insert(scheduledFollowupsTable).values({
+      leadId: input.leadId,
+      userId: input.userId,
+      reason,
+      scheduledFor,
+    });
+  }
 }

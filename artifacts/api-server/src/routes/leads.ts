@@ -167,13 +167,16 @@ router.patch("/leads/:leadId", async (req, res) => {
       booked: "answered",
       callback_requested: "answered",
       not_interested: "answered",
-      no_answer: "no_answer",
-      voicemail: "voicemail",
-      wrong_number: "answered",
+      never_answered: "no_answer",
+      out_of_area: "answered",
+      looking_for_job: "answered",
+      already_had_estimate: "answered",
+      dont_remember: "answered",
     };
     const outcome = dispositionToOutcome[body.disposition] || "answered";
     try {
-      await db.insert(callAttemptsTable).values({
+      const { logAttemptWithFollowup } = await import("../services/lead-scoring");
+      await logAttemptWithFollowup(db, {
         leadId,
         userId: req.session.userId,
         method: "call",

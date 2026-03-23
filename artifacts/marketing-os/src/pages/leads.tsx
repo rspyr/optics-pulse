@@ -55,6 +55,7 @@ interface LeadSuggestion {
   inOptimalWindow: boolean;
   priorityScore: number;
   priorityReason: string;
+  confidenceScore: number;
   totalAttempts: number;
   lastAttemptAt: string | null;
   failedAttempts: number;
@@ -559,6 +560,7 @@ function LeadCard({
                   <TrendingUp className="w-3.5 h-3.5 text-white/40 shrink-0" />
                   <span className="text-[10px] text-white/40">
                     Priority: {suggestion.priorityScore}/100 — {suggestion.priorityReason}
+                    {suggestion.confidenceScore > 0 && ` · Confidence: ${suggestion.confidenceScore}%`}
                   </span>
                   {suggestion.inOptimalWindow && (
                     <span className="ml-auto text-[10px] text-emerald-400/70 flex items-center gap-1">
