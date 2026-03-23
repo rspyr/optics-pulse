@@ -413,7 +413,7 @@ export async function logAttemptWithFollowup(
   });
 
   if (input.outcome === "voicemail" || input.outcome === "no_answer" || input.outcome === "busy") {
-    const now = new Date();
+    const now = input.attemptedAt || new Date();
     const currentHour = now.getHours();
     let scheduledFor: Date;
     let reason: string;
