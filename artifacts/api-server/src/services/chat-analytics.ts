@@ -241,14 +241,46 @@ export async function processQuestionStream(
 
     onChunk({ type: "status", content: "Analyzing results..." });
 
-    const stream = await ai.models.generateContentStream({
-      model: "gemini-3-pro-preview",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `User question: "${question}"
+    const [vizResponse, streamResponse] = await Promise.all([
+      ai.models.generateContent({
+        model: "gemini-3-pro-preview",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `User question: "${question}"
+
+Data shape: ${queryResult.data.length} rows, columns: ${Object.keys(queryResult.data[0] || {}).join(", ")}
+Sample: ${JSON.stringify(queryResult.data.slice(0, 3))}
+
+Pick the best visualization. Respond with ONLY valid JSON:
+{"chartType": "one of: bar, horizontal-bar, table, number, trend-line, pie, list", "chartLabel": "short label"}`,
+              },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction: `You are a data visualization expert. Choose the best chart type for the given data and question.
+- "number" — single KPI or 1 row with few columns
+- "bar" — comparing values across categories (≤12 items)
+- "horizontal-bar" — many categories or long labels
+- "trend-line" — data over time with a date column
+- "pie" — proportional breakdown (≤8 items)
+- "list" — text-heavy items (logs, alerts, reviews)
+- "table" — detailed multi-column data`,
+          responseMimeType: "application/json",
+          maxOutputTokens: 256,
+        },
+      }),
+      ai.models.generateContentStream({
+        model: "gemini-3-pro-preview",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `User question: "${question}"
 
 Query results (${queryResult.data.length} rows):
 ${JSON.stringify(queryResult.data.slice(0, 30), null, 2)}
@@ -256,42 +288,36 @@ ${JSON.stringify(queryResult.data.slice(0, 30), null, 2)}
 ${queryResult.summary}
 
 Provide a helpful, conversational answer. Use **bold** for key numbers. Use bullet points (•) for lists. Be concise but insightful. Format currency as $X,XXX.XX and percentages as X.X%.`,
-            },
-          ],
+              },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction: "You are a friendly marketing data analyst helping a business owner understand their marketing performance. Respond in plain text with **bold** for emphasis. Be concise, highlight what matters, and suggest follow-up questions.",
+          maxOutputTokens: 4096,
         },
-      ],
-      config: {
-        systemInstruction: "You are a friendly marketing data analyst helping a business owner understand their marketing performance. Respond in plain text with **bold** for emphasis. Be concise, highlight what matters, and suggest follow-up questions.",
-        maxOutputTokens: 4096,
-      },
-    });
-
-    for await (const chunk of stream) {
-      const text = chunk.text;
-      if (text) {
-        onChunk({ type: "text", content: text });
-      }
-    }
+      }),
+    ]);
 
     let chartType = "table";
     let chartLabel = "Results";
-    if (queryResult.data.length === 1 && Object.keys(queryResult.data[0]).length <= 5) {
-      chartType = "number";
-      chartLabel = "Key Metric";
-    } else if (queryResult.data.length > 1) {
-      const keys = Object.keys(queryResult.data[0] || {});
-      const hasDateKey = keys.some(k => k.toLowerCase().includes("date"));
-      const numericKeys = keys.filter(k => typeof queryResult.data[0][k] === "number");
+    try {
+      const vizParsed = JSON.parse(vizResponse.text?.trim() || "{}");
+      const validTypes = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "list"];
+      if (vizParsed.chartType && validTypes.includes(vizParsed.chartType)) {
+        chartType = vizParsed.chartType;
+      }
+      if (vizParsed.chartLabel) {
+        chartLabel = vizParsed.chartLabel;
+      }
+    } catch {
+      console.error("[Chat AI] Failed to parse viz response, using fallback");
+    }
 
-      if (hasDateKey && numericKeys.length > 0) {
-        chartType = "trend-line";
-        chartLabel = "Trend";
-      } else if (numericKeys.length > 0 && queryResult.data.length <= 10) {
-        chartType = "bar";
-        chartLabel = "Comparison";
-      } else {
-        chartType = "table";
-        chartLabel = "Data";
+    for await (const chunk of streamResponse) {
+      const text = chunk.text;
+      if (text) {
+        onChunk({ type: "text", content: text });
       }
     }
 
@@ -311,13 +337,19 @@ Provide a helpful, conversational answer. Use **bold** for key numbers. Use bull
 }
 
 export async function generateSuggestions(tenantId: number): Promise<string[]> {
+  const fallbackSuggestions = [
+    "How am I performing this month?",
+    "What's my cost per lead?",
+    "Show me leads broken down by source",
+    "Which campaigns are performing best?",
+    "What's my ROAS?",
+  ];
+
   try {
     const now = new Date();
     const start30 = new Date(now.getTime() - 30 * 86400000);
-    const startStr = start30.toISOString().split("T")[0];
-    const endStr = now.toISOString().split("T")[0];
 
-    const [leadCount, jobRevenue] = await Promise.all([
+    const [leadRows, jobRows, campaignRows] = await Promise.all([
       db
         .select()
         .from(leadsTable)
@@ -326,43 +358,71 @@ export async function generateSuggestions(tenantId: number): Promise<string[]> {
             eq(leadsTable.tenantId, tenantId),
             gte(leadsTable.createdAt, start30)
           )
-        )
-        .then((r) => r.length),
+        ),
       db
         .select()
         .from(jobsTable)
         .where(
           and(
             eq(jobsTable.tenantId, tenantId),
-            eq(jobsTable.status, "completed"),
-            gte(jobsTable.completedAt, start30)
+            gte(jobsTable.createdAt, start30)
           )
-        )
-        .then((r) => r.reduce((s, j) => s + (j.revenue || 0), 0)),
+        ),
+      db
+        .select()
+        .from(campaignsTable)
+        .where(eq(campaignsTable.tenantId, tenantId)),
     ]);
 
-    const suggestions: string[] = [
-      "How am I performing this month?",
-      "What's my cost per lead?",
-      "Show me leads broken down by source",
-      "Which campaigns are performing best?",
-      "What's my ROAS?",
-    ];
+    const leadCount = leadRows.length;
+    const bookedCount = leadRows.filter(l => l.status === "booked" || l.status === "sold").length;
+    const sources = [...new Set(leadRows.map(l => l.source).filter(Boolean))];
+    const completedJobs = jobRows.filter(j => j.status === "completed");
+    const totalRevenue = completedJobs.reduce((s, j) => s + (j.revenue || 0), 0);
+    const activeCampaigns = campaignRows.filter(c => c.status === "active" || c.status === "ENABLED");
+    const platforms = [...new Set(campaignRows.map(c => c.platform).filter(Boolean))];
 
-    if (leadCount > 0) {
-      suggestions.unshift("What's my booking rate and how can I improve it?");
-    }
-    if (jobRevenue > 0) {
-      suggestions.unshift("Show me my revenue trend for the last 30 days");
+    const summaryContext = `Tenant data summary (last 30 days):
+- ${leadCount} leads from sources: ${sources.slice(0, 5).join(", ") || "unknown"}
+- ${bookedCount} booked/sold leads (booking rate: ${leadCount > 0 ? ((bookedCount / leadCount) * 100).toFixed(1) : 0}%)
+- ${completedJobs.length} completed jobs, $${totalRevenue.toFixed(0)} total revenue
+- ${activeCampaigns.length} active campaigns across platforms: ${platforms.join(", ") || "none"}
+- Today's date: ${now.toISOString().split("T")[0]}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-pro-preview",
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: summaryContext }],
+        },
+      ],
+      config: {
+        systemInstruction: `You are a marketing analytics assistant. Based on the tenant's data summary, generate exactly 5 contextual, actionable questions a business owner would want to ask about their marketing data right now.
+
+Rules:
+- Questions should be specific to what the data shows (reference actual sources, platforms, metrics)
+- Mix strategic questions ("Why is X happening?") with tactical ("Show me Y breakdown")
+- If booking rate is low, suggest a question about it
+- If revenue is significant, suggest revenue/ROAS questions
+- If multiple ad platforms, suggest platform comparison
+- Keep questions concise and natural-sounding
+
+Respond with ONLY a JSON array of 5 strings. Example:
+["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"]`,
+        responseMimeType: "application/json",
+        maxOutputTokens: 512,
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || "[]");
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((s: unknown) => typeof s === "string")) {
+      return parsed.slice(0, 5);
     }
 
-    return suggestions.slice(0, 5);
+    return fallbackSuggestions;
   } catch (err) {
     console.error("[Chat AI] Error generating suggestions:", err);
-    return [
-      "How am I performing this month?",
-      "What's my cost per lead?",
-      "Show all campaigns",
-    ];
+    return fallbackSuggestions;
   }
 }

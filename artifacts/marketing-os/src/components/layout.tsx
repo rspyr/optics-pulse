@@ -154,7 +154,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </main>
 
-      <ChatDrawer />
+      <ChatDrawer tenantId={user?.tenantId ?? undefined} />
     </div>
   );
 }

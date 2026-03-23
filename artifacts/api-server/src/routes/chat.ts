@@ -5,22 +5,44 @@ import { processQuestion, processQuestionStream, generateSuggestions, type Conve
 
 const router: IRouter = Router();
 
+function resolveTenantId(req: any, queryOrBodyTenantId?: number | string | null): number | null {
+  const role = req.session.userRole;
+  const sessionTenantId = req.session.tenantId;
+  const isAgency = role === "super_admin" || role === "agency_user";
+
+  if (sessionTenantId) return sessionTenantId;
+
+  if (isAgency && queryOrBodyTenantId) {
+    const parsed = Number(queryOrBodyTenantId);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+
+  return null;
+}
+
 router.post("/chat/ask", async (req, res) => {
-  const { question, conversationHistory, stream } = req.body as {
+  const { question, conversationHistory, stream, tenantId: bodyTenantId } = req.body as {
     question?: string;
     conversationHistory?: ConversationTurn[];
     stream?: boolean;
+    tenantId?: number;
   };
   if (!question || typeof question !== "string" || question.trim().length === 0) {
     res.status(400).json({ error: "Question is required" });
     return;
   }
 
-  if (!req.session.userId || !req.session.tenantId) {
+  if (!req.session.userId) {
     res.status(401).json({ error: "Authentication required" });
     return;
   }
-  const tenantId = req.session.tenantId;
+
+  const tenantId = resolveTenantId(req, bodyTenantId);
+  if (!tenantId) {
+    res.status(400).json({ error: "Tenant context required. Please select a client." });
+    return;
+  }
+
   const history = Array.isArray(conversationHistory) ? conversationHistory.slice(-10) : [];
 
   if (stream) {
@@ -58,11 +80,16 @@ router.post("/chat/ask", async (req, res) => {
 });
 
 router.get("/chat/suggestions", async (req, res) => {
-  if (!req.session.userId || !req.session.tenantId) {
+  if (!req.session.userId) {
     res.status(401).json({ error: "Authentication required" });
     return;
   }
-  const tenantId = req.session.tenantId;
+
+  const tenantId = resolveTenantId(req, req.query.tenantId);
+  if (!tenantId) {
+    res.json({ suggestions: ["How am I performing this month?", "What's my cost per lead?", "Show all campaigns"] });
+    return;
+  }
 
   try {
     const suggestions = await generateSuggestions(tenantId);
@@ -80,11 +107,12 @@ router.get("/chat/saved-questions", async (req, res) => {
     return;
   }
 
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req, req.query.tenantId);
   if (!tenantId) {
-    res.status(401).json({ error: "Not authenticated" });
+    res.json({ questions: [] });
     return;
   }
+
   const questions = await db.select()
     .from(savedQuestionsTable)
     .where(and(eq(savedQuestionsTable.userId, userId), eq(savedQuestionsTable.tenantId, tenantId)))
@@ -94,7 +122,7 @@ router.get("/chat/saved-questions", async (req, res) => {
 });
 
 router.post("/chat/saved-questions", async (req, res) => {
-  const { question } = req.body as { question?: string };
+  const { question, tenantId: bodyTenantId } = req.body as { question?: string; tenantId?: number };
   if (!question || typeof question !== "string") {
     res.status(400).json({ error: "Question is required" });
     return;
@@ -106,11 +134,12 @@ router.post("/chat/saved-questions", async (req, res) => {
     return;
   }
 
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req, bodyTenantId);
   if (!tenantId) {
-    res.status(401).json({ error: "Not authenticated" });
+    res.status(400).json({ error: "Tenant context required" });
     return;
   }
+
   const [saved] = await db.insert(savedQuestionsTable).values({
     userId,
     tenantId,
@@ -128,11 +157,12 @@ router.delete("/chat/saved-questions/:id", async (req, res) => {
     return;
   }
 
-  const tenantId = req.session.tenantId;
+  const tenantId = resolveTenantId(req, req.query.tenantId);
   if (!tenantId) {
-    res.status(401).json({ error: "Not authenticated" });
+    res.status(400).json({ error: "Tenant context required" });
     return;
   }
+
   await db.delete(savedQuestionsTable).where(
     and(
       eq(savedQuestionsTable.id, id),
