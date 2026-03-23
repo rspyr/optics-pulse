@@ -684,12 +684,14 @@ function LeadCard({
   onDisposition,
   isProcessing,
   commConfig,
+  scripts,
 }: {
   lead: LeadData;
   isNew: boolean;
   onDisposition: (leadId: number, disposition: string, status: string) => void;
   isProcessing: boolean;
   commConfig: CommConfig;
+  scripts: ScriptRecord[];
 }) {
   const [showDisposition, setShowDisposition] = useState(false);
   const [showScript, setShowScript] = useState(false);
@@ -699,8 +701,8 @@ function LeadCard({
   const [actionFeedback, setActionFeedback] = useState<{ status: "success" | "error"; message: string } | null>(null);
   const [showWhyOrder, setShowWhyOrder] = useState(false);
   const suggestion = lead._suggestion;
-  const script = SCRIPTS[lead.source] || SCRIPTS["Direct"];
-  const vmScript = VOICEMAIL_SCRIPTS[lead.source] || VOICEMAIL_SCRIPTS["default"];
+  const script = findScript(scripts, "call", lead.source) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
+  const vmScript = findScript(scripts, "voicemail", lead.source) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
   const personalizedVm = vmScript
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -750,7 +752,8 @@ function LeadCard({
 
   const handleText = async () => {
     if (!lead.phone) return;
-    const msg = TEXT_TEMPLATES[0]
+    const textTemplate = findScript(scripts, "text", lead.source) || FALLBACK_TEXT;
+    const msg = textTemplate
       .replace("[NAME]", lead.firstName)
       .replace("[INTEREST]", lead.interestType || "HVAC")
       .replace("[REP]", "your name")
@@ -1061,6 +1064,7 @@ export default function Leads() {
   const { queue, loading, refetch } = useHudQueue();
   const { stats, refetch: refetchStats } = useHudStats();
   const commConfig = useCommConfig();
+  const scripts = useScripts();
   const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
@@ -1248,6 +1252,7 @@ export default function Leads() {
                           onDisposition={handleDisposition}
                           isProcessing={processingLeads.has(lead.id)}
                           commConfig={commConfig}
+                          scripts={scripts}
                         />
                       </div>
                     </div>
