@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable } from "@workspace/db";
+import { db, leadsTable, callAttemptsTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
@@ -161,6 +161,31 @@ router.patch("/leads/:leadId", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
+
+  if (body.disposition && req.session.userId) {
+    const dispositionToOutcome: Record<string, string> = {
+      booked: "answered",
+      callback_requested: "answered",
+      not_interested: "answered",
+      no_answer: "no_answer",
+      voicemail: "voicemail",
+      wrong_number: "answered",
+    };
+    const outcome = dispositionToOutcome[body.disposition] || "answered";
+    try {
+      await db.insert(callAttemptsTable).values({
+        leadId,
+        userId: req.session.userId,
+        method: "call",
+        outcome,
+        platform: "native",
+        notes: `Disposition: ${body.disposition}`,
+      });
+    } catch (err) {
+      console.error("[Leads] Auto-log call attempt on disposition failed:", err);
+    }
+  }
+
   emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
   res.json(lead);
 });

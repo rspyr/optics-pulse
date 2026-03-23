@@ -213,12 +213,20 @@ router.patch("/scheduled-followups/:id/complete", async (req: Request, res): Pro
   const id = parseInt(String(req.params.id));
   if (isNaN(id)) { res.status(400).json({ error: "Invalid followup id" }); return; }
 
+  const [existing] = await db.select().from(scheduledFollowupsTable)
+    .where(eq(scheduledFollowupsTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Followup not found" }); return; }
+
+  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+
   const [updated] = await db.update(scheduledFollowupsTable)
     .set({ completed: true, completedAt: new Date() })
     .where(eq(scheduledFollowupsTable.id, id))
     .returning();
 
-  if (!updated) { res.status(404).json({ error: "Followup not found" }); return; }
   res.json(updated);
 });
 
