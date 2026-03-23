@@ -214,7 +214,7 @@ interface HistoricalDay {
 
 interface HistoricalData {
   dailyStats: HistoricalDay[];
-  personalBests: Record<string, { value: number }>;
+  personalBests: Record<string, { value: number; date: string | null }>;
   totalDays: number;
 }
 
@@ -304,14 +304,15 @@ function DeltaIndicator({ delta, invertColor = false, compact = false }: {
 
 function HistoricalView() {
   const [range, setRange] = useState(30);
-  const [metric, setMetric] = useState<"callsMade" | "bookingsCount" | "bookingRate" | "commission">("callsMade");
+  const [metric, setMetric] = useState<"callsMade" | "bookingsCount" | "bookingRate" | "commission" | "avgSpeedToLead">("callsMade");
   const { data, loading } = useHistoricalStats(range);
 
   const metricConfig = {
-    callsMade: { label: "Calls Made", color: "#60a5fa", format: (v: number) => `${v}` },
+    callsMade: { label: "Calls", color: "#60a5fa", format: (v: number) => `${v}` },
     bookingsCount: { label: "Bookings", color: "#34d399", format: (v: number) => `${v}` },
-    bookingRate: { label: "Booking Rate", color: "#fbbf24", format: (v: number) => `${v}%` },
-    commission: { label: "Commission", color: "#34d399", format: (v: number) => `$${v}` },
+    bookingRate: { label: "Rate", color: "#fbbf24", format: (v: number) => `${v}%` },
+    commission: { label: "Earned", color: "#34d399", format: (v: number) => `$${v}` },
+    avgSpeedToLead: { label: "Speed", color: "#f59e0b", format: (v: number) => `${v}s` },
   };
 
   const config = metricConfig[metric];
@@ -340,7 +341,7 @@ function HistoricalView() {
           <span className="text-sm font-display text-white">Performance History</span>
         </div>
         <div className="flex items-center gap-2">
-          {[7, 14, 30, 90].map(r => (
+          {[7, 30, 90].map(r => (
             <button
               key={r}
               onClick={() => setRange(r)}
@@ -362,6 +363,7 @@ function HistoricalView() {
           <button
             key={key}
             onClick={() => setMetric(key)}
+            data-metric={key}
             className={cn(
               "px-2.5 py-1 rounded-md text-[10px] uppercase tracking-wider transition-colors",
               metric === key
@@ -429,20 +431,26 @@ function HistoricalView() {
       )}
 
       {data && data.personalBests && (
-        <div className="grid grid-cols-4 gap-2 mt-4 pt-3 border-t border-white/5">
+        <div className="grid grid-cols-5 gap-1.5 mt-4 pt-3 border-t border-white/5">
           {([
             ["callsMade", "Best Calls", ""],
-            ["bookingsCount", "Best Bookings", ""],
+            ["bookingsCount", "Best Booked", ""],
             ["bookingRate", "Best Rate", "%"],
-            ["commission", "Best Earned", "$"],
-          ] as const).map(([key, label, prefix]) => (
-            <div key={key} className="text-center">
-              <p className="text-[10px] text-white/30 uppercase">{label}</p>
-              <p className="text-sm font-mono text-white/70 mt-0.5">
-                {prefix === "$" ? "$" : ""}{data.personalBests[key]?.value ?? 0}{prefix === "%" ? "%" : ""}
-              </p>
-            </div>
-          ))}
+            ["commission", "Best $", "$"],
+            ["avgSpeedToLead", "Best Speed", "s"],
+          ] as const).map(([key, label, suffix]) => {
+            const best = data.personalBests[key];
+            const dateStr = best?.date ? new Date(best.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+            return (
+              <div key={key} className="text-center">
+                <p className="text-[9px] text-white/30 uppercase leading-tight">{label}</p>
+                <p className="text-xs font-mono text-white/70 mt-0.5">
+                  {suffix === "$" ? "$" : ""}{best?.value ?? 0}{suffix !== "$" ? suffix : ""}
+                </p>
+                {dateStr && <p className="text-[8px] text-white/20">{dateStr}</p>}
+              </div>
+            );
+          })}
         </div>
       )}
     </PremiumCard>

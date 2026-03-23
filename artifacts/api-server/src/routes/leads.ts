@@ -87,9 +87,15 @@ router.get("/leads/hud/stats", async (req, res) => {
 
 router.get("/leads/hud/comparison", async (req, res) => {
   const role = req.session.userRole;
-  const tenantId = (role === "super_admin" || role === "agency_user")
+  const isManager = role === "super_admin" || role === "agency_user";
+  const tenantId = isManager
     ? (req.query.tenantId ? Number(req.query.tenantId) : null)
     : req.session.tenantId ?? null;
+
+  let userId: number | null = null;
+  if (!isManager) {
+    userId = req.session.userId ?? null;
+  }
 
   const baseline = (req.query.baseline as string) || "yesterday";
   const validBaselines = ["yesterday", "last_week", "monthly_avg", "all_time_best"];
@@ -101,6 +107,7 @@ router.get("/leads/hud/comparison", async (req, res) => {
   try {
     const result = await getComparisonStats(
       tenantId,
+      userId,
       baseline as ComparisonBaseline,
     );
     res.json(result);
@@ -112,9 +119,15 @@ router.get("/leads/hud/comparison", async (req, res) => {
 
 router.get("/leads/hud/historical", async (req, res) => {
   const role = req.session.userRole;
-  const tenantId = (role === "super_admin" || role === "agency_user")
+  const isManager = role === "super_admin" || role === "agency_user";
+  const tenantId = isManager
     ? (req.query.tenantId ? Number(req.query.tenantId) : null)
     : req.session.tenantId ?? null;
+
+  let userId: number | null = null;
+  if (!isManager) {
+    userId = req.session.userId ?? null;
+  }
 
   const range = (req.query.range as string) || "30";
   const days = parseInt(range);
@@ -125,7 +138,7 @@ router.get("/leads/hud/historical", async (req, res) => {
   const endDateParam = (req.query.endDate as string) || endDate;
 
   try {
-    const result = await getHistoricalStats(tenantId, startDate, endDateParam);
+    const result = await getHistoricalStats(tenantId, userId, startDate, endDateParam);
     res.json(result);
   } catch (err) {
     console.error("[HUD Historical]", err);

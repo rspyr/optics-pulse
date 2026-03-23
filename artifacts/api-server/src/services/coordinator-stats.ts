@@ -1,45 +1,55 @@
-import { db, coordinatorDailyStatsTable, leadsTable, usersTable } from "@workspace/db";
+import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count } from "drizzle-orm";
 
 export async function aggregateDailyStats(dateStr: string) {
   const startOfDay = new Date(`${dateStr}T00:00:00`);
   const endOfDay = new Date(`${dateStr}T23:59:59.999`);
 
-  const userRows = await db
-    .selectDistinct({ userId: leadsTable.assignedTo, tenantId: leadsTable.tenantId })
-    .from(leadsTable)
+  const userRows = await db.selectDistinct({
+    userId: callAttemptsTable.userId,
+  }).from(callAttemptsTable)
     .where(and(
-      sql`${leadsTable.assignedTo} IS NOT NULL`,
-      sql`${leadsTable.updatedAt} >= ${startOfDay}`,
-      sql`${leadsTable.updatedAt} <= ${endOfDay}`,
-      sql`${leadsTable.status} != 'new'`,
+      gte(callAttemptsTable.attemptedAt, startOfDay),
+      lte(callAttemptsTable.attemptedAt, endOfDay),
     ));
 
   let processed = 0;
 
-  for (const { userId, tenantId } of userRows) {
-    if (!userId || !tenantId) continue;
+  for (const { userId } of userRows) {
+    if (!userId) continue;
 
-    const baseConds = and(
+    const [userRow] = await db.select({ tenantId: usersTable.tenantId })
+      .from(usersTable).where(eq(usersTable.id, userId));
+    if (!userRow?.tenantId) continue;
+    const tenantId = userRow.tenantId;
+
+    const attemptConds = and(
+      eq(callAttemptsTable.userId, userId),
+      gte(callAttemptsTable.attemptedAt, startOfDay),
+      lte(callAttemptsTable.attemptedAt, endOfDay),
+    );
+
+    const [callsResult] = await db.select({ count: count() })
+      .from(callAttemptsTable).where(attemptConds);
+
+    const tenantLeadConds = and(
       eq(leadsTable.tenantId, tenantId),
-      sql`${leadsTable.assignedTo} = ${userId}`,
       sql`${leadsTable.updatedAt} >= ${startOfDay}`,
       sql`${leadsTable.updatedAt} <= ${endOfDay}`,
     );
 
-    const [contactedResult] = await db.select({ count: count() }).from(leadsTable)
-      .where(and(baseConds, sql`${leadsTable.status} != 'new'`));
+    const [bookedResult] = await db.select({ count: count() })
+      .from(leadsTable).where(and(tenantLeadConds, eq(leadsTable.status, "booked")));
 
-    const [bookedResult] = await db.select({ count: count() }).from(leadsTable)
-      .where(and(baseConds, eq(leadsTable.status, "booked")));
+    const [soldResult] = await db.select({ count: count() })
+      .from(leadsTable).where(and(tenantLeadConds, eq(leadsTable.status, "sold")));
 
-    const [soldResult] = await db.select({ count: count() }).from(leadsTable)
-      .where(and(baseConds, eq(leadsTable.status, "sold")));
+    const [contactedResult] = await db.select({ count: count() })
+      .from(leadsTable).where(and(tenantLeadConds, sql`${leadsTable.status} != 'new'`));
 
-    const [newLeadsResult] = await db.select({ count: count() }).from(leadsTable)
-      .where(and(
+    const [newLeadsResult] = await db.select({ count: count() })
+      .from(leadsTable).where(and(
         eq(leadsTable.tenantId, tenantId),
-        sql`${leadsTable.assignedTo} = ${userId}`,
         sql`${leadsTable.createdAt} >= ${startOfDay}`,
         sql`${leadsTable.createdAt} <= ${endOfDay}`,
       ));
@@ -52,7 +62,7 @@ export async function aggregateDailyStats(dateStr: string) {
     const [speedResult] = await db.select({
       avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
     }).from(leadsTable)
-      .where(and(baseConds, sql`${leadsTable.status} != 'new'`));
+      .where(and(tenantLeadConds, sql`${leadsTable.status} != 'new'`));
 
     const avgSpeedToLead = Math.round(Number(speedResult?.avgSpeed ?? 0));
 
@@ -92,8 +102,8 @@ export function startNightlyAggregation() {
     yesterday.setDate(yesterday.getDate() - 1);
     const dateStr = yesterday.toISOString().split("T")[0];
     try {
-      const count = await aggregateDailyStats(dateStr);
-      console.log(`[StatsAggregation] Aggregated daily stats for ${dateStr}: ${count} coordinator(s)`);
+      const ct = await aggregateDailyStats(dateStr);
+      console.log(`[StatsAggregation] Aggregated daily stats for ${dateStr}: ${ct} coordinator(s)`);
     } catch (err) {
       console.error("[StatsAggregation] Failed:", err);
     }
@@ -181,70 +191,75 @@ async function getTodayLiveStats(tenantId: number | null) {
   return { callsMade, bookingsCount, bookingRate, commission, avgSpeedToLead };
 }
 
+function buildBaselineConds(tenantId: number | null, userId: number | null) {
+  const conds = [];
+  if (tenantId) conds.push(eq(coordinatorDailyStatsTable.tenantId, tenantId));
+  if (userId) conds.push(eq(coordinatorDailyStatsTable.userId, userId));
+  return conds;
+}
+
 export async function getComparisonStats(
   tenantId: number | null,
+  userId: number | null,
   baseline: ComparisonBaseline,
 ) {
   const todayStats = await getTodayLiveStats(tenantId);
 
   let baselineStats = { callsMade: 0, bookingsCount: 0, bookingRate: 0, commission: 0, avgSpeedToLead: 0 };
 
-  const tenantCond = tenantId ? eq(coordinatorDailyStatsTable.tenantId, tenantId) : undefined;
+  const baseConds = buildBaselineConds(tenantId, userId);
 
   if (baseline === "yesterday") {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split("T")[0];
-    const conds = [eq(coordinatorDailyStatsTable.date, yesterdayStr)];
-    if (tenantCond) conds.push(tenantCond);
+    const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, yesterdayStr)];
 
-    const rows = await db.select({
-      totalCalls: sql<number>`SUM(calls_made)`,
-      totalBookings: sql<number>`SUM(bookings_count)`,
-      avgRate: sql<number>`AVG(booking_rate)`,
-      totalCommission: sql<number>`SUM(commission)`,
-      avgSpeed: sql<number>`AVG(avg_speed_to_lead)`,
+    const [row] = await db.select({
+      totalCalls: sql<number>`COALESCE(SUM(calls_made), 0)`,
+      totalBookings: sql<number>`COALESCE(SUM(bookings_count), 0)`,
+      avgRate: sql<number>`COALESCE(AVG(booking_rate), 0)`,
+      totalCommission: sql<number>`COALESCE(SUM(commission), 0)`,
+      avgSpeed: sql<number>`COALESCE(AVG(avg_speed_to_lead), 0)`,
     }).from(coordinatorDailyStatsTable).where(and(...conds));
 
-    if (rows[0] && rows[0].totalCalls !== null) {
+    if (row) {
       baselineStats = {
-        callsMade: Number(rows[0].totalCalls ?? 0),
-        bookingsCount: Number(rows[0].totalBookings ?? 0),
-        bookingRate: Math.round(Number(rows[0].avgRate ?? 0)),
-        commission: Number(rows[0].totalCommission ?? 0),
-        avgSpeedToLead: Math.round(Number(rows[0].avgSpeed ?? 0)),
+        callsMade: Number(row.totalCalls),
+        bookingsCount: Number(row.totalBookings),
+        bookingRate: Math.round(Number(row.avgRate)),
+        commission: Number(row.totalCommission),
+        avgSpeedToLead: Math.round(Number(row.avgSpeed)),
       };
     }
   } else if (baseline === "last_week") {
     const lastWeek = new Date();
     lastWeek.setDate(lastWeek.getDate() - 7);
     const lastWeekStr = lastWeek.toISOString().split("T")[0];
-    const conds = [eq(coordinatorDailyStatsTable.date, lastWeekStr)];
-    if (tenantCond) conds.push(tenantCond);
+    const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, lastWeekStr)];
 
-    const rows = await db.select({
-      totalCalls: sql<number>`SUM(calls_made)`,
-      totalBookings: sql<number>`SUM(bookings_count)`,
-      avgRate: sql<number>`AVG(booking_rate)`,
-      totalCommission: sql<number>`SUM(commission)`,
-      avgSpeed: sql<number>`AVG(avg_speed_to_lead)`,
+    const [row] = await db.select({
+      totalCalls: sql<number>`COALESCE(SUM(calls_made), 0)`,
+      totalBookings: sql<number>`COALESCE(SUM(bookings_count), 0)`,
+      avgRate: sql<number>`COALESCE(AVG(booking_rate), 0)`,
+      totalCommission: sql<number>`COALESCE(SUM(commission), 0)`,
+      avgSpeed: sql<number>`COALESCE(AVG(avg_speed_to_lead), 0)`,
     }).from(coordinatorDailyStatsTable).where(and(...conds));
 
-    if (rows[0] && rows[0].totalCalls !== null) {
+    if (row) {
       baselineStats = {
-        callsMade: Number(rows[0].totalCalls ?? 0),
-        bookingsCount: Number(rows[0].totalBookings ?? 0),
-        bookingRate: Math.round(Number(rows[0].avgRate ?? 0)),
-        commission: Number(rows[0].totalCommission ?? 0),
-        avgSpeedToLead: Math.round(Number(rows[0].avgSpeed ?? 0)),
+        callsMade: Number(row.totalCalls),
+        bookingsCount: Number(row.totalBookings),
+        bookingRate: Math.round(Number(row.avgRate)),
+        commission: Number(row.totalCommission),
+        avgSpeedToLead: Math.round(Number(row.avgSpeed)),
       };
     }
   } else if (baseline === "monthly_avg") {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const thirtyStr = thirtyDaysAgo.toISOString().split("T")[0];
-    const conds = [gte(coordinatorDailyStatsTable.date, thirtyStr)];
-    if (tenantCond) conds.push(tenantCond);
+    const conds = [...baseConds, gte(coordinatorDailyStatsTable.date, thirtyStr)];
 
     const [avgRow] = await db.select({
       avgCalls: sql<number>`COALESCE(AVG(calls_made), 0)`,
@@ -264,8 +279,7 @@ export async function getComparisonStats(
       };
     }
   } else if (baseline === "all_time_best") {
-    const conds = [];
-    if (tenantCond) conds.push(tenantCond);
+    const conds = [...baseConds];
 
     const [bestRow] = await db.select({
       maxCalls: sql<number>`COALESCE(MAX(calls_made), 0)`,
@@ -301,6 +315,7 @@ export async function getComparisonStats(
 
 export async function getHistoricalStats(
   tenantId: number | null,
+  userId: number | null,
   startDate: string,
   endDate: string,
 ) {
@@ -309,21 +324,28 @@ export async function getHistoricalStats(
     lte(coordinatorDailyStatsTable.date, endDate),
   ];
   if (tenantId) conds.push(eq(coordinatorDailyStatsTable.tenantId, tenantId));
+  if (userId) conds.push(eq(coordinatorDailyStatsTable.userId, userId));
 
   const dailyStats = await db.select().from(coordinatorDailyStatsTable)
     .where(and(...conds))
     .orderBy(coordinatorDailyStatsTable.date);
 
-  const allTimeConds = [];
-  if (tenantId) allTimeConds.push(eq(coordinatorDailyStatsTable.tenantId, tenantId));
+  const bestConds = [];
+  if (tenantId) bestConds.push(eq(coordinatorDailyStatsTable.tenantId, tenantId));
+  if (userId) bestConds.push(eq(coordinatorDailyStatsTable.userId, userId));
 
   const [bestRow] = await db.select({
     maxCalls: sql<number>`COALESCE(MAX(calls_made), 0)`,
+    maxCallsDate: sql<string>`(SELECT date FROM coordinator_daily_stats WHERE calls_made = (SELECT MAX(calls_made) FROM coordinator_daily_stats ${tenantId ? sql`WHERE tenant_id = ${tenantId}` : sql``} ${userId ? sql`${tenantId ? sql`AND` : sql`WHERE`} user_id = ${userId}` : sql``}) LIMIT 1)`,
     maxBookings: sql<number>`COALESCE(MAX(bookings_count), 0)`,
+    maxBookingsDate: sql<string>`(SELECT date FROM coordinator_daily_stats WHERE bookings_count = (SELECT MAX(bookings_count) FROM coordinator_daily_stats ${tenantId ? sql`WHERE tenant_id = ${tenantId}` : sql``} ${userId ? sql`${tenantId ? sql`AND` : sql`WHERE`} user_id = ${userId}` : sql``}) LIMIT 1)`,
     maxRate: sql<number>`COALESCE(MAX(booking_rate), 0)`,
+    maxRateDate: sql<string>`(SELECT date FROM coordinator_daily_stats WHERE booking_rate = (SELECT MAX(booking_rate) FROM coordinator_daily_stats ${tenantId ? sql`WHERE tenant_id = ${tenantId}` : sql``} ${userId ? sql`${tenantId ? sql`AND` : sql`WHERE`} user_id = ${userId}` : sql``}) LIMIT 1)`,
     maxCommission: sql<number>`COALESCE(MAX(commission), 0)`,
+    maxCommissionDate: sql<string>`(SELECT date FROM coordinator_daily_stats WHERE commission = (SELECT MAX(commission) FROM coordinator_daily_stats ${tenantId ? sql`WHERE tenant_id = ${tenantId}` : sql``} ${userId ? sql`${tenantId ? sql`AND` : sql`WHERE`} user_id = ${userId}` : sql``}) LIMIT 1)`,
     minSpeed: sql<number>`COALESCE(MIN(NULLIF(avg_speed_to_lead, 0)), 0)`,
-  }).from(coordinatorDailyStatsTable).where(allTimeConds.length > 0 ? and(...allTimeConds) : undefined);
+    minSpeedDate: sql<string>`(SELECT date FROM coordinator_daily_stats WHERE avg_speed_to_lead = (SELECT MIN(NULLIF(avg_speed_to_lead, 0)) FROM coordinator_daily_stats ${tenantId ? sql`WHERE tenant_id = ${tenantId}` : sql``} ${userId ? sql`${tenantId ? sql`AND` : sql`WHERE`} user_id = ${userId}` : sql``}) LIMIT 1)`,
+  }).from(coordinatorDailyStatsTable).where(bestConds.length > 0 ? and(...bestConds) : undefined);
 
   return {
     dailyStats: dailyStats.map(s => ({
@@ -336,11 +358,11 @@ export async function getHistoricalStats(
       soldCount: s.soldCount,
     })),
     personalBests: {
-      callsMade: { value: Number(bestRow?.maxCalls ?? 0) },
-      bookingsCount: { value: Number(bestRow?.maxBookings ?? 0) },
-      bookingRate: { value: Number(bestRow?.maxRate ?? 0) },
-      commission: { value: Number(bestRow?.maxCommission ?? 0) },
-      avgSpeedToLead: { value: Number(bestRow?.minSpeed ?? 0) },
+      callsMade: { value: Number(bestRow?.maxCalls ?? 0), date: bestRow?.maxCallsDate ?? null },
+      bookingsCount: { value: Number(bestRow?.maxBookings ?? 0), date: bestRow?.maxBookingsDate ?? null },
+      bookingRate: { value: Number(bestRow?.maxRate ?? 0), date: bestRow?.maxRateDate ?? null },
+      commission: { value: Number(bestRow?.maxCommission ?? 0), date: bestRow?.maxCommissionDate ?? null },
+      avgSpeedToLead: { value: Number(bestRow?.minSpeed ?? 0), date: bestRow?.minSpeedDate ?? null },
     },
     totalDays: dailyStats.length,
   };
