@@ -74,7 +74,7 @@ function getClientNav(isAdmin: boolean, leaderboardVisible: boolean) {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
-  const { user, logout, isAgency } = useAuth();
+  const { user, logout, isAgency, effectiveTenantId } = useAuth();
 
   const leaderboardVisible = user?.leaderboardConfig?.visible ?? false;
   const navItems = isAgency ? AGENCY_NAV : getClientNav(user?.role === "client_admin", leaderboardVisible);
@@ -154,7 +154,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </main>
 
-      <ChatDrawer tenantId={user?.tenantId ?? undefined} />
+      <ChatDrawer tenantId={effectiveTenantId ?? undefined} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { GradientHeading, PremiumCard } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
 import ScriptManagement from "@/components/script-management";
@@ -11,9 +11,14 @@ interface TenantOption {
 }
 
 export default function AdminScripts() {
-  const { user, isAgency } = useAuth();
+  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(user?.tenantId ?? null);
+  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
+
+  const setSelectedTenantId = useCallback((id: number | null) => {
+    setSelectedTenantIdLocal(id);
+    setGlobalTenantId(id);
+  }, [setGlobalTenantId]);
 
   useEffect(() => {
     if (!isAgency) return;

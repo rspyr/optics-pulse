@@ -134,8 +134,14 @@ function ChangeLogPopover({ log, onClose }: { log: { title: string; description:
 }
 
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { user, isAgency } = useAuth();
+  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
   const effectiveTenantId = tenantIdOverride ?? user?.tenantId ?? 1;
+
+  useEffect(() => {
+    if (isAgency && effectiveTenantId) {
+      setGlobalTenantId(effectiveTenantId);
+    }
+  }, [isAgency, effectiveTenantId, setGlobalTenantId]);
 
   const [dateRange, setDateRange] = useState<DateRange>("30");
   const [roiMode, setRoiMode] = useState<"roas" | "allcosts">("roas");

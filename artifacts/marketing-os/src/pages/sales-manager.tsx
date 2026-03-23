@@ -880,10 +880,15 @@ function SettingsTab({ tenantId }: { tenantId: number | null }) {
 }
 
 export default function SalesManager() {
-  const { user, isAgency } = useAuth();
+  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
   const [tab, setTab] = useState<Tab>("team");
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(user?.tenantId ?? null);
+  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
+
+  const setSelectedTenantId = useCallback((id: number | null) => {
+    setSelectedTenantIdLocal(id);
+    setGlobalTenantId(id);
+  }, [setGlobalTenantId]);
 
   useEffect(() => {
     if (!isAgency) return;

@@ -22,6 +22,9 @@ interface AuthContextType {
   logout: () => Promise<void>;
   isAgency: boolean;
   isClient: boolean;
+  selectedTenantId: number | null;
+  setSelectedTenantId: (id: number | null) => void;
+  effectiveTenantId: number | null;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -31,6 +34,7 @@ const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/auth/me`, { credentials: "include" })
@@ -70,9 +74,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isAgency = user?.role === "super_admin" || user?.role === "agency_user";
   const isClient = user?.role === "client_admin" || user?.role === "client_user";
+  const effectiveTenantId = user?.tenantId ?? selectedTenantId;
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isAgency, isClient }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isAgency, isClient, selectedTenantId, setSelectedTenantId, effectiveTenantId }}>
       {children}
     </AuthContext.Provider>
   );

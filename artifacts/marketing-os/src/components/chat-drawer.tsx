@@ -54,7 +54,12 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
   }, [messages, scrollToBottom]);
 
   useEffect(() => {
-    if (isOpen && suggestions.length === 0) {
+    setSuggestions([]);
+    setMessages([]);
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (isOpen && tenantId && suggestions.length === 0) {
       fetch(`${API_BASE}/api/chat/suggestions${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" })
         .then(r => r.json())
         .then(d => setSuggestions(d.suggestions || []))
@@ -285,7 +290,14 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.length === 0 && (
+            {!tenantId && messages.length === 0 && (
+              <div className="text-center py-12">
+                <Sparkles className="w-10 h-10 text-primary/30 mx-auto mb-3" />
+                <h3 className="text-white font-medium mb-1">Select a client first</h3>
+                <p className="text-sm text-muted-foreground">Navigate to a client page or select a client to start asking about their data.</p>
+              </div>
+            )}
+            {tenantId && messages.length === 0 && (
               <div className="space-y-4">
                 <div className="text-center py-8">
                   <Sparkles className="w-10 h-10 text-primary/30 mx-auto mb-3" />
@@ -387,11 +399,11 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask anything about your data..."
               className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/30"
-              disabled={isLoading}
+              disabled={isLoading || !tenantId}
             />
             <button
               type="submit"
-              disabled={isLoading || !input.trim()}
+              disabled={isLoading || !input.trim() || !tenantId}
               className={cn(
                 "p-2.5 rounded-lg transition-all",
                 input.trim() ? "bg-primary text-white hover:bg-primary/80" : "bg-white/5 text-muted-foreground"
