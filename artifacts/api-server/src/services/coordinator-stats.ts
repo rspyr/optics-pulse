@@ -1,21 +1,36 @@
 import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 
-async function getLeadStatsByIds(leadIds: number[]) {
+async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0 };
 
   const [bookedResult] = await db.select({ count: count() })
     .from(leadsTable)
-    .where(and(inArray(leadsTable.id, leadIds), eq(leadsTable.status, "booked")));
+    .where(and(
+      inArray(leadsTable.id, leadIds),
+      eq(leadsTable.status, "booked"),
+      gte(leadsTable.updatedAt, dayStart),
+      lte(leadsTable.updatedAt, dayEnd),
+    ));
 
   const [soldResult] = await db.select({ count: count() })
     .from(leadsTable)
-    .where(and(inArray(leadsTable.id, leadIds), eq(leadsTable.status, "sold")));
+    .where(and(
+      inArray(leadsTable.id, leadIds),
+      eq(leadsTable.status, "sold"),
+      gte(leadsTable.updatedAt, dayStart),
+      lte(leadsTable.updatedAt, dayEnd),
+    ));
 
   const [speedResult] = await db.select({
     avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
   }).from(leadsTable)
-    .where(and(inArray(leadsTable.id, leadIds), ne(leadsTable.status, "new")));
+    .where(and(
+      inArray(leadsTable.id, leadIds),
+      ne(leadsTable.status, "new"),
+      gte(leadsTable.updatedAt, dayStart),
+      lte(leadsTable.updatedAt, dayEnd),
+    ));
 
   return {
     bookingsCount: bookedResult.count + soldResult.count,
@@ -62,7 +77,7 @@ export async function aggregateDailyStats(dateStr: string) {
       .where(userAttemptConds);
     const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-    const leadStats = await getLeadStatsByIds(handledLeadIds);
+    const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, startOfDay, endOfDay);
 
     const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
     const commission = leadStats.bookingsCount * 20;
@@ -142,6 +157,8 @@ interface StatSnapshot {
   avgSpeedToLead: number;
 }
 
+const ZERO_STATS: StatSnapshot = { callsMade: 0, bookingsCount: 0, bookingRate: 0, commission: 0, avgSpeedToLead: 0 };
+
 function computeDelta(current: number, baseline: number): StatDelta {
   const delta = current - baseline;
   const percentChange = baseline > 0 ? Math.round((delta / baseline) * 100) : current > 0 ? 100 : 0;
@@ -167,6 +184,8 @@ function computeDeltas(today: StatSnapshot, baseline: StatSnapshot) {
 async function getUserTodayStats(userId: number): Promise<StatSnapshot> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
 
   const attemptConds = [
     eq(callAttemptsTable.userId, userId),
@@ -181,7 +200,7 @@ async function getUserTodayStats(userId: number): Promise<StatSnapshot> {
     .from(callAttemptsTable).where(and(...attemptConds));
   const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-  const leadStats = await getLeadStatsByIds(handledLeadIds);
+  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
   return {
@@ -197,27 +216,37 @@ async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const [contactedResult] = await db.select({ count: count() }).from(leadsTable)
-    .where(and(eq(leadsTable.tenantId, tenantId), ne(leadsTable.status, "new"), gte(leadsTable.updatedAt, today)));
+  const attemptConds = [
+    gte(callAttemptsTable.attemptedAt, today),
+  ];
 
-  const [bookedResult] = await db.select({ count: count() }).from(leadsTable)
-    .where(and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} IN ('booked', 'sold')`, gte(leadsTable.updatedAt, today)));
+  const usersInTenant = await db.select({ id: usersTable.id })
+    .from(usersTable).where(eq(usersTable.tenantId, tenantId));
+  const userIds = usersInTenant.map(u => u.id);
 
-  const [speedResult] = await db.select({
-    avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
-  }).from(leadsTable)
-    .where(and(eq(leadsTable.tenantId, tenantId), ne(leadsTable.status, "new"), gte(leadsTable.updatedAt, today)));
+  if (userIds.length === 0) return { ...ZERO_STATS };
 
-  const callsMade = contactedResult.count;
-  const bookingsCount = bookedResult.count;
-  const bookingRate = callsMade > 0 ? Math.round((bookingsCount / callsMade) * 100) : 0;
+  const [callsResult] = await db.select({ count: count() })
+    .from(callAttemptsTable)
+    .where(and(inArray(callAttemptsTable.userId, userIds), ...attemptConds));
+  const callsMade = callsResult.count;
+
+  const leadIdsResult = await db.selectDistinct({ leadId: callAttemptsTable.leadId })
+    .from(callAttemptsTable)
+    .where(and(inArray(callAttemptsTable.userId, userIds), ...attemptConds));
+  const handledLeadIds = leadIdsResult.map(r => r.leadId);
+
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
+  const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
   return {
     callsMade,
-    bookingsCount,
+    bookingsCount: leadStats.bookingsCount,
     bookingRate,
-    commission: bookingsCount * 20,
-    avgSpeedToLead: Math.round(Number(speedResult?.avgSpeed ?? 0)),
+    commission: leadStats.bookingsCount * 20,
+    avgSpeedToLead: leadStats.avgSpeedToLead,
   };
 }
 
@@ -229,8 +258,6 @@ function buildScopeConds(tenantId: number | null, userId: number | null) {
 }
 
 async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, baseline: ComparisonBaseline): Promise<StatSnapshot> {
-  const zero: StatSnapshot = { callsMade: 0, bookingsCount: 0, bookingRate: 0, commission: 0, avgSpeedToLead: 0 };
-
   const selectAgg = {
     totalCalls: sql<number>`COALESCE(SUM(calls_made), 0)`,
     totalBookings: sql<number>`COALESCE(SUM(bookings_count), 0)`,
@@ -239,19 +266,22 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     avgSpeed: sql<number>`COALESCE(AVG(avg_speed_to_lead), 0)`,
   };
 
+  function rowToStats(row: any): StatSnapshot {
+    return {
+      callsMade: Number(row.totalCalls ?? row.avgCalls ?? 0),
+      bookingsCount: Number(row.totalBookings ?? row.avgBookings ?? 0),
+      bookingRate: Math.round(Number(row.avgRate ?? 0)),
+      commission: Number(row.totalCommission ?? row.avgCommission ?? 0),
+      avgSpeedToLead: Math.round(Number(row.avgSpeed ?? 0)),
+    };
+  }
+
   if (baseline === "yesterday") {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, yesterday.toISOString().split("T")[0])];
     const [row] = await db.select(selectAgg).from(coordinatorDailyStatsTable).where(and(...conds));
-    if (!row) return zero;
-    return {
-      callsMade: Number(row.totalCalls),
-      bookingsCount: Number(row.totalBookings),
-      bookingRate: Math.round(Number(row.avgRate)),
-      commission: Number(row.totalCommission),
-      avgSpeedToLead: Math.round(Number(row.avgSpeed)),
-    };
+    return row ? rowToStats(row) : { ...ZERO_STATS };
   }
 
   if (baseline === "last_week") {
@@ -259,14 +289,7 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     lastWeek.setDate(lastWeek.getDate() - 7);
     const conds = [...baseConds, eq(coordinatorDailyStatsTable.date, lastWeek.toISOString().split("T")[0])];
     const [row] = await db.select(selectAgg).from(coordinatorDailyStatsTable).where(and(...conds));
-    if (!row) return zero;
-    return {
-      callsMade: Number(row.totalCalls),
-      bookingsCount: Number(row.totalBookings),
-      bookingRate: Math.round(Number(row.avgRate)),
-      commission: Number(row.totalCommission),
-      avgSpeedToLead: Math.round(Number(row.avgSpeed)),
-    };
+    return row ? rowToStats(row) : { ...ZERO_STATS };
   }
 
   if (baseline === "monthly_avg") {
@@ -280,7 +303,7 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
       avgCommission: sql<number>`COALESCE(AVG(commission), 0)`,
       avgSpeed: sql<number>`COALESCE(AVG(avg_speed_to_lead), 0)`,
     }).from(coordinatorDailyStatsTable).where(and(...conds));
-    if (!avgRow) return zero;
+    if (!avgRow) return { ...ZERO_STATS };
     return {
       callsMade: Math.round(Number(avgRow.avgCalls)),
       bookingsCount: Math.round(Number(avgRow.avgBookings)),
@@ -298,7 +321,7 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
       maxCommission: sql<number>`COALESCE(MAX(commission), 0)`,
       minSpeed: sql<number>`COALESCE(MIN(NULLIF(avg_speed_to_lead, 0)), 0)`,
     }).from(coordinatorDailyStatsTable).where(baseConds.length > 0 ? and(...baseConds) : undefined);
-    if (!bestRow) return zero;
+    if (!bestRow) return { ...ZERO_STATS };
     return {
       callsMade: Number(bestRow.maxCalls),
       bookingsCount: Number(bestRow.maxBookings),
@@ -308,7 +331,15 @@ async function getBaselineStats(baseConds: ReturnType<typeof buildScopeConds>, b
     };
   }
 
-  return zero;
+  return { ...ZERO_STATS };
+}
+
+async function getTenantCoordinators(tenantId: number) {
+  const users = await db.select({ id: usersTable.id, name: usersTable.name, role: usersTable.role })
+    .from(usersTable)
+    .where(eq(usersTable.tenantId, tenantId));
+
+  return users.filter(u => u.role !== "client_admin" && u.role !== "client_user");
 }
 
 export async function getComparisonStats(
@@ -331,23 +362,17 @@ export async function getComparisonStats(
   if (tenantId) {
     const tenantTodayStats = await getTenantTodayStats(tenantId);
 
-    const coordinatorUserIds = await db.selectDistinct({ userId: coordinatorDailyStatsTable.userId })
-      .from(coordinatorDailyStatsTable)
-      .where(eq(coordinatorDailyStatsTable.tenantId, tenantId));
-
+    const teamMembers = await getTenantCoordinators(tenantId);
     const coordinators = [];
-    for (const { userId: uid } of coordinatorUserIds) {
-      const [user] = await db.select({ id: usersTable.id, name: usersTable.name })
-        .from(usersTable).where(eq(usersTable.id, uid));
-      if (!user) continue;
 
-      const coordToday = await getUserTodayStats(user.id);
-      const coordBaseConds = buildScopeConds(tenantId, user.id);
+    for (const member of teamMembers) {
+      const coordToday = await getUserTodayStats(member.id);
+      const coordBaseConds = buildScopeConds(tenantId, member.id);
       const coordBaseline = await getBaselineStats(coordBaseConds, baseline);
 
       coordinators.push({
-        userId: user.id,
-        name: user.name,
+        userId: member.id,
+        name: member.name,
         today: coordToday,
         deltas: computeDeltas(coordToday, coordBaseline),
       });
@@ -364,11 +389,10 @@ export async function getComparisonStats(
     };
   }
 
-  const zero: StatSnapshot = { callsMade: 0, bookingsCount: 0, bookingRate: 0, commission: 0, avgSpeedToLead: 0 };
   return {
     baseline,
-    today: zero,
-    deltas: computeDeltas(zero, zero),
+    today: { ...ZERO_STATS },
+    deltas: computeDeltas(ZERO_STATS, ZERO_STATS),
   };
 }
 
@@ -404,19 +428,17 @@ export async function getHistoricalStats(
     minSpeedDate: sql<string>`(array_agg(date ORDER BY CASE WHEN avg_speed_to_lead > 0 THEN avg_speed_to_lead ELSE 999999 END ASC))[1]`,
   }).from(coordinatorDailyStatsTable).where(bestConds.length > 0 ? and(...bestConds) : undefined);
 
-  const mapDay = (s: typeof dailyStats[0]) => ({
-    date: s.date,
-    userId: s.userId,
-    callsMade: s.callsMade,
-    bookingsCount: s.bookingsCount,
-    bookingRate: s.bookingRate,
-    commission: s.commission,
-    avgSpeedToLead: s.avgSpeedToLead,
-    soldCount: s.soldCount,
-  });
-
   return {
-    dailyStats: dailyStats.map(mapDay),
+    dailyStats: dailyStats.map(s => ({
+      date: s.date,
+      userId: s.userId,
+      callsMade: s.callsMade,
+      bookingsCount: s.bookingsCount,
+      bookingRate: s.bookingRate,
+      commission: s.commission,
+      avgSpeedToLead: s.avgSpeedToLead,
+      soldCount: s.soldCount,
+    })),
     personalBests: {
       callsMade: { value: Number(bestRow?.maxCalls ?? 0), date: bestRow?.maxCallsDate ?? null },
       bookingsCount: { value: Number(bestRow?.maxBookings ?? 0), date: bestRow?.maxBookingsDate ?? null },
