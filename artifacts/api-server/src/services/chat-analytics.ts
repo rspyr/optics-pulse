@@ -474,14 +474,49 @@ const queryPatterns: QueryPattern[] = [
   },
   {
     patterns: [
-      /(?:script|change|update|changelog|change.?log|what.?changed|recent.?changes)/i,
+      /(?:script.?change|script.?update|what.?scripts?.?changed|script.?history)/i,
     ],
-    description: "Script changes and changelog",
+    description: "Script changes",
     handler: async (ctx) => {
-      const dateRange = { startDate: ctx.startDate, endDate: ctx.endDate };
+      const conds: SQL[] = [
+        eq(changeLogsTable.tenantId, ctx.tenantId),
+        eq(changeLogsTable.category, "scripts"),
+      ];
+      if (ctx.startDate) conds.push(gte(changeLogsTable.date, ctx.startDate));
+      if (ctx.endDate) conds.push(lte(changeLogsTable.date, ctx.endDate));
+
+      const scriptLogs = await db.select().from(changeLogsTable)
+        .where(and(...conds))
+        .orderBy(desc(changeLogsTable.date))
+        .limit(20);
+
+      if (scriptLogs.length === 0) {
+        return { answer: "No script changes found for this period.", chartType: "number" as const };
+      }
+
+      let answer = `Found **${scriptLogs.length}** script change(s):\n\n`;
+      for (const l of scriptLogs.slice(0, 10)) {
+        answer += `• ${l.date}: ${l.title} — ${l.description}\n`;
+      }
+      answer += "\nScript changes are overlaid on your spend vs. revenue chart so you can correlate script updates with performance shifts.";
+
+      return {
+        answer,
+        data: scriptLogs.map(l => ({ date: l.date, title: l.title, description: l.description })),
+        chartType: "table" as const,
+        chartLabel: "Script Changes",
+      };
+    },
+  },
+  {
+    patterns: [
+      /(?:changelog|change.?log|what.?changed|recent.?changes)/i,
+    ],
+    description: "All changelog entries",
+    handler: async (ctx) => {
       const conds: SQL[] = [eq(changeLogsTable.tenantId, ctx.tenantId)];
-      if (dateRange.startDate) conds.push(gte(changeLogsTable.date, dateRange.startDate));
-      if (dateRange.endDate) conds.push(lte(changeLogsTable.date, dateRange.endDate));
+      if (ctx.startDate) conds.push(gte(changeLogsTable.date, ctx.startDate));
+      if (ctx.endDate) conds.push(lte(changeLogsTable.date, ctx.endDate));
 
       const logs = await db.select().from(changeLogsTable)
         .where(and(...conds))
@@ -492,26 +527,20 @@ const queryPatterns: QueryPattern[] = [
         return { answer: "No changelog entries found for this period.", chartType: "number" as const };
       }
 
-      const scriptLogs = logs.filter(l => l.category === "scripts");
-      const otherLogs = logs.filter(l => l.category !== "scripts");
+      const grouped = logs.reduce<Record<string, typeof logs>>((acc, l) => {
+        const cat = l.category || "other";
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(l);
+        return acc;
+      }, {});
 
       let answer = `Found **${logs.length}** changelog entries:\n\n`;
-      if (scriptLogs.length > 0) {
-        answer += `**Script Changes (${scriptLogs.length}):**\n`;
-        for (const l of scriptLogs.slice(0, 5)) {
+      for (const [cat, entries] of Object.entries(grouped)) {
+        answer += `**${cat} (${entries.length}):**\n`;
+        for (const l of entries.slice(0, 5)) {
           answer += `• ${l.date}: ${l.title} — ${l.description}\n`;
         }
         answer += "\n";
-      }
-      if (otherLogs.length > 0) {
-        answer += `**Other Changes (${otherLogs.length}):**\n`;
-        for (const l of otherLogs.slice(0, 5)) {
-          answer += `• ${l.date}: ${l.title} (${l.category})\n`;
-        }
-      }
-
-      if (scriptLogs.length > 0) {
-        answer += "\nScript changes are overlaid on your spend vs. revenue chart so you can correlate script updates with performance shifts.";
       }
 
       return {

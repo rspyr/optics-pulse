@@ -62,7 +62,7 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/leaderboards", "/automation"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/leaderboards", "/automation"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <Redirect to="/" />;
   }
@@ -87,7 +87,7 @@ function AuthenticatedRoutes() {
         <Route path="/automation">{() => <AgencyGuard><Automation /></AgencyGuard>}</Route>
         <Route path="/admin/change-logs">{() => <AgencyGuard><AdminChangeLogs /></AgencyGuard>}</Route>
         <Route path="/admin/funnels">{() => <AgencyGuard><AdminFunnels /></AgencyGuard>}</Route>
-        <Route path="/admin/scripts">{() => <AgencyGuard><AdminScripts /></AgencyGuard>}</Route>
+        <Route path="/admin/scripts" component={AdminScripts} />
         <Route path="/training" component={TrainingResources} />
         <Route component={NotFound} />
       </Switch>
