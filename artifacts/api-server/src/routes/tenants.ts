@@ -167,6 +167,10 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     (updateData as Record<string, unknown>).communicationConfig = sanitizedComm;
   }
   if (req.body.leaderboardConfig && typeof req.body.leaderboardConfig === "object") {
+    if (role !== "super_admin" && role !== "agency_user") {
+      res.status(403).json({ error: "Only agency users can modify leaderboard settings" });
+      return;
+    }
     const rawLb = req.body.leaderboardConfig as Record<string, unknown>;
     const validDisplayModes = ["named", "anonymized"];
     const lbConfig: Record<string, unknown> = {};

@@ -10,6 +10,7 @@
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
+    "generate": "drizzle-kit generate --config ./drizzle.config.ts",
     "backfill-funnels": "node --import tsx/esm migrations/backfill-funnel-types.ts"
   },
   "dependencies": {

@@ -43,6 +43,13 @@
       "when": 1774294011014,
       "tag": "0005_closed_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774302132704,
+      "tag": "0006_pale_nitro",
+      "breakpoints": true
     }
   ]
 }
