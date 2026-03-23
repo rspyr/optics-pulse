@@ -122,18 +122,20 @@ function useActivityFeed(tenantId: number | null) {
 function useCoachingInsights(tenantId: number | null) {
   const [insights, setInsights] = useState<CoachingInsight[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
 
   useEffect(() => {
     if (!tenantId) { setLoading(false); setInsights([]); return; }
-    setLoading(true);
+    setFetching(true);
     const url = `${API_BASE}/sales-manager/coaching-insights?tenantId=${tenantId}`;
     fetch(url, { credentials: "include" })
       .then(r => r.json())
-      .then(d => { setInsights(d.insights || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => { setInsights(d.insights || []); })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setFetching(false); });
   }, [tenantId]);
 
-  return { insights, loading };
+  return { insights, loading, fetching };
 }
 
 interface ScriptChange {
@@ -147,17 +149,19 @@ interface ScriptChange {
 function useRecentScriptChanges(tenantId: number | null) {
   const [changes, setChanges] = useState<ScriptChange[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
 
   useEffect(() => {
     if (!tenantId) { setLoading(false); setChanges([]); return; }
-    setLoading(true);
+    setFetching(true);
     fetch(`${API_BASE}/sales-manager/recent-script-changes?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
-      .then(d => { setChanges(d.changes || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => { setChanges(d.changes || []); })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setFetching(false); });
   }, [tenantId]);
 
-  return { changes, loading };
+  return { changes, loading, fetching };
 }
 
 interface CommunicationConfig {
@@ -523,9 +527,10 @@ function ActivityFeedTab({ activities, loading, refetch }: {
   );
 }
 
-function CoachingInsightsTab({ insights, loading }: {
+function CoachingInsightsTab({ insights, loading, fetching }: {
   insights: CoachingInsight[];
   loading: boolean;
+  fetching?: boolean;
 }) {
   if (loading) {
     return (
@@ -542,7 +547,7 @@ function CoachingInsightsTab({ insights, loading }: {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4 transition-opacity duration-200", fetching && "opacity-70")}>
       <div className="flex items-center gap-2">
         <Brain className="w-4 h-4 text-primary" />
         <span className="text-sm font-display text-white">AI Coaching Insights</span>
@@ -586,12 +591,12 @@ function CoachingInsightsTab({ insights, loading }: {
   );
 }
 
-function ScriptChangesPanel({ changes, loading }: { changes: ScriptChange[]; loading: boolean }) {
+function ScriptChangesPanel({ changes, loading, fetching }: { changes: ScriptChange[]; loading: boolean; fetching?: boolean }) {
   if (loading) return <Loader2 className="w-4 h-4 text-primary animate-spin" />;
   if (changes.length === 0) return null;
 
   return (
-    <PremiumCard className="p-4 space-y-3">
+    <PremiumCard className={cn("p-4 space-y-3 transition-opacity duration-200", fetching && "opacity-70")}>
       <div className="flex items-center gap-2">
         <Clock className="w-4 h-4 text-primary" />
         <span className="text-xs font-display text-white">Recent Script Changes</span>
@@ -898,8 +903,8 @@ export default function SalesManager() {
 
   const { coordinators, teamTotals, loading: teamLoading, refetch: refetchTeam } = useTeamData(effectiveTenantId);
   const { activities, loading: activityLoading, refetch: refetchActivity } = useActivityFeed(effectiveTenantId);
-  const { insights, loading: insightsLoading } = useCoachingInsights(effectiveTenantId);
-  const { changes: scriptChanges, loading: scriptChangesLoading } = useRecentScriptChanges(effectiveTenantId);
+  const { insights, loading: insightsLoading, fetching: insightsFetching } = useCoachingInsights(effectiveTenantId);
+  const { changes: scriptChanges, loading: scriptChangesLoading, fetching: scriptChangesFetching } = useRecentScriptChanges(effectiveTenantId);
 
   const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; count?: number }[] = [
     { key: "team", label: "Team Overview", icon: Users, count: teamTotals?.activeCoordinators },
@@ -980,7 +985,7 @@ export default function SalesManager() {
         )}
         {tab === "scripts" && (
           <div className="space-y-4">
-            <ScriptChangesPanel changes={scriptChanges} loading={scriptChangesLoading} />
+            <ScriptChangesPanel changes={scriptChanges} loading={scriptChangesLoading} fetching={scriptChangesFetching} />
             <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
           </div>
         )}
@@ -995,6 +1000,7 @@ export default function SalesManager() {
           <CoachingInsightsTab
             insights={insights}
             loading={insightsLoading}
+            fetching={insightsFetching}
           />
         )}
         {tab === "settings" && (

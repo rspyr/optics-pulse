@@ -96,19 +96,20 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
 
   const tq = tenantId ? `?tenantId=${tenantId}` : "";
 
-  const fetchScripts = useCallback(async () => {
-    setLoading(true);
+  const fetchScripts = useCallback(async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
       const url = `${API_BASE}/scripts${tq}`;
       const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) { setLoading(false); return; }
-      const data = await res.json();
-      if (Array.isArray(data)) setScripts(data);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setScripts(data);
+      }
     } catch { /* ignore */ }
-    setLoading(false);
+    finally { setLoading(false); }
   }, [tq]);
 
-  useEffect(() => { fetchScripts(); }, [fetchScripts]);
+  useEffect(() => { fetchScripts(true); }, [fetchScripts]);
 
   const filteredScripts = scripts.filter(s => s.type === activeType);
 

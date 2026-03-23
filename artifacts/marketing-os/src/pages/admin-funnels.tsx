@@ -224,7 +224,6 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
     const fetches = tenants.map(t =>
       fetch(`${API}/api/tenants/${t.id}/funnel-types`, { credentials: "include" })
         .then(r => r.ok ? r.json() : [])
@@ -235,8 +234,7 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
       const map: Record<number, number[]> = {};
       for (const r of results) map[r.tid] = r.ids;
       setAssignments(map);
-      setLoading(false);
-    });
+    }).finally(() => setLoading(false));
   }, [tenants]);
 
   async function toggleAssignment(tenantId: number, funnelTypeId: number) {

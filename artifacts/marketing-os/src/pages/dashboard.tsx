@@ -36,10 +36,13 @@ export default function Dashboard() {
   const [exporting, setExporting] = useState(false);
   const { startDate, endDate } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
-  const { data: overview, isLoading: overviewLoading } = useGetDashboardOverview({ startDate, endDate });
-  const { data: chartData, isLoading: chartLoading } = useGetSpendRevenueChart({ startDate, endDate });
+  const { data: overview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({ startDate, endDate }, { query: { placeholderData: (prev: unknown) => prev } });
+  const { data: chartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({ startDate, endDate }, { query: { placeholderData: (prev: unknown) => prev } });
 
-  if (overviewLoading || chartLoading) {
+  const isInitialLoad = overviewLoading || chartLoading;
+  const isRefetching = overviewFetching || chartFetching;
+
+  if (isInitialLoad) {
     return <div className="animate-pulse space-y-8">
       <div className="h-8 w-64 bg-white/10 rounded"></div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
@@ -110,7 +113,7 @@ export default function Dashboard() {
     : [];
 
   return (
-    <div className="space-y-8">
+    <div className={cn("space-y-8 transition-opacity duration-200", isRefetching && "opacity-70")}>
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Command Center</GradientHeading>

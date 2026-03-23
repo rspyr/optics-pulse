@@ -155,17 +155,17 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const { startDate, endDate } = parseDateRange(dateRange);
 
-  const { data: overview, isLoading: overviewLoading } = useGetDashboardOverview({
+  const { data: overview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({
     tenantId: effectiveTenantId,
     startDate,
     endDate,
-  });
+  }, { query: { placeholderData: (prev: unknown) => prev } });
 
-  const { data: chartData, isLoading: chartLoading } = useGetSpendRevenueChart({
+  const { data: chartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({
     tenantId: effectiveTenantId,
     startDate,
     endDate,
-  });
+  }, { query: { placeholderData: (prev: unknown) => prev } });
 
   const { data: changeLogs } = useListChangeLogs({
     tenantId: effectiveTenantId,
@@ -423,8 +423,10 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     b.pct < worst.pct ? b : worst
   );
 
+  const isRefetching = (overviewFetching && !overviewLoading) || (chartFetching && !chartLoading);
+
   return (
-    <div className="space-y-8">
+    <div className={cn("space-y-8 transition-opacity duration-200", isRefetching && "opacity-70")}>
       {selectedChangeLog && (
         <ChangeLogPopover log={selectedChangeLog} onClose={() => setSelectedChangeLog(null)} />
       )}

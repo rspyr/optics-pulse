@@ -274,20 +274,22 @@ function useComparisonStats(baseline: ComparisonBaseline) {
 function useHistoricalStats(range: number, startDate?: string, endDate?: string) {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
 
   useEffect(() => {
-    setLoading(true);
+    setFetching(true);
     let url = `${API_BASE}/leads/hud/historical?range=${range}`;
     if (startDate && endDate) {
       url = `${API_BASE}/leads/hud/historical?startDate=${startDate}&endDate=${endDate}`;
     }
     fetch(url, { credentials: "include" })
       .then(r => r.json())
-      .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => { setData(d); })
+      .catch(() => {})
+      .finally(() => { setLoading(false); setFetching(false); });
   }, [range, startDate, endDate]);
 
-  return { data, loading };
+  return { data, loading, fetching };
 }
 
 const BASELINE_LABELS: Record<ComparisonBaseline, string> = {
@@ -349,7 +351,7 @@ function HistoricalView() {
 
   const startDate = rangeMode === "custom" && customStart ? customStart : undefined;
   const endDate = rangeMode === "custom" && customEnd ? customEnd : undefined;
-  const { data, loading } = useHistoricalStats(range, startDate, endDate);
+  const { data, loading, fetching } = useHistoricalStats(range, startDate, endDate);
 
   const metricConfig = {
     callsMade: { label: "Calls", color: "#60a5fa", format: (v: number) => `${v}` },
@@ -383,7 +385,7 @@ function HistoricalView() {
   }
 
   return (
-    <PremiumCard className="p-5">
+    <PremiumCard className={cn("p-5 transition-opacity duration-200", fetching && "opacity-70")}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-primary" />
