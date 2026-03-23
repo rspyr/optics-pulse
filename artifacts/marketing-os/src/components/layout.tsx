@@ -1,5 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
+import ChatDrawer from "./chat-drawer";
 import { 
   LayoutDashboard, 
   Users, 
@@ -152,6 +153,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      <ChatDrawer />
     </div>
   );
 }

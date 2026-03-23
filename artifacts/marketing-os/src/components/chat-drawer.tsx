@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MessageCircle, X, Send, Bookmark, BookmarkCheck, Trash2, Sparkles, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DynamicVisualization } from "./dynamic-visualization";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -9,74 +10,16 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   data?: Record<string, unknown>[];
-  chartType?: "bar" | "table" | "number" | "list";
+  chartType?: string;
   chartLabel?: string;
   timestamp: Date;
+  isStreaming?: boolean;
 }
 
 interface SavedQuestion {
   id: number;
   question: string;
   createdAt: string;
-}
-
-function DataTable({ data, label }: { data: Record<string, unknown>[]; label?: string }) {
-  if (!data || data.length === 0) return null;
-  const keys = Object.keys(data[0]);
-
-  return (
-    <div className="mt-3 overflow-x-auto">
-      {label && <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>}
-      <table className="w-full text-xs border-collapse">
-        <thead>
-          <tr className="border-b border-white/10">
-            {keys.map(k => (
-              <th key={k} className="text-left p-1.5 text-muted-foreground font-medium capitalize">{k}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.slice(0, 10).map((row, i) => (
-            <tr key={i} className="border-b border-white/5">
-              {keys.map(k => (
-                <td key={k} className="p-1.5 text-white/80">{String(row[k] ?? "")}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {data.length > 10 && (
-        <div className="text-[10px] text-muted-foreground mt-1">Showing 10 of {data.length} rows</div>
-      )}
-    </div>
-  );
-}
-
-function MiniBar({ data, label }: { data: Record<string, unknown>[]; label?: string }) {
-  if (!data || data.length === 0) return null;
-  const keys = Object.keys(data[0]);
-  const nameKey = keys[0];
-  const valueKey = keys.find(k => typeof data[0][k] === "number") || keys[1];
-  const maxVal = Math.max(...data.map(d => Number(d[valueKey]) || 0));
-
-  return (
-    <div className="mt-3 space-y-1.5">
-      {label && <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>}
-      {data.slice(0, 8).map((row, i) => {
-        const val = Number(row[valueKey]) || 0;
-        const pct = maxVal > 0 ? (val / maxVal) * 100 : 0;
-        return (
-          <div key={i} className="flex items-center gap-2 text-xs">
-            <span className="text-white/70 w-24 truncate">{String(row[nameKey])}</span>
-            <div className="flex-1 h-4 bg-white/5 rounded overflow-hidden">
-              <div className="h-full bg-primary/40 rounded" style={{ width: `${pct}%` }} />
-            </div>
-            <span className="text-white/80 w-12 text-right">{val}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 function formatMarkdown(text: string) {
@@ -98,6 +41,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
   const [savedQuestions, setSavedQuestions] = useState<SavedQuestion[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [savedSet, setSavedSet] = useState<Set<string>>(new Set());
+  const [statusMessage, setStatusMessage] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -139,9 +83,19 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
       content: question.trim(),
       timestamp: new Date(),
     };
+    const assistantId = crypto.randomUUID();
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
+    setStatusMessage("Understanding your question...");
+
+    setMessages(prev => [...prev, {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+      isStreaming: true,
+    }]);
 
     try {
       const history = messages.map(m => ({ role: m.role, content: m.content }));
@@ -149,31 +103,79 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ question: question.trim(), conversationHistory: history }),
+        body: JSON.stringify({ question: question.trim(), conversationHistory: history, stream: true }),
       });
-      const data = await res.json();
 
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data.answer || "I couldn't process that question.",
-        data: data.data,
-        chartType: data.chartType,
-        chartLabel: data.chartLabel,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
+      if (!res.ok) {
+        throw new Error("Request failed");
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No reader");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+
+          try {
+            const chunk = JSON.parse(jsonStr);
+
+            if (chunk.type === "status") {
+              setStatusMessage(chunk.content || "");
+            } else if (chunk.type === "text") {
+              setMessages(prev => prev.map(m =>
+                m.id === assistantId
+                  ? { ...m, content: m.content + (chunk.content || "") }
+                  : m
+              ));
+              setStatusMessage("");
+            } else if (chunk.type === "data") {
+              setMessages(prev => prev.map(m =>
+                m.id === assistantId
+                  ? { ...m, data: chunk.data, chartType: chunk.chartType, chartLabel: chunk.chartLabel }
+                  : m
+              ));
+            } else if (chunk.type === "done") {
+              setMessages(prev => prev.map(m =>
+                m.id === assistantId
+                  ? { ...m, isStreaming: false }
+                  : m
+              ));
+            }
+          } catch {}
+        }
+      }
+
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId ? { ...m, isStreaming: false } : m
+      ));
     } catch {
-      setMessages(prev => [...prev, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "Sorry, I had trouble connecting. Please try again.",
-        timestamp: new Date(),
-      }]);
+      setMessages(prev => {
+        const filtered = prev.filter(m => m.id !== assistantId);
+        return [...filtered, {
+          id: crypto.randomUUID(),
+          role: "assistant" as const,
+          content: "Sorry, I had trouble connecting. Please try again.",
+          timestamp: new Date(),
+        }];
+      });
     } finally {
       setIsLoading(false);
+      setStatusMessage("");
     }
-  }, [isLoading, tenantId]);
+  }, [isLoading, messages]);
 
   const saveQuestion = useCallback(async (question: string) => {
     try {
@@ -228,6 +230,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
             <h2 className="font-display text-lg text-white">Ask Your Data</h2>
+            <span className="text-[10px] px-1.5 py-0.5 bg-primary/20 text-primary rounded-full font-medium">AI</span>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -287,7 +290,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
                 <div className="text-center py-8">
                   <Sparkles className="w-10 h-10 text-primary/30 mx-auto mb-3" />
                   <h3 className="text-white font-medium mb-1">Ask anything about your marketing data</h3>
-                  <p className="text-sm text-muted-foreground">Type a question or pick one below to get started</p>
+                  <p className="text-sm text-muted-foreground">Powered by AI — ask any question and get insights with visualizations</p>
                 </div>
 
                 {suggestions.length > 0 && (
@@ -316,20 +319,31 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
                     ? "bg-primary/20 text-white"
                     : "bg-white/5 border border-white/5 text-white/80"
                 )}>
-                  <div className="text-sm whitespace-pre-line leading-relaxed">
-                    {msg.content.split("\n").map((line, i) => (
-                      <div key={i}>{formatMarkdown(line)}</div>
-                    ))}
-                  </div>
+                  {msg.content && (
+                    <div className="text-sm whitespace-pre-line leading-relaxed">
+                      {msg.content.split("\n").map((line, i) => (
+                        <div key={i}>{formatMarkdown(line)}</div>
+                      ))}
+                    </div>
+                  )}
 
-                  {msg.data && msg.data.length > 0 && msg.chartType === "bar" && (
-                    <MiniBar data={msg.data} label={msg.chartLabel} />
+                  {msg.isStreaming && !msg.content && statusMessage && (
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <span className="text-sm text-muted-foreground">{statusMessage}</span>
+                    </div>
                   )}
-                  {msg.data && msg.data.length > 0 && (msg.chartType === "table" || msg.chartType === "list") && (
-                    <DataTable data={msg.data} label={msg.chartLabel} />
+
+                  {msg.isStreaming && msg.content && (
+                    <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
                   )}
-                  {msg.data && msg.data.length > 0 && msg.chartType === "number" && (
-                    <DataTable data={msg.data} />
+
+                  {msg.data && msg.data.length > 0 && (
+                    <DynamicVisualization
+                      data={msg.data}
+                      chartType={msg.chartType || "table"}
+                      chartLabel={msg.chartLabel}
+                    />
                   )}
 
                   {msg.role === "user" && (
@@ -350,11 +364,11 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
               </div>
             ))}
 
-            {isLoading && (
+            {isLoading && messages.length > 0 && !messages[messages.length - 1]?.content && statusMessage && (
               <div className="flex justify-start">
                 <div className="bg-white/5 border border-white/5 rounded-xl px-4 py-3 flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                  <span className="text-sm text-muted-foreground">Analyzing your data...</span>
+                  <span className="text-sm text-muted-foreground">{statusMessage}</span>
                 </div>
               </div>
             )}
@@ -371,7 +385,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about your marketing data..."
+              placeholder="Ask anything about your data..."
               className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/30"
               disabled={isLoading}
             />
