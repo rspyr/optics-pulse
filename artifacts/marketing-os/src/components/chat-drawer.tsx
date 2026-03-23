@@ -64,7 +64,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
 
   useEffect(() => {
     if (isOpen) {
-      fetch(`${API_BASE}/api/chat/saved-questions`, { credentials: "include" })
+      fetch(`${API_BASE}/api/chat/saved-questions${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" })
         .then(r => r.json())
         .then(d => {
           setSavedQuestions(d.questions || []);
@@ -103,7 +103,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ question: question.trim(), conversationHistory: history, stream: true }),
+        body: JSON.stringify({ question: question.trim(), conversationHistory: history, stream: true, ...(tenantId ? { tenantId } : {}) }),
       });
 
       if (!res.ok) {
@@ -183,7 +183,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, ...(tenantId ? { tenantId } : {}) }),
       });
       const data = await res.json();
       if (data.question) {
@@ -191,11 +191,11 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         setSavedSet(prev => new Set([...prev, question]));
       }
     } catch {}
-  }, []);
+  }, [tenantId]);
 
   const deleteSavedQuestion = useCallback(async (id: number, question: string) => {
     try {
-      await fetch(`${API_BASE}/api/chat/saved-questions/${id}`, {
+      await fetch(`${API_BASE}/api/chat/saved-questions/${id}${tenantId ? `?tenantId=${tenantId}` : ""}`, {
         method: "DELETE",
         credentials: "include",
       });

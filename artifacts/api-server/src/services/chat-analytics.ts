@@ -1,7 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
-import { SCHEMA_DESCRIPTION, executeQueryPlan } from "./data-query-executor";
-import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable } from "@workspace/db";
-import { eq, and, gte, lte, inArray, SQL, desc } from "drizzle-orm";
+import { SCHEMA_DESCRIPTION, executeQueryPlan, type QueryPlan } from "./data-query-executor";
+import { db, leadsTable, jobsTable, campaignsTable } from "@workspace/db";
+import { eq, and, gte } from "drizzle-orm";
 
 export interface ConversationTurn {
   role: "user" | "assistant";
@@ -72,6 +72,84 @@ Chart type guidelines:
 - "pie" — proportional breakdown (source mix, status distribution)
 - "list" — text-heavy items (changelog entries, alerts)`;
 
+const VALID_TABLES = [
+  "leads", "campaigns", "campaign_daily_stats", "jobs",
+  "attribution_events", "reviews", "review_daily_stats",
+  "coordinator_daily_stats", "automation_rules", "automation_alerts",
+  "change_logs", "call_attempts", "scheduled_followups",
+  "integration_sync_logs", "users",
+] as const;
+
+const VALID_CHART_TYPES = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "list"] as const;
+
+interface AnswerResponse {
+  answer: string;
+  chartType?: string;
+  chartLabel?: string;
+}
+
+function parseAndValidateQueryPlan(text: string): QueryPlan | null {
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    console.error("[Chat AI] Failed to parse query plan:", text);
+    return null;
+  }
+
+  const tables = Array.isArray(raw.tables)
+    ? (raw.tables as string[]).filter((t) => (VALID_TABLES as readonly string[]).includes(t))
+    : [];
+
+  return {
+    tables,
+    filters: raw.filters && typeof raw.filters === "object" ? raw.filters as Record<string, unknown> : undefined,
+    aggregations: Array.isArray(raw.aggregations) ? raw.aggregations as string[] : undefined,
+    groupBy: Array.isArray(raw.groupBy) ? raw.groupBy as string[] : undefined,
+    orderBy: Array.isArray(raw.orderBy)
+      ? (raw.orderBy as Array<Record<string, string>>).filter(
+          (o) => typeof o.column === "string" && (o.direction === "asc" || o.direction === "desc")
+        ).map((o) => ({ column: o.column, direction: o.direction as "asc" | "desc" }))
+      : undefined,
+    limit: typeof raw.limit === "number" ? Math.min(Math.max(raw.limit, 1), 100) : undefined,
+    dateRange: raw.dateRange && typeof raw.dateRange === "object"
+      ? raw.dateRange as { start: string; end: string }
+      : undefined,
+    computedMetrics: Array.isArray(raw.computedMetrics) ? raw.computedMetrics as string[] : undefined,
+  };
+}
+
+function parseAnswerResponse(text: string): AnswerResponse {
+  try {
+    const raw = JSON.parse(text);
+    return {
+      answer: typeof raw.answer === "string" ? raw.answer : "",
+      chartType: typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
+        ? raw.chartType
+        : undefined,
+      chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : undefined,
+    };
+  } catch {
+    console.error("[Chat AI] Failed to parse answer:", text);
+    return { answer: text || "I processed your data but had trouble formatting the response." };
+  }
+}
+
+function parseVizResponse(text: string): { chartType: string; chartLabel: string } {
+  try {
+    const raw = JSON.parse(text);
+    return {
+      chartType: typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
+        ? raw.chartType
+        : "table",
+      chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : "Results",
+    };
+  } catch {
+    console.error("[Chat AI] Failed to parse viz response, using fallback");
+    return { chartType: "table", chartLabel: "Results" };
+  }
+}
+
 export async function processQuestion(
   question: string,
   tenantId: number,
@@ -98,32 +176,13 @@ export async function processQuestion(
       },
     });
 
-    const planText = queryPlanResponse.text?.trim() || "{}";
-    let queryPlan: any;
-    try {
-      queryPlan = JSON.parse(planText);
-    } catch {
-      console.error("[Chat AI] Failed to parse query plan:", planText);
+    const queryPlan = parseAndValidateQueryPlan(queryPlanResponse.text?.trim() || "{}");
+    if (!queryPlan) {
       return {
         answer: "I had trouble understanding that question. Could you try rephrasing it?",
         chartType: "number",
       };
     }
-
-    if (!queryPlan.tables || !Array.isArray(queryPlan.tables)) {
-      queryPlan.tables = [];
-    }
-
-    const validTables = [
-      "leads", "campaigns", "campaign_daily_stats", "jobs",
-      "attribution_events", "reviews", "review_daily_stats",
-      "coordinator_daily_stats", "automation_rules", "automation_alerts",
-      "change_logs", "call_attempts", "scheduled_followups",
-      "integration_sync_logs", "users",
-    ];
-    queryPlan.tables = queryPlan.tables.filter((t: string) =>
-      validTables.includes(t)
-    );
 
     const queryResult = await executeQueryPlan(tenantId, queryPlan);
 
@@ -153,18 +212,7 @@ Generate a helpful answer with the appropriate chart type.`,
       },
     });
 
-    const answerText = answerResponse.text?.trim() || "{}";
-    let answerParsed: any;
-    try {
-      answerParsed = JSON.parse(answerText);
-    } catch {
-      console.error("[Chat AI] Failed to parse answer:", answerText);
-      return {
-        answer: answerText || "I processed your data but had trouble formatting the response.",
-        data: queryResult.data,
-        chartType: "table",
-      };
-    }
+    const answerParsed = parseAnswerResponse(answerResponse.text?.trim() || "{}");
 
     return {
       answer: answerParsed.answer || "Here are your results.",
@@ -210,30 +258,12 @@ export async function processQuestionStream(
       },
     });
 
-    const planText = queryPlanResponse.text?.trim() || "{}";
-    let queryPlan: any;
-    try {
-      queryPlan = JSON.parse(planText);
-    } catch {
+    const queryPlan = parseAndValidateQueryPlan(queryPlanResponse.text?.trim() || "{}");
+    if (!queryPlan) {
       onChunk({ type: "text", content: "I had trouble understanding that question. Could you try rephrasing it?" });
       onChunk({ type: "done", done: true });
       return;
     }
-
-    if (!queryPlan.tables || !Array.isArray(queryPlan.tables)) {
-      queryPlan.tables = [];
-    }
-
-    const validTables = [
-      "leads", "campaigns", "campaign_daily_stats", "jobs",
-      "attribution_events", "reviews", "review_daily_stats",
-      "coordinator_daily_stats", "automation_rules", "automation_alerts",
-      "change_logs", "call_attempts", "scheduled_followups",
-      "integration_sync_logs", "users",
-    ];
-    queryPlan.tables = queryPlan.tables.filter((t: string) =>
-      validTables.includes(t)
-    );
 
     onChunk({ type: "status", content: "Querying your data..." });
 
@@ -299,20 +329,7 @@ Provide a helpful, conversational answer. Use **bold** for key numbers. Use bull
       }),
     ]);
 
-    let chartType = "table";
-    let chartLabel = "Results";
-    try {
-      const vizParsed = JSON.parse(vizResponse.text?.trim() || "{}");
-      const validTypes = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "list"];
-      if (vizParsed.chartType && validTypes.includes(vizParsed.chartType)) {
-        chartType = vizParsed.chartType;
-      }
-      if (vizParsed.chartLabel) {
-        chartLabel = vizParsed.chartLabel;
-      }
-    } catch {
-      console.error("[Chat AI] Failed to parse viz response, using fallback");
-    }
+    const { chartType, chartLabel } = parseVizResponse(vizResponse.text?.trim() || "{}");
 
     for await (const chunk of streamResponse) {
       const text = chunk.text;

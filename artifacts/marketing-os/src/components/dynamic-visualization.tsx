@@ -1,6 +1,13 @@
 import { useRef, useEffect, useMemo } from "react";
 import { reactive, html } from "@arrow-js/core";
 
+interface VizState {
+  data: Record<string, unknown>[];
+  chartType: string;
+  label: string;
+  hoveredIndex: number;
+}
+
 interface DynamicVisualizationProps {
   data: Record<string, unknown>[];
   chartType: string;
@@ -21,7 +28,7 @@ export function DynamicVisualization({ data, chartType, chartLabel }: DynamicVis
     const el = containerRef.current;
     el.innerHTML = "";
 
-    const state = reactive({
+    const state: VizState = reactive({
       data: vizConfig.data,
       chartType: vizConfig.chartType,
       label: vizConfig.chartLabel || "",
@@ -63,7 +70,7 @@ export function DynamicVisualization({ data, chartType, chartLabel }: DynamicVis
 
 function renderKPICard(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {
@@ -100,7 +107,7 @@ function renderKPICard(
 
 function renderBarChart(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {
@@ -140,7 +147,7 @@ function renderBarChart(
 
 function renderTrendLine(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {
@@ -198,7 +205,7 @@ function renderTrendLine(
 
 function renderPieChart(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {
@@ -247,7 +254,7 @@ function renderPieChart(
 
 function renderList(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {
@@ -285,7 +292,7 @@ function renderList(
 
 function renderTable(
   container: HTMLElement,
-  state: any,
+  state: VizState,
   rows: Record<string, unknown>[],
   keys: string[]
 ) {

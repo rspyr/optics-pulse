@@ -76,7 +76,7 @@ Common computed metrics:
 - CTR (Click Through Rate) = total clicks / total impressions
 `;
 
-interface QueryPlan {
+export interface QueryPlan {
   tables: string[];
   filters?: Record<string, unknown>;
   aggregations?: string[];
@@ -196,7 +196,7 @@ function buildDateConditions(
   isDateString: boolean = false
 ): SQL[] {
   const conditions: SQL[] = [];
-  const range = plan.dateRange || plan.filters?.dateRange as any;
+  const range = plan.dateRange || (plan.filters?.dateRange as { start?: string; end?: string } | undefined);
   if (range) {
     if (range.start) {
       conditions.push(
@@ -221,7 +221,7 @@ async function queryLeads(
   conditions.push(...buildDateConditions(leadsTable.createdAt, plan));
   const f = plan.filters || {};
   if (f.source) conditions.push(eq(leadsTable.source, String(f.source)));
-  if (f.status) conditions.push(eq(leadsTable.status, f.status as any));
+  if (f.status) conditions.push(eq(leadsTable.status, String(f.status) as typeof leadsTable.status.enumValues[number]));
   if (f.leadType) conditions.push(eq(leadsTable.leadType, String(f.leadType)));
   if (f.assignedTo) conditions.push(eq(leadsTable.assignedTo, String(f.assignedTo)));
   if (f.disposition) conditions.push(eq(leadsTable.disposition, String(f.disposition)));
@@ -350,7 +350,7 @@ async function queryJobs(
   const conditions: SQL[] = [eq(jobsTable.tenantId, tenantId)];
   conditions.push(...buildDateConditions(jobsTable.createdAt, plan));
   const f = plan.filters || {};
-  if (f.status) conditions.push(eq(jobsTable.status, f.status as any));
+  if (f.status) conditions.push(eq(jobsTable.status, String(f.status) as typeof jobsTable.status.enumValues[number]));
   if (f.jobType) conditions.push(eq(jobsTable.jobType, String(f.jobType)));
   if (f.matchLevel) conditions.push(eq(jobsTable.matchLevel, String(f.matchLevel)));
 
@@ -383,7 +383,7 @@ async function queryAttributionEvents(
     ...buildDateConditions(attributionEventsTable.createdAt, plan)
   );
   const f = plan.filters || {};
-  if (f.eventType) conditions.push(eq(attributionEventsTable.eventType, f.eventType as any));
+  if (f.eventType) conditions.push(eq(attributionEventsTable.eventType, String(f.eventType) as typeof attributionEventsTable.eventType.enumValues[number]));
 
   const rows = await db
     .select()
