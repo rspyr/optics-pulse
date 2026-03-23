@@ -634,7 +634,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
               Change Log
             </button>
           </div>
-          <div className="flex-1 min-h-[320px]">
+          <div className="h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartDataForDisplay} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" vertical={false} />
@@ -726,7 +726,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           <h3 className="font-display text-lg text-white mb-1">Bottleneck Identifier</h3>
           <p className="text-muted-foreground text-xs mb-4">Funnel drop-off analysis</p>
 
-          <div className="flex-1 min-h-[200px] mb-4">
+          <div className="h-[200px] mb-4">
             <ResponsiveContainer width="100%" height="100%">
               <FunnelChart>
                 <Tooltip
