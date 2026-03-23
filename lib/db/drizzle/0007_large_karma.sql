@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD COLUMN "spiff_config" jsonb;

@@ -1,26 +1,21 @@
-import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
+import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
+import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 
 async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date) {
-  if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0 };
+  if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; leadType: string | null }[] };
 
-  const [bookedResult] = await db.select({ count: count() })
+  const bookedSoldLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType })
     .from(leadsTable)
     .where(and(
       inArray(leadsTable.id, leadIds),
-      eq(leadsTable.status, "booked"),
+      inArray(leadsTable.status, ["booked", "sold"]),
       gte(leadsTable.updatedAt, dayStart),
       lte(leadsTable.updatedAt, dayEnd),
     ));
 
-  const [soldResult] = await db.select({ count: count() })
-    .from(leadsTable)
-    .where(and(
-      inArray(leadsTable.id, leadIds),
-      eq(leadsTable.status, "sold"),
-      gte(leadsTable.updatedAt, dayStart),
-      lte(leadsTable.updatedAt, dayEnd),
-    ));
+  const bookingsCount = bookedSoldLeads.length;
+  const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;
 
   const [speedResult] = await db.select({
     avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
@@ -33,9 +28,10 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     ));
 
   return {
-    bookingsCount: bookedResult.count + soldResult.count,
-    soldCount: soldResult.count,
+    bookingsCount,
+    soldCount,
     avgSpeedToLead: Math.round(Number(speedResult?.avgSpeed ?? 0)),
+    bookedLeads: bookedSoldLeads,
   };
 }
 
@@ -79,8 +75,12 @@ export async function aggregateDailyStats(dateStr: string) {
 
     const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, startOfDay, endOfDay);
 
+    const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
+      .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
+
     const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
-    const commission = leadStats.bookingsCount * 20;
+    const commission = computeSpiffCommission(leadStats.bookedLeads, spiffConfig);
 
     await db.insert(coordinatorDailyStatsTable).values({
       userId,
@@ -181,7 +181,7 @@ function computeDeltas(today: StatSnapshot, baseline: StatSnapshot) {
   };
 }
 
-async function getUserTodayStats(userId: number): Promise<StatSnapshot> {
+async function getUserTodayStats(userId: number, tenantId: number | null = null): Promise<StatSnapshot> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const endOfToday = new Date();
@@ -203,13 +203,23 @@ async function getUserTodayStats(userId: number): Promise<StatSnapshot> {
   const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
+  const spiffConfig = await loadSpiffConfig(tenantId);
+  const commission = computeSpiffCommission(leadStats.bookedLeads, spiffConfig);
+
   return {
     callsMade,
     bookingsCount: leadStats.bookingsCount,
     bookingRate,
-    commission: leadStats.bookingsCount * 20,
+    commission,
     avgSpeedToLead: leadStats.avgSpeedToLead,
   };
+}
+
+async function loadSpiffConfig(tenantId: number | null) {
+  if (!tenantId) return parseSpiffConfig(null);
+  const [row] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
+    .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  return parseSpiffConfig(row?.spiffConfig);
 }
 
 async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
@@ -241,11 +251,14 @@ async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
   const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
+  const spiffConfig = await loadSpiffConfig(tenantId);
+  const commission = computeSpiffCommission(leadStats.bookedLeads, spiffConfig);
+
   return {
     callsMade,
     bookingsCount: leadStats.bookingsCount,
     bookingRate,
-    commission: leadStats.bookingsCount * 20,
+    commission,
     avgSpeedToLead: leadStats.avgSpeedToLead,
   };
 }
@@ -346,7 +359,7 @@ export async function getComparisonStats(
   baseline: ComparisonBaseline,
 ) {
   if (userId) {
-    const todayStats = await getUserTodayStats(userId);
+    const todayStats = await getUserTodayStats(userId, tenantId);
     const baseConds = buildScopeConds(tenantId, userId);
     const baselineStats = await getBaselineStats(baseConds, baseline);
 
@@ -364,7 +377,7 @@ export async function getComparisonStats(
     const coordinators = [];
 
     for (const member of teamMembers) {
-      const coordToday = await getUserTodayStats(member.id);
+      const coordToday = await getUserTodayStats(member.id, tenantId);
       const coordBaseConds = buildScopeConds(tenantId, member.id);
       const coordBaseline = await getBaselineStats(coordBaseConds, baseline);
 

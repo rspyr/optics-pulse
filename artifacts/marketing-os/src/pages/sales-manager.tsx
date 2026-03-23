@@ -612,6 +612,180 @@ function ScriptChangesPanel({ changes, loading }: { changes: ScriptChange[]; loa
   );
 }
 
+interface SpiffConfig {
+  default: number;
+  byLeadType: Record<string, number>;
+}
+
+function useSpiffConfig(tenantId: number | null) {
+  const [config, setConfig] = useState<SpiffConfig>({ default: 20, byLeadType: {} });
+  const [leadTypes, setLeadTypes] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!tenantId) { setLoading(false); return; }
+    const base = API_BASE.replace(/\/api$/, "");
+    Promise.all([
+      fetch(`${base}/api/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${base}/api/sales-manager/lead-types?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+    ]).then(([configData, typesData]) => {
+      if (configData?.spiffConfig) setConfig(configData.spiffConfig);
+      if (typesData?.leadTypes) setLeadTypes(typesData.leadTypes);
+    }).finally(() => setLoading(false));
+  }, [tenantId]);
+
+  const saveConfig = async (newConfig: SpiffConfig) => {
+    const base = API_BASE.replace(/\/api$/, "");
+    await fetch(`${base}/api/sales-manager/spiff-config?tenantId=${tenantId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ spiffConfig: newConfig }),
+    });
+    setConfig(newConfig);
+  };
+
+  return { config, leadTypes, loading, saveConfig };
+}
+
+function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
+  const { config, leadTypes, loading, saveConfig } = useSpiffConfig(tenantId);
+  const [defaultAmount, setDefaultAmount] = useState(20);
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [newLeadType, setNewLeadType] = useState("");
+
+  useEffect(() => {
+    setDefaultAmount(config.default);
+    setOverrides({ ...config.byLeadType });
+  }, [config]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    await saveConfig({ default: defaultAmount, byLeadType: overrides });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const availableTypes = leadTypes.filter(lt => !(lt in overrides));
+
+  const addOverride = () => {
+    if (!newLeadType) return;
+    setOverrides(prev => ({ ...prev, [newLeadType]: defaultAmount }));
+    setNewLeadType("");
+  };
+
+  const removeOverride = (lt: string) => {
+    setOverrides(prev => {
+      const next = { ...prev };
+      delete next[lt];
+      return next;
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <DollarSign className="w-4 h-4 text-primary" />
+        <span className="text-sm font-display text-white">Spiff Configuration</span>
+      </div>
+
+      <PremiumCard className="p-6 space-y-5">
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Default Spiff Amount</label>
+          <p className="text-[10px] text-white/30 mb-2">Applied to all bookings unless a lead-type override is set below.</p>
+          <div className="relative w-40">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 text-sm">$</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={defaultAmount}
+              onChange={e => setDefaultAmount(Math.max(0, Number(e.target.value)))}
+              className="w-full bg-white/5 border border-white/10 rounded-md pl-7 pr-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Lead Type Overrides</label>
+          <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific lead types. Types not listed here use the default amount.</p>
+
+          {Object.keys(overrides).length > 0 && (
+            <div className="space-y-2 mb-3">
+              {Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)).map(([lt, amount]) => (
+                <div key={lt} className="flex items-center gap-2">
+                  <span className="flex-1 text-sm text-white/70 truncate">{lt}</span>
+                  <div className="relative w-28">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 text-xs">$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={amount}
+                      onChange={e => setOverrides(prev => ({ ...prev, [lt]: Math.max(0, Number(e.target.value)) }))}
+                      className="w-full bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                  </div>
+                  <button
+                    onClick={() => removeOverride(lt)}
+                    className="text-white/30 hover:text-red-400 text-xs px-1"
+                    title="Remove override"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {availableTypes.length > 0 && (
+            <div className="flex items-center gap-2">
+              <select
+                value={newLeadType}
+                onChange={e => setNewLeadType(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+              >
+                <option value="">Add lead type override...</option>
+                {availableTypes.map(lt => (
+                  <option key={lt} value={lt}>{lt}</option>
+                ))}
+              </select>
+              <button
+                onClick={addOverride}
+                disabled={!newLeadType}
+                className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white hover:bg-white/10 disabled:opacity-30"
+              >
+                Add
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <DollarSign className="w-4 h-4" />}
+          {saved ? "Saved!" : "Save Spiff Settings"}
+        </button>
+      </PremiumCard>
+    </div>
+  );
+}
+
 function SettingsTab({ tenantId }: { tenantId: number | null }) {
   const { config, loading, saveConfig } = useCommunicationConfig(tenantId);
   const [callPlatform, setCallPlatform] = useState("native");
@@ -644,10 +818,14 @@ function SettingsTab({ tenantId }: { tenantId: number | null }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <SettingsIcon className="w-4 h-4 text-primary" />
-        <span className="text-sm font-display text-white">Communication Platform Settings</span>
+    <div className="space-y-6">
+      <SpiffConfigSection tenantId={tenantId} />
+
+      <div className="border-t border-white/5 pt-6">
+        <div className="flex items-center gap-2">
+          <SettingsIcon className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Communication Platform Settings</span>
+        </div>
       </div>
 
       <PremiumCard className="p-6 space-y-4">

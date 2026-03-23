@@ -1,7 +1,8 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
-import { eq, and, count, sql, avg } from "drizzle-orm";
+import { eq, and, count, sql, avg, inArray } from "drizzle-orm";
+import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
@@ -229,8 +230,20 @@ export async function getHudStats(tenantId: number | null) {
   const totalCalls = contactedToday.count;
   const bookings = bookedToday.count + soldToday.count;
   const bookingRate = totalCalls > 0 ? Math.round((bookings / totalCalls) * 100) : 0;
-  const commission = bookings * 20;
   const newLeadsToday = allLeadsToday.count;
+
+  let commission = bookings * 20;
+  if (tenantId) {
+    const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
+      .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
+    const bookedLeadsConds = tenantId
+      ? and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.status, ["booked", "sold"]), sql`${leadsTable.updatedAt} >= ${today}`)
+      : and(inArray(leadsTable.status, ["booked", "sold"]), sql`${leadsTable.updatedAt} >= ${today}`);
+    const bookedLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType })
+      .from(leadsTable).where(bookedLeadsConds);
+    commission = computeSpiffCommission(bookedLeads, spiffConfig);
+  }
 
   const speedConditions = tenantId
     ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
