@@ -31,26 +31,50 @@ const DISPOSITIONS = [
   { value: "callback_requested", label: "Callback Requested", color: "amber" },
 ];
 
-const SCRIPTS: Record<string, string> = {
+const FALLBACK_SCRIPTS: Record<string, string> = {
   "Google Ads": "Hi [NAME], this is [REP] from [COMPANY]. I see you were looking into [INTEREST] — we have availability this week. Would you like to schedule a free estimate?",
-  "Meta Leads": "Hey [NAME]! Thanks for filling out our form on Facebook. I'd love to help you with your [INTEREST] needs. Do you have a moment to chat about scheduling?",
-  "CallRail": "Hi [NAME], I'm returning your call about [INTEREST]. We'd love to get you on the schedule. What times work best for you this week?",
-  "Organic Search": "Hello [NAME], this is [REP] with [COMPANY]. You visited our website about [INTEREST] — we're running a special this month. Can I tell you about it?",
   "Direct": "Hi [NAME], thank you for reaching out! I'd love to help you with [INTEREST]. Let me find the best time for an estimate.",
-  "Referral": "Hi [NAME]! You were referred to us for [INTEREST]. We'd love to take care of you. When would be a good time for a technician to come out?",
 };
 
-const TEXT_TEMPLATES = [
-  "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!",
-  "Hey [NAME], we have same-day availability for [INTEREST] estimates. Want me to reserve a spot for you today?",
-];
+const FALLBACK_TEXT = "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!";
 
-const VOICEMAIL_SCRIPTS: Record<string, string> = {
-  "Google Ads": "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry. We have great availability this week for a free estimate. Please call us back at your earliest convenience. Again, this is [REP] at [COMPANY]. Have a great day!",
-  "Meta Leads": "Hey [NAME], this is [REP] from [COMPANY]. You filled out a form about [INTEREST] and I wanted to reach out personally. We'd love to help — call us back when you get a chance and we'll get you scheduled. Thanks!",
-  "CallRail": "Hi [NAME], [REP] here from [COMPANY], returning your call about [INTEREST]. Sorry I missed you — please give us a ring back and we'll take care of you. Talk soon!",
+const FALLBACK_VM: Record<string, string> = {
   default: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!",
 };
+
+interface ScriptRecord {
+  id: number;
+  type: string;
+  name: string;
+  sourceFilter: string | null;
+  stageFilter: string | null;
+  content: string;
+  isActive: boolean;
+}
+
+function useScripts() {
+  const [scripts, setScripts] = useState<ScriptRecord[]>([]);
+  useEffect(() => {
+    fetch(`${API_BASE}/scripts`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setScripts(data); })
+      .catch(() => {});
+  }, []);
+  return scripts;
+}
+
+function findScript(scripts: ScriptRecord[], type: string, source: string, stage?: string): string | null {
+  const active = scripts.filter(s => s.type === type && s.isActive);
+  const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null));
+  if (bySourceAndStage) return bySourceAndStage.content;
+  const bySource = active.find(s => s.sourceFilter === source && !s.stageFilter);
+  if (bySource) return bySource.content;
+  const byStage = active.find(s => !s.sourceFilter && s.stageFilter === (stage || null));
+  if (byStage) return byStage.content;
+  const generic = active.find(s => !s.sourceFilter && !s.stageFilter);
+  if (generic) return generic.content;
+  return null;
+}
 
 
 interface LeadSuggestion {

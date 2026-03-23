@@ -21,6 +21,7 @@ import callAttemptsRouter from "./call-attempts";
 import drilldownRouter from "./drilldown";
 import budgetRouter from "./budget";
 import reviewsRouter from "./reviews";
+import scriptsRouter from "./scripts";
 
 const router: IRouter = Router();
 
@@ -51,6 +52,7 @@ router.use(funnelTypesRouter);
 router.use(callAttemptsRouter);
 router.use(drilldownRouter);
 router.use(budgetRouter);
+router.use(scriptsRouter);
 
 export default router;
 

@@ -18,3 +18,4 @@ export * from "./scheduled-followups";
 export * from "./coordinator-daily-stats";
 export * from "./reviews";
 export * from "./tracker-heartbeats";
+export * from "./scripts";
