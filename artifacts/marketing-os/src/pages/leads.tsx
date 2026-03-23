@@ -52,14 +52,17 @@ interface ScriptRecord {
   isActive: boolean;
 }
 
-function useScripts() {
+function useScripts(tenantId?: number | null) {
   const [scripts, setScripts] = useState<ScriptRecord[]>([]);
   useEffect(() => {
-    fetch(`${API_BASE}/scripts`, { credentials: "include" })
+    const url = tenantId
+      ? `${API_BASE}/scripts?tenantId=${tenantId}`
+      : `${API_BASE}/scripts`;
+    fetch(url, { credentials: "include" })
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setScripts(data); })
       .catch(() => {});
-  }, []);
+  }, [tenantId]);
   return scripts;
 }
 
@@ -1065,7 +1068,7 @@ export default function Leads() {
   const { queue, loading, refetch } = useHudQueue();
   const { stats, refetch: refetchStats } = useHudStats();
   const commConfig = useCommConfig();
-  const scripts = useScripts();
+  const scripts = useScripts(tenantId);
   const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
