@@ -33,9 +33,9 @@ const DISPOSITIONS = [
 
 const FALLBACK_SCRIPTS: Record<string, string> = {
   "Google Ads": "Hi [NAME], this is [REP] from [COMPANY]. I see you were looking into [INTEREST] — we have availability this week. Would you like to schedule a free estimate?",
-  "Meta": "Hi [NAME], this is [REP] from [COMPANY]. I noticed you were interested in [INTEREST] through our ad. We're running a special this month — would you like a free estimate?",
+  "Meta Leads": "Hi [NAME], this is [REP] from [COMPANY]. I noticed you were interested in [INTEREST] through our ad. We're running a special this month — would you like a free estimate?",
   "CallRail": "Hi [NAME], this is [REP] returning your call from [COMPANY]. I'd love to help you with [INTEREST]. Do you have a few minutes to discuss your needs?",
-  "Organic": "Hi [NAME], this is [REP] from [COMPANY]. Thanks for finding us! I'd love to help with your [INTEREST] needs. When would be a good time for a free estimate?",
+  "Organic Search": "Hi [NAME], this is [REP] from [COMPANY]. Thanks for finding us! I'd love to help with your [INTEREST] needs. When would be a good time for a free estimate?",
   "Referral": "Hi [NAME], this is [REP] from [COMPANY]. I understand you were referred to us for [INTEREST]. We'd love to take care of you — when's a good time for an estimate?",
   "Direct": "Hi [NAME], thank you for reaching out! I'd love to help you with [INTEREST]. Let me find the best time for an estimate.",
 };
@@ -44,7 +44,7 @@ const FALLBACK_TEXT = "Hi [NAME]! This is [REP] from [COMPANY]. Just following u
 
 const FALLBACK_VM: Record<string, string> = {
   "Google Ads": "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry from our Google listing. We'd love to schedule a free estimate at your convenience. Please call us back at your earliest convenience. Thanks!",
-  "Meta": "Hi [NAME], this is [REP] from [COMPANY] following up on your interest in [INTEREST]. We have openings this week for a free estimate. Give us a call back when you can!",
+  "Meta Leads": "Hi [NAME], this is [REP] from [COMPANY] following up on your interest in [INTEREST]. We have openings this week for a free estimate. Give us a call back when you can!",
   default: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!",
 };
 
