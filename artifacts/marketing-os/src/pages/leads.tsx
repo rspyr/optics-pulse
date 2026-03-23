@@ -8,7 +8,7 @@ import {
   Phone, Mail, MessageSquare, Mic,
   Clock, Zap,
   ChevronDown, AlertTriangle, Target,
-  Flame, Award, Calendar, PhoneCall,
+  Award, Calendar, PhoneCall,
   Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   Brain, TrendingUp, TrendingDown, PhoneForwarded, Info,
   BarChart3, ArrowUpRight, ArrowDownRight, Minus, History
@@ -172,7 +172,7 @@ function useHudQueue() {
         setQueue(data);
       }
     } catch (e) {
-      console.error("Failed to fetch HUD queue:", e);
+      console.error("Failed to fetch Pulse queue:", e);
     } finally {
       setLoading(false);
     }
@@ -202,7 +202,7 @@ function useHudStats() {
         setStats(data);
       }
     } catch (e) {
-      console.error("Failed to fetch HUD stats:", e);
+      console.error("Failed to fetch Pulse stats:", e);
     }
   }, []);
 
@@ -559,7 +559,7 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("[HUD] Socket.IO connected:", socket.id);
+      console.log("[Pulse] Socket.IO connected:", socket.id);
     });
 
     socket.on("new-lead", (lead: LeadData) => {
@@ -576,7 +576,7 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
     });
 
     socket.on("disconnect", () => {
-      console.log("[HUD] Socket.IO disconnected");
+      console.log("[Pulse] Socket.IO disconnected");
     });
 
     return () => {
@@ -1154,9 +1154,9 @@ export default function Leads() {
 
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <GradientHeading className="text-3xl md:text-4xl mb-1">
-            <Flame className="w-8 h-8 inline text-primary mr-2" />
-            Leads HUD
+          <GradientHeading className="text-3xl md:text-4xl mb-1 flex items-center gap-3">
+            <img src="/pulse-logo.png" alt="Pulse" className="w-8 h-8" />
+            Pulse
           </GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-[0.2em] uppercase">
             Speed-to-Lead Command Center

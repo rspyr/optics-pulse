@@ -258,7 +258,7 @@ export default function Settings() {
       <PremiumCard>
         <h3 className="text-xl font-display text-white mb-2">Communication Platform</h3>
         <p className="text-sm text-muted-foreground mb-6">
-          Choose how the Leads HUD routes calls and texts. Configure API credentials above, then select your preferred platforms here.
+          Choose how Pulse routes calls and texts. Configure API credentials above, then select your preferred platforms here.
         </p>
 
         <div className="grid md:grid-cols-2 gap-6">

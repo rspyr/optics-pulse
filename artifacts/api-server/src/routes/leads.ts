@@ -59,7 +59,7 @@ router.get("/leads/hud/queue", async (req, res) => {
       total: result.total,
     });
   } catch (err) {
-    console.error("[HUD Queue] Smart queue error, falling back:", err);
+    console.error("[Pulse Queue] Smart queue error, falling back:", err);
     const conditions: SQL[] = [];
     if (tenantId) conditions.push(eq(leadsTable.tenantId, tenantId));
     conditions.push(inArray(leadsTable.status, ["new", "contacted"]));
@@ -114,7 +114,7 @@ router.get("/leads/hud/comparison", async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    console.error("[HUD Comparison]", err);
+    console.error("[Pulse Comparison]", err);
     res.status(500).json({ error: "Failed to fetch comparison stats" });
   }
 });
@@ -145,7 +145,7 @@ router.get("/leads/hud/historical", async (req, res) => {
     const result = await getHistoricalStats(tenantId, userId, startDate, endDateParam);
     res.json(result);
   } catch (err) {
-    console.error("[HUD Historical]", err);
+    console.error("[Pulse Historical]", err);
     res.status(500).json({ error: "Failed to fetch historical stats" });
   }
 });

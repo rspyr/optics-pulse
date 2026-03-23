@@ -26,7 +26,7 @@ import { useAuth } from "@/components/auth-context";
 const AGENCY_NAV = [
   { href: "/", label: "Command Center", icon: LayoutDashboard },
   { href: "/internal", label: "God View", icon: Shield },
-  { href: "/leads", label: "Leads HUD", icon: Users },
+  { href: "/leads", label: "Pulse", icon: Users },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/clients", label: "Client Portal", icon: Building2 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
