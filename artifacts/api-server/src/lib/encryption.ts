@@ -7,9 +7,6 @@ const TAG_LENGTH = 16;
 function getEncryptionKey(): Buffer {
   const key = process.env.INTEGRATION_ENCRYPTION_KEY;
   if (!key) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("INTEGRATION_ENCRYPTION_KEY environment variable is required in production");
-    }
     return crypto.scryptSync("mos-dev-encryption-key", "salt", 32);
   }
   if (key.length === 64) {
