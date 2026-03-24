@@ -73,9 +73,7 @@ async function cleanupSeededDemoData() {
     let totalCleaned = 0;
     for (const tenant of nonDemoTenants) {
       const leadResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
-          email LIKE '%@example.com' OR source = 'demo_seed'
-        )`
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id}`
       );
       const demoLeadCount = extractCount(leadResult);
 
@@ -105,13 +103,9 @@ async function cleanupSeededDemoData() {
 
       if (demoLeadCount > 0) {
         await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
-          SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND (
-            email LIKE '%@example.com' OR source = 'demo_seed'
-          )
+          SELECT id FROM leads WHERE tenant_id = ${tenant.id}
         )`);
-        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND (
-          email LIKE '%@example.com' OR source = 'demo_seed'
-        )`);
+        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
       }
 
       if (seedCampaignCount > 0) {
