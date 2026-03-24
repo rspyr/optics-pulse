@@ -73,7 +73,7 @@ async function cleanupSeededDemoData() {
 
       const seedCampaignResult = await db.execute(
         sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
-          external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+          external_id LIKE 'G-%' OR external_id LIKE 'M-%'
         )`
       );
       const seedCampaignCount = Number((seedCampaignResult.rows[0] as any)?.cnt || 0);
@@ -95,11 +95,11 @@ async function cleanupSeededDemoData() {
       if (seedCampaignCount > 0) {
         await db.execute(sql`DELETE FROM campaign_daily_stats WHERE campaign_id IN (
           SELECT id FROM campaigns WHERE tenant_id = ${tenant.id} AND (
-            external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+            external_id LIKE 'G-%' OR external_id LIKE 'M-%'
           )
         )`);
         await db.execute(sql`DELETE FROM campaigns WHERE tenant_id = ${tenant.id} AND (
-          external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+          external_id LIKE 'G-%' OR external_id LIKE 'M-%'
         )`);
       }
 
