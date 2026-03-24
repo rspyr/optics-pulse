@@ -55,23 +55,110 @@ function loadSeedData(): any | null {
 
 export async function autoSeedIfEmpty() {
   try {
-    const existingUsers = await db.select({ id: usersTable.id }).from(usersTable).limit(1);
-    if (existingUsers.length > 0) {
-      return;
-    }
-
     const seedData = loadSeedData();
+    const existingUsers = await db.select({ id: usersTable.id }).from(usersTable).limit(1);
+    const isEmpty = existingUsers.length === 0;
 
-    if (seedData) {
-      console.log(`[AutoSeed] Empty database detected, seeding from exported snapshot (${seedData.exportedAt})...`);
-      await seedFromSnapshot(seedData);
-    } else {
-      console.log("[AutoSeed] Empty database detected, seeding with defaults...");
-      await seedDefaults();
+    if (isEmpty) {
+      if (seedData) {
+        console.log(`[AutoSeed] Empty database detected, seeding from exported snapshot (${seedData.exportedAt})...`);
+        await seedFromSnapshot(seedData);
+      } else {
+        console.log("[AutoSeed] Empty database detected, seeding with defaults...");
+        await seedDefaults();
+      }
+    } else if (seedData) {
+      await syncTenantConfigs(seedData);
     }
   } catch (err) {
     console.error("[AutoSeed] Seed failed:", err instanceof Error ? err.message : err);
   }
+}
+
+async function syncTenantConfigs(seedData: any) {
+  const { eq } = await import("drizzle-orm");
+  let updated = 0;
+
+  for (const t of seedData.tenants) {
+    const [existing] = await db.select().from(tenantsTable).where(eq(tenantsTable.name, t.name));
+    if (existing) {
+      await db.update(tenantsTable).set({
+        serviceTitanId: t.serviceTitanId,
+        timezone: t.timezone,
+        apiConfig: t.apiConfig,
+        alertConfig: t.alertConfig,
+        communicationConfig: t.communicationConfig,
+        leaderboardConfig: t.leaderboardConfig,
+        spiffConfig: t.spiffConfig,
+        isActive: t.isActive,
+      }).where(eq(tenantsTable.id, existing.id));
+      updated++;
+    } else {
+      await db.insert(tenantsTable).values({
+        name: t.name,
+        serviceTitanId: t.serviceTitanId,
+        timezone: t.timezone,
+        apiConfig: t.apiConfig,
+        alertConfig: t.alertConfig,
+        communicationConfig: t.communicationConfig,
+        leaderboardConfig: t.leaderboardConfig,
+        spiffConfig: t.spiffConfig,
+        isActive: t.isActive,
+      });
+      updated++;
+    }
+  }
+
+  const existingTenants = await db.select().from(tenantsTable);
+  const tenantMap = new Map<string, number>();
+  for (const t of existingTenants) {
+    tenantMap.set(t.name, t.id);
+  }
+
+  for (const ft of seedData.funnelTypes) {
+    await db.insert(funnelTypesTable).values({
+      name: ft.name,
+      slug: ft.slug,
+      description: ft.description,
+      isActive: ft.isActive,
+    }).onConflictDoNothing();
+  }
+
+  const allFunnels = await db.select().from(funnelTypesTable);
+  const funnelMap = new Map<string, number>();
+  for (const f of allFunnels) {
+    funnelMap.set(f.slug, f.id);
+  }
+
+  for (const assoc of seedData.tenantFunnelAssociations) {
+    const tenantId = tenantMap.get(assoc.tenantName);
+    const funnelTypeId = funnelMap.get(assoc.funnelSlug);
+    if (tenantId && funnelTypeId) {
+      await db.execute(
+        sql`INSERT INTO tenant_funnel_types (tenant_id, funnel_type_id) VALUES (${tenantId}, ${funnelTypeId}) ON CONFLICT DO NOTHING`
+      );
+    }
+  }
+
+  if (seedData.automationRules?.length) {
+    for (const rule of seedData.automationRules) {
+      const tenantId = rule.tenantName ? tenantMap.get(rule.tenantName) || null : null;
+      await db.execute(
+        sql`INSERT INTO automation_rules (name, description, condition_type, condition_value, action_type, platform, tenant_id, is_enabled, lookback_days, created_by)
+            VALUES (${rule.name}, ${rule.description}, ${rule.conditionType}, ${String(rule.conditionValue)}, ${rule.actionType}, ${rule.platform}, ${tenantId}, ${rule.isEnabled}, ${rule.lookbackDays || 30}, 1)
+            ON CONFLICT DO NOTHING`
+      );
+    }
+  }
+
+  const existingLeads = await db.select({ id: leadsTable.id }).from(leadsTable).limit(1);
+  if (existingLeads.length === 0) {
+    console.log("[AutoSeed] No demo activity found, generating...");
+    const tenantIds = Array.from(tenantMap.values());
+    await seedDemoActivity(tenantIds, tenantMap);
+  }
+
+  console.log(`[AutoSeed] Synced ${updated} tenant configs from snapshot (${seedData.exportedAt})`);
 }
 
 async function seedFromSnapshot(seedData: any) {
