@@ -59,89 +59,93 @@ function extractCount(result: { rows: Record<string, unknown>[] }): number {
   return Number(row.cnt ?? 0);
 }
 
-async function cleanupSeededDemoData() {
-  const { eq } = await import("drizzle-orm");
+async function cleanupAdvantageDemoData() {
+  const { eq, and } = await import("drizzle-orm");
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS _demo_cleanup_flags (key TEXT PRIMARY KEY, done_at TIMESTAMP DEFAULT NOW())`);
     const flagResult = await db.execute(sql`SELECT 1 FROM _demo_cleanup_flags WHERE key = 'initial_cleanup'`);
     if ((flagResult.rows?.length ?? 0) > 0) return;
 
-    const nonDemoTenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+    const advantageTenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
       .from(tenantsTable)
-      .where(eq(tenantsTable.isDemo, false));
+      .where(and(eq(tenantsTable.name, "Advantage Heating & Cooling"), eq(tenantsTable.isDemo, false)));
 
+    if (advantageTenants.length === 0) {
+      await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
+      return;
+    }
+
+    const tenant = advantageTenants[0];
     let totalCleaned = 0;
-    for (const tenant of nonDemoTenants) {
-      const leadResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id}`
-      );
-      const demoLeadCount = extractCount(leadResult);
 
-      const seedCampaignResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+    const leadResult = await db.execute(
+      sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id}`
+    );
+    const leadCount = extractCount(leadResult);
+
+    const seedCampaignResult = await db.execute(
+      sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+        external_id LIKE 'G-%' OR external_id LIKE 'M-%'
+      )`
+    );
+    const seedCampaignCount = extractCount(seedCampaignResult);
+
+    const seedJobResult = await db.execute(
+      sql`SELECT count(*) as cnt FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`
+    );
+    const seedJobCount = extractCount(seedJobResult);
+
+    const attrResult = await db.execute(
+      sql`SELECT count(*) as cnt FROM attribution_events WHERE tenant_id = ${tenant.id}`
+    );
+    const attrCount = extractCount(attrResult);
+
+    const changeLogResult = await db.execute(
+      sql`SELECT count(*) as cnt FROM change_logs WHERE tenant_id = ${tenant.id}`
+    );
+    const changeLogCount = extractCount(changeLogResult);
+
+    if (leadCount > 0) {
+      await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
+        SELECT id FROM leads WHERE tenant_id = ${tenant.id}
+      )`);
+      await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
+      totalCleaned += leadCount;
+    }
+
+    if (seedCampaignCount > 0) {
+      await db.execute(sql`DELETE FROM campaign_daily_stats WHERE campaign_id IN (
+        SELECT id FROM campaigns WHERE tenant_id = ${tenant.id} AND (
           external_id LIKE 'G-%' OR external_id LIKE 'M-%'
-        )`
-      );
-      const seedCampaignCount = extractCount(seedCampaignResult);
+        )
+      )`);
+      await db.execute(sql`DELETE FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+        external_id LIKE 'G-%' OR external_id LIKE 'M-%'
+      )`);
+      totalCleaned += seedCampaignCount;
+    }
 
-      const seedJobResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`
-      );
-      const seedJobCount = extractCount(seedJobResult);
+    if (seedJobCount > 0) {
+      await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
+      totalCleaned += seedJobCount;
+    }
 
-      const attrResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM attribution_events WHERE tenant_id = ${tenant.id}`
-      );
-      const attrCount = extractCount(attrResult);
+    if (attrCount > 0) {
+      await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+      totalCleaned += attrCount;
+    }
 
-      const changeLogResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM change_logs WHERE tenant_id = ${tenant.id}`
-      );
-      const changeLogCount = extractCount(changeLogResult);
-
-      if (demoLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0 && attrCount === 0 && changeLogCount === 0) continue;
-
-      if (demoLeadCount > 0) {
-        await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
-          SELECT id FROM leads WHERE tenant_id = ${tenant.id}
-        )`);
-        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
-      }
-
-      if (seedCampaignCount > 0) {
-        await db.execute(sql`DELETE FROM campaign_daily_stats WHERE campaign_id IN (
-          SELECT id FROM campaigns WHERE tenant_id = ${tenant.id} AND (
-            external_id LIKE 'G-%' OR external_id LIKE 'M-%'
-          )
-        )`);
-        await db.execute(sql`DELETE FROM campaigns WHERE tenant_id = ${tenant.id} AND (
-          external_id LIKE 'G-%' OR external_id LIKE 'M-%'
-        )`);
-      }
-
-      if (seedJobCount > 0) {
-        await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
-      }
-
-      if (attrCount > 0) {
-        await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
-      }
-
-      if (changeLogCount > 0) {
-        await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
-      }
-
-      const cleaned = demoLeadCount + seedCampaignCount + seedJobCount + attrCount + changeLogCount;
-      totalCleaned += cleaned;
-      console.log(`[AutoSeed] Cleaned up seeded demo data for non-demo tenant "${tenant.name}": ${demoLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs, ${attrCount} attribution events, ${changeLogCount} change logs`);
+    if (changeLogCount > 0) {
+      await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
+      totalCleaned += changeLogCount;
     }
 
     await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
     if (totalCleaned > 0) {
-      console.log(`[AutoSeed] One-time demo data cleanup complete: ${totalCleaned} total seeded records removed`);
+      console.log(`[AutoSeed] One-time Advantage cleanup: ${leadCount} leads, ${seedCampaignCount} seeded campaigns, ${seedJobCount} seeded jobs, ${attrCount} attribution events, ${changeLogCount} change logs removed`);
     }
   } catch (err) {
-    console.error("[AutoSeed] Cleanup seeded demo data failed:", err instanceof Error ? err.message : err);
+    console.error("[AutoSeed] Cleanup Advantage demo data failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -163,7 +167,7 @@ export async function autoSeedIfEmpty() {
       await syncTenantConfigs(seedData);
     }
 
-    await cleanupSeededDemoData();
+    await cleanupAdvantageDemoData();
   } catch (err) {
     console.error("[AutoSeed] Seed failed:", err instanceof Error ? err.message : err);
   }
