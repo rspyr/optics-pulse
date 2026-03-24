@@ -84,7 +84,19 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
       if (existing) {
         await db.update(jobsTable)
-          .set({ revenue: formatted.revenue, status: formatted.status, completedAt: formatted.completedAt, updatedAt: new Date() })
+          .set({
+            revenue: formatted.revenue,
+            status: formatted.status,
+            completedAt: formatted.completedAt,
+            customerName: formatted.customerName,
+            customerPhone: formatted.customerPhone || existing.customerPhone,
+            customerEmail: formatted.customerEmail || existing.customerEmail,
+            serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+            stCustomerId: formatted.stCustomerId || existing.stCustomerId,
+            jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+            businessUnit: formatted.businessUnit || existing.businessUnit,
+            updatedAt: new Date(),
+          })
           .where(eq(jobsTable.id, existing.id));
       } else {
         await db.insert(jobsTable).values({ tenantId, ...formatted });

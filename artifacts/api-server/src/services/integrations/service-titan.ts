@@ -12,6 +12,39 @@ interface STAuthConfig {
   tenantId: string;
 }
 
+interface STContact {
+  type: string;
+  value: string;
+  memo?: string;
+}
+
+interface STCustomer {
+  id: number;
+  name: string;
+  contacts?: STContact[];
+}
+
+interface STLocation {
+  id: number;
+  address?: {
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+    country?: string;
+  };
+}
+
+interface STJobType {
+  id: number;
+  name: string;
+}
+
+interface STBusinessUnit {
+  id: number;
+  name: string;
+}
+
 interface STJob {
   id: number;
   number: string;
@@ -21,21 +54,27 @@ interface STJob {
   summary: string;
   total: number;
   completedOn: string | null;
-  customer?: {
+  customer?: STCustomer;
+  location?: STLocation;
+  type?: STJobType;
+  businessUnit?: STBusinessUnit;
+  customFields?: Array<{
+    typeId: number;
     name: string;
-  };
-  location?: {
-    address: {
-      street: string;
-      city: string;
-      state: string;
-      zip: string;
-    };
-  };
+    value: string;
+  }>;
 }
 
 interface STJobsResponse {
   data: STJob[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
+interface STCustomersResponse {
+  data: STCustomer[];
   page: number;
   pageSize: number;
   totalCount: number;
@@ -77,12 +116,12 @@ async function getAccessToken(config: STAuthConfig): Promise<string> {
   return data.access_token;
 }
 
-async function stFetch<T>(config: STAuthConfig, path: string, options: RequestInit = {}): Promise<T> {
+async function stFetch<T>(config: STAuthConfig, path: string, options: RequestInit = {}, apiModule = "jpm"): Promise<T> {
   await rateLimiter.acquire();
 
   return withRetry(async () => {
     const token = await getAccessToken(config);
-    const url = `${ST_API_BASE}/jpm/v2/tenant/${config.tenantId}${path}`;
+    const url = `${ST_API_BASE}/${apiModule}/v2/tenant/${config.tenantId}${path}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -96,6 +135,39 @@ async function stFetch<T>(config: STAuthConfig, path: string, options: RequestIn
     }
     return response.json() as Promise<T>;
   }, { label: `ServiceTitan ${path}`, maxRetries: 3 });
+}
+
+export async function fetchCustomersByIds(
+  config: STAuthConfig,
+  customerIds: number[],
+): Promise<Map<number, STCustomer>> {
+  const customerMap = new Map<number, STCustomer>();
+  if (customerIds.length === 0) return customerMap;
+
+  const uniqueIds = [...new Set(customerIds)];
+  const batchSize = 50;
+
+  for (let i = 0; i < uniqueIds.length; i += batchSize) {
+    const batch = uniqueIds.slice(i, i + batchSize);
+    const idsParam = batch.join(",");
+
+    try {
+      const response = await stFetch<STCustomersResponse>(
+        config,
+        `/customers?ids=${idsParam}&pageSize=${batchSize}`,
+        {},
+        "crm",
+      );
+
+      for (const customer of response.data) {
+        customerMap.set(customer.id, customer);
+      }
+    } catch (err) {
+      console.warn(`[ServiceTitan] Failed to fetch customer batch: ${(err as Error).message}`);
+    }
+  }
+
+  return customerMap;
 }
 
 export async function fetchCompletedJobs(
@@ -125,7 +197,52 @@ export async function fetchCompletedJobs(
     if (page > 50) break;
   }
 
+  const customerIds = allJobs.map((j) => j.customerId).filter(Boolean);
+  if (customerIds.length > 0) {
+    try {
+      const customerMap = await fetchCustomersByIds(config, customerIds);
+      for (const job of allJobs) {
+        if (job.customerId && customerMap.has(job.customerId)) {
+          job.customer = customerMap.get(job.customerId);
+        }
+      }
+      console.log(`[ServiceTitan] Enriched ${customerMap.size} customers with contact info`);
+    } catch (err) {
+      console.warn(`[ServiceTitan] Customer enrichment failed, using basic names: ${(err as Error).message}`);
+    }
+  }
+
   return allJobs;
+}
+
+function extractPhone(customer?: STCustomer): string | null {
+  if (!customer?.contacts) return null;
+  const phoneContact = customer.contacts.find(
+    (c) => c.type === "MobilePhone" || c.type === "Phone",
+  ) || customer.contacts.find(
+    (c) => c.type?.toLowerCase().includes("phone"),
+  );
+  return phoneContact?.value || null;
+}
+
+function extractEmail(customer?: STCustomer): string | null {
+  if (!customer?.contacts) return null;
+  const emailContact = customer.contacts.find(
+    (c) => c.type === "Email",
+  ) || customer.contacts.find(
+    (c) => c.type?.toLowerCase().includes("email"),
+  );
+  return emailContact?.value || null;
+}
+
+function extractJobTypeName(stJob: STJob): string {
+  if (stJob.type?.name) return stJob.type.name;
+
+  const summary = (stJob.summary || "").trim();
+  const firstLine = summary.split("\n")[0]?.trim();
+  if (firstLine && firstLine.length < 80) return firstLine;
+
+  return "Service";
 }
 
 export async function patchJobCustomField(
@@ -144,11 +261,21 @@ export async function patchJobCustomField(
 
 export function formatSTJobForSync(stJob: STJob) {
   const address = stJob.location?.address;
+  const phone = extractPhone(stJob.customer);
+  const email = extractEmail(stJob.customer);
+
   return {
     stJobId: String(stJob.id),
+    stCustomerId: String(stJob.customerId),
     customerName: stJob.customer?.name || `Customer ${stJob.customerId}`,
-    serviceAddress: address ? `${address.street}, ${address.city}` : null,
+    customerPhone: phone,
+    customerEmail: email,
+    serviceAddress: address
+      ? `${address.street}, ${address.city}, ${address.state} ${address.zip}`
+      : null,
     jobType: stJob.summary || "Service",
+    jobTypeName: extractJobTypeName(stJob),
+    businessUnit: stJob.businessUnit?.name || null,
     revenue: stJob.total || 0,
     status: stJob.jobStatus.toLowerCase() === "completed" ? "completed" as const : "pending" as const,
     completedAt: stJob.completedOn ? new Date(stJob.completedOn) : null,
