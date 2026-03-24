@@ -180,7 +180,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
       setIsLoading(false);
       setStatusMessage("");
     }
-  }, [isLoading, messages]);
+  }, [isLoading, messages, tenantId]);
 
   const saveQuestion = useCallback(async (question: string) => {
     try {
