@@ -14,6 +14,48 @@ interface GoogleAdsConfig {
   loginCustomerId?: string;
 }
 
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
+  if (!config.refreshToken || !config.clientId || !config.clientSecret) {
+    return config.accessToken;
+  }
+
+  const cacheKey = `${config.customerId}:${config.refreshToken.slice(-8)}`;
+  const cached = tokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.token;
+  }
+
+  try {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        refresh_token: config.refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[Google Ads] Token refresh failed (${response.status}): ${text}`);
+      return config.accessToken;
+    }
+
+    const data = await response.json() as { access_token: string; expires_in: number };
+    const expiresAt = Date.now() + data.expires_in * 1000;
+    tokenCache.set(cacheKey, { token: data.access_token, expiresAt });
+    console.log(`[Google Ads] Access token refreshed for customer ${config.customerId}`);
+    return data.access_token;
+  } catch (err) {
+    console.error(`[Google Ads] Token refresh error:`, err instanceof Error ? err.message : err);
+    return config.accessToken;
+  }
+}
+
 interface CampaignPerformanceRow {
   campaign: {
     id: string;
@@ -39,9 +81,10 @@ interface GoogleAdsSearchResponse {
 
 async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options: RequestInit = {}): Promise<T> {
   return withRetry(async () => {
+    const accessToken = await getValidAccessToken(config);
     const url = `${GOOGLE_ADS_BASE}${path}`;
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${config.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       "developer-token": config.developerToken,
       "Content-Type": "application/json",
     };

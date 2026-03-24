@@ -52,6 +52,9 @@ router.post("/budget/adjust", ...agencyOnly, async (req, res): Promise<void> => 
         {
           developerToken: config.googleAdsDeveloperToken,
           accessToken: config.googleAdsAccessToken,
+          refreshToken: config.googleAdsRefreshToken,
+          clientId: config.googleAdsClientId,
+          clientSecret: config.googleAdsClientSecret,
           customerId: config.googleAdsCustomerId,
           loginCustomerId: config.googleAdsLoginCustomerId,
         },

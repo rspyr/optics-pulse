@@ -323,6 +323,9 @@ async function pushConversionsToExternalAPIs(
       const gaConfig = {
         developerToken: config.googleAdsDeveloperToken!,
         accessToken: config.googleAdsApiKey,
+        refreshToken: config.googleAdsRefreshToken,
+        clientId: config.googleAdsClientId,
+        clientSecret: config.googleAdsClientSecret,
         customerId: config.googleAdsCustomerId,
         loginCustomerId: config.googleAdsLoginCustomerId,
       };
@@ -364,6 +367,9 @@ async function pushConversionsToExternalAPIs(
         const gaConfig = {
           developerToken: config.googleAdsDeveloperToken,
           accessToken,
+          refreshToken: config.googleAdsRefreshToken,
+          clientId: config.googleAdsClientId,
+          clientSecret: config.googleAdsClientSecret,
           customerId: config.googleAdsCustomerId,
           loginCustomerId: config.googleAdsLoginCustomerId,
         };

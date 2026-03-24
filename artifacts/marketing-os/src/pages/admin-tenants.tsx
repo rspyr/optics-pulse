@@ -8,6 +8,9 @@ interface TenantForm {
   serviceTitanId: string;
   timezone: string;
   googleAdsApiKey: string;
+  googleAdsRefreshToken: string;
+  googleAdsClientId: string;
+  googleAdsClientSecret: string;
   callRailApiKey: string;
   callRailSigningKey: string;
   serviceTitanClientId: string;
@@ -54,6 +57,9 @@ const emptyForm: TenantForm = {
   serviceTitanId: "",
   timezone: "America/New_York",
   googleAdsApiKey: "",
+  googleAdsRefreshToken: "",
+  googleAdsClientId: "",
+  googleAdsClientSecret: "",
   callRailApiKey: "",
   callRailSigningKey: "",
   serviceTitanClientId: "",
@@ -110,6 +116,7 @@ export default function AdminTenants() {
     const config: Record<string, string> = {};
     const integrationKeys: (keyof TenantForm)[] = [
       "googleAdsApiKey", "googleAdsCustomerId", "googleAdsDeveloperToken",
+      "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey",
       "serviceTitanClientId", "serviceTitanClientSecret",
       "metaAccessToken", "metaAdAccountId", "metaPixelId",
@@ -182,6 +189,9 @@ export default function AdminTenants() {
       serviceTitanId: (t.serviceTitanId as string) || "",
       timezone: (t.timezone as string) || "America/New_York",
       googleAdsApiKey: lc.googleAdsApiKey || "",
+      googleAdsRefreshToken: lc.googleAdsRefreshToken || "",
+      googleAdsClientId: lc.googleAdsClientId || "",
+      googleAdsClientSecret: lc.googleAdsClientSecret || "",
       googleAdsCustomerId: lc.googleAdsCustomerId || "",
       googleAdsDeveloperToken: lc.googleAdsDeveloperToken || "",
       callRailApiKey: lc.callRailApiKey || "",
@@ -204,7 +214,7 @@ export default function AdminTenants() {
   const secretInputType = (field: string) => dirtyFields.has(field) ? "password" : "text";
 
   const handleSecretFocus = (field: keyof TenantForm) => {
-    if (!dirtyFields.has(field) && form[field].startsWith("••••")) {
+    if (!dirtyFields.has(field) && form[field]?.startsWith("••••")) {
       trackFieldChange(field);
       setForm(f => ({ ...f, [field]: "" }));
     }
@@ -242,10 +252,6 @@ export default function AdminTenants() {
             <h4 className="text-xs font-medium text-yellow-400 uppercase tracking-wider mb-3">Google Ads</h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token / API Key</label>
-                <input type={secretInputType("googleAdsApiKey")} value={form.googleAdsApiKey} onFocus={() => handleSecretFocus("googleAdsApiKey")} onChange={(e) => { trackFieldChange("googleAdsApiKey"); setForm(f => ({ ...f, googleAdsApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
                 <input type="text" value={form.googleAdsCustomerId} onChange={(e) => { trackFieldChange("googleAdsCustomerId"); setForm(f => ({ ...f, googleAdsCustomerId: e.target.value })); }} placeholder="123-456-7890" className={inputClass + " w-full"} />
               </div>
@@ -253,7 +259,26 @@ export default function AdminTenants() {
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Developer Token</label>
                 <input type={secretInputType("googleAdsDeveloperToken")} value={form.googleAdsDeveloperToken} onFocus={() => handleSecretFocus("googleAdsDeveloperToken")} onChange={(e) => { trackFieldChange("googleAdsDeveloperToken"); setForm(f => ({ ...f, googleAdsDeveloperToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
               </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token (optional if using refresh)</label>
+                <input type={secretInputType("googleAdsApiKey")} value={form.googleAdsApiKey} onFocus={() => handleSecretFocus("googleAdsApiKey")} onChange={(e) => { trackFieldChange("googleAdsApiKey"); setForm(f => ({ ...f, googleAdsApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">OAuth Client ID</label>
+                <input type={secretInputType("googleAdsClientId")} value={form.googleAdsClientId} onFocus={() => handleSecretFocus("googleAdsClientId")} onChange={(e) => { trackFieldChange("googleAdsClientId"); setForm(f => ({ ...f, googleAdsClientId: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">OAuth Client Secret</label>
+                <input type={secretInputType("googleAdsClientSecret")} value={form.googleAdsClientSecret} onFocus={() => handleSecretFocus("googleAdsClientSecret")} onChange={(e) => { trackFieldChange("googleAdsClientSecret"); setForm(f => ({ ...f, googleAdsClientSecret: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Refresh Token</label>
+                <input type={secretInputType("googleAdsRefreshToken")} value={form.googleAdsRefreshToken} onFocus={() => handleSecretFocus("googleAdsRefreshToken")} onChange={(e) => { trackFieldChange("googleAdsRefreshToken"); setForm(f => ({ ...f, googleAdsRefreshToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">With OAuth credentials and a Refresh Token, access tokens are refreshed automatically.</p>
           </div>
           <div>
             <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider mb-3">Meta (Facebook/Instagram)</h4>

@@ -10,6 +10,9 @@ const router: IRouter = Router();
 const SECRET_FIELDS = new Set([
   "googleAdsApiKey",
   "googleAdsDeveloperToken",
+  "googleAdsRefreshToken",
+  "googleAdsClientId",
+  "googleAdsClientSecret",
   "callRailApiKey",
   "callRailSigningKey",
   "serviceTitanClientId",

@@ -43,7 +43,7 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 ## External Dependencies
 
 - **ServiceTitan:** OAuth2 client for fetching completed jobs, applying custom field patches, and utilizing a token bucket rate limiter.
-- **Google Ads API:** Used for campaign performance data (GAQL), Offline Conversion Import (OCI), and Enhanced Conversions uploads. Requires developer token and access token authentication.
+- **Google Ads API:** Used for campaign performance data (GAQL), Offline Conversion Import (OCI), and Enhanced Conversions uploads. Supports automatic OAuth2 token refresh: when `googleAdsRefreshToken`, `googleAdsClientId`, and `googleAdsClientSecret` are configured in tenant settings, access tokens are automatically refreshed before API calls (with in-memory caching). Falls back to the static `googleAdsApiKey` access token if refresh credentials are not provided.
 - **Meta Marketing API:** For fetching campaign insights and server-side event uploads via Conversions API (CAPI).
 - **CallRail API:** Webhook ingestion with HMAC-SHA256 signature verification using tenant-specific signing keys.
 - **Podium API:** For review data synchronization and webhook handling.
