@@ -26,6 +26,7 @@ interface TenantForm {
   googleAdsDeveloperToken: string;
   podiumApiToken: string;
   podiumLocationId: string;
+  isDemo: boolean;
 }
 
 interface AlertConfig {
@@ -79,6 +80,7 @@ const emptyForm: TenantForm = {
   googleAdsDeveloperToken: "",
   podiumApiToken: "",
   podiumLocationId: "",
+  isDemo: false,
 };
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -239,6 +241,7 @@ export default function AdminTenants() {
       name: form.name,
       serviceTitanId: form.serviceTitanId || undefined,
       timezone: form.timezone,
+      isDemo: form.isDemo,
     };
     if (integrationConfig) body.integrationConfig = integrationConfig;
 
@@ -260,6 +263,7 @@ export default function AdminTenants() {
       name: form.name,
       serviceTitanId: form.serviceTitanId || undefined,
       timezone: form.timezone,
+      isDemo: form.isDemo,
     };
     if (integrationConfig) body.integrationConfig = integrationConfig;
 
@@ -309,6 +313,7 @@ export default function AdminTenants() {
       metaPixelId: lc.metaPixelId || "",
       podiumApiToken: lc.podiumApiToken || "",
       podiumLocationId: lc.podiumLocationId || "",
+      isDemo: Boolean(t.isDemo),
     });
     setDirtyFields(new Set());
     setClearedFields(new Set());
@@ -523,6 +528,17 @@ export default function AdminTenants() {
             </select>
           </div>
           <IntegrationFields />
+          <div className="mt-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.isDemo}
+                onChange={(e) => setForm(f => ({ ...f, isDemo: e.target.checked }))}
+                className="rounded border-white/20 bg-white/5"
+              />
+              <span className="text-sm text-muted-foreground">Demo tenant (receives simulated leads and data)</span>
+            </label>
+          </div>
           <div className="flex gap-2 mt-4">
             <button onClick={handleCreate} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm">
               <Check className="w-4 h-4" /> Create
@@ -547,6 +563,7 @@ export default function AdminTenants() {
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Timezone</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Integrations</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Mode</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Actions</th>
               </tr>
             </thead>
@@ -583,6 +600,17 @@ export default function AdminTenants() {
                           </Badge>
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
+                        <td className="p-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={form.isDemo || false}
+                              onChange={(e) => setForm({ ...form, isDemo: e.target.checked })}
+                              className="rounded border-white/20 bg-white/5"
+                            />
+                            <span className="text-xs text-muted-foreground">Demo</span>
+                          </label>
+                        </td>
                         <td className="p-4 text-right space-x-2">
                           <button onClick={() => handleUpdate(tid)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-4 h-4 inline" /></button>
                           <button onClick={() => { setEditId(null); setShowIntegrationConfig(false); }} className="text-muted-foreground hover:text-white"><X className="w-4 h-4 inline" /></button>
@@ -612,6 +640,7 @@ export default function AdminTenants() {
                           </div>
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
+                        <td className="p-4"><Badge variant={(t.isDemo as boolean) ? "warning" : "neutral"}>{(t.isDemo as boolean) ? "Demo" : "Production"}</Badge></td>
                         <td className="p-4 text-right space-x-2">
                           <button onClick={() => startEdit(t)} className="text-muted-foreground hover:text-white" title="Edit tenant">
                             <Settings className="w-4 h-4 inline" />
