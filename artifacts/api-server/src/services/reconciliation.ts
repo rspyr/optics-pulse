@@ -320,12 +320,13 @@ async function pushConversionsToExternalAPIs(
     return;
   }
 
-  if (config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken && ociPayloads.length > 0) {
+  const hasGoogleAdsCredentials = (config.googleAdsApiKey || (config.googleAdsRefreshToken && config.googleAdsClientId && config.googleAdsClientSecret));
+  if (hasGoogleAdsCredentials && config.googleAdsCustomerId && config.googleAdsDeveloperToken && ociPayloads.length > 0) {
     const startedAt = new Date();
     try {
       const gaConfig = {
         developerToken: config.googleAdsDeveloperToken!,
-        accessToken: config.googleAdsApiKey,
+        accessToken: config.googleAdsApiKey || "",
         refreshToken: config.googleAdsRefreshToken,
         clientId: config.googleAdsClientId,
         clientSecret: config.googleAdsClientSecret,
@@ -361,8 +362,8 @@ async function pushConversionsToExternalAPIs(
     }
   }
 
-  const accessToken = config.googleAdsAccessToken || config.googleAdsApiKey;
-  if (accessToken && config.googleAdsCustomerId && config.googleAdsDeveloperToken) {
+  const accessToken = config.googleAdsAccessToken || config.googleAdsApiKey || "";
+  if ((accessToken || hasGoogleAdsCredentials) && config.googleAdsCustomerId && config.googleAdsDeveloperToken) {
     const nonGclidJobs = matchedJobs.filter(j => !j.matchedGclid && j.revenue > 0);
     if (nonGclidJobs.length > 0) {
       const startedAt = new Date();

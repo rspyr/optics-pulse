@@ -106,11 +106,15 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
   const config = getTenantConfig(tenant);
-  if (!config?.googleAdsApiKey || !config?.googleAdsCustomerId) {
-    return { synced: 0, error: "Google Ads not configured (missing API key or customer ID)" };
+  if (!config?.googleAdsCustomerId) {
+    return { synced: 0, error: "Google Ads not configured (missing customer ID)" };
   }
   if (!config.googleAdsDeveloperToken) {
     return { synced: 0, error: "Google Ads not configured (missing developer token)" };
+  }
+  const hasRefreshCredentials = config.googleAdsRefreshToken && config.googleAdsClientId && config.googleAdsClientSecret;
+  if (!config.googleAdsApiKey && !hasRefreshCredentials) {
+    return { synced: 0, error: "Google Ads not configured (need either an access token or OAuth refresh credentials)" };
   }
 
   const syncLog = await logSync(tenantId, "google_ads", "campaigns", new Date());
@@ -121,7 +125,7 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
 
     const gaConfig = {
       developerToken: config.googleAdsDeveloperToken || "",
-      accessToken: config.googleAdsApiKey,
+      accessToken: config.googleAdsApiKey || "",
       refreshToken: config.googleAdsRefreshToken,
       clientId: config.googleAdsClientId,
       clientSecret: config.googleAdsClientSecret,
