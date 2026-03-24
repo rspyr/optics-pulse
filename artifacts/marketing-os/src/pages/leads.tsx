@@ -8,7 +8,7 @@ import {
   Phone, Mail, MessageSquare, Mic,
   Clock, Zap,
   ChevronDown, AlertTriangle, Target,
-  Award, Calendar, PhoneCall,
+  Calendar, PhoneCall,
   Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   Brain, TrendingUp, TrendingDown, PhoneForwarded, Info,
   BarChart3, ArrowUpRight, ArrowDownRight, Minus, History
@@ -1088,26 +1088,30 @@ export default function Leads() {
   const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
+  const [lastSpiffAmount, setLastSpiffAmount] = useState(20);
   const [baseline, setBaseline] = useState<ComparisonBaseline>("yesterday");
   const [showHistory, setShowHistory] = useState(false);
-  const { data: comparison } = useComparisonStats(baseline, effectiveTenantId);
+  const { data: comparison, refetch: refetchComparison } = useComparisonStats(baseline, effectiveTenantId);
 
   useEffect(() => {
     if (latestLead) {
       refetch();
       refetchStats();
+      refetchComparison();
     }
-  }, [latestLead, refetch, refetchStats]);
+  }, [latestLead, refetch, refetchStats, refetchComparison]);
 
   useEffect(() => {
     if (leadUpdatedSignal > 0) {
       refetch();
       refetchStats();
+      refetchComparison();
     }
-  }, [leadUpdatedSignal, refetch, refetchStats]);
+  }, [leadUpdatedSignal, refetch, refetchStats, refetchComparison]);
 
   const handleDisposition = async (leadId: number, disposition: string, status: string) => {
     setProcessingLeads(prev => new Set(prev).add(leadId));
+    const prevCommission = stats.commission;
     try {
       const res = await fetch(`${API_BASE}/leads/${leadId}`, {
         method: "PATCH",
@@ -1116,12 +1120,24 @@ export default function Leads() {
         body: JSON.stringify({ disposition, status }),
       });
       if (res.ok) {
+        const [, freshStats] = await Promise.all([
+          refetch(),
+          fetch(
+            effectiveTenantId
+              ? `${API_BASE}/leads/hud/stats?tenantId=${effectiveTenantId}`
+              : `${API_BASE}/leads/hud/stats`,
+            { credentials: "include" }
+          ).then(r => r.ok ? r.json() : null),
+          refetchStats(),
+          refetchComparison(),
+        ]);
         if (disposition === "booked") {
+          const newCommission = freshStats?.commission ?? stats.commission;
+          const earned = newCommission - prevCommission;
+          setLastSpiffAmount(earned > 0 ? earned : 20);
           setShowCommission(true);
           setTimeout(() => setShowCommission(false), 2000);
         }
-        await refetch();
-        await refetchStats();
       }
     } catch (e) {
       console.error("Failed to update disposition:", e);
@@ -1140,13 +1156,6 @@ export default function Leads() {
     ...queue.background.map(l => ({ ...l, _priority: "background" as const })),
   ];
 
-  const tierColors = {
-    gold: "from-amber-400 to-yellow-500",
-    silver: "from-gray-300 to-gray-400",
-    bronze: "from-orange-400 to-orange-600",
-    none: "from-gray-600 to-gray-700",
-  };
-
   return (
     <div className="relative min-h-screen">
       <AnimatePresence>
@@ -1160,7 +1169,7 @@ export default function Leads() {
         )}
       </AnimatePresence>
 
-      <CommissionTicker amount={20} show={showCommission} />
+      <CommissionTicker amount={lastSpiffAmount} show={showCommission} />
 
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
@@ -1368,32 +1377,22 @@ export default function Leads() {
             <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor />
           </PremiumCard>
 
-          <PremiumCard className={cn("p-4 relative overflow-hidden")}>
-            <div className={cn(
-              "absolute inset-0 opacity-10 bg-gradient-to-br",
-              tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none
-            )} />
-            <div className="relative">
-              <div className="flex items-center justify-between mb-3">
-                <DollarSign className="w-5 h-5 text-emerald-400" />
-                <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <p className="text-3xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
-                <DeltaIndicator delta={comparison?.deltas.commission} compact />
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                {stats.bonusTier !== "none" ? (
-                  <span className="text-amber-400">
-                    <Award className="w-3 h-3 inline mr-1" />
-                    {stats.bonusTier.toUpperCase()} TIER
-                  </span>
-                ) : (
-                  `${stats.nextBonusAt - (comparison?.today.bookingRate ?? stats.bookingRate)}% to next bonus`
-                )}
-              </p>
-              <DeltaIndicator delta={comparison?.deltas.commission} />
+          <PremiumCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <DollarSign className="w-5 h-5 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
             </div>
+            <div className="flex items-baseline gap-2">
+              <p className="text-3xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
+              <DeltaIndicator delta={comparison?.deltas.commission} compact />
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              <span className="text-emerald-400/70">
+                <DollarSign className="w-3 h-3 inline mr-0.5" />
+                {stats.bookingsToday} booking{stats.bookingsToday !== 1 ? "s" : ""} today
+              </span>
+            </p>
+            <DeltaIndicator delta={comparison?.deltas.commission} />
           </PremiumCard>
 
           <AnimatePresence>
@@ -1442,17 +1441,14 @@ export default function Leads() {
             <DeltaIndicator delta={comparison?.deltas.avgSpeedToLead} invertColor compact />
           </div>
         </PremiumCard>
-        <PremiumCard className={cn("p-3 relative overflow-hidden")}>
-          <div className={cn("absolute inset-0 opacity-10 bg-gradient-to-br", tierColors[stats.bonusTier as keyof typeof tierColors] || tierColors.none)} />
-          <div className="relative">
-            <div className="flex items-center gap-2 mb-1">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
-            </div>
-            <div className="flex items-baseline gap-1.5">
-              <p className="text-xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
-              <DeltaIndicator delta={comparison?.deltas.commission} compact />
-            </div>
+        <PremiumCard className="p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <DollarSign className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
+          </div>
+          <div className="flex items-baseline gap-1.5">
+            <p className="text-xl font-display text-emerald-400">${comparison?.today.commission ?? stats.commission}</p>
+            <DeltaIndicator delta={comparison?.deltas.commission} compact />
           </div>
         </PremiumCard>
       </div>
