@@ -720,9 +720,12 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                 />
                 <Legend wrapperStyle={{ paddingTop: "16px", fontSize: "12px" }} />
                 {roiMode === "allcosts" ? (
-                  <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                  <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
                 ) : (
-                  <Bar yAxisId="left" dataKey="spend" name="Ad Spend" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                  <>
+                    <Bar yAxisId="left" dataKey="googleSpend" name="Google Ads" fill="#4285F4" radius={[0, 0, 0, 0]} maxBarSize={32} stackId="spend" />
+                    <Bar yAxisId="left" dataKey="metaSpend" name="Meta Ads" fill="#0668E1" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
+                  </>
                 )}
                 <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill="#F20505" radius={[3, 3, 0, 0]} maxBarSize={32} />
                 {showChangeLog && changeLogs && changeLogs.map((log, i) => (
@@ -881,22 +884,18 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                 <span className="text-emerald-400 font-medium">{formatCurrency(d.totalRevenue)}</span>
               </div>
               <div className="border-t border-white/5 pt-2 space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Ad Spend</span>
-                  <span className="text-red-400">- {formatCurrency(d.totalSpend)}</span>
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: "#4285F4" }} />Google Ads</span>
+                  <span className="text-red-400/70">- {formatCurrency(d.googleSpend)}</span>
                 </div>
-                {(d.googleSpend > 0 || d.metaSpend > 0) && (
-                  <div className="pl-3 space-y-1 border-l border-white/5">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Google Ads</span>
-                      <span className="text-red-400/70">- {formatCurrency(d.googleSpend)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Meta Ads</span>
-                      <span className="text-red-400/70">- {formatCurrency(d.metaSpend)}</span>
-                    </div>
-                  </div>
-                )}
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: "#0668E1" }} />Meta Ads</span>
+                  <span className="text-red-400/70">- {formatCurrency(d.metaSpend)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-white/5">
+                  <span className="text-gray-400 font-medium">Total Ad Spend</span>
+                  <span className="text-red-400 font-medium">- {formatCurrency(d.totalSpend)}</span>
+                </div>
               </div>
               {roiMode === "allcosts" && (
                 <div className="flex justify-between">
