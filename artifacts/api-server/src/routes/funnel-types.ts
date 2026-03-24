@@ -70,9 +70,13 @@ router.get("/funnel-types/script/:tenantId", async (req, res) => {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) { res.status(404).json({ error: "Tenant not found" }); return; }
 
-  const baseUrl = process.env.REPLIT_DEV_DOMAIN
-    ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-    : "https://api.marketingos.app";
+  const prodDomain = process.env.REPLIT_DOMAINS?.split(",")[0];
+  const devDomain = process.env.REPLIT_DEV_DOMAIN;
+  const baseUrl = prodDomain
+    ? `https://${prodDomain}`
+    : devDomain
+      ? `https://${devDomain}`
+      : "https://api.marketingos.app";
 
   const baseScript = `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}"></script>`;
 
