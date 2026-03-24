@@ -131,7 +131,7 @@ export default function AdminTenants() {
         return;
       }
       const { authUrl } = await res.json();
-      window.location.href = authUrl;
+      window.open(authUrl, "_blank");
     } catch {
       setGoogleAdsOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
     } finally {
