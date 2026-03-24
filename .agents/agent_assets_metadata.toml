@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "xotfA7YfTiDnDttGf7aYw"
+uri = "file://docs/google-ads-api-application.md"
+type = "text"
+title = "Google Ads API Application Documentation"
