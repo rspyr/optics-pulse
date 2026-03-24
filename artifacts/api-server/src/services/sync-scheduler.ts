@@ -1,7 +1,7 @@
 import { db, tenantsTable, jobsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync } from "./integrations/service-titan";
+import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -106,6 +106,11 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId}`);
+
+    enrichCustomerContacts(tenantId, stConfig).catch((err) => {
+      console.warn(`[Sync] Background contact enrichment failed for tenant ${tenantId}:`, (err as Error).message);
+    });
+
     return { synced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -113,6 +118,77 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     console.error(`[Sync] ServiceTitan error for tenant ${tenantId}:`, message);
     return { synced: 0, error: message };
   }
+}
+
+async function enrichCustomerContacts(
+  tenantId: number,
+  stConfig: { clientId: string; clientSecret: string; tenantId: string; appKey: string },
+): Promise<void> {
+  const jobsNeedingEnrichment = await db.select({
+    id: jobsTable.id,
+    stCustomerId: jobsTable.stCustomerId,
+  }).from(jobsTable).where(
+    and(
+      eq(jobsTable.tenantId, tenantId),
+      isNotNull(jobsTable.stCustomerId),
+      isNull(jobsTable.customerPhone),
+      isNull(jobsTable.customerEmail),
+      sql`${jobsTable.revenue} > 0`,
+    ),
+  );
+
+  if (jobsNeedingEnrichment.length === 0) {
+    console.log(`[Enrich] No jobs need contact enrichment for tenant ${tenantId}`);
+    return;
+  }
+
+  const customerIdToJobIds = new Map<string, number[]>();
+  for (const job of jobsNeedingEnrichment) {
+    if (!job.stCustomerId) continue;
+    const existing = customerIdToJobIds.get(job.stCustomerId) || [];
+    existing.push(job.id);
+    customerIdToJobIds.set(job.stCustomerId, existing);
+  }
+
+  console.log(`[Enrich] Enriching ${customerIdToJobIds.size} customers for ${jobsNeedingEnrichment.length} jobs (tenant ${tenantId})`);
+
+  let enriched = 0;
+  const entries = [...customerIdToJobIds.entries()];
+
+  for (let i = 0; i < entries.length; i += 5) {
+    const batch = entries.slice(i, i + 5);
+    await Promise.allSettled(
+      batch.map(async ([customerId, jobIds]) => {
+        try {
+          const contacts = await fetchCustomerContactsById(stConfig, parseInt(customerId));
+          if (contacts.length === 0) return;
+
+          const phoneContact = contacts.find((c) => c.type === "MobilePhone" || c.type === "Phone")
+            || contacts.find((c) => c.type?.toLowerCase().includes("phone"));
+          const emailContact = contacts.find((c) => c.type === "Email")
+            || contacts.find((c) => c.type?.toLowerCase().includes("email"));
+
+          const phone = phoneContact?.value || null;
+          const email = emailContact?.value || null;
+
+          if (phone || email) {
+            for (const jobId of jobIds) {
+              await db.update(jobsTable)
+                .set({
+                  ...(phone ? { customerPhone: phone } : {}),
+                  ...(email ? { customerEmail: email } : {}),
+                  updatedAt: new Date(),
+                })
+                .where(eq(jobsTable.id, jobId));
+            }
+            enriched++;
+          }
+        } catch {}
+      }),
+    );
+  }
+
+  console.log(`[Enrich] Done: ${enriched}/${customerIdToJobIds.size} customers enriched for tenant ${tenantId}`);
 }
 
 export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced: number; error?: string }> {

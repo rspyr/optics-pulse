@@ -137,6 +137,31 @@ async function stFetch<T>(config: STAuthConfig, path: string, options: RequestIn
   }, { label: `ServiceTitan ${path}`, maxRetries: 3 });
 }
 
+export async function fetchCustomerContactsById(
+  config: STAuthConfig,
+  customerId: number,
+): Promise<STContact[]> {
+  try {
+    await rateLimiter.acquire();
+    const token = await getAccessToken(config);
+    const url = `${ST_API_BASE}/crm/v2/tenant/${config.tenantId}/customers/${customerId}/contacts`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(config.appKey ? { "ST-App-Key": config.appKey } : {}),
+    };
+
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      return [];
+    }
+    const data = await response.json() as { data: STContact[] };
+    return data.data || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchCustomersByIds(
   config: STAuthConfig,
   customerIds: number[],
@@ -192,12 +217,19 @@ export async function fetchCompletedJobs(
     const response = await stFetch<STJobsResponse>(config, `/jobs?${params.toString()}`);
     allJobs.push(...response.data);
     hasMore = response.hasMore;
+    if (page % 10 === 0 || !hasMore) {
+      console.log(`[ServiceTitan] Fetched page ${page}, ${allJobs.length} jobs so far`);
+    }
     page++;
 
     if (page > 50) break;
   }
 
-  const customerIds = allJobs.map((j) => j.customerId).filter(Boolean);
+  const revenueJobs = allJobs.filter((j) => j.total > 0);
+  const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
+  const uniqueCustomerCount = new Set(customerIds).size;
+  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue — ${uniqueCustomerCount} unique customers`);
+
   if (customerIds.length > 0) {
     try {
       const customerMap = await fetchCustomersByIds(config, customerIds);
@@ -206,7 +238,6 @@ export async function fetchCompletedJobs(
           job.customer = customerMap.get(job.customerId);
         }
       }
-      console.log(`[ServiceTitan] Enriched ${customerMap.size} customers with contact info`);
     } catch (err) {
       console.warn(`[ServiceTitan] Customer enrichment failed, using basic names: ${(err as Error).message}`);
     }
