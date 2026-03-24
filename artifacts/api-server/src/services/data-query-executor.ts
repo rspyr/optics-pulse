@@ -276,12 +276,17 @@ function applyGroupByAggregation(
       }
     }
 
+    const SKIP_SUM_FIELDS = new Set(["id", "tenantId", "campaignId", "userId", "leadId", "ruleId", "funnelTypeId"]);
     const firstRow = groupRows[0];
     for (const [key, val] of Object.entries(firstRow)) {
       if (groupBySet.has(key) || explicitAggCols.has(key)) continue;
       if (key in aggregated) continue;
+      if (SKIP_SUM_FIELDS.has(key)) {
+        aggregated[key] = val;
+        continue;
+      }
       const numVal = Number(val);
-      if (val !== null && val !== undefined && val !== "" && !isNaN(numVal)) {
+      if (val !== null && val !== undefined && val !== "" && typeof val !== "boolean" && !isNaN(numVal)) {
         aggregated[key] = groupRows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
       } else {
         aggregated[key] = val;
