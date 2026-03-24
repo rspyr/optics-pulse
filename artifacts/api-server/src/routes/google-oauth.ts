@@ -60,6 +60,8 @@ router.get("/oauth/google-ads/authorize", requireRole("super_admin", "agency_use
   });
 
   const authUrl = `${GOOGLE_AUTH_URL}?${params.toString()}`;
+  console.log(`[Google OAuth] Authorize requested for tenant ${tenantId}, redirect_uri=${redirectUri}`);
+  console.log(`[Google OAuth] Auth URL: ${authUrl}`);
   res.json({ authUrl });
 });
 
