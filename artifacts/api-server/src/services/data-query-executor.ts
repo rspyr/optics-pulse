@@ -16,6 +16,8 @@ import {
   callAttemptsTable,
   scheduledFollowupsTable,
   usersTable,
+  funnelTypesTable,
+  tenantFunnelTypesTable,
 } from "@workspace/db";
 import { eq, and, gte, lte, sql, inArray, SQL, desc, asc, count, sum, avg } from "drizzle-orm";
 
@@ -23,7 +25,8 @@ export const SCHEMA_DESCRIPTION = `
 You have access to the following database tables for this tenant's marketing data:
 
 1. **leads** - Potential customers / inbound leads
-   Columns: id, tenantId, firstName, lastName, phone, email, source (text - e.g. "google", "meta", "organic", "referral"), leadType (text), interestType (text), status (enum: "new","contacted","booked","sold","lost","cancelled"), isNewCustomer (boolean), matchedGclid, assignedTo (text - coordinator name), disposition (text), createdAt, updatedAt
+   Columns: id, tenantId, firstName, lastName, phone, email, source (text - e.g. "google", "meta", "organic", "referral"), leadType (text - maps to funnel type name, e.g. "Fit Funnel", "Emergency Repair"), interestType (text), status (enum: "new","contacted","booked","sold","lost","cancelled"), isNewCustomer (boolean), matchedGclid, assignedTo (text - coordinator name), disposition (text), createdAt, updatedAt
+   NOTE: leadType stores the funnel type name. To analyze data by funnel type, group leads by leadType.
 
 2. **campaigns** - Marketing campaigns with aggregated spend data (Google Ads, Meta, etc.)
    Columns: id, tenantId, platform (text - "google","meta","facebook"), externalId, name, status, createdAt
@@ -69,6 +72,19 @@ You have access to the following database tables for this tenant's marketing dat
 
 15. **users** - User accounts (coordinators, admins)
     Columns: id, tenantId, email, name, role (enum: "super_admin","agency_user","client_admin","client_user"), createdAt
+
+16. **funnel_types** - Global funnel type definitions (e.g. "Fit Funnel", "Emergency Repair", "Financing Quiz")
+    Columns: id, name, slug, description, isActive (boolean), createdAt, updatedAt
+    NOTE: This is a global table (no tenantId). Use tenant_funnel_types to see which funnels a tenant uses.
+
+17. **tenant_funnel_types** - Association between tenants and their active funnel types
+    Columns: tenantId, funnelTypeId (FK to funnel_types), createdAt
+    Join with funnel_types to get funnel names for a specific tenant.
+
+IMPORTANT CROSS-TABLE RELATIONSHIPS:
+- "Funnel types" = leads.leadType values. To show data "by funnel type" or "across funnel types", query leads and group by leadType.
+- To get spend by funnel type, you need BOTH tables: query leads (grouped by leadType for lead counts) AND campaigns (for total spend). The AI answer should correlate these.
+- campaign_daily_stats links to campaigns via campaignId; campaigns link to tenants via tenantId.
 
 Common computed metrics:
 - CPL (Cost Per Lead) = total spend / total leads
@@ -125,11 +141,33 @@ export async function executeQueryPlan(
 ): Promise<QueryExecutionResult> {
   const results: Record<string, unknown>[] = [];
   const summaryParts: string[] = [];
+  const groupByFields = plan.groupBy && plan.groupBy.length > 0 ? plan.groupBy : null;
+  const aggregations = plan.aggregations && plan.aggregations.length > 0 ? plan.aggregations : ["count"];
 
   for (const table of plan.tables) {
-    const tableData = await queryTable(tenantId, table, plan);
+    let tableData = await queryTable(tenantId, table, plan);
+
+    if (groupByFields && plan.tables.length > 1) {
+      const sampleRow = tableData[0];
+      if (sampleRow) {
+        const hasGroupFields = groupByFields.some(col => col in sampleRow);
+        if (hasGroupFields) {
+          tableData = applyGroupByAggregation(tableData, groupByFields, aggregations);
+          summaryParts.push(`${table}: ${tableData.length} groups (by ${groupByFields.join(", ")})`);
+        } else {
+          summaryParts.push(`${table}: ${tableData.length} rows (no groupBy match)`);
+        }
+      } else {
+        summaryParts.push(`${table}: 0 rows`);
+      }
+    } else {
+      summaryParts.push(`${table}: ${tableData.length} rows`);
+    }
+
+    for (const row of tableData) {
+      (row as Record<string, unknown>).__sourceTable = table;
+    }
     results.push(...tableData);
-    summaryParts.push(`${table}: ${tableData.length} rows`);
   }
 
   if (plan.computedMetrics && plan.computedMetrics.length > 0) {
@@ -142,9 +180,9 @@ export async function executeQueryPlan(
 
   let processed = results;
 
-  if (plan.groupBy && plan.groupBy.length > 0 && plan.aggregations && plan.aggregations.length > 0) {
-    processed = applyGroupByAggregation(processed, plan.groupBy, plan.aggregations);
-    summaryParts.push(`grouped by ${plan.groupBy.join(", ")} with ${plan.aggregations.join(", ")}`);
+  if (groupByFields && plan.tables.length === 1) {
+    processed = applyGroupByAggregation(processed, groupByFields, aggregations);
+    summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")}`);
   }
 
   if (plan.orderBy && plan.orderBy.length > 0) {
@@ -154,6 +192,10 @@ export async function executeQueryPlan(
   const limitedResults = plan.limit
     ? processed.slice(0, plan.limit)
     : processed.slice(0, 100);
+
+  for (const row of limitedResults) {
+    delete (row as Record<string, unknown>).__sourceTable;
+  }
 
   return {
     data: limitedResults,
@@ -193,6 +235,14 @@ function applyGroupByAggregation(
     groups.get(key)!.push(row);
   }
 
+  const explicitAggCols = new Set<string>();
+  for (const agg of aggregations) {
+    const match = agg.match(/^(count|sum|avg|min|max)\((.+)\)$/i);
+    if (match) explicitAggCols.add(match[2]);
+  }
+
+  const groupBySet = new Set(groupBy);
+
   const result: Record<string, unknown>[] = [];
   for (const [, groupRows] of groups) {
     const aggregated: Record<string, unknown> = {};
@@ -225,6 +275,19 @@ function applyGroupByAggregation(
         aggregated["count"] = groupRows.length;
       }
     }
+
+    const firstRow = groupRows[0];
+    for (const [key, val] of Object.entries(firstRow)) {
+      if (groupBySet.has(key) || explicitAggCols.has(key)) continue;
+      if (key in aggregated) continue;
+      const numVal = Number(val);
+      if (val !== null && val !== undefined && val !== "" && !isNaN(numVal)) {
+        aggregated[key] = groupRows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
+      } else {
+        aggregated[key] = val;
+      }
+    }
+
     result.push(aggregated);
   }
   return result;
@@ -268,6 +331,10 @@ async function queryTable(
       return queryIntegrationSyncLogs(tenantId, plan, limit);
     case "users":
       return queryUsers(tenantId, plan, limit);
+    case "funnel_types":
+      return queryFunnelTypes(tenantId, plan, limit);
+    case "tenant_funnel_types":
+      return queryTenantFunnelTypes(tenantId, plan, limit);
     default:
       return [];
   }
@@ -817,6 +884,62 @@ async function queryUsers(
     name: r.name,
     email: r.email,
     role: r.role,
+    createdAt: r.createdAt?.toISOString?.() || r.createdAt,
+  }));
+}
+
+async function queryFunnelTypes(
+  _tenantId: number,
+  _plan: QueryPlan,
+  limit: number
+): Promise<Record<string, unknown>[]> {
+  const conditions: SQL[] = [];
+  const f = _plan.filters || {};
+  if (f.isActive !== undefined) conditions.push(eq(funnelTypesTable.isActive, Boolean(f.isActive)));
+
+  const rows = await db
+    .select()
+    .from(funnelTypesTable)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    description: r.description,
+    isActive: r.isActive,
+    createdAt: r.createdAt?.toISOString?.() || r.createdAt,
+  }));
+}
+
+async function queryTenantFunnelTypes(
+  tenantId: number,
+  _plan: QueryPlan,
+  limit: number
+): Promise<Record<string, unknown>[]> {
+  const rows = await db
+    .select({
+      tenantId: tenantFunnelTypesTable.tenantId,
+      funnelTypeId: tenantFunnelTypesTable.funnelTypeId,
+      funnelName: funnelTypesTable.name,
+      funnelSlug: funnelTypesTable.slug,
+      funnelDescription: funnelTypesTable.description,
+      isActive: funnelTypesTable.isActive,
+      createdAt: tenantFunnelTypesTable.createdAt,
+    })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    tenantId: r.tenantId,
+    funnelTypeId: r.funnelTypeId,
+    funnelName: r.funnelName,
+    funnelSlug: r.funnelSlug,
+    funnelDescription: r.funnelDescription,
+    isActive: r.isActive,
     createdAt: r.createdAt?.toISOString?.() || r.createdAt,
   }));
 }

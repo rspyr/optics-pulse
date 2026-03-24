@@ -40,6 +40,8 @@ Rules:
 - For campaign performance, query both "campaigns" and "campaign_daily_stats"
 - For lead breakdowns by source, query "leads"
 - For coordinator/rep performance, query "coordinator_daily_stats"
+- For "funnel type" questions: query "leads" with groupBy: ["leadType"] — leadType stores the funnel type name (e.g. "Fit Funnel", "Emergency Repair"). Also query "campaigns" to get total spend data to correlate.
+- For "which funnels does this client have", query "tenant_funnel_types" (joined with funnel_types automatically)
 - Keep limit reasonable (50 max) unless user asks for "all"
 - Never include tenantId in filters - it's always applied automatically
 - For "why" questions about metric changes, include data from both the current and previous period`;
@@ -77,7 +79,7 @@ const VALID_TABLES = [
   "attribution_events", "reviews", "review_daily_stats",
   "coordinator_daily_stats", "automation_rules", "automation_alerts",
   "change_logs", "call_attempts", "scheduled_followups",
-  "integration_sync_logs", "users",
+  "integration_sync_logs", "users", "funnel_types", "tenant_funnel_types",
 ] as const;
 
 const VALID_CHART_TYPES = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "donut", "list"] as const;
@@ -95,9 +97,9 @@ interface AnswerResponse {
 function parseAndValidateQueryPlan(text: string): QueryPlan | null {
   let raw: Record<string, unknown>;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(extractJson(text));
   } catch {
-    console.error("[Chat AI] Failed to parse query plan:", text);
+    console.error("[Chat AI] Failed to parse query plan:", text.substring(0, 200));
     return null;
   }
 
@@ -123,9 +125,24 @@ function parseAndValidateQueryPlan(text: string): QueryPlan | null {
   };
 }
 
+function extractJson(text: string): string {
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) return fenceMatch[1].trim();
+  const trimmed = text.trim();
+  if (trimmed.startsWith("[")) {
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) return arrayMatch[0];
+  }
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch) return braceMatch[0];
+  const arrayMatch = text.match(/\[[\s\S]*\]/);
+  if (arrayMatch) return arrayMatch[0];
+  return text;
+}
+
 function parseAnswerResponse(text: string): AnswerResponse {
   try {
-    const raw = JSON.parse(text);
+    const raw = JSON.parse(extractJson(text));
     const rawType = typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
       ? raw.chartType
       : undefined;
@@ -135,14 +152,14 @@ function parseAnswerResponse(text: string): AnswerResponse {
       chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : undefined,
     };
   } catch {
-    console.error("[Chat AI] Failed to parse answer:", text);
+    console.error("[Chat AI] Failed to parse answer:", text.substring(0, 200));
     return { answer: text || "I processed your data but had trouble formatting the response." };
   }
 }
 
 function parseVizResponse(text: string): { chartType: string; chartLabel: string } {
   try {
-    const raw = JSON.parse(text);
+    const raw = JSON.parse(extractJson(text));
     const rawType = typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
       ? raw.chartType
       : "table";
@@ -151,7 +168,7 @@ function parseVizResponse(text: string): { chartType: string; chartLabel: string
       chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : "Results",
     };
   } catch {
-    console.error("[Chat AI] Failed to parse viz response, using fallback");
+    console.error("[Chat AI] Failed to parse viz response, using fallback:", text.substring(0, 200));
     return { chartType: "table", chartLabel: "Results" };
   }
 }
@@ -438,7 +455,7 @@ Respond with ONLY a JSON array of 5 strings. Example:
       },
     });
 
-    const parsed = JSON.parse(response.text?.trim() || "[]");
+    const parsed = JSON.parse(extractJson(response.text?.trim() || "[]"));
     if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((s: unknown) => typeof s === "string")) {
       return parsed.slice(0, 5);
     }
