@@ -15,6 +15,8 @@ interface TenantForm {
   callRailSigningKey: string;
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
+  metaAppId: string;
+  metaAppSecret: string;
   metaAccessToken: string;
   metaAdAccountId: string;
   metaPixelId: string;
@@ -65,6 +67,8 @@ const emptyForm: TenantForm = {
   callRailSigningKey: "",
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
+  metaAppId: "",
+  metaAppSecret: "",
   metaAccessToken: "",
   metaAdAccountId: "",
   metaPixelId: "",
@@ -95,6 +99,8 @@ export default function AdminTenants() {
   const [editTab, setEditTab] = useState<EditTab>("integrations");
   const [googleAdsConnecting, setGoogleAdsConnecting] = useState(false);
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [metaConnecting, setMetaConnecting] = useState(false);
+  const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -120,6 +126,28 @@ export default function AdminTenants() {
       url.searchParams.delete("message");
       window.history.replaceState({}, "", url.pathname + url.search);
     }
+
+    const metaResult = params.get("metaOAuth");
+    if (metaResult === "success") {
+      setMetaOAuthMessage({ type: "success", text: "Meta connected successfully! Access token saved." });
+      refetch();
+      const url = new URL(window.location.href);
+      url.searchParams.delete("metaOAuth");
+      url.searchParams.delete("tenantId");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    } else if (metaResult === "error") {
+      const message = params.get("message") || "Unknown error";
+      const readable: Record<string, string> = {
+        token_exchange_failed: "Failed to exchange authorization code for access token.",
+        missing_app_credentials: "Meta App ID and App Secret must be saved before connecting.",
+        invalid_state: "Security validation failed. Please try again.",
+      };
+      setMetaOAuthMessage({ type: "error", text: readable[message] || `OAuth error: ${message}` });
+      const url = new URL(window.location.href);
+      url.searchParams.delete("metaOAuth");
+      url.searchParams.delete("message");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
   }, [refetch]);
 
   const handleConnectGoogleAds = async (tenantId: number) => {
@@ -138,6 +166,25 @@ export default function AdminTenants() {
       setGoogleAdsOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
     } finally {
       setGoogleAdsConnecting(false);
+    }
+  };
+
+  const handleConnectMeta = async (tenantId: number) => {
+    setMetaConnecting(true);
+    setMetaOAuthMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/oauth/meta/authorize?tenantId=${tenantId}`, { credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json();
+        setMetaOAuthMessage({ type: "error", text: data.error || "Failed to start OAuth flow" });
+        return;
+      }
+      const { authUrl } = await res.json();
+      window.open(authUrl, "_blank");
+    } catch {
+      setMetaOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
+    } finally {
+      setMetaConnecting(false);
     }
   };
 
@@ -168,7 +215,7 @@ export default function AdminTenants() {
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey",
       "serviceTitanClientId", "serviceTitanClientSecret",
-      "metaAccessToken", "metaAdAccountId", "metaPixelId",
+      "metaAppId", "metaAppSecret", "metaAccessToken", "metaAdAccountId", "metaPixelId",
       "podiumApiToken", "podiumLocationId",
     ];
     for (const key of integrationKeys) {
@@ -252,6 +299,8 @@ export default function AdminTenants() {
       callRailSigningKey: lc.callRailSigningKey || "",
       serviceTitanClientId: lc.serviceTitanClientId || "",
       serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
+      metaAppId: lc.metaAppId || "",
+      metaAppSecret: lc.metaAppSecret || "",
       metaAccessToken: lc.metaAccessToken || "",
       metaAdAccountId: lc.metaAdAccountId || "",
       metaPixelId: lc.metaPixelId || "",
@@ -364,9 +413,32 @@ export default function AdminTenants() {
             <p className="text-xs text-muted-foreground mt-2">Save Client ID and Client Secret first, then click "Connect Google Ads" to authorize. Tokens are obtained and refreshed automatically.</p>
           </div>
           <div>
-            <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider mb-3">Meta (Facebook/Instagram)</h4>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider">Meta (Facebook/Instagram)</h4>
+              {editId && (
+                <button
+                  type="button"
+                  onClick={() => handleConnectMeta(editId)}
+                  disabled={metaConnecting || !form.metaAppId}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+                >
+                  {metaConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
+                  {form.metaAccessToken && !form.metaAccessToken.startsWith("••••") ? "Reconnect" : form.metaAccessToken ? "Reconnect" : "Connect Meta"}
+                </button>
+              )}
+            </div>
+            {metaOAuthMessage && (
+              <div className={`mb-3 p-3 rounded-lg text-xs ${metaOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
+                {metaOAuthMessage.type === "success" ? <CheckCircle className="w-3.5 h-3.5 inline mr-1.5" /> : <XCircle className="w-3.5 h-3.5 inline mr-1.5" />}
+                {metaOAuthMessage.text}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <SecretInput field="metaAccessToken" label="Access Token" />
+              <SecretInput field="metaAppId" label="App ID" />
+              <SecretInput field="metaAppSecret" label="App Secret" />
+              <SecretInput field="metaAccessToken" label="Access Token (auto-filled on connect)" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Ad Account ID</label>
                 <input type="text" value={form.metaAdAccountId} onChange={(e) => { trackFieldChange("metaAdAccountId"); setForm(f => ({ ...f, metaAdAccountId: e.target.value })); }} placeholder="act_123456789" className={inputClass + " w-full"} />
@@ -376,6 +448,7 @@ export default function AdminTenants() {
                 <input type="text" value={form.metaPixelId} onChange={(e) => { trackFieldChange("metaPixelId"); setForm(f => ({ ...f, metaPixelId: e.target.value })); }} placeholder="For CAPI events" className={inputClass + " w-full"} />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground mt-2">Save App ID and App Secret first, then click "Connect Meta" to authorize. The access token is automatically exchanged for a long-lived token (~60 days).</p>
           </div>
           <div>
             <h4 className="text-xs font-medium text-green-400 uppercase tracking-wider mb-3">CallRail</h4>

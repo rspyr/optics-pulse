@@ -7,5 +7,7 @@ declare module "express-session" {
     tenantId: number | null;
     googleOAuthState?: string;
     googleOAuthTenantId?: number;
+    metaOAuthState?: string;
+    metaOAuthTenantId?: number;
   }
 }

@@ -1,0 +1,98 @@
+Here's the full breakdown of the Meta (Facebook) integration in this app:
+
+1. Auth Flow (OAuth 2.0)
+Step 1 — Redirect to Facebook Login
+
+When a user clicks "Connect Meta", the app redirects them to:
+
+https://www.facebook.com/v21.0/dialog/oauth?
+  client_id={META_APP_ID}
+  &redirect_uri={your_domain}/api/auth/meta/callback
+  &scope=pages_show_list,pages_read_engagement,ads_read,business_management
+  &response_type=code
+  &state={userId}
+Step 2 — Callback: Exchange code for access token
+
+Facebook redirects back to /api/auth/meta/callback?code=...&state=.... The app then exchanges the code:
+
+POST https://graph.facebook.com/v21.0/oauth/access_token
+Headers:
+  Content-Type: application/x-www-form-urlencoded
+Body (form-encoded):
+  client_id={META_APP_ID}
+  client_secret={META_APP_SECRET}
+  redirect_uri={your_domain}/api/auth/meta/callback
+  code={authorization_code}
+The response contains { access_token: "..." }, which is stored in the database on the user record.
+
+Step 3 — Validate the token
+
+After getting the token, it verifies it works by calling:
+
+GET https://graph.facebook.com/v21.0/me?access_token={token}
+Step 4 — Initial data fetch
+
+After auth, the app immediately fetches data for 7-day, 30-day, and 90-day ranges in parallel.
+
+2. How API Calls Are Made
+All Meta API calls go through a MetaAPIService class. Every request hits:
+
+GET https://graph.facebook.com/v21.0/{endpoint}?access_token={token}&{params}
+Key details:
+
+API Version: v21.0
+Auth: The access token is passed as a query parameter (access_token=...), not as a header
+Retries: Automatic exponential backoff on 429 (rate limit) and 5xx errors, up to 3 retries
+Timeout: 30 seconds per request
+Pagination: Cursor-based using after parameter, max 500 results per page
+There's also a Batch API for efficiency:
+
+POST https://graph.facebook.com/v21.0/
+Body (form-encoded):
+  access_token={token}
+  batch=[{"method":"GET","relative_url":"{account_id}/campaigns?fields=..."},
+         {"method":"GET","relative_url":"{account_id}/adsets?fields=..."}]
+3. Key API Endpoints Used
+List Ad Accounts:
+
+GET /me/adaccounts?fields=id,name,currency&limit=500
+Get Campaigns:
+
+GET /{ad_account_id}/campaigns?fields=id,name,status,daily_budget,effective_status&limit=500
+Get Ad Sets:
+
+GET /{ad_account_id}/adsets?fields=id,name,status,effective_status,daily_budget,campaign_id&limit=500
+  &filtering=[{"field":"effective_status","operator":"IN","value":["ACTIVE","PAUSED"]}]
+Get Ads:
+
+GET /{ad_account_id}/ads?fields=id,name,status,campaign_id,adset_id,adset{name},creative{object_story_spec},created_time,effective_status&limit=500
+  &filtering=[{"field":"effective_status","operator":"IN","value":["ACTIVE","PAUSED","DELETED",...]}]
+Get Account-Level Insights (daily, broken down by ad):
+
+GET /{ad_account_id}/insights?
+  level=ad
+  &fields=ad_id,ad_name,campaign_id,spend,impressions,cpm,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions,video_play_actions,video_thruplay_watched_actions,actions,date_start,date_stop
+  &time_range={"since":"2025-01-01","until":"2025-03-24"}
+  &time_increment=1
+  &limit=500
+Get Individual Ad Insights:
+
+GET /{ad_id}/insights?
+  fields=spend,impressions,cpm,video_p25_watched_actions,...,actions
+  &time_range={"since":"2025-01-01","until":"2025-03-24"}
+Get Page Insights (followers, views, etc.):
+
+GET /{page_id}/insights/{metric}?
+  access_token={page_access_token}
+  &period=day
+  &since={start_date}&until={end_date}
+4. Environment Variables Needed
+Variable	Purpose
+META_APP_ID	Facebook App ID (OAuth client_id)
+META_APP_SECRET	Facebook App Secret (OAuth client_secret)
+5. Key Differences from Google Ads
+Auth token delivery: Meta uses query parameter (?access_token=...) vs Google Ads using Authorization: Bearer header
+No developer token: Meta doesn't need a developer token — just app ID + secret for OAuth, then the user access token for API calls
+Date format: Meta uses YYYY-MM-DD (e.g. 2025-03-24) vs Google Ads using YYYYMMDD
+Money format: Meta returns spend as a string in normal currency units (e.g. "42.50") vs Google Ads returning micros (divide by 1,000,000)
+Query language: Meta uses REST endpoints with query parameters vs Google Ads using GAQL (SQL-like query language)

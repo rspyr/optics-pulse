@@ -24,6 +24,7 @@ import reviewsRouter from "./reviews";
 import scriptsRouter from "./scripts";
 import salesManagerRouter from "./sales-manager";
 import googleOAuthRouter from "./google-oauth";
+import metaOAuthRouter from "./meta-oauth";
 
 const router: IRouter = Router();
 
@@ -33,6 +34,7 @@ router.use(webhooksRouter);
 router.use(trackerRouter);
 
 router.use(googleOAuthRouter);
+router.use(metaOAuthRouter);
 
 router.use(requireAuth);
 
