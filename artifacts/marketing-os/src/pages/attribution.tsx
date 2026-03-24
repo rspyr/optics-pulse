@@ -1,6 +1,12 @@
+import { useState, useEffect, useCallback } from "react";
 import { useListAttributionEvents } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
+import { useAuth } from "@/components/auth-context";
 import { format } from "date-fns";
+
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
+
+interface TenantOption { id: number; name: string; }
 
 type EventRow = {
   id: number;
@@ -16,7 +22,42 @@ type EventRow = {
 };
 
 export default function Attribution() {
-  const { data } = useListAttributionEvents({});
+  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
+
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
+
+  const setSelectedTenantId = useCallback((id: number | null) => {
+    setSelectedTenantIdLocal(id);
+    setGlobalTenantId(id);
+  }, [setGlobalTenantId]);
+
+  useEffect(() => {
+    if (!isAgency) return;
+    fetch(`${API_BASE}/tenants`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const mapped = data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name }));
+          setTenants(mapped);
+          setSelectedTenantIdLocal(prev => {
+            if (prev !== null) return prev;
+            if (mapped.length > 0) {
+              setGlobalTenantId(mapped[0].id);
+              return mapped[0].id;
+            }
+            return null;
+          });
+        }
+      })
+      .catch(() => {});
+  }, [isAgency, setGlobalTenantId]);
+
+  const effectiveTenantId = isAgency ? selectedTenantId : (user?.tenantId ?? null);
+
+  const { data } = useListAttributionEvents({
+    ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
+  });
 
   const events: EventRow[] = (data?.events as EventRow[] | undefined) || [
     { id: 1, eventType: "click", utmSource: "google", matchLevel: "diamond", gclid: "CjwKCAjw7...", createdAt: new Date().toISOString() },
@@ -42,6 +83,23 @@ export default function Attribution() {
         <GradientHeading className="text-3xl md:text-4xl mb-2">Attribution Log</GradientHeading>
         <p className="font-sub text-muted-foreground text-sm tracking-wide">RAW EVENT INGESTION & MATCHING WATERFALL</p>
       </header>
+
+      {isAgency && tenants.length > 0 && (
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
+            <select
+              value={selectedTenantId ?? ""}
+              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
+              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              {tenants.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        </PremiumCard>
+      )}
 
       <PremiumCard className="p-0 overflow-hidden">
         <div className="overflow-x-auto">

@@ -160,13 +160,16 @@ function useCommConfig() {
   return config;
 }
 
-function useHudQueue() {
+function useHudQueue(tenantId?: number | null) {
   const [queue, setQueue] = useState<{ newLeads: LeadData[]; followUps: LeadData[]; background: LeadData[] }>({ newLeads: [], followUps: [], background: [] });
   const [loading, setLoading] = useState(true);
 
   const fetchQueue = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/leads/hud/queue`, { credentials: "include" });
+      const url = tenantId
+        ? `${API_BASE}/leads/hud/queue?tenantId=${tenantId}`
+        : `${API_BASE}/leads/hud/queue`;
+      const res = await fetch(url, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setQueue(data);
@@ -176,7 +179,7 @@ function useHudQueue() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tenantId]);
 
   useEffect(() => {
     fetchQueue();
@@ -187,7 +190,7 @@ function useHudQueue() {
   return { queue, loading, refetch: fetchQueue };
 }
 
-function useHudStats() {
+function useHudStats(tenantId?: number | null) {
   const [stats, setStats] = useState<HudStats>({
     callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
     newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
@@ -196,7 +199,10 @@ function useHudStats() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/leads/hud/stats`, { credentials: "include" });
+      const url = tenantId
+        ? `${API_BASE}/leads/hud/stats?tenantId=${tenantId}`
+        : `${API_BASE}/leads/hud/stats`;
+      const res = await fetch(url, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setStats(data);
@@ -204,7 +210,7 @@ function useHudStats() {
     } catch (e) {
       console.error("Failed to fetch Pulse stats:", e);
     }
-  }, []);
+  }, [tenantId]);
 
   useEffect(() => {
     fetchStats();
@@ -252,15 +258,17 @@ interface HistoricalData {
   totalDays: number;
 }
 
-function useComparisonStats(baseline: ComparisonBaseline) {
+function useComparisonStats(baseline: ComparisonBaseline, tenantId?: number | null) {
   const [data, setData] = useState<ComparisonData | null>(null);
 
   const fetchComparison = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/leads/hud/comparison?baseline=${baseline}`, { credentials: "include" });
+      let url = `${API_BASE}/leads/hud/comparison?baseline=${baseline}`;
+      if (tenantId) url += `&tenantId=${tenantId}`;
+      const res = await fetch(url, { credentials: "include" });
       if (res.ok) setData(await res.json());
     } catch {}
-  }, [baseline]);
+  }, [baseline, tenantId]);
 
   useEffect(() => {
     fetchComparison();
@@ -271,7 +279,7 @@ function useComparisonStats(baseline: ComparisonBaseline) {
   return { data, refetch: fetchComparison };
 }
 
-function useHistoricalStats(range: number, startDate?: string, endDate?: string) {
+function useHistoricalStats(range: number, startDate?: string, endDate?: string, tenantId?: number | null) {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
@@ -282,12 +290,13 @@ function useHistoricalStats(range: number, startDate?: string, endDate?: string)
     if (startDate && endDate) {
       url = `${API_BASE}/leads/hud/historical?startDate=${startDate}&endDate=${endDate}`;
     }
+    if (tenantId) url += `&tenantId=${tenantId}`;
     fetch(url, { credentials: "include" })
       .then(r => r.json())
       .then(d => { setData(d); })
       .catch(() => {})
       .finally(() => { setLoading(false); setFetching(false); });
-  }, [range, startDate, endDate]);
+  }, [range, startDate, endDate, tenantId]);
 
   return { data, loading, fetching };
 }
@@ -342,7 +351,7 @@ function DeltaIndicator({ delta, invertColor = false, compact = false }: {
   );
 }
 
-function HistoricalView() {
+function HistoricalView({ tenantId }: { tenantId?: number | null }) {
   const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
   const [range, setRange] = useState(30);
   const [customStart, setCustomStart] = useState("");
@@ -351,7 +360,7 @@ function HistoricalView() {
 
   const startDate = rangeMode === "custom" && customStart ? customStart : undefined;
   const endDate = rangeMode === "custom" && customEnd ? customEnd : undefined;
-  const { data, loading, fetching } = useHistoricalStats(range, startDate, endDate);
+  const { data, loading, fetching } = useHistoricalStats(range, startDate, endDate, tenantId);
 
   const metricConfig = {
     callsMade: { label: "Calls", color: "#60a5fa", format: (v: number) => `${v}` },
@@ -1069,19 +1078,52 @@ function LeadCard({
   );
 }
 
+interface TenantOption { id: number; name: string; }
+
 export default function Leads() {
-  const { user, isAgency } = useAuth();
-  const tenantId = user?.tenantId ?? null;
-  const { queue, loading, refetch } = useHudQueue();
-  const { stats, refetch: refetchStats } = useHudStats();
+  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
+
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
+
+  const setSelectedTenantId = useCallback((id: number | null) => {
+    setSelectedTenantIdLocal(id);
+    setGlobalTenantId(id);
+  }, [setGlobalTenantId]);
+
+  useEffect(() => {
+    if (!isAgency) return;
+    fetch(`${API_BASE}/tenants`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const mapped = data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name }));
+          setTenants(mapped);
+          setSelectedTenantIdLocal(prev => {
+            if (prev !== null) return prev;
+            if (mapped.length > 0) {
+              setGlobalTenantId(mapped[0].id);
+              return mapped[0].id;
+            }
+            return null;
+          });
+        }
+      })
+      .catch(() => {});
+  }, [isAgency, setGlobalTenantId]);
+
+  const effectiveTenantId = isAgency ? selectedTenantId : (user?.tenantId ?? null);
+
+  const { queue, loading, refetch } = useHudQueue(effectiveTenantId);
+  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId);
   const commConfig = useCommConfig();
-  const scripts = useScripts(tenantId);
-  const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(tenantId, isAgency);
+  const scripts = useScripts(effectiveTenantId);
+  const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
   const [baseline, setBaseline] = useState<ComparisonBaseline>("yesterday");
   const [showHistory, setShowHistory] = useState(false);
-  const { data: comparison } = useComparisonStats(baseline);
+  const { data: comparison } = useComparisonStats(baseline, effectiveTenantId);
 
   useEffect(() => {
     if (latestLead) {
@@ -1194,6 +1236,23 @@ export default function Leads() {
           </div>
         </div>
       </header>
+
+      {isAgency && tenants.length > 0 && (
+        <PremiumCard className="p-4 mb-6">
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
+            <select
+              value={selectedTenantId ?? ""}
+              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
+              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              {tenants.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        </PremiumCard>
+      )}
 
       <div className="flex gap-6">
         <div className="flex-1 min-w-0">
@@ -1378,7 +1437,7 @@ export default function Leads() {
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <HistoricalView />
+                <HistoricalView tenantId={effectiveTenantId} />
               </motion.div>
             )}
           </AnimatePresence>
