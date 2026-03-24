@@ -80,7 +80,11 @@ const VALID_TABLES = [
   "integration_sync_logs", "users",
 ] as const;
 
-const VALID_CHART_TYPES = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "list"] as const;
+const VALID_CHART_TYPES = ["bar", "horizontal-bar", "table", "number", "trend-line", "pie", "donut", "list"] as const;
+
+function normalizeChartType(type: string): string {
+  return type === "donut" ? "pie" : type;
+}
 
 interface AnswerResponse {
   answer: string;
@@ -122,11 +126,12 @@ function parseAndValidateQueryPlan(text: string): QueryPlan | null {
 function parseAnswerResponse(text: string): AnswerResponse {
   try {
     const raw = JSON.parse(text);
+    const rawType = typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
+      ? raw.chartType
+      : undefined;
     return {
       answer: typeof raw.answer === "string" ? raw.answer : "",
-      chartType: typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
-        ? raw.chartType
-        : undefined,
+      chartType: rawType ? normalizeChartType(rawType) : undefined,
       chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : undefined,
     };
   } catch {
@@ -138,10 +143,11 @@ function parseAnswerResponse(text: string): AnswerResponse {
 function parseVizResponse(text: string): { chartType: string; chartLabel: string } {
   try {
     const raw = JSON.parse(text);
+    const rawType = typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
+      ? raw.chartType
+      : "table";
     return {
-      chartType: typeof raw.chartType === "string" && (VALID_CHART_TYPES as readonly string[]).includes(raw.chartType)
-        ? raw.chartType
-        : "table",
+      chartType: normalizeChartType(rawType),
       chartLabel: typeof raw.chartLabel === "string" ? raw.chartLabel : "Results",
     };
   } catch {
