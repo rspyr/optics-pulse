@@ -335,7 +335,7 @@ export default function AdminTenants() {
             <input
               value={form.serviceTitanId}
               onChange={(e) => setForm(f => ({ ...f, serviceTitanId: e.target.value }))}
-              placeholder="ServiceTitan ID"
+              placeholder="ServiceTitan Tenant ID"
               className={inputClass}
             />
             <select
@@ -370,7 +370,7 @@ export default function AdminTenants() {
               <tr className="border-b border-white/5 bg-background/50">
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ID</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
-                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ServiceTitan ID</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ServiceTitan Tenant ID</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Timezone</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Integrations</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
