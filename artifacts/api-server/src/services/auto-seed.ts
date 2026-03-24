@@ -72,10 +72,12 @@ async function cleanupSeededDemoData() {
 
     let totalCleaned = 0;
     for (const tenant of nonDemoTenants) {
-      const seededLeadResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'`
+      const leadResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
+          email LIKE '%@example.com' OR source = 'demo_seed'
+        )`
       );
-      const seededLeadCount = extractCount(seededLeadResult);
+      const demoLeadCount = extractCount(leadResult);
 
       const seedCampaignResult = await db.execute(
         sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
@@ -89,13 +91,27 @@ async function cleanupSeededDemoData() {
       );
       const seedJobCount = extractCount(seedJobResult);
 
-      if (seededLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0) continue;
+      const attrResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM attribution_events WHERE tenant_id = ${tenant.id}`
+      );
+      const attrCount = extractCount(attrResult);
 
-      if (seededLeadCount > 0) {
+      const changeLogResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM change_logs WHERE tenant_id = ${tenant.id}`
+      );
+      const changeLogCount = extractCount(changeLogResult);
+
+      if (demoLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0 && attrCount === 0 && changeLogCount === 0) continue;
+
+      if (demoLeadCount > 0) {
         await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
-          SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'
+          SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND (
+            email LIKE '%@example.com' OR source = 'demo_seed'
+          )
         )`);
-        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'`);
+        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND (
+          email LIKE '%@example.com' OR source = 'demo_seed'
+        )`);
       }
 
       if (seedCampaignCount > 0) {
@@ -113,14 +129,17 @@ async function cleanupSeededDemoData() {
         await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
       }
 
-      if (tenant.name === "Advantage Heating & Cooling") {
+      if (attrCount > 0) {
         await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+      }
+
+      if (changeLogCount > 0) {
         await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
       }
 
-      const cleaned = seededLeadCount + seedCampaignCount + seedJobCount;
+      const cleaned = demoLeadCount + seedCampaignCount + seedJobCount + attrCount + changeLogCount;
       totalCleaned += cleaned;
-      console.log(`[AutoSeed] Cleaned up seeded demo data for non-demo tenant "${tenant.name}": ${seededLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs`);
+      console.log(`[AutoSeed] Cleaned up seeded demo data for non-demo tenant "${tenant.name}": ${demoLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs, ${attrCount} attribution events, ${changeLogCount} change logs`);
     }
 
     await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
@@ -374,16 +393,16 @@ async function seedDefaults() {
 }
 
 async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, number>) {
-  const t1Id = tenantIds[0];
-  const t2Id = tenantIds[1];
+  const apexId = tenantMap.get("Apex HVAC") ?? tenantIds[0];
+  const nordicId = tenantMap.get("Nordic Climate Solutions") ?? tenantIds[1] ?? tenantIds[0];
 
   const campaignDefs = [
-    { tenantId: t1Id, platform: "google", externalId: "G-APEX-BRAND-001", name: "Apex - Brand Search", status: "active" },
-    { tenantId: t1Id, platform: "google", externalId: "G-APEX-HEAT-002", name: "Apex - Heat Pump Install", status: "active" },
-    { tenantId: t1Id, platform: "meta", externalId: "M-APEX-LEAD-003", name: "Apex - Facebook Lead Gen", status: "active" },
-    { tenantId: t2Id, platform: "google", externalId: "G-NORD-AC-001", name: "Nordic - AC Repair Near Me", status: "active" },
-    { tenantId: t2Id, platform: "google", externalId: "G-NORD-FURN-002", name: "Nordic - Furnace Replacement", status: "active" },
-    { tenantId: t2Id, platform: "meta", externalId: "M-NORD-LEAD-003", name: "Nordic - Instagram Reels", status: "paused" },
+    { tenantId: apexId, platform: "google", externalId: "G-APEX-BRAND-001", name: "Apex - Brand Search", status: "active" },
+    { tenantId: apexId, platform: "google", externalId: "G-APEX-HEAT-002", name: "Apex - Heat Pump Install", status: "active" },
+    { tenantId: apexId, platform: "meta", externalId: "M-APEX-LEAD-003", name: "Apex - Facebook Lead Gen", status: "active" },
+    { tenantId: nordicId, platform: "google", externalId: "G-NORD-AC-001", name: "Nordic - AC Repair Near Me", status: "active" },
+    { tenantId: nordicId, platform: "google", externalId: "G-NORD-FURN-002", name: "Nordic - Furnace Replacement", status: "active" },
+    { tenantId: nordicId, platform: "meta", externalId: "M-NORD-LEAD-003", name: "Nordic - Instagram Reels", status: "paused" },
   ];
   const campaigns = [];
   for (const c of campaignDefs) {
@@ -483,10 +502,10 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
   await db.insert(attributionEventsTable).values(events);
 
   const changeLogEntries = [
-    { tenantId: tenantIds[0], date: new Date(Date.now() - 25 * 86400000).toISOString().split("T")[0], title: "Launched Google Performance Max", description: "Switched to Performance Max campaign.", category: "campaign" },
-    { tenantId: tenantIds[0], date: new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0], title: "Budget Increase: Google Ads", description: "Increased daily budget from $150 to $250.", category: "budget" },
-    { tenantId: tenantIds[1], date: new Date(Date.now() - 22 * 86400000).toISOString().split("T")[0], title: "Launched Fit Funnel Campaign", description: "Deployed multi-step quiz funnel.", category: "campaign" },
-    { tenantId: tenantIds[1], date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased ad budget by 20%.", category: "budget" },
+    { tenantId: apexId, date: new Date(Date.now() - 25 * 86400000).toISOString().split("T")[0], title: "Launched Google Performance Max", description: "Switched to Performance Max campaign.", category: "campaign" },
+    { tenantId: apexId, date: new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0], title: "Budget Increase: Google Ads", description: "Increased daily budget from $150 to $250.", category: "budget" },
+    { tenantId: nordicId, date: new Date(Date.now() - 22 * 86400000).toISOString().split("T")[0], title: "Launched Fit Funnel Campaign", description: "Deployed multi-step quiz funnel.", category: "campaign" },
+    { tenantId: nordicId, date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased ad budget by 20%.", category: "budget" },
   ];
   await db.insert(changeLogsTable).values(changeLogEntries);
 }

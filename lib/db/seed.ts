@@ -41,8 +41,8 @@ function fakeGclid(): string {
 async function seed() {
   console.log("Seeding database...");
 
-  const [t1] = await db.insert(tenantsTable).values({ name: "Apex HVAC", serviceTitanId: "ST-APEX-001", timezone: "America/New_York" }).returning();
-  const [t2] = await db.insert(tenantsTable).values({ name: "Nordic Climate Solutions", serviceTitanId: "ST-NORDIC-002", timezone: "America/Chicago" }).returning();
+  const [t1] = await db.insert(tenantsTable).values({ name: "Apex HVAC", serviceTitanId: "ST-APEX-001", timezone: "America/New_York", isDemo: true }).returning();
+  const [t2] = await db.insert(tenantsTable).values({ name: "Nordic Climate Solutions", serviceTitanId: "ST-NORDIC-002", timezone: "America/Chicago", isDemo: true }).returning();
   console.log(`Created tenants: ${t1.name} (id=${t1.id}), ${t2.name} (id=${t2.id})`);
 
   const campaigns = [];
