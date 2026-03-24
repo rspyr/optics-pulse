@@ -57,6 +57,13 @@
       "when": 1774302594197,
       "tag": "0007_large_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1774390611546,
+      "tag": "0008_tricky_the_hunter",
+      "breakpoints": true
     }
   ]
 }

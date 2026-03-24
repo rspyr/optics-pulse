@@ -53,38 +53,56 @@ function loadSeedData(): any | null {
   return null;
 }
 
-async function ensureIsDemoColumn() {
-  try {
-    await db.execute(sql`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false`);
-  } catch (err) {
-    console.log("[AutoSeed] is_demo column already exists or migration skipped");
-  }
-}
-
 async function cleanupNonDemoData() {
   const { eq } = await import("drizzle-orm");
   try {
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS _demo_cleanup_flags (key TEXT PRIMARY KEY, done_at TIMESTAMP DEFAULT NOW())`);
+    const flagResult = await db.execute(sql`SELECT 1 FROM _demo_cleanup_flags WHERE key = 'initial_cleanup'`);
+    if ((flagResult.rows?.length ?? 0) > 0) return;
+
     const nonDemoTenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
       .from(tenantsTable)
       .where(eq(tenantsTable.isDemo, false));
 
+    let totalCleaned = 0;
     for (const tenant of nonDemoTenants) {
-      const dummyLeads = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
+      const leadCheck = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND source = 'demo_seed'`
+      );
+      const seedLeadCount = Number((leadCheck.rows[0] as any)?.cnt || 0);
+
+      const dummyCheck = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND source != 'demo_seed' AND (
           email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
           email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR
           email LIKE '%@example.com'
         )`
       );
-      const leadCount = Number((dummyLeads.rows[0] as any)?.cnt || 0);
-      if (leadCount === 0) continue;
+      const dummyLeadCount = Number((dummyCheck.rows[0] as any)?.cnt || 0);
 
-      await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (SELECT id FROM leads WHERE tenant_id = ${tenant.id})`);
+      if (seedLeadCount === 0 && dummyLeadCount === 0) continue;
+
+      await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
+        SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND (
+          source = 'demo_seed' OR email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
+          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR email LIKE '%@example.com'
+        )
+      )`);
       await db.execute(sql`DELETE FROM coordinator_daily_stats WHERE tenant_id = ${tenant.id}`);
-      await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
       await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+      await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND (
+        source = 'demo_seed' OR email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
+        email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR email LIKE '%@example.com'
+      )`);
       await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
-      console.log(`[AutoSeed] Cleaned up ${leadCount} dummy leads and related data for non-demo tenant "${tenant.name}"`);
+      const cleaned = seedLeadCount + dummyLeadCount;
+      totalCleaned += cleaned;
+      console.log(`[AutoSeed] Cleaned up ${cleaned} seeded/dummy leads and related data for non-demo tenant "${tenant.name}"`);
+    }
+
+    await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
+    if (totalCleaned > 0) {
+      console.log(`[AutoSeed] One-time demo data cleanup complete: ${totalCleaned} total dummy records removed`);
     }
   } catch (err) {
     console.error("[AutoSeed] Cleanup non-demo data failed:", err instanceof Error ? err.message : err);
@@ -93,8 +111,6 @@ async function cleanupNonDemoData() {
 
 export async function autoSeedIfEmpty() {
   try {
-    await ensureIsDemoColumn();
-
     const seedData = loadSeedData();
     const existingUsers = await db.select({ id: usersTable.id }).from(usersTable).limit(1);
     const isEmpty = existingUsers.length === 0;
