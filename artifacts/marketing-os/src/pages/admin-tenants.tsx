@@ -19,6 +19,7 @@ interface TenantForm {
   metaAdAccountId: string;
   metaPixelId: string;
   googleAdsCustomerId: string;
+  googleAdsLoginCustomerId: string;
   googleAdsDeveloperToken: string;
   podiumApiToken: string;
   podiumLocationId: string;
@@ -68,6 +69,7 @@ const emptyForm: TenantForm = {
   metaAdAccountId: "",
   metaPixelId: "",
   googleAdsCustomerId: "",
+  googleAdsLoginCustomerId: "",
   googleAdsDeveloperToken: "",
   podiumApiToken: "",
   podiumLocationId: "",
@@ -162,7 +164,7 @@ export default function AdminTenants() {
   const buildIntegrationConfig = () => {
     const config: Record<string, string> = {};
     const integrationKeys: (keyof TenantForm)[] = [
-      "googleAdsApiKey", "googleAdsCustomerId", "googleAdsDeveloperToken",
+      "googleAdsApiKey", "googleAdsCustomerId", "googleAdsLoginCustomerId", "googleAdsDeveloperToken",
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey",
       "serviceTitanClientId", "serviceTitanClientSecret",
@@ -244,6 +246,7 @@ export default function AdminTenants() {
       googleAdsClientId: lc.googleAdsClientId || "",
       googleAdsClientSecret: lc.googleAdsClientSecret || "",
       googleAdsCustomerId: lc.googleAdsCustomerId || "",
+      googleAdsLoginCustomerId: lc.googleAdsLoginCustomerId || "",
       googleAdsDeveloperToken: lc.googleAdsDeveloperToken || "",
       callRailApiKey: lc.callRailApiKey || "",
       callRailSigningKey: lc.callRailSigningKey || "",
@@ -347,8 +350,11 @@ export default function AdminTenants() {
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
                 <input type="text" value={form.googleAdsCustomerId} onChange={(e) => { trackFieldChange("googleAdsCustomerId"); setForm(f => ({ ...f, googleAdsCustomerId: e.target.value })); }} placeholder="123-456-7890" className={inputClass + " w-full"} />
               </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Manager Account ID (MCC)</label>
+                <input type="text" value={form.googleAdsLoginCustomerId} onChange={(e) => { trackFieldChange("googleAdsLoginCustomerId"); setForm(f => ({ ...f, googleAdsLoginCustomerId: e.target.value })); }} placeholder="123-456-7890 (if using MCC login)" className={inputClass + " w-full"} />
+              </div>
               <SecretInput field="googleAdsDeveloperToken" label="Developer Token" />
-              <SecretInput field="googleAdsClientId" label="OAuth Client ID" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
               <SecretInput field="googleAdsClientSecret" label="OAuth Client Secret" />
