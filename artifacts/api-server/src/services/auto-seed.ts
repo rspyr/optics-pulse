@@ -107,8 +107,10 @@ async function cleanupSeededDemoData() {
         await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
       }
 
-      await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
-      await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
+      if (tenant.name === "Advantage Heating & Cooling") {
+        await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+        await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
+      }
 
       const cleaned = seededLeadCount + seedCampaignCount + seedJobCount;
       totalCleaned += cleaned;
