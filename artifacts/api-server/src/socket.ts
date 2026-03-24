@@ -146,9 +146,9 @@ async function createDemoLead(): Promise<void> {
     const firstName = randomFrom(DEMO_FIRST_NAMES);
     const lastName = randomFrom(DEMO_LAST_NAMES);
     const source = randomFrom(DEMO_SOURCES);
-    const allTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable);
-    if (allTenants.length === 0) return;
-    const tenantId = randomFrom(allTenants).id;
+    const demoTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isDemo, true));
+    if (demoTenants.length === 0) return;
+    const tenantId = randomFrom(demoTenants).id;
 
     const tenantFunnels = cachedFunnelTypes[tenantId];
     const leadType = tenantFunnels && tenantFunnels.length > 0

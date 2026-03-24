@@ -13,6 +13,7 @@ export const tenantsTable = pgTable("tenants", {
   leaderboardConfig: jsonb("leaderboard_config"),
   spiffConfig: jsonb("spiff_config"),
   isActive: boolean("is_active").notNull().default(true),
+  isDemo: boolean("is_demo").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

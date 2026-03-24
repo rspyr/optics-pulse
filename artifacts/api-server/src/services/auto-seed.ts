@@ -53,8 +53,46 @@ function loadSeedData(): any | null {
   return null;
 }
 
+async function ensureIsDemoColumn() {
+  try {
+    await db.execute(sql`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false`);
+  } catch (err) {
+    console.log("[AutoSeed] is_demo column already exists or migration skipped");
+  }
+}
+
+async function cleanupNonDemoData() {
+  const { eq } = await import("drizzle-orm");
+  try {
+    const nonDemoTenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+      .from(tenantsTable)
+      .where(eq(tenantsTable.isDemo, false));
+
+    for (const tenant of nonDemoTenants) {
+      const dummyLeads = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
+          email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
+          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR
+          email LIKE '%@example.com'
+        )`
+      );
+      const leadCount = Number((dummyLeads.rows[0] as any)?.cnt || 0);
+      if (leadCount === 0) continue;
+
+      await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (SELECT id FROM leads WHERE tenant_id = ${tenant.id})`);
+      await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
+      await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+      console.log(`[AutoSeed] Cleaned up ${leadCount} dummy leads and related data for non-demo tenant "${tenant.name}"`);
+    }
+  } catch (err) {
+    console.error("[AutoSeed] Cleanup non-demo data failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 export async function autoSeedIfEmpty() {
   try {
+    await ensureIsDemoColumn();
+
     const seedData = loadSeedData();
     const existingUsers = await db.select({ id: usersTable.id }).from(usersTable).limit(1);
     const isEmpty = existingUsers.length === 0;
@@ -70,6 +108,8 @@ export async function autoSeedIfEmpty() {
     } else if (seedData) {
       await syncTenantConfigs(seedData);
     }
+
+    await cleanupNonDemoData();
   } catch (err) {
     console.error("[AutoSeed] Seed failed:", err instanceof Error ? err.message : err);
   }
@@ -91,6 +131,7 @@ async function syncTenantConfigs(seedData: any) {
         leaderboardConfig: t.leaderboardConfig,
         spiffConfig: t.spiffConfig,
         isActive: t.isActive,
+        isDemo: t.isDemo === true,
       }).where(eq(tenantsTable.id, existing.id));
       updated++;
     } else {
@@ -104,6 +145,7 @@ async function syncTenantConfigs(seedData: any) {
         leaderboardConfig: t.leaderboardConfig,
         spiffConfig: t.spiffConfig,
         isActive: t.isActive,
+        isDemo: t.isDemo === true,
       });
       updated++;
     }
@@ -154,8 +196,15 @@ async function syncTenantConfigs(seedData: any) {
   const existingLeads = await db.select({ id: leadsTable.id }).from(leadsTable).limit(1);
   if (existingLeads.length === 0) {
     console.log("[AutoSeed] No demo activity found, generating...");
-    const tenantIds = Array.from(tenantMap.values());
-    await seedDemoActivity(tenantIds, tenantMap);
+    const demoTenantNames = seedData.tenants
+      .filter((t: any) => t.isDemo === true)
+      .map((t: any) => t.name);
+    const demoTenantIds = demoTenantNames
+      .map((name: string) => tenantMap.get(name))
+      .filter((id: number | undefined): id is number => id !== undefined);
+    if (demoTenantIds.length > 0) {
+      await seedDemoActivity(demoTenantIds, tenantMap);
+    }
   }
 
   console.log(`[AutoSeed] Synced ${updated} tenant configs from snapshot (${seedData.exportedAt})`);
@@ -174,6 +223,7 @@ async function seedFromSnapshot(seedData: any) {
       leaderboardConfig: t.leaderboardConfig,
       spiffConfig: t.spiffConfig,
       isActive: t.isActive,
+      isDemo: t.isDemo === true,
     }).returning();
     tenantMap.set(t.name, tenant.id);
   }
@@ -229,16 +279,23 @@ async function seedFromSnapshot(seedData: any) {
     console.log(`[AutoSeed] Created ${seedData.automationRules.length} automation rules`);
   }
 
-  const tenantIds = Array.from(tenantMap.values());
-  await seedDemoActivity(tenantIds, tenantMap);
+  const demoTenantNames = seedData.tenants
+    .filter((t: any) => t.isDemo === true)
+    .map((t: any) => t.name);
+  const demoTenantIds = demoTenantNames
+    .map((name: string) => tenantMap.get(name))
+    .filter((id: number | undefined): id is number => id !== undefined);
+  if (demoTenantIds.length > 0) {
+    await seedDemoActivity(demoTenantIds, tenantMap);
+  }
 
   console.log(`[AutoSeed] Production seed complete from snapshot`);
 }
 
 async function seedDefaults() {
-  const [t1] = await db.insert(tenantsTable).values({ name: "Apex HVAC", serviceTitanId: "ST-APEX-001", timezone: "America/New_York" }).returning();
-  const [t2] = await db.insert(tenantsTable).values({ name: "Nordic Climate Solutions", serviceTitanId: "ST-NORDIC-002", timezone: "America/Chicago" }).returning();
-  const [t3] = await db.insert(tenantsTable).values({ name: "Advantage Heating & Cooling", serviceTitanId: "ST-ADV-003", timezone: "America/Denver" }).returning();
+  const [t1] = await db.insert(tenantsTable).values({ name: "Apex HVAC", serviceTitanId: "ST-APEX-001", timezone: "America/New_York", isDemo: true }).returning();
+  const [t2] = await db.insert(tenantsTable).values({ name: "Nordic Climate Solutions", serviceTitanId: "ST-NORDIC-002", timezone: "America/Chicago", isDemo: true }).returning();
+  const [t3] = await db.insert(tenantsTable).values({ name: "Advantage Heating & Cooling", serviceTitanId: "ST-ADV-003", timezone: "America/Denver", isDemo: false }).returning();
   console.log(`[AutoSeed] Created tenants: ${t1.name}, ${t2.name}, ${t3.name}`);
 
   const passwordHash = await bcrypt.hash("demo1234", 10);
@@ -270,7 +327,7 @@ async function seedDefaults() {
     ["Advantage Heating & Cooling", t3.id],
   ]);
 
-  await seedDemoActivity([t1.id, t2.id, t3.id], tenantMap);
+  await seedDemoActivity([t1.id, t2.id], tenantMap);
 
   console.log(`[AutoSeed] Default seed complete`);
 }
@@ -314,7 +371,7 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
 
   const leads = [];
   for (let i = 0; i < 60; i++) {
-    const tenantId = i < 35 ? tenantIds[0] : i < 50 ? tenantIds[1] : tenantIds[2] || tenantIds[0];
+    const tenantId = tenantIds[i % tenantIds.length];
     const firstName = randomFrom(FIRST_NAMES);
     const lastName = randomFrom(LAST_NAMES);
     const source = randomFrom(SOURCES);

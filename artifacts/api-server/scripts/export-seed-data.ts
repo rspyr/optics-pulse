@@ -45,6 +45,7 @@ async function exportSeedData() {
       leaderboardConfig: t.leaderboardConfig,
       spiffConfig: t.spiffConfig,
       isActive: t.isActive,
+      isDemo: t.isDemo,
     })),
     users: users.map(u => ({
       email: u.email,

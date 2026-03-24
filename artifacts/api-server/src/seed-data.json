@@ -1,5 +1,5 @@
 {
-  "exportedAt": "2026-03-24T20:24:04.015Z",
+  "exportedAt": "2026-03-24T22:07:49.620Z",
   "tenants": [
     {
       "name": "Advantage Heating & Cooling",
@@ -10,7 +10,8 @@
       "communicationConfig": null,
       "leaderboardConfig": null,
       "spiffConfig": null,
-      "isActive": true
+      "isActive": true,
+      "isDemo": false
     },
     {
       "name": "Nordic Climate Solutions",
@@ -29,7 +30,8 @@
           "AC Tune-Up": 35
         }
       },
-      "isActive": true
+      "isActive": true,
+      "isDemo": true
     },
     {
       "name": "Apex HVAC",
@@ -50,7 +52,8 @@
           "Emergency Repair": 40
         }
       },
-      "isActive": true
+      "isActive": true,
+      "isDemo": true
     }
   ],
   "users": [
@@ -180,6 +183,336 @@
     }
   ],
   "automationRules": [
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
     {
       "name": "7-Day CPL Check",
       "description": null,
