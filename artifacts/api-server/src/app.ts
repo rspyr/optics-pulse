@@ -11,6 +11,8 @@ const PgStore = connectPgSimple(session);
 
 const app: Express = express();
 
+app.set("trust proxy", 1);
+
 const allowedOrigins = process.env.REPLIT_DEV_DOMAIN
   ? [`https://${process.env.REPLIT_DEV_DOMAIN}`]
   : ["http://localhost:5173"];
