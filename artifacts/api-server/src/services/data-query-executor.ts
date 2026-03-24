@@ -1,3 +1,4 @@
+import type { Column } from "drizzle-orm";
 import {
   db,
   leadsTable,
@@ -191,7 +192,7 @@ async function queryTable(
 }
 
 function buildDateConditions(
-  dateColumn: any,
+  dateColumn: Column,
   plan: QueryPlan,
   isDateString: boolean = false
 ): SQL[] {
