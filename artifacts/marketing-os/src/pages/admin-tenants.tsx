@@ -91,6 +91,53 @@ export default function AdminTenants() {
   const [expandedSyncTenant, setExpandedSyncTenant] = useState<number | null>(null);
   const [tenantSyncStatuses, setTenantSyncStatuses] = useState<Record<number, { statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }> }>>({});
   const [editTab, setEditTab] = useState<EditTab>("integrations");
+  const [googleAdsConnecting, setGoogleAdsConnecting] = useState(false);
+  const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthResult = params.get("googleAdsOAuth");
+    if (oauthResult === "success") {
+      setGoogleAdsOAuthMessage({ type: "success", text: "Google Ads connected successfully! Tokens saved." });
+      refetch();
+      const url = new URL(window.location.href);
+      url.searchParams.delete("googleAdsOAuth");
+      url.searchParams.delete("tenantId");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    } else if (oauthResult === "error") {
+      const message = params.get("message") || "Unknown error";
+      const readable: Record<string, string> = {
+        no_refresh_token: "Google didn't return a refresh token. Try revoking app access at myaccount.google.com/permissions then reconnect.",
+        token_exchange_failed: "Failed to exchange authorization code for tokens.",
+        missing_client_credentials: "Client ID and Client Secret must be saved before connecting.",
+        invalid_state: "Security validation failed. Please try again.",
+      };
+      setGoogleAdsOAuthMessage({ type: "error", text: readable[message] || `OAuth error: ${message}` });
+      const url = new URL(window.location.href);
+      url.searchParams.delete("googleAdsOAuth");
+      url.searchParams.delete("message");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, [refetch]);
+
+  const handleConnectGoogleAds = async (tenantId: number) => {
+    setGoogleAdsConnecting(true);
+    setGoogleAdsOAuthMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/oauth/google-ads/authorize?tenantId=${tenantId}`, { credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json();
+        setGoogleAdsOAuthMessage({ type: "error", text: data.error || "Failed to start OAuth flow" });
+        return;
+      }
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
+    } catch {
+      setGoogleAdsOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
+    } finally {
+      setGoogleAdsConnecting(false);
+    }
+  };
 
   const fetchTenantSyncStatus = useCallback(async (tenantId: number) => {
     try {
@@ -275,21 +322,40 @@ export default function AdminTenants() {
             </div>
           </div>
           <div>
-            <h4 className="text-xs font-medium text-yellow-400 uppercase tracking-wider mb-3">Google Ads</h4>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-medium text-yellow-400 uppercase tracking-wider">Google Ads</h4>
+              {editId && (
+                <button
+                  type="button"
+                  onClick={() => handleConnectGoogleAds(editId)}
+                  disabled={googleAdsConnecting || !form.googleAdsClientId}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+                >
+                  {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
+                  {form.googleAdsRefreshToken && !form.googleAdsRefreshToken.startsWith("••••") ? "Reconnect" : form.googleAdsRefreshToken ? "Reconnect" : "Connect Google Ads"}
+                </button>
+              )}
+            </div>
+            {googleAdsOAuthMessage && (
+              <div className={`mb-3 p-3 rounded-lg text-xs ${googleAdsOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
+                {googleAdsOAuthMessage.type === "success" ? <CheckCircle className="w-3.5 h-3.5 inline mr-1.5" /> : <XCircle className="w-3.5 h-3.5 inline mr-1.5" />}
+                {googleAdsOAuthMessage.text}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
                 <input type="text" value={form.googleAdsCustomerId} onChange={(e) => { trackFieldChange("googleAdsCustomerId"); setForm(f => ({ ...f, googleAdsCustomerId: e.target.value })); }} placeholder="123-456-7890" className={inputClass + " w-full"} />
               </div>
               <SecretInput field="googleAdsDeveloperToken" label="Developer Token" />
-              <SecretInput field="googleAdsApiKey" label="Access Token (optional if using refresh)" />
+              <SecretInput field="googleAdsClientId" label="OAuth Client ID" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-              <SecretInput field="googleAdsClientId" label="OAuth Client ID" />
               <SecretInput field="googleAdsClientSecret" label="OAuth Client Secret" />
-              <SecretInput field="googleAdsRefreshToken" label="Refresh Token" />
+              <SecretInput field="googleAdsRefreshToken" label="Refresh Token (auto-filled on connect)" />
+              <SecretInput field="googleAdsApiKey" label="Access Token (auto-filled on connect)" />
             </div>
-            <p className="text-xs text-muted-foreground mt-2">With OAuth credentials and a Refresh Token, access tokens are refreshed automatically.</p>
+            <p className="text-xs text-muted-foreground mt-2">Save Client ID and Client Secret first, then click "Connect Google Ads" to authorize. Tokens are obtained and refreshed automatically.</p>
           </div>
           <div>
             <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider mb-3">Meta (Facebook/Instagram)</h4>

@@ -32,7 +32,6 @@ async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
       ? `${config.clientId.slice(0, 8)}...${config.clientId.slice(-4)}`
       : "****";
     console.log(`[Google Ads] Refreshing token for customer ${config.customerId} (clientId: ${maskedClientId})`);
-    console.log(`[Google Ads] DEBUG credential lengths: clientId=${config.clientId.length} clientId_trimmed=${config.clientId.trim().length} secret=${config.clientSecret.length} secret_trimmed=${config.clientSecret.trim().length} refresh=${config.refreshToken.length} refresh_trimmed=${config.refreshToken.trim().length}`);
 
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -48,15 +47,6 @@ async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
     if (!response.ok) {
       const text = await response.text();
       console.error(`[Google Ads] Token refresh failed (${response.status}): ${text}`);
-      
-      // Additional debug: try to identify the issue
-      if (text.includes("unauthorized_client")) {
-        console.error(`[Google Ads] DEBUG: clientId starts='${config.clientId.slice(0,20)}' ends='${config.clientId.slice(-30)}'`);
-        console.error(`[Google Ads] DEBUG: refreshToken starts='${config.refreshToken.slice(0,10)}' ends='${config.refreshToken.slice(-10)}'`);
-        console.error(`[Google Ads] DEBUG: secret first3='${config.clientSecret.slice(0,3)}'`);
-      }
-      
-      console.error(`[Google Ads] Hint: Verify that your OAuth Client ID, Client Secret, and Refresh Token are correct and were generated from the same OAuth app.`);
       return config.accessToken;
     }
 

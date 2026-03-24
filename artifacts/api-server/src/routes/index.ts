@@ -23,6 +23,7 @@ import budgetRouter from "./budget";
 import reviewsRouter from "./reviews";
 import scriptsRouter from "./scripts";
 import salesManagerRouter from "./sales-manager";
+import googleOAuthRouter from "./google-oauth";
 
 const router: IRouter = Router();
 
@@ -30,6 +31,8 @@ router.use(healthRouter);
 router.use(authRouter);
 router.use(webhooksRouter);
 router.use(trackerRouter);
+
+router.use(googleOAuthRouter);
 
 router.use(requireAuth);
 

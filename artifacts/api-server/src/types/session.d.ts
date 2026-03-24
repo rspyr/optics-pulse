@@ -5,5 +5,7 @@ declare module "express-session" {
     userId: number;
     userRole: string;
     tenantId: number | null;
+    googleOAuthState?: string;
+    googleOAuthTenantId?: number;
   }
 }
