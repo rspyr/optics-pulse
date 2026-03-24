@@ -492,10 +492,10 @@ export const ListJobsResponse = zod.object({
 });
 
 /**
- * @summary Ingest webhook from CallRail, GoHighLevel, or forms
+ * @summary Ingest webhook from any lead source
  */
 export const IngestWebhookBody = zod.object({
-  source: zod.enum(["callrail", "ghl", "form", "manual"]),
+  source: zod.string().min(1),
   tenantId: zod.number().describe("Target tenant for this webhook event"),
   data: zod.object({
     phone: zod.string().optional(),
