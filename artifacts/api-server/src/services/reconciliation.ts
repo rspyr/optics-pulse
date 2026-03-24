@@ -289,6 +289,9 @@ interface TenantApiConfig {
   googleAdsDeveloperToken?: string;
   googleAdsCustomerId?: string;
   googleAdsLoginCustomerId?: string;
+  googleAdsRefreshToken?: string;
+  googleAdsClientId?: string;
+  googleAdsClientSecret?: string;
   metaAccessToken?: string;
   metaAdAccountId?: string;
   metaPixelId?: string;

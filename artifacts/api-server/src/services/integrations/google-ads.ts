@@ -1,7 +1,7 @@
 import { withRetry } from "./rate-limiter";
 import type { OciPayload } from "../reconciliation";
 
-const GOOGLE_ADS_API_VERSION = "v17";
+const GOOGLE_ADS_API_VERSION = "v19";
 const GOOGLE_ADS_BASE = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
 interface GoogleAdsConfig {
@@ -28,6 +28,11 @@ async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
   }
 
   try {
+    const maskedClientId = config.clientId.length > 8
+      ? `${config.clientId.slice(0, 8)}...${config.clientId.slice(-4)}`
+      : "****";
+    console.log(`[Google Ads] Refreshing token for customer ${config.customerId} (clientId: ${maskedClientId})`);
+
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -42,6 +47,7 @@ async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
     if (!response.ok) {
       const text = await response.text();
       console.error(`[Google Ads] Token refresh failed (${response.status}): ${text}`);
+      console.error(`[Google Ads] Hint: Verify that your OAuth Client ID, Client Secret, and Refresh Token are correct and were generated from the same OAuth app.`);
       return config.accessToken;
     }
 
