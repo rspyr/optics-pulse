@@ -10,6 +10,7 @@ export const jobsTable = pgTable("jobs", {
   tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
   stJobId: text("st_job_id"),
   stCustomerId: text("st_customer_id"),
+  stLocationId: text("st_location_id"),
   customerName: text("customer_name").notNull(),
   customerPhone: text("customer_phone"),
   customerEmail: text("customer_email"),

@@ -23,7 +23,7 @@ export class TokenBucketRateLimiter {
 
   async acquire(): Promise<void> {
     const waitTime = Math.ceil(this.refillIntervalMs / this.refillRate);
-    const maxAttempts = 10;
+    const maxAttempts = 60;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.refill();
       if (this.tokens > 0) {

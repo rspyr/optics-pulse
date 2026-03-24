@@ -81,6 +81,14 @@ interface STCustomersResponse {
   hasMore: boolean;
 }
 
+interface STLocationsResponse {
+  data: STLocation[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
 let tokenCache: Map<string, { token: string; expiresAt: number }> = new Map();
 
 async function getAccessToken(config: STAuthConfig): Promise<string> {
@@ -195,6 +203,44 @@ export async function fetchCustomersByIds(
   return customerMap;
 }
 
+export async function fetchLocationsByIds(
+  config: STAuthConfig,
+  locationIds: number[],
+): Promise<Map<number, STLocation>> {
+  const locationMap = new Map<number, STLocation>();
+  if (locationIds.length === 0) return locationMap;
+
+  const uniqueIds = [...new Set(locationIds)];
+  const batchSize = 50;
+
+  for (let i = 0; i < uniqueIds.length; i += batchSize) {
+    const batch = uniqueIds.slice(i, i + batchSize);
+    const idsParam = batch.join(",");
+
+    try {
+      const response = await stFetch<STLocationsResponse>(
+        config,
+        `/locations?ids=${idsParam}&pageSize=${batchSize}`,
+        {},
+        "crm",
+      );
+
+      for (const location of response.data) {
+        locationMap.set(location.id, location);
+      }
+    } catch (err) {
+      console.warn(`[ServiceTitan] Failed to fetch location batch: ${(err as Error).message}`);
+    }
+  }
+
+  return locationMap;
+}
+
+export function formatLocationAddress(address: { street: string; city: string; state: string; zip: string }): string {
+  const parts = [address.street, address.city, `${address.state} ${address.zip}`].filter(Boolean);
+  return parts.join(", ");
+}
+
 export async function fetchCompletedJobs(
   config: STAuthConfig,
   modifiedAfter?: string,
@@ -227,22 +273,36 @@ export async function fetchCompletedJobs(
 
   const revenueJobs = allJobs.filter((j) => j.total > 0);
   const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
+  const locationIds = revenueJobs.map((j) => j.locationId).filter(Boolean);
   const uniqueCustomerCount = new Set(customerIds).size;
-  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue — ${uniqueCustomerCount} unique customers`);
+  const uniqueLocationCount = new Set(locationIds).size;
+  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue — ${uniqueCustomerCount} unique customers, ${uniqueLocationCount} unique locations`);
 
-  if (customerIds.length > 0) {
-    try {
-      const customerMap = await fetchCustomersByIds(config, customerIds);
-      for (const job of allJobs) {
-        if (job.customerId && customerMap.has(job.customerId)) {
-          job.customer = customerMap.get(job.customerId);
-        }
-      }
-    } catch (err) {
-      console.warn(`[ServiceTitan] Customer enrichment failed, using basic names: ${(err as Error).message}`);
+  const [customerMap, locationMap] = await Promise.all([
+    customerIds.length > 0
+      ? fetchCustomersByIds(config, customerIds).catch((err) => {
+          console.warn(`[ServiceTitan] Customer enrichment failed: ${(err as Error).message}`);
+          return new Map<number, STCustomer>();
+        })
+      : Promise.resolve(new Map<number, STCustomer>()),
+    locationIds.length > 0
+      ? fetchLocationsByIds(config, locationIds).catch((err) => {
+          console.warn(`[ServiceTitan] Location enrichment failed: ${(err as Error).message}`);
+          return new Map<number, STLocation>();
+        })
+      : Promise.resolve(new Map<number, STLocation>()),
+  ]);
+
+  for (const job of allJobs) {
+    if (job.customerId && customerMap.has(job.customerId)) {
+      job.customer = customerMap.get(job.customerId);
+    }
+    if (job.locationId && locationMap.has(job.locationId)) {
+      job.location = locationMap.get(job.locationId);
     }
   }
 
+  console.log(`[ServiceTitan] Enriched ${customerMap.size} customers, ${locationMap.size} locations`);
   return allJobs;
 }
 
@@ -298,12 +358,11 @@ export function formatSTJobForSync(stJob: STJob) {
   return {
     stJobId: String(stJob.id),
     stCustomerId: String(stJob.customerId),
+    stLocationId: stJob.locationId ? String(stJob.locationId) : null,
     customerName: stJob.customer?.name || `Customer ${stJob.customerId}`,
     customerPhone: phone,
     customerEmail: email,
-    serviceAddress: address
-      ? `${address.street}, ${address.city}, ${address.state} ${address.zip}`
-      : null,
+    serviceAddress: address ? formatLocationAddress(address) : null,
     jobType: stJob.summary || "Service",
     jobTypeName: extractJobTypeName(stJob),
     businessUnit: stJob.businessUnit?.name || null,
