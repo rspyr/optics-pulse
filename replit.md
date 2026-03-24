@@ -17,7 +17,7 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 
 **Technical Implementations:**
 - **API:** An Express 5 server handles all API requests.
-- **Database:** PostgreSQL is used as the primary database, managed with Drizzle ORM.
+- **Database:** PostgreSQL is used as the primary database, managed with Drizzle ORM. Production seeding is managed by `autoSeedIfEmpty()` which loads tenant data (including encrypted API keys, spiff configs, funnel types, and automation rules) from `src/seed-data.json`. Run `pnpm --filter @workspace/api-server run export-seed` to snapshot current dev data before publishing. The build step copies `seed-data.json` to `dist/` automatically.
 - **Authentication:** Session-based authentication is implemented using `express-session` with a PostgreSQL store and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) governs portal access.
 - **Real-time Features:** Socket.IO is integrated for real-time lead notifications and other interactive elements, ensuring tenant isolation.
 - **API Codegen:** OpenAPI specifications are used with Orval for generating TypeScript API clients (`api-client-react`) and Zod schemas (`api-zod`), promoting type safety and consistency.

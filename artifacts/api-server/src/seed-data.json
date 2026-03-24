@@ -1,0 +1,217 @@
+{
+  "exportedAt": "2026-03-24T20:24:04.015Z",
+  "tenants": [
+    {
+      "name": "Advantage Heating & Cooling",
+      "serviceTitanId": "4029621154",
+      "timezone": "America/Los_Angeles",
+      "apiConfig": "1dM2hsHquS3KXYRsq0EA2b2N+RereV9L7A3g8dhy6DW7anNwHMBd8xwM/qs2h6ZBBDA/FHqqODGayrCbCiTrPSZcSyQ+Q5EFFNGP0+ZCnxYyLeROxBas+LNSNpq6T5JpBT34INPp72UCptD4WqTKASIgrzRUxeZk8s/2tZzh8BUPmQ6fMUiibTEYa/Bh8s41M9ZPq2qL59Gkiz6OWTKk0H5VEusOdOo9Z00m2VJaMpcebx/trEQ50YR/sWI8PC4GS4i4bS8+fIFH4HlMvKjINV51MOIih7neSM5VrQXQClGOK//C/538F0xgzUB+al8jQ5DrLTteDSdCV2YoG+P73lvW69EjLluja4i56smRt4oURcxDKfi2h/AapfR3aMFcEODa8Ot24y88ko76gsmH+38fv2o77ppIx90td8s0gkoWvhERRsndoxCX0hhJd3hQm8Ejzc9rBEpie8Pd1IIj7cap045u6D7UJCeIhiH5HIJWK6kLS6xwEr85JMct1TBxsuoVqkIUaUsXTHhCeo5WBMlm9uOYwHsdC7kyAAiFQBs8CZ1iliddwQKRS8c0HnzqN/mfabhQ+NYv/N7Ad50MlOxT36oDqSNCk3ciQpYpkHAhQqoVLDtIei7uA/CwCLLU0B3rZjHtJ5oBCBzWCR3S46woWBszvEdo8Mqg8wR5PuZZ3gI1AA++CUYfP9uMnmJv5gwqjdoUrGAhJb3ogQp2R+4nZZ2lsVwRkRiu/sjM+9AfuXjkKSl22tgn8g68TESCJTvxiyR1fA0uVQU/gWm41uvqDHlLSP6FnkbSr9S5cNqBJeux5yeW/y7X1gvItgApqgUHccsYG0ZBIyL/uwdVN9aFj382ctcZt6mgpIgl9wGw7cMHz4ftwWQBRxD4EGZlQMnjExAFakrxhPAnc3jCJ/YC27o2u62ihMuqXcZW58vOurGgpNBtDvzyrIa3pLsUNNdIclkWzSmHj/ZmGfI4hP7oADXIzrFbZ0BIhNKTFAV9kzbWcOMiNUl9aBN6eTHC3FWg42f2UCBSkVYcn6vII72S66rhNIhkcsTr3jnxnElijundAw0HUE+ipAs+xMTbi7L+QsenTBFm7obleo+hy+LXsZy4IYSSTgW2yfuJhMXrk74C3Kj6/ttmIEgmIuOqtvjvieK/CrOidnR2kEiX52OddR/3JarGeFzUBGKRZ/cFr/tVfXh2h0edd2LGWFazfqK6HRWloNe/o0Lp9OvDDqh+F4WhwqmUveK9m/Rx6PLuqjfe97t9Vw4cWUJIHWGAV0s7RnOUREOClwZy6Zl6yrMuZ5Ix6VObvF9o6C3VNvMkv9AylZQB4xs6EvtYc8SR/dv8kC1UOJ3eZwe3MyESuapPxgHDQfKnf5uvoQ1SRAFea+oW0WcbDbN8PpOifuCfpIe8/yMHm+YSl5HoTpdQ5aCMdnkaZfAqwaDcHrsavVXCXM97z1/Bbn6kbel7bgBMzE75eeZkQkER60KPcA3JNjARYQ80MV9d5BNmb1czg9Hwfur2+YDXTFCI7yP99TRZS3P1tYcKKtP7sqp6Kx+WDo8fx7pf0CF+r474Ug4mTnyWzWazIurtIIrgPB9aqPwvoNIO6alYZwRntAd9fGhzW3BHfZhIM4e0ZndHfuBJ105vFFLalchRhad5LruWo+yXmorlN/Dht8DpthhMdVPqFGZgpe2aejYHfiCIoCVbCZvQAeufrt15G977+7+YYPimARllZR9q",
+      "alertConfig": null,
+      "communicationConfig": null,
+      "leaderboardConfig": null,
+      "spiffConfig": null,
+      "isActive": true
+    },
+    {
+      "name": "Nordic Climate Solutions",
+      "serviceTitanId": "ST-NORDIC-002",
+      "timezone": "America/Chicago",
+      "apiConfig": null,
+      "alertConfig": null,
+      "communicationConfig": null,
+      "leaderboardConfig": {
+        "visible": true,
+        "displayMode": "named"
+      },
+      "spiffConfig": {
+        "default": 25,
+        "byLeadType": {
+          "AC Tune-Up": 35
+        }
+      },
+      "isActive": true
+    },
+    {
+      "name": "Apex HVAC",
+      "serviceTitanId": "ST-APEX-001",
+      "timezone": "America/New_York",
+      "apiConfig": "N06C175MQ5E0tt40/i7yXmVJwEmEVj6ZAuocpXkfEXpjz0v0t3hObaEKhLIbtym9GmnNiuOIJAMPrTbU26DlcCHU2oBRNZcqz/sw558M46eWORc2s6Cqo6tyYrlQ/OWMdV8=",
+      "alertConfig": null,
+      "communicationConfig": null,
+      "leaderboardConfig": {
+        "visible": true,
+        "displayMode": "anonymized"
+      },
+      "spiffConfig": {
+        "default": 20,
+        "byLeadType": {
+          "organic": 20,
+          "Seasonal Promo": 0,
+          "Emergency Repair": 40
+        }
+      },
+      "isActive": true
+    }
+  ],
+  "users": [
+    {
+      "email": "admin@hvaclaunch.com",
+      "name": "Aaron Mitchell",
+      "role": "super_admin",
+      "tenantName": null
+    },
+    {
+      "email": "ben@hvaclaunch.com",
+      "name": "Ben Carter",
+      "role": "agency_user",
+      "tenantName": null
+    },
+    {
+      "email": "brandon@apexhvac.com",
+      "name": "Brandon Hayes",
+      "role": "client_admin",
+      "tenantName": "Apex HVAC"
+    },
+    {
+      "email": "dan@apexhvac.com",
+      "name": "Dan Collins",
+      "role": "client_user",
+      "tenantName": "Apex HVAC"
+    },
+    {
+      "email": "corey@apexhvac.com",
+      "name": "Corey Mitchell",
+      "role": "client_user",
+      "tenantName": "Apex HVAC"
+    },
+    {
+      "email": "owner@nordicclimate.com",
+      "name": "Erik Johansson",
+      "role": "client_admin",
+      "tenantName": "Nordic Climate Solutions"
+    },
+    {
+      "email": "yoojin@hvaclaunch.com",
+      "name": "YooJin Park",
+      "role": "agency_user",
+      "tenantName": null
+    }
+  ],
+  "funnelTypes": [
+    {
+      "name": "Fit Funnel",
+      "slug": "fit-funnel",
+      "description": "Multi-step quiz funnel qualifying homeowner HVAC needs",
+      "isActive": true
+    },
+    {
+      "name": "Emergency Repair",
+      "slug": "emergency-repair",
+      "description": "Direct high-intent emergency service landing page",
+      "isActive": true
+    },
+    {
+      "name": "Financing Quiz",
+      "slug": "financing-quiz",
+      "description": "Monthly payment calculator with pre-qualification",
+      "isActive": true
+    },
+    {
+      "name": "Seasonal Promo",
+      "slug": "seasonal-promo",
+      "description": "Limited-time seasonal discount offer funnel",
+      "isActive": true
+    },
+    {
+      "name": "Home Assessment",
+      "slug": "home-assessment",
+      "description": "Full-home energy audit and HVAC assessment request",
+      "isActive": true
+    },
+    {
+      "name": "Referral Program",
+      "slug": "referral-program",
+      "description": "Customer referral incentive landing page",
+      "isActive": true
+    },
+    {
+      "name": "AC Tune-Up",
+      "slug": "ac-tune-up",
+      "description": "Spring AC maintenance special offer",
+      "isActive": true
+    }
+  ],
+  "tenantFunnelAssociations": [
+    {
+      "tenantName": "Nordic Climate Solutions",
+      "funnelSlug": "ac-tune-up"
+    },
+    {
+      "tenantName": "Apex HVAC",
+      "funnelSlug": "emergency-repair"
+    },
+    {
+      "tenantName": "Apex HVAC",
+      "funnelSlug": "financing-quiz"
+    },
+    {
+      "tenantName": "Apex HVAC",
+      "funnelSlug": "fit-funnel"
+    },
+    {
+      "tenantName": "Nordic Climate Solutions",
+      "funnelSlug": "fit-funnel"
+    },
+    {
+      "tenantName": "Nordic Climate Solutions",
+      "funnelSlug": "home-assessment"
+    },
+    {
+      "tenantName": "Nordic Climate Solutions",
+      "funnelSlug": "referral-program"
+    },
+    {
+      "tenantName": "Apex HVAC",
+      "funnelSlug": "seasonal-promo"
+    },
+    {
+      "tenantName": "Advantage Heating & Cooling",
+      "funnelSlug": "fit-funnel"
+    }
+  ],
+  "automationRules": [
+    {
+      "name": "7-Day CPL Check",
+      "description": null,
+      "conditionType": "cpl_above",
+      "conditionValue": 150,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": "Apex HVAC",
+      "isEnabled": true,
+      "lookbackDays": 7
+    },
+    {
+      "name": "Low ROAS Warning",
+      "description": "Flag campaigns with ROAS below 2x",
+      "conditionType": "roas_below",
+      "conditionValue": 2,
+      "actionType": "flag_for_review",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    },
+    {
+      "name": "High Spend Alert",
+      "description": "Alert when campaign spend exceeds $5000",
+      "conditionType": "spend_above",
+      "conditionValue": 5000,
+      "actionType": "send_alert",
+      "platform": null,
+      "tenantName": null,
+      "isEnabled": true,
+      "lookbackDays": 30
+    }
+  ]
+}
