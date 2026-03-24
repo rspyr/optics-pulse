@@ -111,13 +111,19 @@ interface TenantOption { id: number; name: string; }
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
+  const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
 
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(tenantIdOverride ?? user?.tenantId ?? null);
+  const [localTenantId, setLocalTenantId] = useState<number | null>(tenantIdOverride ?? globalTenantId ?? user?.tenantId ?? null);
+
+  useEffect(() => {
+    if (!tenantIdOverride && globalTenantId !== null && globalTenantId !== localTenantId) {
+      setLocalTenantId(globalTenantId);
+    }
+  }, [globalTenantId, tenantIdOverride]);
 
   const setSelectedTenantId = useCallback((id: number | null) => {
-    setSelectedTenantIdLocal(id);
+    setLocalTenantId(id);
     setGlobalTenantId(id);
   }, [setGlobalTenantId]);
 
@@ -129,7 +135,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
         if (Array.isArray(data)) {
           const mapped = data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name }));
           setTenants(mapped);
-          setSelectedTenantIdLocal(prev => {
+          setLocalTenantId(prev => {
             if (prev !== null) return prev;
             if (mapped.length > 0) {
               setGlobalTenantId(mapped[0].id);
@@ -142,7 +148,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       .catch(() => {});
   }, [isAgency, setGlobalTenantId]);
 
-  const effectiveTenantId = tenantIdOverride ?? (isAgency ? selectedTenantId : user?.tenantId) ?? 1;
+  const effectiveTenantId = tenantIdOverride ?? (isAgency ? localTenantId : user?.tenantId) ?? 1;
 
   useEffect(() => {
     if (isAgency && effectiveTenantId) {
@@ -492,7 +498,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
             <select
-              value={selectedTenantId ?? ""}
+              value={localTenantId ?? ""}
               onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
               className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
             >
