@@ -376,14 +376,6 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
               </div>
             ))}
 
-            {isLoading && messages.length > 0 && !messages[messages.length - 1]?.content && statusMessage && (
-              <div className="flex justify-start">
-                <div className="bg-white/5 border border-white/5 rounded-xl px-4 py-3 flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                  <span className="text-sm text-muted-foreground">{statusMessage}</span>
-                </div>
-              </div>
-            )}
             <div ref={messagesEndRef} />
           </div>
         )}

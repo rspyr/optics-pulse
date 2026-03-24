@@ -25,8 +25,10 @@ You have access to the following database tables for this tenant's marketing dat
 1. **leads** - Potential customers / inbound leads
    Columns: id, tenantId, firstName, lastName, phone, email, source (text - e.g. "google", "meta", "organic", "referral"), leadType (text), interestType (text), status (enum: "new","contacted","booked","sold","lost","cancelled"), isNewCustomer (boolean), matchedGclid, assignedTo (text - coordinator name), disposition (text), createdAt, updatedAt
 
-2. **campaigns** - Marketing campaigns (Google Ads, Meta, etc.)
+2. **campaigns** - Marketing campaigns with aggregated spend data (Google Ads, Meta, etc.)
    Columns: id, tenantId, platform (text - "google","meta","facebook"), externalId, name, status, createdAt
+   Auto-joined financial data: spend, clicks, impressions, conversions (aggregated from campaign_daily_stats)
+   Use this table for per-campaign spend/performance breakdowns.
 
 3. **campaign_daily_stats** - Daily performance metrics per campaign
    Columns: id, campaignId (FK to campaigns), date (date string), spend (float), impressions (int), clicks (int), conversions (int)
@@ -337,11 +339,34 @@ async function queryCampaigns(
   if (f.platform) conditions.push(eq(campaignsTable.platform, String(f.platform)));
   if (f.status) conditions.push(eq(campaignsTable.status, String(f.status)));
 
+  const dateConditions: SQL[] = [];
+  const range = plan.dateRange || (plan.filters?.dateRange as { start?: string; end?: string } | undefined);
+  if (range?.start) dateConditions.push(gte(campaignDailyStatsTable.date, range.start));
+  if (range?.end) dateConditions.push(lte(campaignDailyStatsTable.date, range.end));
+
   const rows = await db
-    .select()
+    .select({
+      id: campaignsTable.id,
+      name: campaignsTable.name,
+      platform: campaignsTable.platform,
+      status: campaignsTable.status,
+      createdAt: campaignsTable.createdAt,
+      totalSpend: sum(campaignDailyStatsTable.spend),
+      totalClicks: sum(campaignDailyStatsTable.clicks),
+      totalImpressions: sum(campaignDailyStatsTable.impressions),
+      totalConversions: sum(campaignDailyStatsTable.conversions),
+    })
     .from(campaignsTable)
+    .leftJoin(
+      campaignDailyStatsTable,
+      and(
+        eq(campaignDailyStatsTable.campaignId, campaignsTable.id),
+        ...dateConditions
+      )
+    )
     .where(and(...conditions))
-    .orderBy(desc(campaignsTable.createdAt))
+    .groupBy(campaignsTable.id, campaignsTable.name, campaignsTable.platform, campaignsTable.status, campaignsTable.createdAt)
+    .orderBy(desc(sql`sum(${campaignDailyStatsTable.spend})`))
     .limit(limit);
 
   return rows.map((r) => ({
@@ -349,6 +374,10 @@ async function queryCampaigns(
     name: r.name,
     platform: r.platform,
     status: r.status,
+    spend: Number(r.totalSpend) || 0,
+    clicks: Number(r.totalClicks) || 0,
+    impressions: Number(r.totalImpressions) || 0,
+    conversions: Number(r.totalConversions) || 0,
     createdAt: r.createdAt?.toISOString?.() || r.createdAt,
   }));
 }
