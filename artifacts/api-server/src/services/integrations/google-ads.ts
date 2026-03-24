@@ -1,7 +1,7 @@
 import { withRetry } from "./rate-limiter";
 import type { OciPayload } from "../reconciliation";
 
-const GOOGLE_ADS_API_VERSION = "v17";
+const GOOGLE_ADS_API_VERSION = "v19";
 const GOOGLE_ADS_BASE = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
 interface GoogleAdsConfig {
