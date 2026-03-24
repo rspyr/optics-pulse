@@ -31,7 +31,7 @@ async function getValidAccessToken(config: GoogleAdsConfig): Promise<string> {
     const maskedClientId = config.clientId.length > 8
       ? `${config.clientId.slice(0, 8)}...${config.clientId.slice(-4)}`
       : "****";
-    console.log(`[Google Ads] Refreshing token for customer ${config.customerId} (clientId: ${maskedClientId}, clientId_len: ${config.clientId.length}, secret_len: ${config.clientSecret.length}, refresh_len: ${config.refreshToken.length})`);
+    console.log(`[Google Ads] Refreshing token for customer ${config.customerId} (clientId: ${maskedClientId})`);
 
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",

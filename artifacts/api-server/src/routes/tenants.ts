@@ -139,9 +139,12 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     }
     const newFields = req.body.integrationConfig as Record<string, unknown>;
     for (const [key, val] of Object.entries(newFields)) {
-      if (val !== undefined && val !== null && val !== "") {
-        const strVal = String(val);
-        if (strVal.startsWith("••••") || strVal.startsWith("****")) continue;
+      if (val === undefined || val === null) continue;
+      const strVal = String(val);
+      if (strVal.startsWith("••••") || strVal.startsWith("****")) continue;
+      if (strVal === "" || strVal === "__CLEAR__") {
+        delete mergedConfig[key];
+      } else {
         mergedConfig[key] = val;
       }
     }

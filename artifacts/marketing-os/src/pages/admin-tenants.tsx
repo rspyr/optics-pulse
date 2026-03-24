@@ -123,6 +123,10 @@ export default function AdminTenants() {
       "podiumApiToken", "podiumLocationId",
     ];
     for (const key of integrationKeys) {
+      if (clearedFields.has(key)) {
+        config[key] = "__CLEAR__";
+        continue;
+      }
       const val = form[key];
       if (!val) continue;
       if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
@@ -205,6 +209,7 @@ export default function AdminTenants() {
       podiumLocationId: lc.podiumLocationId || "",
     });
     setDirtyFields(new Set());
+    setClearedFields(new Set());
     setShowIntegrationConfig(false);
     setEditTab("integrations");
   };
@@ -218,6 +223,33 @@ export default function AdminTenants() {
       trackFieldChange(field);
       setForm(f => ({ ...f, [field]: "" }));
     }
+  };
+
+  const [clearedFields, setClearedFields] = useState<Set<string>>(new Set());
+
+  const handleClearSecret = (field: keyof TenantForm) => {
+    trackFieldChange(field);
+    setForm(f => ({ ...f, [field]: "" }));
+    setClearedFields(prev => new Set(prev).add(field));
+  };
+
+  const SecretInput = ({ field, label, placeholder = "Enter to update" }: { field: keyof TenantForm; label: string; placeholder?: string }) => {
+    const hasValue = form[field] && (form[field].startsWith("••••") || form[field].startsWith("****"));
+    const isCleared = clearedFields.has(field);
+    return (
+      <div>
+        <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">{label}</label>
+        <div className="relative">
+          <input type={secretInputType(field)} value={form[field] || ""} onFocus={() => handleSecretFocus(field)} onChange={(e) => { trackFieldChange(field); setClearedFields(prev => { const s = new Set(prev); s.delete(field); return s; }); setForm(f => ({ ...f, [field]: e.target.value })); }} placeholder={isCleared ? "Cleared — save to apply" : placeholder} className={inputClass + " w-full" + (isCleared ? " border-red-500/50" : "")} />
+          {(hasValue || isCleared) && !isCleared && (
+            <button type="button" onClick={() => handleClearSecret(field)} className="absolute right-2 top-1/2 -translate-y-1/2 text-red-400 hover:text-red-300 transition-colors" title="Clear this field">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {isCleared && <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-red-400">cleared</span>}
+        </div>
+      </div>
+    );
   };
 
   const IntegrationFields = () => (
@@ -238,14 +270,8 @@ export default function AdminTenants() {
           <div>
             <h4 className="text-xs font-medium text-blue-400 uppercase tracking-wider mb-3">ServiceTitan</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client ID</label>
-                <input type={secretInputType("serviceTitanClientId")} value={form.serviceTitanClientId} onFocus={() => handleSecretFocus("serviceTitanClientId")} onChange={(e) => { trackFieldChange("serviceTitanClientId"); setForm(f => ({ ...f, serviceTitanClientId: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Client Secret</label>
-                <input type={secretInputType("serviceTitanClientSecret")} value={form.serviceTitanClientSecret} onFocus={() => handleSecretFocus("serviceTitanClientSecret")} onChange={(e) => { trackFieldChange("serviceTitanClientSecret"); setForm(f => ({ ...f, serviceTitanClientSecret: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="serviceTitanClientId" label="Client ID" />
+              <SecretInput field="serviceTitanClientSecret" label="Client Secret" />
             </div>
           </div>
           <div>
@@ -255,38 +281,20 @@ export default function AdminTenants() {
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Customer ID</label>
                 <input type="text" value={form.googleAdsCustomerId} onChange={(e) => { trackFieldChange("googleAdsCustomerId"); setForm(f => ({ ...f, googleAdsCustomerId: e.target.value })); }} placeholder="123-456-7890" className={inputClass + " w-full"} />
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Developer Token</label>
-                <input type={secretInputType("googleAdsDeveloperToken")} value={form.googleAdsDeveloperToken} onFocus={() => handleSecretFocus("googleAdsDeveloperToken")} onChange={(e) => { trackFieldChange("googleAdsDeveloperToken"); setForm(f => ({ ...f, googleAdsDeveloperToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token (optional if using refresh)</label>
-                <input type={secretInputType("googleAdsApiKey")} value={form.googleAdsApiKey} onFocus={() => handleSecretFocus("googleAdsApiKey")} onChange={(e) => { trackFieldChange("googleAdsApiKey"); setForm(f => ({ ...f, googleAdsApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="googleAdsDeveloperToken" label="Developer Token" />
+              <SecretInput field="googleAdsApiKey" label="Access Token (optional if using refresh)" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">OAuth Client ID</label>
-                <input type={secretInputType("googleAdsClientId")} value={form.googleAdsClientId} onFocus={() => handleSecretFocus("googleAdsClientId")} onChange={(e) => { trackFieldChange("googleAdsClientId"); setForm(f => ({ ...f, googleAdsClientId: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">OAuth Client Secret</label>
-                <input type={secretInputType("googleAdsClientSecret")} value={form.googleAdsClientSecret} onFocus={() => handleSecretFocus("googleAdsClientSecret")} onChange={(e) => { trackFieldChange("googleAdsClientSecret"); setForm(f => ({ ...f, googleAdsClientSecret: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Refresh Token</label>
-                <input type={secretInputType("googleAdsRefreshToken")} value={form.googleAdsRefreshToken} onFocus={() => handleSecretFocus("googleAdsRefreshToken")} onChange={(e) => { trackFieldChange("googleAdsRefreshToken"); setForm(f => ({ ...f, googleAdsRefreshToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="googleAdsClientId" label="OAuth Client ID" />
+              <SecretInput field="googleAdsClientSecret" label="OAuth Client Secret" />
+              <SecretInput field="googleAdsRefreshToken" label="Refresh Token" />
             </div>
             <p className="text-xs text-muted-foreground mt-2">With OAuth credentials and a Refresh Token, access tokens are refreshed automatically.</p>
           </div>
           <div>
             <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider mb-3">Meta (Facebook/Instagram)</h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Access Token</label>
-                <input type={secretInputType("metaAccessToken")} value={form.metaAccessToken} onFocus={() => handleSecretFocus("metaAccessToken")} onChange={(e) => { trackFieldChange("metaAccessToken"); setForm(f => ({ ...f, metaAccessToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="metaAccessToken" label="Access Token" />
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Ad Account ID</label>
                 <input type="text" value={form.metaAdAccountId} onChange={(e) => { trackFieldChange("metaAdAccountId"); setForm(f => ({ ...f, metaAdAccountId: e.target.value })); }} placeholder="act_123456789" className={inputClass + " w-full"} />
@@ -300,23 +308,14 @@ export default function AdminTenants() {
           <div>
             <h4 className="text-xs font-medium text-green-400 uppercase tracking-wider mb-3">CallRail</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Key</label>
-                <input type={secretInputType("callRailApiKey")} value={form.callRailApiKey} onFocus={() => handleSecretFocus("callRailApiKey")} onChange={(e) => { trackFieldChange("callRailApiKey"); setForm(f => ({ ...f, callRailApiKey: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Webhook Signing Key</label>
-                <input type={secretInputType("callRailSigningKey")} value={form.callRailSigningKey} onFocus={() => handleSecretFocus("callRailSigningKey")} onChange={(e) => { trackFieldChange("callRailSigningKey"); setForm(f => ({ ...f, callRailSigningKey: e.target.value })); }} placeholder="HMAC verification key" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="callRailApiKey" label="API Key" />
+              <SecretInput field="callRailSigningKey" label="Webhook Signing Key" placeholder="HMAC verification key" />
             </div>
           </div>
           <div>
             <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3">Podium</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">API Token</label>
-                <input type={secretInputType("podiumApiToken")} value={form.podiumApiToken} onFocus={() => handleSecretFocus("podiumApiToken")} onChange={(e) => { trackFieldChange("podiumApiToken"); setForm(f => ({ ...f, podiumApiToken: e.target.value })); }} placeholder="Enter to update" className={inputClass + " w-full"} />
-              </div>
+              <SecretInput field="podiumApiToken" label="API Token" />
               <div>
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Location ID</label>
                 <input type="text" value={form.podiumLocationId} onChange={(e) => { trackFieldChange("podiumLocationId"); setForm(f => ({ ...f, podiumLocationId: e.target.value })); }} placeholder="e.g. loc_abc123" className={inputClass + " w-full"} />
