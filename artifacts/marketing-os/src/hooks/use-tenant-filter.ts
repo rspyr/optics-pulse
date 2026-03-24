@@ -22,6 +22,12 @@ export function useTenantFilter(tenantIdOverride?: number) {
     }
   }, [globalTenantId, tenantIdOverride]);
 
+  useEffect(() => {
+    if (isAgency && tenantIdOverride) {
+      setGlobalTenantId(tenantIdOverride);
+    }
+  }, [isAgency, tenantIdOverride, setGlobalTenantId]);
+
   const setSelectedTenantId = useCallback((id: number | null) => {
     setLocalTenantId(id);
     setGlobalTenantId(id);
