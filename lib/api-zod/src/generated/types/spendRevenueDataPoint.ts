@@ -9,5 +9,7 @@
 export interface SpendRevenueDataPoint {
   date: Date;
   spend: number;
+  googleSpend: number;
+  metaSpend: number;
   revenue: number;
 }

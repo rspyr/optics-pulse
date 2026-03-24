@@ -330,7 +330,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   }
 
   const d = overview || {
-    totalSpend: 0, totalRevenue: 0, roas: 0, totalLeads: 0,
+    totalSpend: 0, googleSpend: 0, metaSpend: 0, totalRevenue: 0, roas: 0, totalLeads: 0,
     bookedLeads: 0, soldLeads: 0, bookingRate: 0, closeRate: 0,
     avgSaleValue: 0, cpl: 0, attributionMatchRate: 0, previousPeriod: null,
   };
@@ -880,9 +880,23 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                 <span className="text-gray-400">Total Revenue</span>
                 <span className="text-emerald-400 font-medium">{formatCurrency(d.totalRevenue)}</span>
               </div>
-              <div className="border-t border-white/5 pt-2 flex justify-between">
-                <span className="text-gray-400">Ad Spend</span>
-                <span className="text-red-400">- {formatCurrency(d.totalSpend)}</span>
+              <div className="border-t border-white/5 pt-2 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Ad Spend</span>
+                  <span className="text-red-400">- {formatCurrency(d.totalSpend)}</span>
+                </div>
+                {(d.googleSpend > 0 || d.metaSpend > 0) && (
+                  <div className="pl-3 space-y-1 border-l border-white/5">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Google Ads</span>
+                      <span className="text-red-400/70">- {formatCurrency(d.googleSpend)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Meta Ads</span>
+                      <span className="text-red-400/70">- {formatCurrency(d.metaSpend)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
               {roiMode === "allcosts" && (
                 <div className="flex justify-between">

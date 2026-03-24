@@ -270,7 +270,7 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
 
   try {
     const endDate = new Date().toISOString().split("T")[0];
-    const startDate = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+    const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
 
     const gaConfig = {
       developerToken: config.googleAdsDeveloperToken || "",
@@ -347,7 +347,7 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
 
   try {
     const endDate = new Date().toISOString().split("T")[0];
-    const startDate = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+    const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
 
     const insights = await fetchCampaignInsights(
       { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId },

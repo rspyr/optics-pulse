@@ -14,13 +14,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   if (tenantId) {
     leadConditions.push(eq(leadsTable.tenantId, tenantId));
     jobConditions.push(eq(jobsTable.tenantId, tenantId));
-    const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
-    const campaignIds = tenantCampaigns.map(c => c.id);
-    if (campaignIds.length > 0) {
-      spendConditions.push(inArray(campaignDailyStatsTable.campaignId, campaignIds));
-    } else {
-      tenantHasCampaigns = false;
-    }
+    spendConditions.push(eq(campaignsTable.tenantId, tenantId));
   }
   if (startDate) {
     leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
@@ -37,19 +31,27 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const jobWhere = jobConditions.length > 0 ? and(...jobConditions) : undefined;
   const spendWhere = spendConditions.length > 0 ? and(...spendConditions) : undefined;
 
-  const [leads, jobs, spendResult] = await Promise.all([
+  const [leads, jobs, platformSpendResult] = await Promise.all([
     db.select().from(leadsTable).where(leadWhere),
     db.select().from(jobsTable).where(jobWhere),
-    tenantHasCampaigns
-      ? db.select({ total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)` }).from(campaignDailyStatsTable).where(spendWhere)
-      : Promise.resolve([{ total: 0 }]),
+    db.select({
+      platform: campaignsTable.platform,
+      total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
+    })
+      .from(campaignDailyStatsTable)
+      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+      .where(spendWhere)
+      .groupBy(campaignsTable.platform),
   ]);
+
+  const googleSpend = Number(platformSpendResult.find(r => r.platform === "google_ads")?.total || 0);
+  const metaSpend = Number(platformSpendResult.find(r => r.platform === "meta")?.total || 0);
+  const totalSpend = platformSpendResult.reduce((sum, r) => sum + Number(r.total || 0), 0);
 
   const totalLeads = leads.length;
   const bookedLeads = leads.filter(l => l.status === "booked" || l.status === "sold").length;
   const soldLeads = leads.filter(l => l.status === "sold").length;
   const totalRevenue = jobs.filter(j => j.status === "completed").reduce((s, j) => s + (j.revenue || 0), 0);
-  const totalSpend = Number(spendResult[0]?.total || 0);
   const matchedEvents = jobs.filter(j => j.matchLevel && j.matchLevel !== "unmatched").length;
   const totalJobs = jobs.length;
 
@@ -62,6 +64,8 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
 
   return {
     totalSpend: Math.round(totalSpend * 100) / 100,
+    googleSpend: Math.round(googleSpend * 100) / 100,
+    metaSpend: Math.round(metaSpend * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     roas,
     totalLeads,
@@ -104,67 +108,56 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
 
-  let statsQuery;
-  let jobsQuery;
+  const statsConditions: SQL[] = [];
+  const jobConditions: SQL[] = [eq(jobsTable.status, "completed")];
+
   if (tenantId) {
-    const tenantCampaigns = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
-    const campaignIds = tenantCampaigns.map(c => c.id);
-
-    const statsConditions: SQL[] = [];
-    const jobConditions: SQL[] = [eq(jobsTable.tenantId, tenantId), eq(jobsTable.status, "completed")];
-
-    if (campaignIds.length > 0) {
-      statsConditions.push(inArray(campaignDailyStatsTable.campaignId, campaignIds));
-    }
-    if (startDate) {
-      statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
-      jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
-    }
-    if (endDate) {
-      statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
-      jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
-    }
-
-    statsQuery = campaignIds.length > 0 && statsConditions.length > 0
-      ? db.select().from(campaignDailyStatsTable).where(and(...statsConditions)).orderBy(campaignDailyStatsTable.date)
-      : campaignIds.length > 0
-        ? db.select().from(campaignDailyStatsTable).where(inArray(campaignDailyStatsTable.campaignId, campaignIds)).orderBy(campaignDailyStatsTable.date)
-        : Promise.resolve([]);
-    jobsQuery = db.select().from(jobsTable).where(and(...jobConditions));
-  } else {
-    const statsConditions: SQL[] = [];
-    const jobConditions: SQL[] = [eq(jobsTable.status, "completed")];
-
-    if (startDate) {
-      statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
-      jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
-    }
-    if (endDate) {
-      statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
-      jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
-    }
-
-    statsQuery = statsConditions.length > 0
-      ? db.select().from(campaignDailyStatsTable).where(and(...statsConditions)).orderBy(campaignDailyStatsTable.date)
-      : db.select().from(campaignDailyStatsTable).orderBy(campaignDailyStatsTable.date);
-    jobsQuery = db.select().from(jobsTable).where(and(...jobConditions));
+    statsConditions.push(eq(campaignsTable.tenantId, tenantId));
+    jobConditions.push(eq(jobsTable.tenantId, tenantId));
+  }
+  if (startDate) {
+    statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
+    jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
+  }
+  if (endDate) {
+    statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
+    jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
   }
 
-  const [stats, jobs] = await Promise.all([statsQuery, jobsQuery]);
+  const statsWhere = statsConditions.length > 0 ? and(...statsConditions) : undefined;
 
-  const dailyMap = new Map<string, { spend: number; revenue: number }>();
+  const [stats, jobs] = await Promise.all([
+    db.select({
+      date: campaignDailyStatsTable.date,
+      platform: campaignsTable.platform,
+      spend: campaignDailyStatsTable.spend,
+    })
+      .from(campaignDailyStatsTable)
+      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+      .where(statsWhere)
+      .orderBy(campaignDailyStatsTable.date),
+    db.select().from(jobsTable).where(and(...jobConditions)),
+  ]);
+
+  const dailyMap = new Map<string, { spend: number; googleSpend: number; metaSpend: number; revenue: number }>();
 
   for (const s of stats) {
     const dateStr = typeof s.date === 'string' ? s.date : String(s.date);
-    const existing = dailyMap.get(dateStr) || { spend: 0, revenue: 0 };
-    existing.spend += s.spend || 0;
+    const existing = dailyMap.get(dateStr) || { spend: 0, googleSpend: 0, metaSpend: 0, revenue: 0 };
+    const amount = s.spend || 0;
+    existing.spend += amount;
+    if (s.platform === "google_ads") {
+      existing.googleSpend += amount;
+    } else if (s.platform === "meta") {
+      existing.metaSpend += amount;
+    }
     dailyMap.set(dateStr, existing);
   }
 
   for (const j of jobs) {
     if (j.completedAt) {
       const dateStr = j.completedAt.toISOString().split("T")[0];
-      const existing = dailyMap.get(dateStr) || { spend: 0, revenue: 0 };
+      const existing = dailyMap.get(dateStr) || { spend: 0, googleSpend: 0, metaSpend: 0, revenue: 0 };
       existing.revenue += j.revenue || 0;
       dailyMap.set(dateStr, existing);
     }
@@ -174,6 +167,8 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
     .map(([date, data]) => ({
       date,
       spend: Math.round(data.spend * 100) / 100,
+      googleSpend: Math.round(data.googleSpend * 100) / 100,
+      metaSpend: Math.round(data.metaSpend * 100) / 100,
       revenue: Math.round(data.revenue * 100) / 100,
     }))
     .sort((a, b) => a.date.localeCompare(b.date));

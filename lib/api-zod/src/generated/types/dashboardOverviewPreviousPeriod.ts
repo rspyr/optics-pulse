@@ -8,6 +8,8 @@
 
 export type DashboardOverviewPreviousPeriod = {
   totalSpend?: number;
+  googleSpend?: number;
+  metaSpend?: number;
   totalRevenue?: number;
   roas?: number;
   totalLeads?: number;

@@ -9,6 +9,8 @@ import type { DashboardOverviewPreviousPeriod } from "./dashboardOverviewPreviou
 
 export interface DashboardOverview {
   totalSpend: number;
+  googleSpend: number;
+  metaSpend: number;
   totalRevenue: number;
   roas: number;
   totalLeads: number;

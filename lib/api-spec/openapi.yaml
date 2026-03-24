@@ -1488,6 +1488,10 @@ components:
       properties:
         totalSpend:
           type: number
+        googleSpend:
+          type: number
+        metaSpend:
+          type: number
         totalRevenue:
           type: number
         roas:
@@ -1513,6 +1517,10 @@ components:
           properties:
             totalSpend:
               type: number
+            googleSpend:
+              type: number
+            metaSpend:
+              type: number
             totalRevenue:
               type: number
             roas:
@@ -1534,7 +1542,7 @@ components:
             attributionMatchRate:
               type: number
           nullable: true
-      required: [totalSpend, totalRevenue, roas, totalLeads, bookedLeads, soldLeads, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
+      required: [totalSpend, googleSpend, metaSpend, totalRevenue, roas, totalLeads, bookedLeads, soldLeads, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
 
     SpendRevenueDataPoint:
       type: object
@@ -1544,9 +1552,13 @@ components:
           format: date
         spend:
           type: number
+        googleSpend:
+          type: number
+        metaSpend:
+          type: number
         revenue:
           type: number
-      required: [date, spend, revenue]
+      required: [date, spend, googleSpend, metaSpend, revenue]
 
     BenchmarkData:
       type: object

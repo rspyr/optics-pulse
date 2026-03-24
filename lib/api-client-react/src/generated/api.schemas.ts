@@ -244,6 +244,8 @@ export interface WebhookIngestResponse {
 
 export type DashboardOverviewPreviousPeriod = {
   totalSpend?: number;
+  googleSpend?: number;
+  metaSpend?: number;
   totalRevenue?: number;
   roas?: number;
   totalLeads?: number;
@@ -258,6 +260,8 @@ export type DashboardOverviewPreviousPeriod = {
 
 export interface DashboardOverview {
   totalSpend: number;
+  googleSpend: number;
+  metaSpend: number;
   totalRevenue: number;
   roas: number;
   totalLeads: number;
@@ -274,6 +278,8 @@ export interface DashboardOverview {
 export interface SpendRevenueDataPoint {
   date: string;
   spend: number;
+  googleSpend: number;
+  metaSpend: number;
   revenue: number;
 }
 

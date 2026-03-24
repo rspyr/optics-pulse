@@ -33,12 +33,13 @@ export const ListTenantsResponse = zod.array(ListTenantsResponseItem);
  * @summary Create a new tenant
  */
 export const createTenantBodyTimezoneDefault = `America/New_York`;
+export const createTenantBodyIsDemoDefault = false;
 
 export const CreateTenantBody = zod.object({
   name: zod.string(),
   serviceTitanId: zod.string().optional(),
   timezone: zod.string().default(createTenantBodyTimezoneDefault),
-  isDemo: zod.boolean().optional().default(false),
+  isDemo: zod.boolean().default(createTenantBodyIsDemoDefault),
 });
 
 /**
@@ -497,10 +498,10 @@ export const ListJobsResponse = zod.object({
 });
 
 /**
- * @summary Ingest webhook from any lead source
+ * @summary Ingest webhook from CallRail, GoHighLevel, or forms
  */
 export const IngestWebhookBody = zod.object({
-  source: zod.string().min(1),
+  source: zod.enum(["callrail", "ghl", "form", "manual"]),
   tenantId: zod.number().describe("Target tenant for this webhook event"),
   data: zod.object({
     phone: zod.string().optional(),
@@ -532,6 +533,8 @@ export const GetDashboardOverviewQueryParams = zod.object({
 
 export const GetDashboardOverviewResponse = zod.object({
   totalSpend: zod.number(),
+  googleSpend: zod.number(),
+  metaSpend: zod.number(),
   totalRevenue: zod.number(),
   roas: zod.number(),
   totalLeads: zod.number(),
@@ -545,6 +548,8 @@ export const GetDashboardOverviewResponse = zod.object({
   previousPeriod: zod
     .object({
       totalSpend: zod.number().optional(),
+      googleSpend: zod.number().optional(),
+      metaSpend: zod.number().optional(),
       totalRevenue: zod.number().optional(),
       roas: zod.number().optional(),
       totalLeads: zod.number().optional(),
@@ -571,6 +576,8 @@ export const GetSpendRevenueChartQueryParams = zod.object({
 export const GetSpendRevenueChartResponseItem = zod.object({
   date: zod.date(),
   spend: zod.number(),
+  googleSpend: zod.number(),
+  metaSpend: zod.number(),
   revenue: zod.number(),
 });
 export const GetSpendRevenueChartResponse = zod.array(
