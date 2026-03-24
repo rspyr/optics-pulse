@@ -7,9 +7,9 @@ import { useAuth } from "@/components/auth-context";
 import {
   ArrowUpRight, ArrowDownRight, Target, Flame, CheckCircle,
   TrendingUp, DollarSign, Calendar, Search,
-  AlertTriangle, X, Zap, Bookmark, Plus, Trash2,
+  AlertTriangle, X, Zap, Bookmark, Plus, Trash2, Loader2,
 } from "lucide-react";
-
+import { parseLeadFilter, type ParsedFilterResult } from "@/lib/parse-filter-api";
 import TrainingCards from "@/components/training-cards";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -67,33 +67,6 @@ function trendValueInverse(current: number, previous: number | undefined | null)
   return { ...result, isPositive: result.isNeutral ? true : !result.isPositive };
 }
 
-interface NLFilterResult {
-  source?: string;
-  leadType?: string;
-  assignedTo?: string;
-}
-
-function parseNaturalLanguageFilter(query: string): NLFilterResult {
-  const q = query.toLowerCase();
-  const result: NLFilterResult = {};
-
-  if (q.includes("google")) result.source = "Google Ads";
-  else if (q.includes("meta") || q.includes("facebook")) result.source = "Meta Leads";
-  else if (q.includes("callrail") || q.includes("call")) result.source = "CallRail";
-  else if (q.includes("organic")) result.source = "Organic Search";
-  else if (q.includes("direct")) result.source = "Direct";
-  else if (q.includes("referral")) result.source = "Referral";
-
-  if (q.includes("fit funnel") || q.includes("paid")) result.leadType = "paid";
-  else if (q.includes("quiz") || q.includes("organic")) result.leadType = "organic";
-  else if (q.includes("pop-up") || q.includes("popup")) result.leadType = "popup";
-
-  const salespersonMatch = q.match(/(?:salesperson|rep|assigned to|by)\s+(\w+)/);
-  if (salespersonMatch) result.assignedTo = salespersonMatch[1];
-
-  return result;
-}
-
 function ClickableMarkerLabel({ viewBox, onClick }: { viewBox?: { x?: number; y?: number }; onClick: () => void }) {
   if (!viewBox?.x) return null;
   return (
@@ -149,7 +122,9 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const [showChangeLog, setShowChangeLog] = useState(false);
   const [selectedChangeLog, setSelectedChangeLog] = useState<{ title: string; description: string; date: string; category: string } | null>(null);
   const [nlQuery, setNlQuery] = useState("");
-  const [activeNlFilter, setActiveNlFilter] = useState<NLFilterResult>({});
+  const [activeNlFilter, setActiveNlFilter] = useState<ParsedFilterResult>({});
+  const [nlLoading, setNlLoading] = useState(false);
+  const [nlError, setNlError] = useState<string | null>(null);
   const [filterSource, setFilterSource] = useState("");
   const [filterLeadType, setFilterLeadType] = useState("");
   const [filterSalesperson, setFilterSalesperson] = useState("");
@@ -222,17 +197,27 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const effectiveSource = activeNlFilter.source || filterSource;
   const effectiveLeadType = activeNlFilter.leadType || filterLeadType;
   const effectiveSalesperson = activeNlFilter.assignedTo || filterSalesperson;
+  const effectiveStatus = activeNlFilter.status || "";
+  const effectiveDisposition = activeNlFilter.disposition || "";
+  const effectiveDateRange = activeNlFilter.dateRange;
 
   const filteredLeads = useMemo(() => {
     return leads.filter(l => {
       if (effectiveSource && l.source !== effectiveSource) return false;
       if (effectiveLeadType && l.leadType !== effectiveLeadType) return false;
       if (effectiveSalesperson && l.assignedTo !== effectiveSalesperson) return false;
+      if (effectiveStatus && l.status !== effectiveStatus) return false;
+      if (effectiveDisposition && l.disposition !== effectiveDisposition) return false;
+      if (effectiveDateRange) {
+        if (!l.createdAt) return false;
+        const created = new Date(l.createdAt).toISOString().split("T")[0];
+        if (created < effectiveDateRange.startDate || created > effectiveDateRange.endDate) return false;
+      }
       return true;
     });
-  }, [leads, effectiveSource, effectiveLeadType, effectiveSalesperson]);
+  }, [leads, effectiveSource, effectiveLeadType, effectiveSalesperson, effectiveStatus, effectiveDisposition, effectiveDateRange]);
 
-  const hasActiveFilters = effectiveSource || effectiveLeadType || effectiveSalesperson;
+  const hasActiveFilters = effectiveSource || effectiveLeadType || effectiveSalesperson || effectiveStatus || effectiveDisposition || effectiveDateRange;
 
   const filteredMetrics = useMemo(() => {
     if (!hasActiveFilters || filteredLeads.length === 0) return null;
@@ -264,14 +249,28 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     }));
   }, [chartData, changeLogs, roiMode, agencyFee, dateRange]);
 
-  const handleNlSubmit = useCallback(() => {
-    if (!nlQuery.trim()) return;
-    const parsed = parseNaturalLanguageFilter(nlQuery);
-    setActiveNlFilter(parsed);
-    if (parsed.source) setFilterSource("");
-    if (parsed.leadType) setFilterLeadType("");
-    if (parsed.assignedTo) setFilterSalesperson("");
-  }, [nlQuery]);
+  const handleNlSubmit = useCallback(async () => {
+    if (!nlQuery.trim() || nlLoading) return;
+    setNlLoading(true);
+    setNlError(null);
+    try {
+      const data = await parseLeadFilter(nlQuery.trim(), effectiveTenantId);
+      if (data.empty) {
+        setNlError("Couldn't understand that query. Try something like \"show me all Google leads that are booked\".");
+        setActiveNlFilter({});
+      } else {
+        setNlError(null);
+        setActiveNlFilter(data.filters);
+        if (data.filters.source) setFilterSource("");
+        if (data.filters.leadType) setFilterLeadType("");
+        if (data.filters.assignedTo) setFilterSalesperson("");
+      }
+    } catch {
+      setNlError("Something went wrong parsing your query. Please try again.");
+    } finally {
+      setNlLoading(false);
+    }
+  }, [nlQuery, nlLoading, effectiveTenantId]);
 
   const clearFilters = useCallback(() => {
     setFilterSource("");
@@ -279,6 +278,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
     setFilterSalesperson("");
     setNlQuery("");
     setActiveNlFilter({});
+    setNlError(null);
   }, []);
 
   const saveCurrentView = useCallback(() => {
@@ -544,18 +544,28 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex-1 min-w-[280px] relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          {nlLoading ? (
+            <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary animate-spin" />
+          ) : (
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          )}
           <input
             type="text"
             value={nlQuery}
-            onChange={e => setNlQuery(e.target.value)}
+            onChange={e => { setNlQuery(e.target.value); if (!e.target.value.trim()) { setActiveNlFilter({}); setNlError(null); } }}
             onKeyDown={e => e.key === "Enter" && handleNlSubmit()}
-            placeholder='Try: "show me all meta campaigns" or "google leads only"'
-            className="w-full bg-card border border-white/10 text-white text-sm rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/50"
+            disabled={nlLoading}
+            placeholder='Try: "show me all Google leads that are booked" or "organic quiz leads assigned to Jake"'
+            className="w-full bg-card border border-white/10 text-white text-sm rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground/50 disabled:opacity-50"
           />
+          {nlError && (
+            <div className="absolute left-0 right-0 top-full mt-1 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-xs text-red-400 z-10">
+              {nlError}
+            </div>
+          )}
         </div>
         <select
-          value={filterSource}
+          value={effectiveSource}
           onChange={e => { setFilterSource(e.target.value); setActiveNlFilter(prev => ({ ...prev, source: undefined })); }}
           className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
         >
@@ -563,7 +573,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           {uniqueSources.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <select
-          value={filterLeadType}
+          value={effectiveLeadType}
           onChange={e => { setFilterLeadType(e.target.value); setActiveNlFilter(prev => ({ ...prev, leadType: undefined })); }}
           className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
         >
@@ -574,7 +584,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           })}
         </select>
         <select
-          value={filterSalesperson}
+          value={effectiveSalesperson}
           onChange={e => { setFilterSalesperson(e.target.value); setActiveNlFilter(prev => ({ ...prev, assignedTo: undefined })); }}
           className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
         >

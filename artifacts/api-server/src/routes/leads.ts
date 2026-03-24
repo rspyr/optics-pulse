@@ -7,8 +7,55 @@ import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } 
 import { getSmartQueue } from "../services/lead-scoring";
 import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";
 import type { ComparisonBaseline } from "../services/coordinator-stats";
+import { parseFilterQuery } from "../services/parse-filter";
 
 const router: IRouter = Router();
+
+router.post("/leads/parse-filter", async (req, res) => {
+  const { query } = req.body as { query?: string };
+
+  if (!query || typeof query !== "string" || query.trim().length === 0) {
+    res.status(400).json({ error: "Query is required" });
+    return;
+  }
+
+  if (query.length > 500) {
+    res.status(400).json({ error: "Query too long" });
+    return;
+  }
+
+  const role = req.session.userRole;
+  const bodyTenantId = (req.body as { tenantId?: number }).tenantId;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : undefined;
+  const requestedTenantId = bodyTenantId || queryTenantId;
+  const tenantId = (role === "super_admin" || role === "agency_user")
+    ? (requestedTenantId || req.session.tenantId || 1)
+    : req.session.tenantId || 1;
+
+  try {
+    const [sourcesResult, leadTypesResult, statusesResult, salespeopleResult, dispositionsResult] = await Promise.all([
+      db.selectDistinct({ value: leadsTable.source }).from(leadsTable).where(eq(leadsTable.tenantId, tenantId)),
+      db.selectDistinct({ value: leadsTable.leadType }).from(leadsTable).where(eq(leadsTable.tenantId, tenantId)),
+      db.selectDistinct({ value: leadsTable.status }).from(leadsTable).where(eq(leadsTable.tenantId, tenantId)),
+      db.selectDistinct({ value: leadsTable.assignedTo }).from(leadsTable).where(eq(leadsTable.tenantId, tenantId)),
+      db.selectDistinct({ value: leadsTable.disposition }).from(leadsTable).where(eq(leadsTable.tenantId, tenantId)),
+    ]);
+
+    const filters = await parseFilterQuery(query.trim(), {
+      sources: sourcesResult.map(r => r.value).filter(Boolean).sort() as string[],
+      leadTypes: leadTypesResult.map(r => r.value).filter(Boolean).sort() as string[],
+      statuses: statusesResult.map(r => r.value).filter(Boolean).sort() as string[],
+      salespeople: salespeopleResult.map(r => r.value).filter(Boolean).sort() as string[],
+      dispositions: dispositionsResult.map(r => r.value).filter(Boolean).sort() as string[],
+    });
+
+    const isEmpty = Object.keys(filters).length === 0;
+    res.json({ filters, empty: isEmpty });
+  } catch (err) {
+    console.error("[ParseFilter] Error:", err);
+    res.status(500).json({ error: "Failed to parse filter query" });
+  }
+});
 
 router.get("/leads", async (req, res) => {
   const query = ListLeadsQueryParams.parse(req.query);
