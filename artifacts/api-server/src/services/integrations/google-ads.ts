@@ -97,6 +97,7 @@ async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options:
       headers["login-customer-id"] = config.loginCustomerId.replace(/-/g, "");
     }
 
+    console.log(`[Google Ads] Request: ${path} | customerId: ${config.customerId} | loginCustomerId: ${config.loginCustomerId || "none"} | hasDeveloperToken: ${!!config.developerToken}`);
     const response = await fetch(url, { ...options, headers: { ...headers, ...(options.headers as Record<string, string> || {}) } });
     if (!response.ok) {
       const text = await response.text();
