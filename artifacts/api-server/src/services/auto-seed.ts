@@ -53,7 +53,7 @@ function loadSeedData(): any | null {
   return null;
 }
 
-async function cleanupNonDemoData() {
+async function cleanupSeededDemoData() {
   const { eq } = await import("drizzle-orm");
   try {
     await db.execute(sql`CREATE TABLE IF NOT EXISTS _demo_cleanup_flags (key TEXT PRIMARY KEY, done_at TIMESTAMP DEFAULT NOW())`);
@@ -66,14 +66,10 @@ async function cleanupNonDemoData() {
 
     let totalCleaned = 0;
     for (const tenant of nonDemoTenants) {
-      const dummyLeadResult = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
-          source = 'demo_seed' OR email LIKE '%@example.com' OR
-          email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
-        )`
+      const seededLeadResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'`
       );
-      const dummyLeadCount = Number((dummyLeadResult.rows[0] as any)?.cnt || 0);
+      const seededLeadCount = Number((seededLeadResult.rows[0] as any)?.cnt || 0);
 
       const seedCampaignResult = await db.execute(
         sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
@@ -87,23 +83,14 @@ async function cleanupNonDemoData() {
       );
       const seedJobCount = Number((seedJobResult.rows[0] as any)?.cnt || 0);
 
-      if (dummyLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0) continue;
+      if (seededLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0) continue;
 
-      await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
-        SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND (
-          source = 'demo_seed' OR email LIKE '%@example.com' OR
-          email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
-        )
-      )`);
-      await db.execute(sql`DELETE FROM coordinator_daily_stats WHERE tenant_id = ${tenant.id}`);
-      await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
-      await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND (
-        source = 'demo_seed' OR email LIKE '%@example.com' OR
-        email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-        email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
-      )`);
-      await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
+      if (seededLeadCount > 0) {
+        await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
+          SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'
+        )`);
+        await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'`);
+      }
 
       if (seedCampaignCount > 0) {
         await db.execute(sql`DELETE FROM campaign_daily_stats WHERE campaign_id IN (
@@ -120,17 +107,17 @@ async function cleanupNonDemoData() {
         await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
       }
 
-      const cleaned = dummyLeadCount + seedCampaignCount + seedJobCount;
+      const cleaned = seededLeadCount + seedCampaignCount + seedJobCount;
       totalCleaned += cleaned;
-      console.log(`[AutoSeed] Cleaned up demo data for non-demo tenant "${tenant.name}": ${dummyLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs`);
+      console.log(`[AutoSeed] Cleaned up seeded demo data for non-demo tenant "${tenant.name}": ${seededLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs`);
     }
 
     await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
     if (totalCleaned > 0) {
-      console.log(`[AutoSeed] One-time demo data cleanup complete: ${totalCleaned} total dummy records removed`);
+      console.log(`[AutoSeed] One-time demo data cleanup complete: ${totalCleaned} total seeded records removed`);
     }
   } catch (err) {
-    console.error("[AutoSeed] Cleanup non-demo data failed:", err instanceof Error ? err.message : err);
+    console.error("[AutoSeed] Cleanup seeded demo data failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -152,7 +139,7 @@ export async function autoSeedIfEmpty() {
       await syncTenantConfigs(seedData);
     }
 
-    await cleanupNonDemoData();
+    await cleanupSeededDemoData();
   } catch (err) {
     console.error("[AutoSeed] Seed failed:", err instanceof Error ? err.message : err);
   }
