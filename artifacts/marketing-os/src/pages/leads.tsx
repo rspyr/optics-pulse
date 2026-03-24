@@ -1134,9 +1134,11 @@ export default function Leads() {
         if (disposition === "booked") {
           const newCommission = freshStats?.commission ?? stats.commission;
           const earned = newCommission - prevCommission;
-          setLastSpiffAmount(earned > 0 ? earned : 20);
-          setShowCommission(true);
-          setTimeout(() => setShowCommission(false), 2000);
+          if (earned > 0) {
+            setLastSpiffAmount(earned);
+            setShowCommission(true);
+            setTimeout(() => setShowCommission(false), 2000);
+          }
         }
       }
     } catch (e) {
