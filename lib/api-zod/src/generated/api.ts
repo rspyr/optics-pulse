@@ -24,6 +24,7 @@ export const ListTenantsResponseItem = zod.object({
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
   isActive: zod.boolean(),
+  isDemo: zod.boolean(),
   createdAt: zod.date(),
 });
 export const ListTenantsResponse = zod.array(ListTenantsResponseItem);
@@ -37,6 +38,7 @@ export const CreateTenantBody = zod.object({
   name: zod.string(),
   serviceTitanId: zod.string().optional(),
   timezone: zod.string().default(createTenantBodyTimezoneDefault),
+  isDemo: zod.boolean().optional().default(false),
 });
 
 /**
@@ -52,6 +54,7 @@ export const GetTenantResponse = zod.object({
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
   isActive: zod.boolean(),
+  isDemo: zod.boolean(),
   createdAt: zod.date(),
 });
 
@@ -67,6 +70,7 @@ export const UpdateTenantBody = zod.object({
   serviceTitanId: zod.string().optional(),
   timezone: zod.string().optional(),
   isActive: zod.boolean().optional(),
+  isDemo: zod.boolean().optional(),
 });
 
 export const UpdateTenantResponse = zod.object({
@@ -75,6 +79,7 @@ export const UpdateTenantResponse = zod.object({
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
   isActive: zod.boolean(),
+  isDemo: zod.boolean(),
   createdAt: zod.date(),
 });
 

@@ -15,6 +15,7 @@ export interface Tenant {
   serviceTitanId?: string | null;
   timezone: string;
   isActive: boolean;
+  isDemo: boolean;
   createdAt: string;
 }
 
@@ -22,6 +23,7 @@ export interface CreateTenantInput {
   name: string;
   serviceTitanId?: string;
   timezone?: string;
+  isDemo?: boolean;
 }
 
 export interface UpdateTenantInput {
@@ -29,6 +31,7 @@ export interface UpdateTenantInput {
   serviceTitanId?: string;
   timezone?: string;
   isActive?: boolean;
+  isDemo?: boolean;
 }
 
 export type LeadStatus = (typeof LeadStatus)[keyof typeof LeadStatus];

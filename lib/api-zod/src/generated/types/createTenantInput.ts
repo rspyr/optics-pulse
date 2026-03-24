@@ -10,4 +10,5 @@ export interface CreateTenantInput {
   name: string;
   serviceTitanId?: string;
   timezone?: string;
+  isDemo?: boolean;
 }

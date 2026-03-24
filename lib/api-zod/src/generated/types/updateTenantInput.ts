@@ -11,4 +11,5 @@ export interface UpdateTenantInput {
   serviceTitanId?: string;
   timezone?: string;
   isActive?: boolean;
+  isDemo?: boolean;
 }

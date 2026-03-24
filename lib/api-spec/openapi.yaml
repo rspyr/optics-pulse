@@ -1173,10 +1173,12 @@ components:
           type: string
         isActive:
           type: boolean
+        isDemo:
+          type: boolean
         createdAt:
           type: string
           format: date-time
-      required: [id, name, timezone, isActive, createdAt]
+      required: [id, name, timezone, isActive, isDemo, createdAt]
 
     CreateTenantInput:
       type: object
@@ -1188,6 +1190,9 @@ components:
         timezone:
           type: string
           default: "America/New_York"
+        isDemo:
+          type: boolean
+          default: false
       required: [name]
 
     UpdateTenantInput:
@@ -1200,6 +1205,8 @@ components:
         timezone:
           type: string
         isActive:
+          type: boolean
+        isDemo:
           type: boolean
 
     Lead:

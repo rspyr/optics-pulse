@@ -12,5 +12,6 @@ export interface Tenant {
   serviceTitanId?: string | null;
   timezone: string;
   isActive: boolean;
+  isDemo: boolean;
   createdAt: Date;
 }
