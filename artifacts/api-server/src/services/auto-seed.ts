@@ -66,38 +66,63 @@ async function cleanupNonDemoData() {
 
     let totalCleaned = 0;
     for (const tenant of nonDemoTenants) {
-      const leadCheck = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND source = 'demo_seed'`
-      );
-      const seedLeadCount = Number((leadCheck.rows[0] as any)?.cnt || 0);
-
-      const dummyCheck = await db.execute(
-        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND source != 'demo_seed' AND (
+      const dummyLeadResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND (
+          source = 'demo_seed' OR email LIKE '%@example.com' OR
           email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR
-          email LIKE '%@example.com'
+          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
         )`
       );
-      const dummyLeadCount = Number((dummyCheck.rows[0] as any)?.cnt || 0);
+      const dummyLeadCount = Number((dummyLeadResult.rows[0] as any)?.cnt || 0);
 
-      if (seedLeadCount === 0 && dummyLeadCount === 0) continue;
+      const seedCampaignResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+          external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+        )`
+      );
+      const seedCampaignCount = Number((seedCampaignResult.rows[0] as any)?.cnt || 0);
+
+      const seedJobResult = await db.execute(
+        sql`SELECT count(*) as cnt FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`
+      );
+      const seedJobCount = Number((seedJobResult.rows[0] as any)?.cnt || 0);
+
+      if (dummyLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0) continue;
 
       await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (
         SELECT id FROM leads WHERE tenant_id = ${tenant.id} AND (
-          source = 'demo_seed' OR email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR email LIKE '%@example.com'
+          source = 'demo_seed' OR email LIKE '%@example.com' OR
+          email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
+          email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
         )
       )`);
       await db.execute(sql`DELETE FROM coordinator_daily_stats WHERE tenant_id = ${tenant.id}`);
       await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
       await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id} AND (
-        source = 'demo_seed' OR email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
-        email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com' OR email LIKE '%@example.com'
+        source = 'demo_seed' OR email LIKE '%@example.com' OR
+        email LIKE '%@gmail.com' OR email LIKE '%@yahoo.com' OR
+        email LIKE '%@outlook.com' OR email LIKE '%@hotmail.com'
       )`);
       await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
-      const cleaned = seedLeadCount + dummyLeadCount;
+
+      if (seedCampaignCount > 0) {
+        await db.execute(sql`DELETE FROM campaign_daily_stats WHERE campaign_id IN (
+          SELECT id FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+            external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+          )
+        )`);
+        await db.execute(sql`DELETE FROM campaigns WHERE tenant_id = ${tenant.id} AND (
+          external_id LIKE 'G-%-' OR external_id LIKE 'M-%-'
+        )`);
+      }
+
+      if (seedJobCount > 0) {
+        await db.execute(sql`DELETE FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`);
+      }
+
+      const cleaned = dummyLeadCount + seedCampaignCount + seedJobCount;
       totalCleaned += cleaned;
-      console.log(`[AutoSeed] Cleaned up ${cleaned} seeded/dummy leads and related data for non-demo tenant "${tenant.name}"`);
+      console.log(`[AutoSeed] Cleaned up demo data for non-demo tenant "${tenant.name}": ${dummyLeadCount} leads, ${seedCampaignCount} campaigns, ${seedJobCount} jobs`);
     }
 
     await db.execute(sql`INSERT INTO _demo_cleanup_flags (key) VALUES ('initial_cleanup')`);
