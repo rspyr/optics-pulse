@@ -77,7 +77,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         })
         .catch(() => {});
     }
-  }, [isOpen]);
+  }, [isOpen, tenantId]);
 
   const askQuestion = useCallback(async (question: string) => {
     if (!question.trim() || isLoading) return;
@@ -211,7 +211,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         return next;
       });
     } catch {}
-  }, []);
+  }, [tenantId]);
 
   return (
     <>
