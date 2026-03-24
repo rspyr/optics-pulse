@@ -1,0 +1,70 @@
+Here's the information you need for your other app:
+
+1. API Endpoint/URL
+
+This app uses two approaches:
+
+For listing accessible customers (REST): It calls the Google Ads REST API directly:
+
+https://googleads.googleapis.com/v17/customers:listAccessibleCustomers
+For campaign data queries: It uses the google-ads-api npm library (which internally calls https://googleads.googleapis.com/v17/customers/{customer_id}/googleAds:searchStream). The library handles this under the hood.
+
+2. Headers
+
+For the direct REST call (listAccessibleCustomers):
+
+Authorization: Bearer {access_token}
+developer-token: {GOOGLE_ADS_DEVELOPER_TOKEN}
+When using the google-ads-api library, the headers are set automatically, but the equivalent headers sent are:
+
+Authorization: Bearer {access_token} (obtained via OAuth2 refresh token flow)
+developer-token: {developer_token}
+login-customer-id: {customer_id} (set when accessing accounts under an MCC/manager account)
+3. Client Configuration
+
+The library is initialized with:
+
+const client = new GoogleAdsApi({
+  client_id: process.env.GOOGLE_ADS_CLIENT_ID,
+  client_secret: process.env.GOOGLE_ADS_CLIENT_SECRET,
+  developer_token: process.env.GOOGLE_ADS_DEVELOPER_TOKEN
+});
+const customer = client.Customer({
+  customer_id: targetCustomerId,   // e.g. "1234567890"
+  refresh_token: refreshToken,      // OAuth2 refresh token
+});
+4. Campaign Search Query (Request Body)
+
+The GAQL (Google Ads Query Language) query used for campaign data looks like this:
+
+SELECT
+  campaign.id,
+  campaign.name,
+  campaign.status,
+  segments.date,
+  metrics.impressions,
+  metrics.clicks,
+  metrics.cost_micros,
+  metrics.conversions,
+  metrics.ctr,
+  metrics.average_cpc
+FROM campaign
+WHERE segments.date BETWEEN '20250101' AND '20250324'
+If you're calling the REST API directly (without the library), the equivalent POST request would be:
+
+POST https://googleads.googleapis.com/v17/customers/{customer_id}/googleAds:searchStream
+Headers:
+  Authorization: Bearer {access_token}
+  developer-token: {developer_token}
+  Content-Type: application/json
+Body:
+{
+  "query": "SELECT campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.ctr, metrics.average_cpc FROM campaign WHERE segments.date BETWEEN '20250101' AND '20250324'"
+}
+Key notes for your implementation:
+
+cost_micros and average_cpc are returned in micros (divide by 1,000,000 to get actual currency value)
+ctr is returned as a decimal (multiply by 100 for percentage)
+conversions can be fractional due to data-driven attribution
+Date format in the WHERE clause is YYYYMMDD
+The OAuth2 scopes needed: https://www.googleapis.com/auth/adwords

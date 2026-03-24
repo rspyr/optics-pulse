@@ -79,9 +79,8 @@ interface CampaignPerformanceRow {
   };
 }
 
-interface GoogleAdsSearchResponse {
-  results: CampaignPerformanceRow[];
-  nextPageToken?: string;
+interface GoogleAdsSearchStreamBatch {
+  results?: CampaignPerformanceRow[];
 }
 
 async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options: RequestInit = {}): Promise<T> {
@@ -97,7 +96,7 @@ async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options:
       headers["login-customer-id"] = config.loginCustomerId.replace(/-/g, "");
     }
 
-    console.log(`[Google Ads] Request: ${path} | customerId: ${config.customerId} | loginCustomerId: ${config.loginCustomerId || "none"} | hasDeveloperToken: ${!!config.developerToken}`);
+    console.log(`[Google Ads] Request: ${path} | customerId: ${config.customerId} | loginCustomerId: ${config.loginCustomerId || "none"}`);
     const response = await fetch(url, { ...options, headers: { ...headers, ...(options.headers as Record<string, string> || {}) } });
     if (!response.ok) {
       const text = await response.text();
@@ -105,6 +104,19 @@ async function googleAdsFetch<T>(config: GoogleAdsConfig, path: string, options:
     }
     return response.json() as Promise<T>;
   }, { label: `Google Ads ${path}`, maxRetries: 3 });
+}
+
+async function searchStream(config: GoogleAdsConfig, customerId: string, query: string): Promise<CampaignPerformanceRow[]> {
+  const batches = await googleAdsFetch<GoogleAdsSearchStreamBatch[]>(
+    config,
+    `/customers/${customerId}/googleAds:searchStream`,
+    { method: "POST", body: JSON.stringify({ query }) },
+  );
+  const allResults: CampaignPerformanceRow[] = [];
+  for (const batch of batches) {
+    if (batch.results) allResults.push(...batch.results);
+  }
+  return allResults;
 }
 
 export async function fetchCampaignPerformance(
@@ -130,24 +142,7 @@ export async function fetchCampaignPerformance(
     ORDER BY segments.date DESC
   `;
 
-  const allResults: CampaignPerformanceRow[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const body: Record<string, unknown> = { query, pageSize: 1000 };
-    if (pageToken) body.pageToken = pageToken;
-
-    const response = await googleAdsFetch<GoogleAdsSearchResponse>(
-      config,
-      `/customers/${customerId}/googleAds:search`,
-      { method: "POST", body: JSON.stringify(body) },
-    );
-
-    if (response.results) allResults.push(...response.results);
-    pageToken = response.nextPageToken;
-  } while (pageToken);
-
-  return allResults;
+  return searchStream(config, customerId, query);
 }
 
 export function formatCampaignRow(row: CampaignPerformanceRow) {
@@ -173,17 +168,13 @@ export async function updateGoogleAdsCampaignBudget(
   const budgetMicros = Math.round(newDailyBudgetDollars * 1_000_000);
 
   const query = `SELECT campaign_budget.resource_name FROM campaign WHERE campaign.id = '${campaignId}'`;
-  const searchResponse = await googleAdsFetch<GoogleAdsSearchResponse>(
-    config,
-    `/customers/${customerId}/googleAds:search`,
-    { method: "POST", body: JSON.stringify({ query, pageSize: 1 }) },
-  );
+  const results = await searchStream(config, customerId, query);
 
-  if (!searchResponse.results || searchResponse.results.length === 0) {
+  if (!results || results.length === 0) {
     throw new Error(`Campaign ${campaignId} not found in Google Ads`);
   }
 
-  const budgetResource = (searchResponse.results[0] as unknown as Record<string, Record<string, string>>).campaignBudget?.resourceName;
+  const budgetResource = (results[0] as unknown as Record<string, Record<string, string>>).campaignBudget?.resourceName;
   if (!budgetResource) {
     throw new Error(`No budget resource found for campaign ${campaignId}`);
   }
