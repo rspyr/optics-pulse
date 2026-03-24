@@ -92,6 +92,7 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
     name: body.name,
     serviceTitanId: body.serviceTitanId,
     timezone: body.timezone || "America/New_York",
+    isDemo: req.body.isDemo === true ? true : false,
   };
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
     insertData.apiConfig = encryptConfig(req.body.integrationConfig);
@@ -130,6 +131,9 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   if (body.serviceTitanId !== undefined) updateData.serviceTitanId = body.serviceTitanId;
   if (body.timezone !== undefined) updateData.timezone = body.timezone;
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
+  if (req.body.isDemo !== undefined && (role === "super_admin" || role === "agency_user")) {
+    updateData.isDemo = req.body.isDemo === true;
+  }
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
     const [existingTenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     let mergedConfig: Record<string, unknown> = {};

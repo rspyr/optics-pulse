@@ -80,8 +80,10 @@ async function cleanupNonDemoData() {
       if (leadCount === 0) continue;
 
       await db.execute(sql`DELETE FROM call_attempts WHERE lead_id IN (SELECT id FROM leads WHERE tenant_id = ${tenant.id})`);
+      await db.execute(sql`DELETE FROM coordinator_daily_stats WHERE tenant_id = ${tenant.id}`);
       await db.execute(sql`DELETE FROM leads WHERE tenant_id = ${tenant.id}`);
       await db.execute(sql`DELETE FROM attribution_events WHERE tenant_id = ${tenant.id}`);
+      await db.execute(sql`DELETE FROM change_logs WHERE tenant_id = ${tenant.id}`);
       console.log(`[AutoSeed] Cleaned up ${leadCount} dummy leads and related data for non-demo tenant "${tenant.name}"`);
     }
   } catch (err) {
