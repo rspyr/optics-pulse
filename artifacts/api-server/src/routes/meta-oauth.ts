@@ -10,7 +10,7 @@ const router: IRouter = Router();
 const META_AUTH_URL = "https://www.facebook.com/v21.0/dialog/oauth";
 const META_TOKEN_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
 const META_EXCHANGE_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
-const SCOPES = "ads_read,ads_management,pages_read_engagement";
+const SCOPES = "ads_read,ads_management,pages_show_list,pages_read_engagement,business_management";
 
 function getRedirectUri(): string {
   const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
@@ -166,6 +166,16 @@ router.get("/oauth/meta/callback", async (req, res) => {
     } else {
       console.warn("[Meta OAuth] Long-lived token exchange failed, using short-lived token");
     }
+
+    const verifyResponse = await fetch(`https://graph.facebook.com/v21.0/me?access_token=${encodeURIComponent(longLivedToken)}`);
+    if (!verifyResponse.ok) {
+      const verifyError = await verifyResponse.text();
+      console.error(`[Meta OAuth] Token verification failed: ${verifyError}`);
+      res.redirect("/internal?metaOAuth=error&message=token_verification_failed");
+      return;
+    }
+    const meData = await verifyResponse.json() as { id: string; name?: string };
+    console.log(`[Meta OAuth] Token verified — Facebook user: ${meData.name || meData.id}`);
 
     config.metaAccessToken = longLivedToken;
 
