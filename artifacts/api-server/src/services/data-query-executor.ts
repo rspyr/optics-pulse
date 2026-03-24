@@ -138,14 +138,94 @@ export async function executeQueryPlan(
     }
   }
 
+  let processed = results;
+
+  if (plan.groupBy && plan.groupBy.length > 0 && plan.aggregations && plan.aggregations.length > 0) {
+    processed = applyGroupByAggregation(processed, plan.groupBy, plan.aggregations);
+    summaryParts.push(`grouped by ${plan.groupBy.join(", ")} with ${plan.aggregations.join(", ")}`);
+  }
+
+  if (plan.orderBy && plan.orderBy.length > 0) {
+    processed = applyOrderBy(processed, plan.orderBy);
+  }
+
   const limitedResults = plan.limit
-    ? results.slice(0, plan.limit)
-    : results.slice(0, 100);
+    ? processed.slice(0, plan.limit)
+    : processed.slice(0, 100);
 
   return {
     data: limitedResults,
     summary: `Queried ${plan.tables.join(", ")} for tenant ${tenantId}. ${summaryParts.join("; ")}. Returned ${limitedResults.length} rows.`,
   };
+}
+
+function applyOrderBy(
+  rows: Record<string, unknown>[],
+  orderBy: { column: string; direction: "asc" | "desc" }[]
+): Record<string, unknown>[] {
+  return [...rows].sort((a, b) => {
+    for (const { column, direction } of orderBy) {
+      const aVal = a[column];
+      const bVal = b[column];
+      if (aVal === bVal) continue;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      const cmp = typeof aVal === "number" && typeof bVal === "number"
+        ? aVal - bVal
+        : String(aVal).localeCompare(String(bVal));
+      return direction === "desc" ? -cmp : cmp;
+    }
+    return 0;
+  });
+}
+
+function applyGroupByAggregation(
+  rows: Record<string, unknown>[],
+  groupBy: string[],
+  aggregations: string[]
+): Record<string, unknown>[] {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    const key = groupBy.map(col => String(row[col] ?? "")).join("||");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+
+  const result: Record<string, unknown>[] = [];
+  for (const [, groupRows] of groups) {
+    const aggregated: Record<string, unknown> = {};
+    for (const col of groupBy) {
+      aggregated[col] = groupRows[0][col];
+    }
+    for (const agg of aggregations) {
+      const match = agg.match(/^(count|sum|avg|min|max)\((.+)\)$/i);
+      if (match) {
+        const [, fn, col] = match;
+        const values = groupRows.map(r => Number(r[col])).filter(n => !isNaN(n));
+        switch (fn.toLowerCase()) {
+          case "count":
+            aggregated[`${fn}(${col})`] = groupRows.length;
+            break;
+          case "sum":
+            aggregated[`${fn}(${col})`] = values.reduce((s, v) => s + v, 0);
+            break;
+          case "avg":
+            aggregated[`${fn}(${col})`] = values.length > 0 ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+            break;
+          case "min":
+            aggregated[`${fn}(${col})`] = values.length > 0 ? Math.min(...values) : 0;
+            break;
+          case "max":
+            aggregated[`${fn}(${col})`] = values.length > 0 ? Math.max(...values) : 0;
+            break;
+        }
+      } else if (agg.toLowerCase() === "count") {
+        aggregated["count"] = groupRows.length;
+      }
+    }
+    result.push(aggregated);
+  }
+  return result;
 }
 
 async function queryTable(
