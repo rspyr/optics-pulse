@@ -15,6 +15,7 @@ interface TenantForm {
   callRailSigningKey: string;
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
+  serviceTitanAppKey: string;
   metaAppId: string;
   metaAppSecret: string;
   metaAccessToken: string;
@@ -67,6 +68,7 @@ const emptyForm: TenantForm = {
   callRailSigningKey: "",
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
+  serviceTitanAppKey: "",
   metaAppId: "",
   metaAppSecret: "",
   metaAccessToken: "",
@@ -214,7 +216,7 @@ export default function AdminTenants() {
       "googleAdsApiKey", "googleAdsCustomerId", "googleAdsLoginCustomerId", "googleAdsDeveloperToken",
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey",
-      "serviceTitanClientId", "serviceTitanClientSecret",
+      "serviceTitanClientId", "serviceTitanClientSecret", "serviceTitanAppKey",
       "metaAppId", "metaAppSecret", "metaAccessToken", "metaAdAccountId", "metaPixelId",
       "podiumApiToken", "podiumLocationId",
     ];
@@ -299,6 +301,7 @@ export default function AdminTenants() {
       callRailSigningKey: lc.callRailSigningKey || "",
       serviceTitanClientId: lc.serviceTitanClientId || "",
       serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
+      serviceTitanAppKey: lc.serviceTitanAppKey || "",
       metaAppId: lc.metaAppId || "",
       metaAppSecret: lc.metaAppSecret || "",
       metaAccessToken: lc.metaAccessToken || "",
@@ -371,6 +374,7 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <SecretInput field="serviceTitanClientId" label="Client ID" />
               <SecretInput field="serviceTitanClientSecret" label="Client Secret" />
+              <SecretInput field="serviceTitanAppKey" label="App Key" />
             </div>
           </div>
           <div>

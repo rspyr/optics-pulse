@@ -17,6 +17,7 @@ const SECRET_FIELDS = new Set([
   "callRailSigningKey",
   "serviceTitanClientId",
   "serviceTitanClientSecret",
+  "serviceTitanAppKey",
   "metaAccessToken",
   "ghlApiKey",
   "podiumApiToken",

@@ -10,6 +10,7 @@ interface TenantApiConfig {
   serviceTitanClientId?: string;
   serviceTitanClientSecret?: string;
   serviceTitanTenantId?: string;
+  serviceTitanAppKey?: string;
   googleAdsApiKey?: string;
   googleAdsDeveloperToken?: string;
   googleAdsCustomerId?: string;
@@ -58,8 +59,8 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
   const config = getTenantConfig(tenant);
-  if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret) {
-    return { synced: 0, error: "ServiceTitan not configured" };
+  if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
+    return { synced: 0, error: "ServiceTitan not configured (need Client ID, Client Secret, and App Key)" };
   }
 
   const syncLog = await logSync(tenantId, "service_titan", "jobs", new Date());
@@ -69,6 +70,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       clientId: config.serviceTitanClientId,
       clientSecret: config.serviceTitanClientSecret,
       tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+      appKey: config.serviceTitanAppKey,
     };
 
     const stJobs = await fetchCompletedJobs(stConfig);
