@@ -53,6 +53,12 @@ function loadSeedData(): any | null {
   return null;
 }
 
+function extractCount(result: { rows: Record<string, unknown>[] }): number {
+  const row = result.rows[0];
+  if (!row) return 0;
+  return Number(row.cnt ?? 0);
+}
+
 async function cleanupSeededDemoData() {
   const { eq } = await import("drizzle-orm");
   try {
@@ -69,19 +75,19 @@ async function cleanupSeededDemoData() {
       const seededLeadResult = await db.execute(
         sql`SELECT count(*) as cnt FROM leads WHERE tenant_id = ${tenant.id} AND email LIKE '%@example.com'`
       );
-      const seededLeadCount = Number((seededLeadResult.rows[0] as any)?.cnt || 0);
+      const seededLeadCount = extractCount(seededLeadResult);
 
       const seedCampaignResult = await db.execute(
         sql`SELECT count(*) as cnt FROM campaigns WHERE tenant_id = ${tenant.id} AND (
           external_id LIKE 'G-%' OR external_id LIKE 'M-%'
         )`
       );
-      const seedCampaignCount = Number((seedCampaignResult.rows[0] as any)?.cnt || 0);
+      const seedCampaignCount = extractCount(seedCampaignResult);
 
       const seedJobResult = await db.execute(
         sql`SELECT count(*) as cnt FROM jobs WHERE tenant_id = ${tenant.id} AND st_job_id LIKE 'STJ-%'`
       );
-      const seedJobCount = Number((seedJobResult.rows[0] as any)?.cnt || 0);
+      const seedJobCount = extractCount(seedJobResult);
 
       if (seededLeadCount === 0 && seedCampaignCount === 0 && seedJobCount === 0) continue;
 
