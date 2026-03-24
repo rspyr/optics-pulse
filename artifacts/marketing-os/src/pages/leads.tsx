@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/components/auth-context";
+import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { motion, AnimatePresence } from "framer-motion";
 import { io as socketIOClient, type Socket as IOSocket } from "socket.io-client";
 import {
@@ -1078,47 +1078,8 @@ function LeadCard({
   );
 }
 
-interface TenantOption { id: number; name: string; }
-
 export default function Leads() {
-  const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
-
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [localTenantId, setLocalTenantId] = useState<number | null>(globalTenantId ?? user?.tenantId ?? null);
-
-  useEffect(() => {
-    if (globalTenantId !== null && globalTenantId !== localTenantId) {
-      setLocalTenantId(globalTenantId);
-    }
-  }, [globalTenantId]);
-
-  const setSelectedTenantId = useCallback((id: number | null) => {
-    setLocalTenantId(id);
-    setGlobalTenantId(id);
-  }, [setGlobalTenantId]);
-
-  useEffect(() => {
-    if (!isAgency) return;
-    fetch(`${API_BASE}/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const mapped = data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name }));
-          setTenants(mapped);
-          setLocalTenantId(prev => {
-            if (prev !== null) return prev;
-            if (mapped.length > 0) {
-              setGlobalTenantId(mapped[0].id);
-              return mapped[0].id;
-            }
-            return null;
-          });
-        }
-      })
-      .catch(() => {});
-  }, [isAgency, setGlobalTenantId]);
-
-  const effectiveTenantId = isAgency ? localTenantId : (user?.tenantId ?? null);
+  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter();
 
   const { queue, loading, refetch } = useHudQueue(effectiveTenantId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId);

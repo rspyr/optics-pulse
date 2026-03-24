@@ -3,7 +3,7 @@ import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, us
 import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn, formatCurrency } from "@/lib/utils";
-import { useAuth } from "@/components/auth-context";
+import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import {
   ArrowUpRight, ArrowDownRight, Target, Flame, CheckCircle,
   TrendingUp, DollarSign, Calendar, Search,
@@ -106,55 +106,9 @@ function ChangeLogPopover({ log, onClose }: { log: { title: string; description:
   );
 }
 
-interface TenantOption { id: number; name: string; }
-
-const API_BASE = import.meta.env.VITE_API_URL || "/api";
-
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
-
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [localTenantId, setLocalTenantId] = useState<number | null>(tenantIdOverride ?? globalTenantId ?? user?.tenantId ?? null);
-
-  useEffect(() => {
-    if (!tenantIdOverride && globalTenantId !== null && globalTenantId !== localTenantId) {
-      setLocalTenantId(globalTenantId);
-    }
-  }, [globalTenantId, tenantIdOverride]);
-
-  const setSelectedTenantId = useCallback((id: number | null) => {
-    setLocalTenantId(id);
-    setGlobalTenantId(id);
-  }, [setGlobalTenantId]);
-
-  useEffect(() => {
-    if (!isAgency) return;
-    fetch(`${API_BASE}/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const mapped = data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name }));
-          setTenants(mapped);
-          setLocalTenantId(prev => {
-            if (prev !== null) return prev;
-            if (mapped.length > 0) {
-              setGlobalTenantId(mapped[0].id);
-              return mapped[0].id;
-            }
-            return null;
-          });
-        }
-      })
-      .catch(() => {});
-  }, [isAgency, setGlobalTenantId]);
-
-  const effectiveTenantId = tenantIdOverride ?? (isAgency ? localTenantId : user?.tenantId) ?? 1;
-
-  useEffect(() => {
-    if (isAgency && effectiveTenantId) {
-      setGlobalTenantId(effectiveTenantId);
-    }
-  }, [isAgency, effectiveTenantId, setGlobalTenantId]);
+  const { tenants, localTenantId, effectiveTenantId: rawEffectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter(tenantIdOverride);
+  const effectiveTenantId = rawEffectiveTenantId ?? 1;
 
   const [dateRange, setDateRange] = useState<DateRange>("30");
   const [roiMode, setRoiMode] = useState<"roas" | "allcosts">("roas");
