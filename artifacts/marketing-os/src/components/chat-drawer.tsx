@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MessageCircle, X, Send, Bookmark, BookmarkCheck, Trash2, Sparkles, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DynamicVisualization } from "./dynamic-visualization";
+import { Renderer } from "@openuidev/react-lang";
+import { shadcnChatLibrary } from "@/lib/shadcn-genui";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -9,9 +10,6 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  data?: Record<string, unknown>[];
-  chartType?: string;
-  chartLabel?: string;
   timestamp: Date;
   isStreaming?: boolean;
 }
@@ -20,16 +18,6 @@ interface SavedQuestion {
   id: number;
   question: string;
   createdAt: string;
-}
-
-function formatMarkdown(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i} className="text-white font-semibold">{part.slice(2, -2)}</strong>;
-    }
-    return <span key={i}>{part}</span>;
-  });
 }
 
 export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
@@ -146,12 +134,6 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
                   : m
               ));
               setStatusMessage("");
-            } else if (chunk.type === "data") {
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, data: chunk.data, chartType: chunk.chartType, chartLabel: chunk.chartLabel }
-                  : m
-              ));
             } else if (chunk.type === "done") {
               setMessages(prev => prev.map(m =>
                 m.id === assistantId
@@ -172,7 +154,7 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         return [...filtered, {
           id: crypto.randomUUID(),
           role: "assistant" as const,
-          content: "Sorry, I had trouble connecting. Please try again.",
+          content: 'root = ResponseCard([msg])\nmsg = Text("Sorry, I had trouble connecting. Please try again.")',
           timestamp: new Date(),
         }];
       });
@@ -331,31 +313,29 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
                     ? "bg-primary/20 text-white"
                     : "bg-white/5 border border-white/5 text-white/80"
                 )}>
-                  {msg.content && (
-                    <div className="text-sm whitespace-pre-line leading-relaxed">
-                      {msg.content.split("\n").map((line, i) => (
-                        <div key={i}>{formatMarkdown(line)}</div>
-                      ))}
-                    </div>
-                  )}
+                  {msg.role === "user" ? (
+                    <div className="text-sm whitespace-pre-line leading-relaxed">{msg.content}</div>
+                  ) : (
+                    <>
+                      {msg.isStreaming && !msg.content && statusMessage && (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                          <span className="text-sm text-muted-foreground">{statusMessage}</span>
+                        </div>
+                      )}
 
-                  {msg.isStreaming && !msg.content && statusMessage && (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                      <span className="text-sm text-muted-foreground">{statusMessage}</span>
-                    </div>
-                  )}
+                      {msg.content && (
+                        <Renderer
+                          response={msg.content}
+                          library={shadcnChatLibrary}
+                          isStreaming={msg.isStreaming}
+                        />
+                      )}
 
-                  {msg.isStreaming && msg.content && (
-                    <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
-                  )}
-
-                  {msg.data && msg.data.length > 0 && (
-                    <DynamicVisualization
-                      data={msg.data}
-                      chartType={msg.chartType || "table"}
-                      chartLabel={msg.chartLabel}
-                    />
+                      {msg.isStreaming && msg.content && (
+                        <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle mt-2" />
+                      )}
+                    </>
                   )}
 
                   {msg.role === "user" && (

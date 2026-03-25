@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, savedQuestionsTable, tenantsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { processQuestion, processQuestionStream, generateSuggestions, type ConversationTurn } from "../services/chat-analytics";
+import { processQuestionStream, generateSuggestions, type ConversationTurn } from "../services/chat-analytics";
 
 const router: IRouter = Router();
 
@@ -67,7 +67,7 @@ router.post("/chat/ask", async (req, res) => {
       );
     } catch (err) {
       console.error("[Chat] Stream error:", err);
-      res.write(`data: ${JSON.stringify({ type: "text", content: "An error occurred while processing your question." })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "text", content: 'root = ResponseCard([msg])\nmsg = Text("An error occurred while processing your question.")' })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: "done", done: true })}\n\n`);
     }
     res.end();
@@ -75,8 +75,18 @@ router.post("/chat/ask", async (req, res) => {
   }
 
   try {
-    const result = await processQuestion(question.trim(), tenantId, history);
-    res.json({ question: question.trim(), ...result });
+    let uiContent = "";
+    await processQuestionStream(
+      question.trim(),
+      tenantId,
+      history,
+      (chunk) => {
+        if (chunk.type === "text" && chunk.content) {
+          uiContent += chunk.content;
+        }
+      }
+    );
+    res.json({ question: question.trim(), uiContent });
   } catch (err) {
     console.error("[Chat] Error processing question:", err);
     res.status(500).json({ error: "Failed to process question" });
