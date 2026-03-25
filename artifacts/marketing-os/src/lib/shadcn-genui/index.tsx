@@ -116,14 +116,14 @@ const MetricValue = defineComponent({
   description:
     "A single KPI metric with label and value. Use for displaying key numbers like CPL, ROAS, lead count, revenue, booking rate, etc. Optionally include change and trend direction.",
   component: ({ props }) => {
-    const sizeClass = props.value.length > 10 ? "text-lg" : props.value.length > 7 ? "text-xl" : "text-2xl";
+    const sizeClass = props.value.length > 10 ? "text-base" : props.value.length > 7 ? "text-lg" : "text-2xl";
     return (
-      <div className="text-center space-y-1 min-w-0">
-        <div className={`${sizeClass} font-bold text-white tracking-tight truncate`}>{props.value}</div>
-        <div className="text-[10px] uppercase tracking-widest text-white/40 truncate">{props.label}</div>
+      <div className="text-center space-y-1 min-w-0 overflow-hidden">
+        <div className={`${sizeClass} font-bold text-white tracking-tight break-words`}>{props.value}</div>
+        <div className="text-[10px] uppercase tracking-widest text-white/40 break-words">{props.label}</div>
         {props.change && (
           <div
-            className={`text-xs font-medium truncate ${
+            className={`text-xs font-medium break-words ${
               props.trend === "up"
                 ? "text-emerald-400"
                 : props.trend === "down"
@@ -154,9 +154,7 @@ const MetricCard = defineComponent({
             ? "grid-cols-1"
             : props.metrics.length === 2
               ? "grid-cols-2"
-              : props.metrics.length <= 4
-                ? "grid-cols-2"
-                : "grid-cols-3"
+              : "grid-cols-2 sm:grid-cols-3"
         }`}
       >
         {renderNode(props.metrics)}
