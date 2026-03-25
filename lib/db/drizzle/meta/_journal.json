@@ -64,6 +64,13 @@
       "when": 1774390611546,
       "tag": "0008_tricky_the_hunter",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1774452429332,
+      "tag": "0009_brief_madame_masque",
+      "breakpoints": true
     }
   ]
 }

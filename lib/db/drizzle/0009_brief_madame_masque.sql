@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD COLUMN "st_sync_paused" boolean DEFAULT true NOT NULL;
