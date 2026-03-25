@@ -8,6 +8,7 @@ import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
 import { startNightlyAggregation } from "./services/coordinator-stats";
 import { autoSeedIfEmpty } from "./services/auto-seed";
+import { runOneTimeMigrations } from "./services/one-time-migrations";
 
 const rawPort = process.env["PORT"];
 
@@ -28,6 +29,7 @@ initSocketIO(httpServer, sessionMiddleware);
 
 httpServer.listen(port, async () => {
   console.log(`Server listening on port ${port}`);
+  await runOneTimeMigrations();
   await autoSeedIfEmpty();
   startReconciliationCron(3, 0);
   startSyncScheduler();
