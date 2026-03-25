@@ -190,17 +190,20 @@ const BarChartViz = defineComponent({
         value: item.props.value,
       }));
     if (data.length === 0) return null;
+    const barHeight = Math.max(200, data.length * 40);
+    const maxLabelLen = Math.max(...data.map((d) => d.name.length));
+    const yAxisWidth = Math.min(160, Math.max(80, maxLabelLen * 6));
     return (
       <div className="space-y-2">
         {props.title && (
           <div className="text-[10px] uppercase tracking-widest text-white/40">{props.title}</div>
         )}
-        <div className="h-[200px] w-full">
+        <div style={{ height: barHeight }} className="w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} layout="vertical" margin={{ left: 0, right: 10, top: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" horizontal={false} />
               <XAxis type="number" tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="name" tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 11 }} axisLine={false} tickLine={false} width={80} />
+              <YAxis type="category" dataKey="name" tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 10 }} axisLine={false} tickLine={false} width={yAxisWidth} />
               <Tooltip
                 contentStyle={{ background: "rgba(10,15,31,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "12px", color: "white" }}
                 cursor={{ fill: "rgba(255,255,255,0.04)" }}
