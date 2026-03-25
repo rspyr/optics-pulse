@@ -58,6 +58,10 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
+  if (tenant.stSyncPaused) {
+    return { synced: 0, error: "ServiceTitan sync is paused for this tenant" };
+  }
+
   const config = getTenantConfig(tenant);
   if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
     return { synced: 0, error: "ServiceTitan not configured (need Client ID, Client Secret, and App Key)" };

@@ -134,6 +134,9 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   if (req.body.isDemo !== undefined && (role === "super_admin" || role === "agency_user")) {
     updateData.isDemo = req.body.isDemo === true;
   }
+  if (body.stSyncPaused !== undefined && (role === "super_admin" || role === "agency_user")) {
+    updateData.stSyncPaused = body.stSyncPaused;
+  }
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
     const [existingTenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     let mergedConfig: Record<string, unknown> = {};

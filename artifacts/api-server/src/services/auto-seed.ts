@@ -353,7 +353,7 @@ async function seedFromSnapshot(seedData: any) {
 async function seedDefaults() {
   const [t1] = await db.insert(tenantsTable).values({ name: "Apex HVAC", serviceTitanId: "ST-APEX-001", timezone: "America/New_York", isDemo: true }).returning();
   const [t2] = await db.insert(tenantsTable).values({ name: "Nordic Climate Solutions", serviceTitanId: "ST-NORDIC-002", timezone: "America/Chicago", isDemo: true }).returning();
-  const [t3] = await db.insert(tenantsTable).values({ name: "Advantage Heating & Cooling", serviceTitanId: "ST-ADV-003", timezone: "America/Denver", isDemo: false }).returning();
+  const [t3] = await db.insert(tenantsTable).values({ name: "Advantage Heating & Cooling", serviceTitanId: "ST-ADV-003", timezone: "America/Denver", isDemo: false, stSyncPaused: true }).returning();
   console.log(`[AutoSeed] Created tenants: ${t1.name}, ${t2.name}, ${t3.name}`);
 
   const passwordHash = await bcrypt.hash("demo1234", 10);

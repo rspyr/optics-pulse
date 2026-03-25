@@ -14,6 +14,7 @@ export const tenantsTable = pgTable("tenants", {
   spiffConfig: jsonb("spiff_config"),
   isActive: boolean("is_active").notNull().default(true),
   isDemo: boolean("is_demo").notNull().default(false),
+  stSyncPaused: boolean("st_sync_paused").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

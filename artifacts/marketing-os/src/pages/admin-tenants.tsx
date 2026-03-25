@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -105,6 +105,21 @@ export default function AdminTenants() {
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [togglingStSync, setTogglingStSync] = useState<number | null>(null);
+
+  const handleToggleStSync = async (tenantId: number, currentlyPaused: boolean) => {
+    setTogglingStSync(tenantId);
+    try {
+      await fetch(`${API_BASE}/api/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ stSyncPaused: !currentlyPaused }),
+      });
+      refetch();
+    } catch { /* ignore */ }
+    setTogglingStSync(null);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -562,6 +577,7 @@ export default function AdminTenants() {
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ServiceTitan Tenant ID</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Timezone</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Integrations</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ST Sync</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Mode</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Actions</th>
@@ -597,6 +613,11 @@ export default function AdminTenants() {
                         <td className="p-4">
                           <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>
                             {t.hasIntegrationConfig ? "Configured" : "None"}
+                          </Badge>
+                        </td>
+                        <td className="p-4">
+                          <Badge variant={(t.stSyncPaused as boolean) ? "danger" : "success"}>
+                            {(t.stSyncPaused as boolean) ? "Paused" : "Active"}
                           </Badge>
                         </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
@@ -639,6 +660,27 @@ export default function AdminTenants() {
                             )}
                           </div>
                         </td>
+                        <td className="p-4">
+                          <button
+                            onClick={() => handleToggleStSync(tid, t.stSyncPaused as boolean)}
+                            disabled={togglingStSync === tid}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                              (t.stSyncPaused as boolean)
+                                ? "bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20"
+                                : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20"
+                            } disabled:opacity-50`}
+                            title={(t.stSyncPaused as boolean) ? "Click to resume ServiceTitan sync" : "Click to pause ServiceTitan sync"}
+                          >
+                            {togglingStSync === tid ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (t.stSyncPaused as boolean) ? (
+                              <Pause className="w-3 h-3" />
+                            ) : (
+                              <Play className="w-3 h-3" />
+                            )}
+                            {(t.stSyncPaused as boolean) ? "Paused" : "Active"}
+                          </button>
+                        </td>
                         <td className="p-4"><Badge variant={(t.isActive as boolean) ? "success" : "danger"}>{(t.isActive as boolean) ? "Active" : "Inactive"}</Badge></td>
                         <td className="p-4"><Badge variant={(t.isDemo as boolean) ? "warning" : "neutral"}>{(t.isDemo as boolean) ? "Demo" : "Production"}</Badge></td>
                         <td className="p-4 text-right space-x-2">
@@ -652,7 +694,7 @@ export default function AdminTenants() {
                   </tr>
                   {expandedSyncTenant === tid && !editId && (
                     <tr className="bg-white/[0.01]">
-                      <td colSpan={7} className="px-6 py-4">
+                      <td colSpan={9} className="px-6 py-4">
                         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Integration Sync Status</div>
                         {tenantSyncStatuses[tid] ? (
                           <div className="grid grid-cols-3 gap-4">
