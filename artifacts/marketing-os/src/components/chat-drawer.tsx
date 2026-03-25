@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { MessageCircle, X, Send, Bookmark, BookmarkCheck, Trash2, Sparkles, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Renderer } from "@openuidev/react-lang";
@@ -20,6 +20,10 @@ interface SavedQuestion {
   createdAt: string;
 }
 
+const MIN_DRAWER_WIDTH = 320;
+const MAX_DRAWER_WIDTH = 800;
+const DEFAULT_DRAWER_WIDTH = 440;
+
 export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -30,8 +34,36 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
   const [showSaved, setShowSaved] = useState(false);
   const [savedSet, setSavedSet] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState<string>("");
+  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_DRAWER_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleResizeStart = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startWidth = drawerWidth;
+
+    const onMouseMove = (ev: globalThis.MouseEvent) => {
+      const delta = startX - ev.clientX;
+      const newWidth = Math.min(MAX_DRAWER_WIDTH, Math.max(MIN_DRAWER_WIDTH, startWidth + delta));
+      setDrawerWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [drawerWidth]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -209,10 +241,20 @@ export default function ChatDrawer({ tenantId }: { tenantId?: number }) {
         <span className="text-sm font-medium">Ask Your Data</span>
       </button>
 
-      <div className={cn(
-        "fixed top-0 right-0 z-50 h-full w-full sm:w-[440px] bg-[#0A0F1F] border-l border-white/10 shadow-2xl flex flex-col transition-transform duration-300",
-        isOpen ? "translate-x-0" : "translate-x-full"
-      )}>
+      <div
+        className={cn(
+          "fixed top-0 right-0 z-50 h-full bg-[#0A0F1F] border-l border-white/10 shadow-2xl flex flex-col transition-transform duration-300",
+          isOpen ? "translate-x-0" : "translate-x-full"
+        )}
+        style={{ width: `min(100vw, ${drawerWidth}px)` }}
+      >
+        <div
+          onMouseDown={handleResizeStart}
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-primary/30 transition-colors hidden sm:block",
+            isResizing && "bg-primary/40"
+          )}
+        />
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />

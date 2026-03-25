@@ -116,14 +116,15 @@ const MetricValue = defineComponent({
   description:
     "A single KPI metric with label and value. Use for displaying key numbers like CPL, ROAS, lead count, revenue, booking rate, etc. Optionally include change and trend direction.",
   component: ({ props }) => {
-    const sizeClass = props.value.length > 10 ? "text-base" : props.value.length > 7 ? "text-lg" : "text-2xl";
+    const len = props.value.length;
+    const sizeClass = len > 12 ? "text-xs" : len > 10 ? "text-sm" : len > 7 ? "text-base" : "text-2xl";
     return (
       <div className="text-center space-y-1 min-w-0 overflow-hidden">
-        <div className={`${sizeClass} font-bold text-white tracking-tight break-words`}>{props.value}</div>
-        <div className="text-[10px] uppercase tracking-widest text-white/40 break-words">{props.label}</div>
+        <div className={`${sizeClass} font-bold text-white tracking-tight whitespace-nowrap`}>{props.value}</div>
+        <div className="text-[10px] uppercase tracking-widest text-white/40 whitespace-nowrap overflow-hidden text-ellipsis">{props.label}</div>
         {props.change && (
           <div
-            className={`text-xs font-medium break-words ${
+            className={`text-xs font-medium whitespace-nowrap ${
               props.trend === "up"
                 ? "text-emerald-400"
                 : props.trend === "down"
@@ -206,6 +207,8 @@ const BarChartViz = defineComponent({
               <YAxis type="category" dataKey="name" tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 10 }} axisLine={false} tickLine={false} width={yAxisWidth} />
               <Tooltip
                 contentStyle={{ background: "rgba(10,15,31,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "12px", color: "white" }}
+                labelStyle={{ color: "rgba(255,255,255,0.7)" }}
+                itemStyle={{ color: "white" }}
                 cursor={{ fill: "rgba(255,255,255,0.04)" }}
               />
               <Bar dataKey="value" fill="hsl(217, 91%, 60%)" radius={[0, 4, 4, 0]} name={props.valueLabel || "Value"} />
@@ -263,6 +266,8 @@ const TrendLineViz = defineComponent({
               <YAxis tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }} axisLine={false} tickLine={false} width={45} />
               <Tooltip
                 contentStyle={{ background: "rgba(10,15,31,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "12px", color: "white" }}
+                labelStyle={{ color: "rgba(255,255,255,0.7)" }}
+                itemStyle={{ color: "white" }}
               />
               <Area type="monotone" dataKey="value" stroke="hsl(217, 91%, 60%)" fill="url(#trendGrad)" strokeWidth={2} name={props.valueLabel || "Value"} dot={false} />
             </AreaChart>
@@ -325,6 +330,8 @@ const PieChartViz = defineComponent({
                 </Pie>
                 <Tooltip
                   contentStyle={{ background: "rgba(10,15,31,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "12px", color: "white" }}
+                  labelStyle={{ color: "rgba(255,255,255,0.7)" }}
+                  itemStyle={{ color: "white" }}
                 />
               </PieChart>
             </ResponsiveContainer>
