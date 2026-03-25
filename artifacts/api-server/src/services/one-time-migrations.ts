@@ -1,13 +1,5 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
-import { decryptConfig, encryptConfig } from "../lib/encryption";
-
-const ST_CREDENTIAL_KEYS = [
-  "serviceTitanClientId",
-  "serviceTitanClientSecret",
-  "serviceTitanAppKey",
-  "serviceTitanTenantId",
-];
 
 interface Migration {
   id: string;
@@ -18,7 +10,7 @@ interface Migration {
 const migrations: Migration[] = [
   {
     id: "2026-03-25_wipe-servicetitan-data",
-    description: "Wipe all ServiceTitan data, credentials, and pause ST sync for compliance",
+    description: "Wipe ST jobs/logs and pause ST sync for compliance (credentials preserved)",
     run: async () => {
       await db.delete(jobsTable);
       console.log("[Migration] Deleted all jobs");
@@ -32,32 +24,6 @@ const migrations: Migration[] = [
         .update(tenantsTable)
         .set({ stSyncPaused: true, serviceTitanId: null, updatedAt: new Date() });
       console.log("[Migration] Paused ST sync and cleared service_titan_id for all tenants");
-
-      const tenants = await db.select().from(tenantsTable);
-      let cleared = 0;
-      for (const tenant of tenants) {
-        if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") continue;
-        try {
-          const config = decryptConfig(tenant.apiConfig) as Record<string, unknown>;
-          let changed = false;
-          for (const key of ST_CREDENTIAL_KEYS) {
-            if (key in config) {
-              delete config[key];
-              changed = true;
-            }
-          }
-          if (changed) {
-            await db
-              .update(tenantsTable)
-              .set({ apiConfig: encryptConfig(config), updatedAt: new Date() })
-              .where(eq(tenantsTable.id, tenant.id));
-            cleared++;
-          }
-        } catch (err) {
-          console.error(`[Migration] Failed to clear ST credentials for tenant ${tenant.id}:`, err);
-        }
-      }
-      console.log(`[Migration] Cleared ST credentials from ${cleared} tenant(s)`);
     },
   },
 ];
