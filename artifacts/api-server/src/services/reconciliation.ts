@@ -471,7 +471,7 @@ async function pushConversionsToExternalAPIs(
     }
   }
 
-  if (config.serviceTitanClientId && config.serviceTitanClientSecret) {
+  if (config.serviceTitanClientId && config.serviceTitanClientSecret && !tenant.stSyncPaused) {
     const stConfig = {
       clientId: config.serviceTitanClientId,
       clientSecret: config.serviceTitanClientSecret,
