@@ -10,8 +10,8 @@
 --
 -- NOTE: ServiceTitan credentials stored in the encrypted api_config
 -- JSONB column cannot be cleared via raw SQL (they are AES-256-GCM
--- encrypted). Use the companion script wipe-st-credentials.ts to
--- clear those via the application's decryption/encryption layer.
+-- encrypted). Use the companion TypeScript script to clear those:
+--   cd artifacts/api-server && pnpm exec tsx src/scripts/wipe-servicetitan-data.ts
 --
 -- Run with: psql $DATABASE_URL -f scripts/wipe-servicetitan-data-production.sql
 -- =============================================================
