@@ -25,6 +25,19 @@ import {
   AreaChart,
 } from "recharts";
 
+import type { ReactNode } from "react";
+
+function renderBoldMarkdown(text: string): ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i} className="font-semibold text-white">{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
+}
+
 const CHART_COLORS = [
   "hsl(217, 91%, 60%)",
   "hsl(263, 70%, 50%)",
@@ -46,7 +59,7 @@ const TextBlock = defineComponent({
     "A paragraph of text. Use for conversational commentary, analysis, and insights. Use bold=true for emphasis on key metrics or numbers.",
   component: ({ props }) => (
     <p className={`text-sm leading-relaxed text-white/80 ${props.bold ? "font-semibold text-white" : ""}`}>
-      {props.content}
+      {renderBoldMarkdown(props.content)}
     </p>
   ),
 });
@@ -74,7 +87,7 @@ const BulletItem = defineComponent({
   }),
   description: "A single bullet point item. Must be used inside a BulletList.",
   component: ({ props }) => (
-    <li className="text-sm text-white/80 leading-relaxed">{props.text}</li>
+    <li className="text-sm text-white/80 leading-relaxed">{renderBoldMarkdown(props.text)}</li>
   ),
 });
 
@@ -102,25 +115,28 @@ const MetricValue = defineComponent({
   }),
   description:
     "A single KPI metric with label and value. Use for displaying key numbers like CPL, ROAS, lead count, revenue, booking rate, etc. Optionally include change and trend direction.",
-  component: ({ props }) => (
-    <div className="text-center space-y-1">
-      <div className="text-2xl font-bold text-white tracking-tight">{props.value}</div>
-      <div className="text-[10px] uppercase tracking-widest text-white/40">{props.label}</div>
-      {props.change && (
-        <div
-          className={`text-xs font-medium ${
-            props.trend === "up"
-              ? "text-emerald-400"
-              : props.trend === "down"
-                ? "text-red-400"
-                : "text-white/50"
-          }`}
-        >
-          {props.change}
-        </div>
-      )}
-    </div>
-  ),
+  component: ({ props }) => {
+    const sizeClass = props.value.length > 10 ? "text-lg" : props.value.length > 7 ? "text-xl" : "text-2xl";
+    return (
+      <div className="text-center space-y-1 min-w-0">
+        <div className={`${sizeClass} font-bold text-white tracking-tight truncate`}>{props.value}</div>
+        <div className="text-[10px] uppercase tracking-widest text-white/40 truncate">{props.label}</div>
+        {props.change && (
+          <div
+            className={`text-xs font-medium truncate ${
+              props.trend === "up"
+                ? "text-emerald-400"
+                : props.trend === "down"
+                  ? "text-red-400"
+                  : "text-white/50"
+            }`}
+          >
+            {props.change}
+          </div>
+        )}
+      </div>
+    );
+  },
 });
 
 const MetricCard = defineComponent({
@@ -131,14 +147,16 @@ const MetricCard = defineComponent({
   description:
     "A card displaying one or more KPI metrics side by side. Use for single-number answers (CPL, ROAS) or metric summaries. Best for 1-7 metrics.",
   component: ({ props, renderNode }) => (
-    <div className="rounded-xl border border-white/10 bg-gradient-to-br from-blue-500/10 to-violet-500/10 p-4">
+    <div className="rounded-xl border border-white/10 bg-gradient-to-br from-blue-500/10 to-violet-500/10 p-4 overflow-hidden">
       <div
-        className={`grid gap-4 ${
+        className={`grid gap-3 ${
           props.metrics.length === 1
             ? "grid-cols-1"
             : props.metrics.length === 2
               ? "grid-cols-2"
-              : "grid-cols-3"
+              : props.metrics.length <= 4
+                ? "grid-cols-2"
+                : "grid-cols-3"
         }`}
       >
         {renderNode(props.metrics)}
@@ -459,7 +477,7 @@ const AlertBox = defineComponent({
     };
     return (
       <div className={`rounded-lg border px-3 py-2.5 text-xs leading-relaxed ${styles[variant]}`}>
-        {props.message}
+        {renderBoldMarkdown(props.message)}
       </div>
     );
   },
