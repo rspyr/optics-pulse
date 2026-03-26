@@ -25,7 +25,10 @@ async function purgeExpiredStData(): Promise<void> {
     )
   );
 
-  if (expiredJobs.length === 0) return;
+  if (expiredJobs.length === 0) {
+    console.log("[ST Purge] No expired ST data to purge");
+    return;
+  }
 
   const expiredIds = expiredJobs.map((j) => j.id);
 

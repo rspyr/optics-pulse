@@ -30,6 +30,16 @@ const migrations: Migration[] = [
     id: "2026-03-26_purge-historical-st-pii",
     description: "NULL out ST PII fields on all existing jobs for 24h data retention compliance",
     run: async () => {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const hasAnyStPii = or(
+        isNotNull(jobsTable.customerName),
+        isNotNull(jobsTable.customerPhone),
+        isNotNull(jobsTable.customerEmail),
+        isNotNull(jobsTable.serviceAddress),
+        isNotNull(jobsTable.stJobId),
+        isNotNull(jobsTable.stCustomerId),
+        isNotNull(jobsTable.stLocationId),
+      );
       const result = await db.update(jobsTable)
         .set({
           customerName: null,
@@ -42,17 +52,12 @@ const migrations: Migration[] = [
           stDataExpiresAt: null,
           updatedAt: new Date(),
         })
-        .where(or(
-          isNotNull(jobsTable.customerName),
-          isNotNull(jobsTable.customerPhone),
-          isNotNull(jobsTable.customerEmail),
-          isNotNull(jobsTable.serviceAddress),
-          isNotNull(jobsTable.stJobId),
-          isNotNull(jobsTable.stCustomerId),
-          isNotNull(jobsTable.stLocationId),
+        .where(and(
+          hasAnyStPii!,
+          sql`${jobsTable.createdAt} <= ${cutoff}`,
         ))
         .returning({ id: jobsTable.id });
-      console.log(`[Migration] Purged ST PII from ${result.length} historical job(s)`);
+      console.log(`[Migration] Purged ST PII from ${result.length} historical job(s) older than 24h`);
     },
   },
 ];

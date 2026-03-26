@@ -71,6 +71,13 @@
       "when": 1774452429332,
       "tag": "0009_brief_madame_masque",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1774540560514,
+      "tag": "0010_lowly_alice",
+      "breakpoints": true
     }
   ]
 }
