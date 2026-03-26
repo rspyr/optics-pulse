@@ -107,22 +107,22 @@ function useScripts(tenantId?: number | null) {
   return scripts;
 }
 
-function findScript(scripts: ScriptRecord[], type: string, source: string, stage?: string, disposition?: string | null): string | null {
+function findScriptByDisposition(scripts: ScriptRecord[], type: string, disposition: string | null | undefined): string | null {
+  if (!scripts || !Array.isArray(scripts) || !disposition) return null;
+  const match = scripts.find(s => s.type === type && s.isActive && s.dispositionFilter === disposition);
+  return match ? match.content : null;
+}
+
+function findScriptBySourceStage(scripts: ScriptRecord[], type: string, source: string, stage?: string): string | null {
   if (!scripts || !Array.isArray(scripts)) return null;
-  const active = scripts.filter(s => s.type === type && s.isActive);
-
-  if (disposition) {
-    const byDisposition = active.find(s => s.dispositionFilter === disposition);
-    if (byDisposition) return byDisposition.content;
-  }
-
-  const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null) && !s.dispositionFilter);
+  const active = scripts.filter(s => s.type === type && s.isActive && !s.dispositionFilter);
+  const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null));
   if (bySourceAndStage) return bySourceAndStage.content;
-  const bySource = active.find(s => s.sourceFilter === source && !s.stageFilter && !s.dispositionFilter);
+  const bySource = active.find(s => s.sourceFilter === source && !s.stageFilter);
   if (bySource) return bySource.content;
-  const byStage = active.find(s => !s.sourceFilter && s.stageFilter === (stage || null) && !s.dispositionFilter);
+  const byStage = active.find(s => !s.sourceFilter && s.stageFilter === (stage || null));
   if (byStage) return byStage.content;
-  const generic = active.find(s => !s.sourceFilter && !s.stageFilter && !s.dispositionFilter);
+  const generic = active.find(s => !s.sourceFilter && !s.stageFilter);
   if (generic) return generic.content;
   return null;
 }
@@ -785,8 +785,8 @@ function LeadCard({
   const [showWhyOrder, setShowWhyOrder] = useState(false);
   const suggestion = lead._suggestion;
   const dispScripts = lead.disposition ? DISPOSITION_SCRIPTS[lead.disposition] : null;
-  const script = findScript(scripts, "call", lead.source, lead.status, lead.disposition) || dispScripts?.call || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
-  const vmScript = findScript(scripts, "voicemail", lead.source, lead.status, lead.disposition) || dispScripts?.vm || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
+  const script = findScriptByDisposition(scripts, "call", lead.disposition) || dispScripts?.call || findScriptBySourceStage(scripts, "call", lead.source, lead.status) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
+  const vmScript = findScriptByDisposition(scripts, "voicemail", lead.disposition) || dispScripts?.vm || findScriptBySourceStage(scripts, "voicemail", lead.source, lead.status) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
   const personalizedVm = vmScript
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -837,7 +837,7 @@ function LeadCard({
 
   const handleText = async () => {
     if (!lead.phone) return;
-    const textTemplate = findScript(scripts, "text", lead.source, lead.status, lead.disposition) || dispScripts?.text || FALLBACK_TEXT;
+    const textTemplate = findScriptByDisposition(scripts, "text", lead.disposition) || dispScripts?.text || findScriptBySourceStage(scripts, "text", lead.source, lead.status) || FALLBACK_TEXT;
     const msg = textTemplate
       .replace("[NAME]", lead.firstName)
       .replace("[INTEREST]", lead.interestType || "HVAC")
