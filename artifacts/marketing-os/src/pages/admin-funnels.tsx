@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink, BookOpen, MessageSquareText, ChevronDown, ChevronUp } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -34,7 +34,7 @@ export default function AdminFunnels() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: "", slug: "", description: "" });
   const [formError, setFormError] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [tab, setTab] = useState<"funnels" | "assignments" | "scripts" | "health">("funnels");
 
   useEffect(() => {
@@ -300,8 +300,84 @@ interface ScriptData {
   funnelScripts: { id: number; name: string; slug: string; script: string }[];
 }
 
-function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; copiedId: number | null; setCopiedId: (id: number | null) => void }) {
+const INSTALLATION_INSTRUCTIONS = `Installation Instructions for Marketing OS Tracking Script
+===========================================================
+
+1. PLACEMENT
+   Copy the script tag provided below and paste it into the HTML of your website,
+   just before the closing </head> tag. This ensures the tracker loads early on
+   every page.
+
+   Example:
+   <head>
+     <!-- your existing tags -->
+     <script src="https://..." data-tenant="..." ></script>
+   </head>
+
+2. WHICH PAGES
+   Install the script on ALL pages of your website, especially any page that
+   contains a form (contact forms, quote request forms, scheduling forms, etc.).
+   The tracker automatically detects forms and injects hidden attribution fields.
+
+3. FUNNEL-SPECIFIC SCRIPTS (if applicable)
+   If you have per-funnel scripts, use those on the specific landing pages for
+   each funnel/campaign. The base script should still be on all other pages.
+
+4. VERIFICATION
+   After installing, visit your website and then check the "Tracker Health" tab
+   in Marketing OS. You should see a green "Healthy" status with the detected
+   domain within a few minutes.
+
+5. COMMON ISSUES
+   - Script not firing: Make sure it is placed before </head>, not at the
+     bottom of <body>.
+   - Forms not tracked: The script uses a MutationObserver to detect
+     dynamically loaded forms. If your forms load inside iframes, they may
+     not be detected.
+   - Multiple scripts: Do NOT install both the base script AND a funnel script
+     on the same page. Use one or the other.`;
+
+function buildDevPrompt(tenantName: string, baseScript: string, funnelScripts: { name: string; script: string }[]) {
+  const allScripts = [
+    `Base Script (install on all pages):\n${baseScript}`,
+    ...funnelScripts.map(fs => `${fs.name} (install on that funnel's landing pages only):\n${fs.script}`)
+  ].join("\n\n");
+
+  return `Hi there,
+
+We need a tracking script installed on the ${tenantName} website so we can properly attribute marketing leads. This is a lightweight JavaScript tag — similar to a Google Analytics snippet.
+
+Here's what we need:
+
+${allScripts}
+
+Installation steps:
+1. Paste the script tag(s) above into the <head> section of the site, just before the closing </head> tag.
+2. The base script should go on ALL pages. If there are funnel-specific scripts listed above, those go only on the landing pages for that specific campaign/funnel.
+3. Do NOT install both the base script and a funnel-specific script on the same page — use one or the other.
+4. After installing, please let us know so we can verify the tracker is reporting correctly.
+
+The script is async and lightweight — it will not affect page load speed. It captures UTM parameters and Google Click IDs from the URL and injects hidden fields into any forms on the page for lead attribution.
+
+Thank you!`;
+}
+
+function CopyButton({ copyKey, copiedId, onClick, label }: { copyKey: string; copiedId: string | null; onClick: () => void; label: string }) {
+  const isCopied = copiedId === copyKey;
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0"
+    >
+      {isCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+      {isCopied ? "Copied!" : label}
+    </button>
+  );
+}
+
+function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; copiedId: string | null; setCopiedId: (id: string | null) => void }) {
   const [scriptData, setScriptData] = useState<Record<number, ScriptData>>({});
+  const [showInstructions, setShowInstructions] = useState(false);
 
   useEffect(() => {
     tenants.forEach(t => {
@@ -312,14 +388,40 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
     });
   }, [tenants]);
 
-  const handleCopy = (text: string, id: number) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  const copyTimerRef = useState<ReturnType<typeof setTimeout> | null>(null);
+  const handleCopy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    if (copyTimerRef[0]) clearTimeout(copyTimerRef[0]);
+    setCopiedId(key);
+    copyTimerRef[0] = setTimeout(() => setCopiedId(null), 2000);
   };
 
   return (
     <div className="space-y-4">
+      <PremiumCard className="p-5">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setShowInstructions(!showInstructions)}
+            className="flex items-center gap-2 text-white hover:text-white/80 transition-colors"
+          >
+            <BookOpen className="w-5 h-5 text-blue-400" />
+            <h3 className="font-display text-lg">Installation Instructions</h3>
+            {showInstructions ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </button>
+          <CopyButton
+            copyKey="instructions"
+            copiedId={copiedId}
+            onClick={() => handleCopy(INSTALLATION_INSTRUCTIONS, "instructions")}
+            label="Copy Instructions"
+          />
+        </div>
+        {showInstructions && (
+          <div className="mt-4 bg-background border border-white/10 rounded-lg p-5 font-mono text-xs text-blue-300/80 whitespace-pre-wrap leading-relaxed overflow-x-auto">
+            {INSTALLATION_INSTRUCTIONS}
+          </div>
+        )}
+      </PremiumCard>
+
       {tenants.map(t => {
         const data = scriptData[t.id];
         if (!data) return (
@@ -328,22 +430,47 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
             <p className="text-sm text-muted-foreground mt-2">Loading scripts...</p>
           </PremiumCard>
         );
+
+        const prompt = buildDevPrompt(t.name, data.script, data.funnelScripts);
+
         return (
           <PremiumCard key={t.id} className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-display text-lg text-white">{t.name}</h3>
-              <button onClick={() => handleCopy(data.script, t.id)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all">
-                {copiedId === t.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                {copiedId === t.id ? "Copied!" : "Copy Base Script"}
-              </button>
-            </div>
-            <div className="space-y-3">
+            <h3 className="font-display text-lg text-white mb-4">{t.name}</h3>
+
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <MessageSquareText className="w-4 h-4 text-amber-400" />
+                    <p className="text-xs text-amber-400 uppercase tracking-wider font-medium">Developer Request Prompt</p>
+                  </div>
+                  <CopyButton
+                    copyKey={`prompt-${t.id}`}
+                    copiedId={copiedId}
+                    onClick={() => handleCopy(prompt, `prompt-${t.id}`)}
+                    label="Copy Prompt"
+                  />
+                </div>
+                <div className="bg-background/50 border border-white/10 rounded-lg p-4 text-sm text-white/70 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                  {prompt}
+                </div>
+              </div>
+
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Base Script (no funnel)</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
+                  <CopyButton
+                    copyKey={`base-${t.id}`}
+                    copiedId={copiedId}
+                    onClick={() => handleCopy(data.script, `base-${t.id}`)}
+                    label="Copy Base Script"
+                  />
+                </div>
                 <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
                   {data.script}
                 </div>
               </div>
+
               {data.funnelScripts.length > 0 && (
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts ({data.funnelScripts.length})</p>
@@ -355,11 +482,11 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
                           {fs.script}
                         </div>
                         <button
-                          onClick={() => handleCopy(fs.script, fs.id)}
+                          onClick={() => handleCopy(fs.script, `funnel-${t.id}-${fs.id}`)}
                           className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
                           title="Copy"
                         >
-                          {copiedId === fs.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                          {copiedId === `funnel-${t.id}-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                         </button>
                       </div>
                     ))}
