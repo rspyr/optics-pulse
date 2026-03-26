@@ -29,41 +29,31 @@ async function purgeExpiredStData(): Promise<void> {
     )
   );
 
-  if (expiredJobs.length === 0) {
-    const tenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
-      await db.insert(integrationSyncLogsTable).values({
-        tenantId: tenant.id,
-        integration: "service_titan",
-        syncType: "st_data_purge",
-        status: "completed",
-        recordsProcessed: 0,
-        startedAt: now,
-        completedAt: new Date(),
-      });
-    }
-    console.log("[ST Purge] No expired ST data to purge");
-    return;
+  const tenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isActive, true));
+  const tenantCounts = new Map<number, number>();
+  for (const tenant of tenants) {
+    tenantCounts.set(tenant.id, 0);
   }
 
-  const expiredIds = expiredJobs.map((j) => j.id);
+  if (expiredJobs.length > 0) {
+    const expiredIds = expiredJobs.map((j) => j.id);
 
-  await db.update(jobsTable)
-    .set({
-      customerName: null,
-      customerPhone: null,
-      customerEmail: null,
-      serviceAddress: null,
-      stJobId: null,
-      stCustomerId: null,
-      stLocationId: null,
-      updatedAt: now,
-    })
-    .where(sql`${jobsTable.id} IN (${sql.join(expiredIds.map((id) => sql`${id}`), sql`, `)})`);
+    await db.update(jobsTable)
+      .set({
+        customerName: null,
+        customerPhone: null,
+        customerEmail: null,
+        serviceAddress: null,
+        stJobId: null,
+        stCustomerId: null,
+        stLocationId: null,
+        updatedAt: now,
+      })
+      .where(sql`${jobsTable.id} IN (${sql.join(expiredIds.map((id) => sql`${id}`), sql`, `)})`);
 
-  const tenantCounts = new Map<number, number>();
-  for (const job of expiredJobs) {
-    tenantCounts.set(job.tenantId, (tenantCounts.get(job.tenantId) || 0) + 1);
+    for (const job of expiredJobs) {
+      tenantCounts.set(job.tenantId, (tenantCounts.get(job.tenantId) || 0) + 1);
+    }
   }
 
   for (const [tenantId, count] of tenantCounts) {
@@ -78,7 +68,11 @@ async function purgeExpiredStData(): Promise<void> {
     });
   }
 
-  console.log(`[ST Purge] Purged ST PII from ${expiredJobs.length} expired job(s) across ${tenantCounts.size} tenant(s)`);
+  if (expiredJobs.length > 0) {
+    console.log(`[ST Purge] Purged ST PII from ${expiredJobs.length} expired job(s) across ${tenantCounts.size} tenant(s)`);
+  } else {
+    console.log("[ST Purge] No expired ST data to purge");
+  }
 }
 
 let purgeTimer: ReturnType<typeof setInterval> | null = null;
