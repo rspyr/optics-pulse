@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
 
 interface TenantForm {
   name: string;
@@ -92,6 +92,45 @@ const emptyForm: TenantForm = {
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
 type EditTab = "integrations" | "alerts" | "scripts" | "leaderboard";
+
+function SetupGuide({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-3 border border-white/10 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-white hover:bg-white/5 transition-colors"
+      >
+        <Info className="w-3.5 h-3.5 shrink-0" />
+        <span className="font-medium">{title}</span>
+        <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="px-4 pb-3 text-xs text-muted-foreground leading-relaxed space-y-2 border-t border-white/10 pt-3">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CopyableUrl({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="inline-flex items-center gap-1.5 bg-white/5 rounded px-2 py-0.5 font-mono text-[11px] text-white/80 break-all">
+      {url}
+      <button
+        type="button"
+        onClick={() => { navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+        className="shrink-0 hover:text-white transition-colors"
+        title="Copy to clipboard"
+      >
+        {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+      </button>
+    </span>
+  );
+}
 
 export default function AdminTenants() {
   const { data: tenants, isLoading, refetch } = useListTenants();
@@ -501,6 +540,20 @@ export default function AdminTenants() {
                 <input type="text" value={form.callRailTrackingNumber} onChange={(e) => { trackFieldChange("callRailTrackingNumber"); setForm(f => ({ ...f, callRailTrackingNumber: e.target.value })); }} placeholder="e.g. +18005551234" className={inputClass + " w-full"} />
               </div>
             </div>
+            <SetupGuide title="CallRail Setup Instructions">
+              <p className="font-medium text-white/90">1. Generate an API Key</p>
+              <p>In CallRail, go to <span className="text-white/80">Settings → API Access</span>. Click <span className="text-white/80">"Create API V3 Key"</span>. Copy the key and paste it into the <span className="text-white/80">API Key</span> field above.</p>
+              <p className="font-medium text-white/90 pt-1">2. Find your Account ID &amp; Company ID</p>
+              <p>Your <span className="text-white/80">Account ID</span> is in the URL when logged into CallRail (e.g. <span className="font-mono text-[11px]">app.callrail.com/a/<strong>123456789</strong>/…</span>). The <span className="text-white/80">Company ID</span> can be found under <span className="text-white/80">Settings → Companies</span> — click a company and note the ID from the URL.</p>
+              <p className="font-medium text-white/90 pt-1">3. Configure the Webhook</p>
+              <p>In CallRail, go to <span className="text-white/80">Settings → Webhooks → Custom Notifications</span>. Create a new POST webhook with this URL:</p>
+              {editId && <CopyableUrl url={`${window.location.origin}/api/webhooks/ingest`} />}
+              <p>Set the webhook body to JSON and include these fields in the payload: <span className="font-mono text-[11px] text-white/80">source: "callrail"</span>, <span className="font-mono text-[11px] text-white/80">tenantId: {editId || "<TENANT_ID>"}</span>, and a <span className="font-mono text-[11px] text-white/80">data</span> object with <span className="font-mono text-[11px] text-white/80">phone</span>, <span className="font-mono text-[11px] text-white/80">firstName</span>, <span className="font-mono text-[11px] text-white/80">lastName</span>, <span className="font-mono text-[11px] text-white/80">gclid</span>, <span className="font-mono text-[11px] text-white/80">utmSource</span>, <span className="font-mono text-[11px] text-white/80">utmCampaign</span>, <span className="font-mono text-[11px] text-white/80">utmMedium</span>, <span className="font-mono text-[11px] text-white/80">landingPage</span>, and <span className="font-mono text-[11px] text-white/80">externalId</span> (set to the call ID).</p>
+              <p className="font-medium text-white/90 pt-1">4. Set the Webhook Signing Key</p>
+              <p>In the same webhook settings, enable <span className="text-white/80">HMAC signature verification</span>. Copy the signing secret and paste it into the <span className="text-white/80">Webhook Signing Key</span> field above. This verifies incoming webhooks are authentic.</p>
+              <p className="font-medium text-white/90 pt-1">5. Tracking Number (for SMS)</p>
+              <p>If using CallRail as the text platform, enter a <span className="text-white/80">tracking number</span> assigned to this company. This is the number texts will be sent from. Find it under <span className="text-white/80">Settings → Numbers</span> in CallRail. Format: <span className="font-mono text-[11px]">+18005551234</span>.</p>
+            </SetupGuide>
           </div>
           <div>
             <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3">Podium</h4>
@@ -511,6 +564,18 @@ export default function AdminTenants() {
                 <input type="text" value={form.podiumLocationId} onChange={(e) => { trackFieldChange("podiumLocationId"); setForm(f => ({ ...f, podiumLocationId: e.target.value })); }} placeholder="e.g. loc_abc123" className={inputClass + " w-full"} />
               </div>
             </div>
+            <SetupGuide title="Podium Setup Instructions">
+              <p className="font-medium text-white/90">1. Generate an API Token</p>
+              <p>Log into your Podium account and navigate to <span className="text-white/80">Settings → API Tokens</span>. Generate a new token with read access to reviews, contacts, and messages. Copy it and paste it into the <span className="text-white/80">API Token</span> field above.</p>
+              <p className="font-medium text-white/90 pt-1">2. Find your Location ID</p>
+              <p>In Podium, go to <span className="text-white/80">Settings → Locations</span>. Select the location for this tenant. The <span className="text-white/80">Location ID</span> is displayed in the location details or in the URL (e.g. <span className="font-mono text-[11px]">loc_abc123</span>). Paste it into the field above.</p>
+              <p className="font-medium text-white/90 pt-1">3. Configure the Review Webhook</p>
+              <p>In Podium's developer settings, set up a webhook to receive review notifications. Point it to this URL:</p>
+              {editId && <CopyableUrl url={`${window.location.origin}/api/webhooks/podium?tenantId=${editId}`} />}
+              <p>This will automatically sync new reviews in real-time. Reviews are also polled every 6 hours as a backup.</p>
+              <p className="font-medium text-white/90 pt-1">4. Communication Platform (Optional)</p>
+              <p>If using Podium as the call/text platform, ensure the Podium account has messaging capabilities enabled. Set <span className="text-white/80">Text Platform</span> and/or <span className="text-white/80">Call Platform</span> to "Podium" in this tenant's Communication settings.</p>
+            </SetupGuide>
           </div>
         </div>
       )}
