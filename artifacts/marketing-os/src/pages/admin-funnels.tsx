@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink, BookOpen, MessageSquareText, ChevronDown, ChevronUp } from "lucide-react";
 
@@ -388,12 +388,13 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
     });
   }, [tenants]);
 
-  const copyTimerRef = useState<ReturnType<typeof setTimeout> | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { return () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current); }; }, []);
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text).catch(() => {});
-    if (copyTimerRef[0]) clearTimeout(copyTimerRef[0]);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     setCopiedId(key);
-    copyTimerRef[0] = setTimeout(() => setCopiedId(null), 2000);
+    copyTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   return (
