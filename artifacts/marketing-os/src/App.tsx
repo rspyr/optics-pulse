@@ -8,7 +8,7 @@ import { AuthProvider, useAuth } from "@/components/auth-context";
 import { AppLayout } from "@/components/layout";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
-import Leads from "@/pages/leads";
+import Leads from "@/pages/pulse";
 import Clients from "@/pages/clients";
 import Internal from "@/pages/internal";
 import Attribution from "@/pages/attribution";
@@ -79,7 +79,8 @@ function AuthenticatedRoutes() {
     <AppLayout>
       <Switch>
         <Route path="/">{() => isAgency ? <Dashboard key="dashboard" /> : <Clients key="clients" />}</Route>
-        <Route path="/leads" component={Leads} />
+        <Route path="/pulse" component={Leads} />
+        <Route path="/leads">{() => <Redirect to="/pulse" />}</Route>
         <Route path="/attribution" component={Attribution} />
         <Route path="/settings" component={Settings} />
         <Route path="/internal">{() => <AgencyGuard><Internal /></AgencyGuard>}</Route>

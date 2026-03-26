@@ -31,7 +31,7 @@ const PulseIcon = ({ className }: { className?: string }) => (
 const AGENCY_NAV = [
   { href: "/", label: "Command Center", icon: LayoutDashboard },
   { href: "/internal", label: "God View", icon: Shield },
-  { href: "/leads", label: "Pulse", icon: PulseIcon },
+  { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/clients", label: "Client Portal", icon: Building2 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
@@ -47,7 +47,7 @@ const AGENCY_NAV = [
 
 const CLIENT_NAV_ADMIN_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Pulse", icon: PulseIcon },
+  { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
@@ -56,7 +56,7 @@ const CLIENT_NAV_ADMIN_BASE = [
 
 const CLIENT_NAV_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Pulse", icon: PulseIcon },
+  { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Client Settings", icon: Settings },
