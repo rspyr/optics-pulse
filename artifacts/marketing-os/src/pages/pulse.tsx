@@ -1031,7 +1031,8 @@ function LeadCard({
                 <button
                   key={d.value}
                   onClick={() => {
-                    const newStatus = d.value === "booked" ? "booked" : "contacted";
+                    const terminalDispositions = ["not_interested", "out_of_area", "looking_for_job"];
+                    const newStatus = d.value === "booked" ? "booked" : terminalDispositions.includes(d.value) ? "lost" : "contacted";
                     onDisposition(lead.id, d.value, newStatus);
                     setShowDisposition(false);
                   }}
@@ -1116,6 +1117,7 @@ export default function Leads() {
   const [lastSpiffAmount, setLastSpiffAmount] = useState(20);
   const [baseline, setBaseline] = useState<ComparisonBaseline>("yesterday");
   const [showHistory, setShowHistory] = useState(false);
+  const [queueFilter, setQueueFilter] = useState<"all" | "new" | "followup" | "background">("all");
   const { data: comparison, refetch: refetchComparison } = useComparisonStats(baseline, effectiveTenantId, isAgency);
 
   useEffect(() => {
@@ -1214,11 +1216,12 @@ export default function Leads() {
     }
   };
 
-  const unifiedQueue = [
+  const fullQueue = [
     ...queue.newLeads.map(l => ({ ...l, _priority: "new" as const })),
     ...queue.followUps.map(l => ({ ...l, _priority: "followup" as const })),
     ...queue.background.map(l => ({ ...l, _priority: "background" as const })),
   ];
+  const unifiedQueue = queueFilter === "all" ? fullQueue : fullQueue.filter(l => l._priority === queueFilter);
 
   return (
     <div className="relative min-h-screen">
@@ -1380,21 +1383,45 @@ export default function Leads() {
       <div className="flex gap-6">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setQueueFilter("all")}
+              className="flex items-center gap-1.5 cursor-pointer group"
+            >
               {queue.newLeads.length > 0 && (
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
                 </span>
               )}
-              <span className="text-xs text-white/50 uppercase tracking-wider font-medium">Focus Queue</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-white/30">
-              <span className="text-red-400 font-mono">{queue.newLeads.length} new</span>
-              <span>·</span>
-              <span className="text-amber-400 font-mono">{queue.followUps.length} follow-up</span>
-              <span>·</span>
-              <span className="text-white/30 font-mono">{queue.background.length} background</span>
+              <span className={cn(
+                "text-xs uppercase tracking-wider font-medium transition-colors",
+                queueFilter === "all" ? "text-white border-b border-white/50 pb-0.5" : "text-white/50 group-hover:text-white/70"
+              )}>Focus Queue</span>
+            </button>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => setQueueFilter("new")}
+                className={cn(
+                  "font-mono cursor-pointer transition-all",
+                  queueFilter === "new" ? "text-red-300 border-b border-red-400/50 pb-0.5" : "text-red-400/70 hover:text-red-300"
+                )}
+              >{queue.newLeads.length} new</button>
+              <span className="text-white/20">·</span>
+              <button
+                onClick={() => setQueueFilter("followup")}
+                className={cn(
+                  "font-mono cursor-pointer transition-all",
+                  queueFilter === "followup" ? "text-amber-300 border-b border-amber-400/50 pb-0.5" : "text-amber-400/70 hover:text-amber-300"
+                )}
+              >{queue.followUps.length} follow-up</button>
+              <span className="text-white/20">·</span>
+              <button
+                onClick={() => setQueueFilter("background")}
+                className={cn(
+                  "font-mono cursor-pointer transition-all",
+                  queueFilter === "background" ? "text-white/60 border-b border-white/30 pb-0.5" : "text-white/30 hover:text-white/50"
+                )}
+              >{queue.background.length} background</button>
             </div>
           </div>
 
