@@ -83,6 +83,10 @@ router.post("/webhooks/ingest", async (req, res) => {
     if (source === "callrail") eventType = "call";
     else if (source === "manual") eventType = "click";
 
+    const externalId = source === "callrail" && data.externalId
+      ? `callrail:${data.externalId}`
+      : data.externalId || null;
+
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
       eventType,
@@ -95,6 +99,7 @@ router.post("/webhooks/ingest", async (req, res) => {
       landingPage: data.landingPage || null,
       matchLevel: data.gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched",
       matchConfidence: data.gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
+      externalId,
     }).returning();
 
     if (data.firstName || data.lastName || data.phone || data.email) {

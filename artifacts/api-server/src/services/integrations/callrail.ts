@@ -109,13 +109,7 @@ export async function syncCallRailCalls(
 ): Promise<{ synced: number; newCalls: number }> {
   const sinceDate = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
 
-  let calls: CallRailCall[];
-  try {
-    calls = await fetchCallRailCalls(config, sinceDate);
-  } catch (err) {
-    console.error(`[CallRail] Fetch error for tenant ${tenantId}:`, err);
-    return { synced: 0, newCalls: 0 };
-  }
+  const calls = await fetchCallRailCalls(config, sinceDate);
 
   let newCalls = 0;
   for (const call of calls) {

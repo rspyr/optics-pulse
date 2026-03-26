@@ -514,6 +514,7 @@ export const IngestWebhookBody = zod.object({
     utmSource: zod.string().optional(),
     utmCampaign: zod.string().optional(),
     utmMedium: zod.string().optional(),
+    externalId: zod.string().optional(),
   }),
 });
 
