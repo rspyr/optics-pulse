@@ -103,24 +103,38 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
       const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       if (existing) {
-        await db.update(jobsTable)
-          .set({
-            revenue: formatted.revenue,
-            status: formatted.status,
-            completedAt: formatted.completedAt,
-            customerName: formatted.customerName,
-            customerPhone: formatted.customerPhone || existing.customerPhone,
-            customerEmail: formatted.customerEmail || existing.customerEmail,
-            serviceAddress: formatted.serviceAddress || existing.serviceAddress,
-            stCustomerId: formatted.stCustomerId || existing.stCustomerId,
-            stLocationId: formatted.stLocationId || existing.stLocationId,
-            jobTypeName: formatted.jobTypeName || existing.jobTypeName,
-            businessUnit: formatted.businessUnit || existing.businessUnit,
-            stJobIdHash: jobIdHash,
-            stDataExpiresAt,
-            updatedAt: new Date(),
-          })
-          .where(eq(jobsTable.id, existing.id));
+        const wasPurged = existing.customerName === null && existing.stJobId === null;
+        if (wasPurged) {
+          await db.update(jobsTable)
+            .set({
+              revenue: formatted.revenue,
+              status: formatted.status,
+              completedAt: formatted.completedAt,
+              jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+              businessUnit: formatted.businessUnit || existing.businessUnit,
+              updatedAt: new Date(),
+            })
+            .where(eq(jobsTable.id, existing.id));
+        } else {
+          await db.update(jobsTable)
+            .set({
+              revenue: formatted.revenue,
+              status: formatted.status,
+              completedAt: formatted.completedAt,
+              customerName: formatted.customerName,
+              customerPhone: formatted.customerPhone || existing.customerPhone,
+              customerEmail: formatted.customerEmail || existing.customerEmail,
+              serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+              stCustomerId: formatted.stCustomerId || existing.stCustomerId,
+              stLocationId: formatted.stLocationId || existing.stLocationId,
+              jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+              businessUnit: formatted.businessUnit || existing.businessUnit,
+              stJobIdHash: jobIdHash,
+              stDataExpiresAt,
+              updatedAt: new Date(),
+            })
+            .where(eq(jobsTable.id, existing.id));
+        }
       } else {
         await db.insert(jobsTable).values({ tenantId, ...formatted, stJobIdHash: jobIdHash, stDataExpiresAt });
       }
