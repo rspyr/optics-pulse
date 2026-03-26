@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../../socket";
 
