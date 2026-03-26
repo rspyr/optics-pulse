@@ -160,11 +160,13 @@ function useCommConfig() {
   return config;
 }
 
-function useHudQueue(tenantId?: number | null) {
+function useHudQueue(tenantId?: number | null, isAgency?: boolean) {
   const [queue, setQueue] = useState<{ newLeads: LeadData[]; followUps: LeadData[]; background: LeadData[] }>({ newLeads: [], followUps: [], background: [] });
-  const [loading, setLoading] = useState(true);
+  const shouldFetch = !isAgency || tenantId !== null;
+  const [loading, setLoading] = useState(shouldFetch);
 
   const fetchQueue = useCallback(async () => {
+    if (!shouldFetch) return;
     try {
       const url = tenantId
         ? `${API_BASE}/leads/hud/queue?tenantId=${tenantId}`
@@ -179,25 +181,29 @@ function useHudQueue(tenantId?: number | null) {
     } finally {
       setLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, shouldFetch]);
 
   useEffect(() => {
+    if (!shouldFetch) return;
     fetchQueue();
     const interval = setInterval(fetchQueue, 15000);
     return () => clearInterval(interval);
-  }, [fetchQueue]);
+  }, [fetchQueue, shouldFetch]);
 
   return { queue, loading, refetch: fetchQueue };
 }
 
-function useHudStats(tenantId?: number | null) {
+function useHudStats(tenantId?: number | null, isAgency?: boolean) {
   const [stats, setStats] = useState<HudStats>({
     callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
     newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
     bonusTier: "none", bonusThreshold: 30, nextBonusAt: 30,
   });
 
+  const shouldFetch = !isAgency || tenantId !== null;
+
   const fetchStats = useCallback(async () => {
+    if (!shouldFetch) return;
     try {
       const url = tenantId
         ? `${API_BASE}/leads/hud/stats?tenantId=${tenantId}`
@@ -210,13 +216,14 @@ function useHudStats(tenantId?: number | null) {
     } catch (e) {
       console.error("Failed to fetch Pulse stats:", e);
     }
-  }, [tenantId]);
+  }, [tenantId, shouldFetch]);
 
   useEffect(() => {
+    if (!shouldFetch) return;
     fetchStats();
     const interval = setInterval(fetchStats, 10000);
     return () => clearInterval(interval);
-  }, [fetchStats]);
+  }, [fetchStats, shouldFetch]);
 
   return { stats, refetch: fetchStats };
 }
@@ -258,23 +265,27 @@ interface HistoricalData {
   totalDays: number;
 }
 
-function useComparisonStats(baseline: ComparisonBaseline, tenantId?: number | null) {
+function useComparisonStats(baseline: ComparisonBaseline, tenantId?: number | null, isAgency?: boolean) {
   const [data, setData] = useState<ComparisonData | null>(null);
 
+  const shouldFetch = !isAgency || tenantId !== null;
+
   const fetchComparison = useCallback(async () => {
+    if (!shouldFetch) return;
     try {
       let url = `${API_BASE}/leads/hud/comparison?baseline=${baseline}`;
       if (tenantId) url += `&tenantId=${tenantId}`;
       const res = await fetch(url, { credentials: "include" });
       if (res.ok) setData(await res.json());
     } catch {}
-  }, [baseline, tenantId]);
+  }, [baseline, tenantId, shouldFetch]);
 
   useEffect(() => {
+    if (!shouldFetch) return;
     fetchComparison();
     const interval = setInterval(fetchComparison, 30000);
     return () => clearInterval(interval);
-  }, [fetchComparison]);
+  }, [fetchComparison, shouldFetch]);
 
   return { data, refetch: fetchComparison };
 }
@@ -1091,19 +1102,21 @@ function LeadCard({
 export default function Leads() {
   const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter();
 
-  const { queue, loading, refetch } = useHudQueue(effectiveTenantId);
-  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId);
+  const { queue, loading, refetch } = useHudQueue(effectiveTenantId, isAgency);
+  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency);
   const commConfig = useCommConfig();
   const scripts = useScripts(effectiveTenantId);
   const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [highlightedLeadId, setHighlightedLeadId] = useState<number | null>(null);
+  const leadRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
   const [lastSpiffAmount, setLastSpiffAmount] = useState(20);
   const [baseline, setBaseline] = useState<ComparisonBaseline>("yesterday");
   const [showHistory, setShowHistory] = useState(false);
-  const { data: comparison, refetch: refetchComparison } = useComparisonStats(baseline, effectiveTenantId);
+  const { data: comparison, refetch: refetchComparison } = useComparisonStats(baseline, effectiveTenantId, isAgency);
 
   useEffect(() => {
     if (latestLead) {
@@ -1124,6 +1137,25 @@ export default function Leads() {
     setNotificationLead(null);
     clearLatestLead();
   }, [clearLatestLead]);
+
+  const handleNotificationClick = useCallback(() => {
+    if (!notificationLead) return;
+    const leadId = notificationLead.id;
+    dismissNotification();
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = leadRefsMap.current.get(leadId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightedLeadId(leadId);
+        setTimeout(() => setHighlightedLeadId(null), 1500);
+      } else if (attempts < 10) {
+        attempts++;
+        setTimeout(tryScroll, 200);
+      }
+    };
+    setTimeout(tryScroll, 100);
+  }, [notificationLead, dismissNotification]);
 
   useEffect(() => {
     return () => {
@@ -1200,7 +1232,10 @@ export default function Leads() {
             transition={{ type: "spring", damping: 20, stiffness: 300 }}
             className="fixed top-6 right-6 z-50 w-80"
           >
-            <div className="relative overflow-hidden rounded-xl border border-red-500/40 bg-gradient-to-br from-red-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(242,5,5,0.25),0_0_80px_rgba(242,5,5,0.1)] backdrop-blur-xl">
+            <div
+              onClick={handleNotificationClick}
+              className="relative overflow-hidden rounded-xl border border-red-500/40 bg-gradient-to-br from-red-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(242,5,5,0.25),0_0_80px_rgba(242,5,5,0.1)] backdrop-blur-xl cursor-pointer hover:border-red-500/60 transition-colors"
+            >
               <motion.div
                 className="absolute inset-0 bg-red-500/20 pointer-events-none"
                 animate={{ opacity: [0.3, 0, 0.2, 0, 0.15, 0] }}
@@ -1240,7 +1275,7 @@ export default function Leads() {
                     </motion.span>
                   </div>
                   <button
-                    onClick={dismissNotification}
+                    onClick={(e) => { e.stopPropagation(); dismissNotification(); }}
                     className="text-white/40 hover:text-white/80 transition-colors p-0.5 rounded hover:bg-white/10"
                   >
                     <X className="w-4 h-4" />
@@ -1389,7 +1424,13 @@ export default function Leads() {
                   const isFirstFollowUp = lead._priority === "followup" && (idx === 0 || unifiedQueue[idx - 1]._priority === "new");
                   const isFirstBackground = lead._priority === "background" && (idx === 0 || unifiedQueue[idx - 1]._priority !== "background");
                   return (
-                    <div key={lead.id}>
+                    <div
+                      key={lead.id}
+                      ref={(el) => {
+                        if (el) leadRefsMap.current.set(lead.id, el);
+                        else leadRefsMap.current.delete(lead.id);
+                      }}
+                    >
                       {isFirstFollowUp && (
                         <div className="flex items-center gap-2 mb-2 mt-4">
                           <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
@@ -1403,7 +1444,10 @@ export default function Leads() {
                           <div className="flex-1 h-px bg-white/5" />
                         </div>
                       )}
-                      <div className={cn(lead._priority === "background" && "opacity-50")}>
+                      <div className={cn(
+                        lead._priority === "background" && "opacity-50",
+                        highlightedLeadId === lead.id && "animate-pulse rounded-xl ring-2 ring-red-500 shadow-[0_0_30px_rgba(242,5,5,0.4)]"
+                      )}>
                         <LeadCard
                           lead={lead}
                           isNew={lead._priority === "new"}
