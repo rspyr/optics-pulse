@@ -28,6 +28,7 @@ export default function Settings() {
     callRailAccountId: "",
     callRailApiKey: "",
     callRailCompanyId: "",
+    callRailTrackingNumber: "",
     ghlApiKey: "",
     podiumApiToken: "",
     podiumLocationId: "",
@@ -47,6 +48,7 @@ export default function Settings() {
           callRailAccountId: lc.callRailAccountId || "",
           callRailApiKey: lc.callRailApiKey || "",
           callRailCompanyId: lc.callRailCompanyId || "",
+          callRailTrackingNumber: lc.callRailTrackingNumber || "",
           ghlApiKey: lc.ghlApiKey || "",
           podiumApiToken: lc.podiumApiToken || "",
           podiumLocationId: lc.podiumLocationId || "",
@@ -82,7 +84,7 @@ export default function Settings() {
     setSaving(true);
     try {
       const integrationConfig: Record<string, string | null> = {};
-      const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "callRailApiKey", "callRailCompanyId", "podiumApiToken", "podiumLocationId"] as const;
+      const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "callRailApiKey", "callRailCompanyId", "callRailTrackingNumber", "podiumApiToken", "podiumLocationId"] as const;
       for (const key of configKeys) {
         const val = form[key];
         if (!val) continue;
@@ -213,6 +215,16 @@ export default function Settings() {
             />
           </div>
           <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">CallRail Tracking Number</label>
+            <input
+              type="text"
+              value={form.callRailTrackingNumber}
+              onChange={e => { trackField("callRailTrackingNumber"); setForm({ ...form, callRailTrackingNumber: e.target.value }); }}
+              className={inputClass}
+              placeholder="e.g. +18005551234"
+            />
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
             <input
               type={dirtyFields.has("ghlApiKey") ? "password" : "text"}
@@ -307,6 +319,7 @@ export default function Settings() {
             <div className="space-y-2">
               {[
                 { value: "native", label: "Native SMS App", desc: "Opens system messaging app" },
+                { value: "callrail", label: "CallRail", desc: "Send texts via CallRail API" },
                 { value: "podium", label: "Podium", desc: "Send texts via Podium API" },
               ].map(opt => (
                 <button

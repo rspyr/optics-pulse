@@ -74,6 +74,24 @@ const migrations: Migration[] = [
       console.log(`[Migration] Backfilled stDataExpiresAt on ${backfilled.length} recent job(s) with ST PII`);
     },
   },
+  {
+    id: "2026-03-26_add-attribution-external-id",
+    description: "Add external_id column to attribution_events table for CallRail sync deduplication",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE attribution_events
+        ADD COLUMN IF NOT EXISTS external_id TEXT
+      `);
+      console.log("[Migration] Added external_id column to attribution_events");
+
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS idx_attribution_events_external_id
+        ON attribution_events (tenant_id, external_id)
+        WHERE external_id IS NOT NULL
+      `);
+      console.log("[Migration] Created index on attribution_events(tenant_id, external_id)");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

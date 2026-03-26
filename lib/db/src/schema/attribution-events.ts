@@ -21,6 +21,7 @@ export const attributionEventsTable = pgTable("attribution_events", {
   utmMedium: text("utm_medium"),
   landingPage: text("landing_page"),
   userAgent: text("user_agent"),
+  externalId: text("external_id"),
   matchLevel: matchLevelEnum("match_level"),
   matchConfidence: real("match_confidence"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

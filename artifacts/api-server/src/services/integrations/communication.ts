@@ -4,7 +4,7 @@ import { decryptConfig } from "../../lib/encryption";
 
 export interface CommunicationConfig {
   callPlatform: "native" | "callrail" | "podium";
-  textPlatform: "native" | "podium";
+  textPlatform: "native" | "podium" | "callrail";
   callRailAccountId?: string;
   callRailApiKey?: string;
   callRailCompanyId?: string;
@@ -118,6 +118,9 @@ export async function initiateText(
   switch (config.textPlatform) {
     case "podium":
       result = await sendPodiumText(config, customerPhone, messageBody);
+      break;
+    case "callrail":
+      result = await sendCallRailText(config, customerPhone, messageBody);
       break;
     default:
       result = {
@@ -277,6 +280,56 @@ async function sendPodiumText(
   }
 }
 
+async function sendCallRailText(
+  config: CommunicationConfig,
+  customerPhone: string,
+  messageBody: string,
+): Promise<TextResult> {
+  if (!config.callRailApiKey || !config.callRailAccountId) {
+    return { success: false, platform: "callrail", message: "CallRail not configured — missing API key or account ID" };
+  }
+
+  if (!config.callRailTrackingNumber) {
+    return { success: false, platform: "callrail", message: "CallRail tracking number not set — add a tracking number in API Integrations above" };
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.callrail.com/v3/a/${config.callRailAccountId}/text-messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Token token=${config.callRailApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customer_phone_number: customerPhone,
+          tracking_phone_number: config.callRailTrackingNumber,
+          content: messageBody,
+          ...(config.callRailCompanyId ? { company_id: config.callRailCompanyId } : {}),
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`[CallRail] Text send failed (${res.status}):`, text);
+      return { success: false, platform: "callrail", message: `CallRail error: ${res.status}` };
+    }
+
+    const data = (await res.json()) as Record<string, unknown>;
+    return {
+      success: true,
+      platform: "callrail",
+      message: "Text sent through CallRail",
+      externalId: String(data.id || ""),
+    };
+  } catch (err) {
+    console.error("[CallRail] Text send error:", err);
+    return { success: false, platform: "callrail", message: "Failed to connect to CallRail" };
+  }
+}
+
 export function getCommConfigStatus(config: CommunicationConfig): {
   callPlatform: string;
   textPlatform: string;
@@ -301,6 +354,9 @@ export function getCommConfigStatus(config: CommunicationConfig): {
   if (config.textPlatform === "podium") {
     textReady = !!(config.podiumApiToken && config.podiumLocationId);
     textStatusMessage = textReady ? "Podium connected" : "Podium credentials missing — add API token and location ID in API Integrations above";
+  } else if (config.textPlatform === "callrail") {
+    textReady = !!(config.callRailApiKey && config.callRailAccountId && config.callRailTrackingNumber);
+    textStatusMessage = textReady ? "CallRail connected" : "CallRail credentials missing — add API key, account ID, and tracking number in API Integrations above";
   }
 
   return {

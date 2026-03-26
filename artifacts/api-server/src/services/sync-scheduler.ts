@@ -5,6 +5,7 @@ import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetc
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
+import { syncCallRailCalls } from "./integrations/callrail";
 import { runReconciliation } from "./reconciliation";
 import crypto from "crypto";
 
@@ -29,6 +30,8 @@ interface TenantApiConfig {
   metaAdAccountId?: string;
   metaPixelId?: string;
   callRailApiKey?: string;
+  callRailAccountId?: string;
+  callRailCompanyId?: string;
   callRailSigningKey?: string;
   podiumApiToken?: string;
   podiumLocationId?: string;
@@ -491,8 +494,32 @@ export function startSyncScheduler() {
     }
   }, reviewSyncInterval);
 
-  syncTimers = [jobsTimer, campaignTimer, reviewTimer];
-  console.log("[SyncScheduler] Started: jobs every 15min, campaigns every 60min, reviews every 6hr");
+  const callRailSyncInterval = 30 * 60 * 1000;
+  const callRailTimer = setInterval(async () => {
+    console.log("[SyncScheduler] Starting CallRail call-log sync for all tenants");
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      const config = getTenantConfig(tenant);
+      if (config?.callRailApiKey && config?.callRailAccountId) {
+        const syncLog = await logSync(tenant.id, "callrail", "calls", new Date());
+        try {
+          const result = await syncCallRailCalls(tenant.id, {
+            apiKey: config.callRailApiKey,
+            accountId: config.callRailAccountId,
+            companyId: config.callRailCompanyId,
+          });
+          await completeSyncLog(syncLog.id, "completed", result.synced);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await completeSyncLog(syncLog.id, "error", 0, message);
+          console.error(`[Sync] CallRail error for tenant ${tenant.id}:`, message);
+        }
+      }
+    }
+  }, callRailSyncInterval);
+
+  syncTimers = [jobsTimer, campaignTimer, reviewTimer, callRailTimer];
+  console.log("[SyncScheduler] Started: jobs every 15min, campaigns every 60min, reviews every 6hr, callrail every 30min");
 }
 
 export function stopSyncScheduler() {

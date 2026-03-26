@@ -13,6 +13,9 @@ interface TenantForm {
   googleAdsClientSecret: string;
   callRailApiKey: string;
   callRailSigningKey: string;
+  callRailAccountId: string;
+  callRailCompanyId: string;
+  callRailTrackingNumber: string;
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
   serviceTitanAppKey: string;
@@ -67,6 +70,9 @@ const emptyForm: TenantForm = {
   googleAdsClientSecret: "",
   callRailApiKey: "",
   callRailSigningKey: "",
+  callRailAccountId: "",
+  callRailCompanyId: "",
+  callRailTrackingNumber: "",
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
   serviceTitanAppKey: "",
@@ -232,7 +238,7 @@ export default function AdminTenants() {
     const integrationKeys: (keyof TenantForm)[] = [
       "googleAdsApiKey", "googleAdsCustomerId", "googleAdsLoginCustomerId", "googleAdsDeveloperToken",
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
-      "callRailApiKey", "callRailSigningKey",
+      "callRailApiKey", "callRailSigningKey", "callRailAccountId", "callRailCompanyId", "callRailTrackingNumber",
       "serviceTitanClientId", "serviceTitanClientSecret", "serviceTitanAppKey",
       "metaAppId", "metaAppSecret", "metaAccessToken", "metaAdAccountId", "metaPixelId",
       "podiumApiToken", "podiumLocationId",
@@ -318,6 +324,9 @@ export default function AdminTenants() {
       googleAdsDeveloperToken: lc.googleAdsDeveloperToken || "",
       callRailApiKey: lc.callRailApiKey || "",
       callRailSigningKey: lc.callRailSigningKey || "",
+      callRailAccountId: lc.callRailAccountId || "",
+      callRailCompanyId: lc.callRailCompanyId || "",
+      callRailTrackingNumber: lc.callRailTrackingNumber || "",
       serviceTitanClientId: lc.serviceTitanClientId || "",
       serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
       serviceTitanAppKey: lc.serviceTitanAppKey || "",
@@ -479,6 +488,18 @@ export default function AdminTenants() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <SecretInput field="callRailApiKey" label="API Key" />
               <SecretInput field="callRailSigningKey" label="Webhook Signing Key" placeholder="HMAC verification key" />
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Account ID</label>
+                <input type="text" value={form.callRailAccountId} onChange={(e) => { trackFieldChange("callRailAccountId"); setForm(f => ({ ...f, callRailAccountId: e.target.value })); }} placeholder="e.g. 123456789" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Company ID</label>
+                <input type="text" value={form.callRailCompanyId} onChange={(e) => { trackFieldChange("callRailCompanyId"); setForm(f => ({ ...f, callRailCompanyId: e.target.value })); }} placeholder="e.g. COM123456" className={inputClass + " w-full"} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Tracking Number</label>
+                <input type="text" value={form.callRailTrackingNumber} onChange={(e) => { trackFieldChange("callRailTrackingNumber"); setForm(f => ({ ...f, callRailTrackingNumber: e.target.value })); }} placeholder="e.g. +18005551234" className={inputClass + " w-full"} />
+              </div>
             </div>
           </div>
           <div>
