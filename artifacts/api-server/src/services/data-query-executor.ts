@@ -38,7 +38,8 @@ You have access to the following database tables for this tenant's marketing dat
    NOTE: This table does NOT have tenantId directly. To filter by tenant, first get campaignIds from campaigns table.
 
 4. **jobs** - Service jobs / completed work with revenue
-   Columns: id, tenantId, stJobId, customerName, serviceAddress, jobType, revenue (float), status (enum: "pending","in_progress","completed","cancelled"), matchedGclid, matchLevel (text - "diamond","golden","silver","bronze","unmatched"), completedAt, createdAt, updatedAt
+   Columns: id, tenantId, jobType, revenue (float), status (enum: "pending","in_progress","completed","cancelled"), matchedGclid, matchLevel (text - "diamond","golden","silver","bronze","unmatched"), completedAt, createdAt, updatedAt
+   NOTE: customerName, serviceAddress, stJobId and other ST PII fields are purged (set to NULL) after 24 hours for data retention compliance. Do not rely on these fields for historical queries.
 
 5. **attribution_events** - Click/call/form tracking events
    Columns: id, tenantId, eventType (enum: "click","call","form_fill"), gclid, wbraid, fbclid, utmSource, utmCampaign, utmMedium, landingPage, matchLevel, matchConfidence, createdAt
@@ -545,7 +546,7 @@ async function queryJobs(
 
   return rows.map((r) => ({
     id: r.id,
-    customerName: r.customerName,
+    customerName: r.customerName ?? "[Purged]",
     jobType: r.jobType,
     revenue: r.revenue,
     status: r.status,

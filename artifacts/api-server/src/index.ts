@@ -9,6 +9,7 @@ import { startClientAlertScheduler } from "./services/client-alerts";
 import { startNightlyAggregation } from "./services/coordinator-stats";
 import { autoSeedIfEmpty } from "./services/auto-seed";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
+import { startStDataPurgeScheduler } from "./services/st-data-purge";
 
 const rawPort = process.env["PORT"];
 
@@ -37,4 +38,5 @@ httpServer.listen(port, async () => {
   startAutomationScheduler();
   startClientAlertScheduler();
   startNightlyAggregation();
+  startStDataPurgeScheduler();
 });

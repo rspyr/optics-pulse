@@ -60,7 +60,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const allMatchedJobIds: number[] = [];
 
   const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
-  const baseConditions = [matchCondition, eq(jobsTable.status, "completed")];
+  const baseConditions = [matchCondition, eq(jobsTable.status, "completed"), isNotNull(jobsTable.customerName)];
   if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));
   const unmatchedJobs = await db.select().from(jobsTable).where(and(...baseConditions));
 
@@ -68,7 +68,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     let matched = false;
     let matchedGclid: string | null = null;
 
-    const nameParts = job.customerName.split(" ");
+    const nameParts = (job.customerName || "").split(" ");
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
 
@@ -309,7 +309,7 @@ function getTenantApiConfig(tenant: typeof tenantsTable.$inferSelect): TenantApi
 async function pushConversionsToExternalAPIs(
   tenantId: number,
   ociPayloads: OciPayload[],
-  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number; customerName: string; completedAt: Date | null }>,
+  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number; customerName: string | null; completedAt: Date | null }>,
 ): Promise<void> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return;

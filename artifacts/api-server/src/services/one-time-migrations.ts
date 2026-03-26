@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, isNotNull, or } from "drizzle-orm";
 
 interface Migration {
   id: string;
@@ -24,6 +24,35 @@ const migrations: Migration[] = [
         .update(tenantsTable)
         .set({ stSyncPaused: true, serviceTitanId: null, updatedAt: new Date() });
       console.log("[Migration] Paused ST sync and cleared service_titan_id for all tenants");
+    },
+  },
+  {
+    id: "2026-03-26_purge-historical-st-pii",
+    description: "NULL out ST PII fields on all existing jobs for 24h data retention compliance",
+    run: async () => {
+      const result = await db.update(jobsTable)
+        .set({
+          customerName: null,
+          customerPhone: null,
+          customerEmail: null,
+          serviceAddress: null,
+          stJobId: null,
+          stCustomerId: null,
+          stLocationId: null,
+          stDataExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(or(
+          isNotNull(jobsTable.customerName),
+          isNotNull(jobsTable.customerPhone),
+          isNotNull(jobsTable.customerEmail),
+          isNotNull(jobsTable.serviceAddress),
+          isNotNull(jobsTable.stJobId),
+          isNotNull(jobsTable.stCustomerId),
+          isNotNull(jobsTable.stLocationId),
+        ))
+        .returning({ id: jobsTable.id });
+      console.log(`[Migration] Purged ST PII from ${result.length} historical job(s)`);
     },
   },
 ];

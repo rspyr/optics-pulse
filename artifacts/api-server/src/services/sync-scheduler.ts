@@ -5,6 +5,12 @@ import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetc
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
+import { runReconciliation } from "./reconciliation";
+import crypto from "crypto";
+
+function hashStJobId(stJobId: string): string {
+  return crypto.createHash("sha256").update(stJobId).digest("hex");
+}
 
 interface TenantApiConfig {
   serviceTitanClientId?: string;
@@ -82,10 +88,20 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
     for (const stJob of stJobs) {
       const formatted = formatSTJobForSync(stJob);
-      const [existing] = await db.select().from(jobsTable)
-        .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobId, formatted.stJobId)))
+      const jobIdHash = hashStJobId(formatted.stJobId);
+
+      const [existingByHash] = await db.select().from(jobsTable)
+        .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobIdHash, jobIdHash)))
         .limit(1);
 
+      const existing = existingByHash || await (async () => {
+        const [byRawId] = await db.select().from(jobsTable)
+          .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobId, formatted.stJobId)))
+          .limit(1);
+        return byRawId;
+      })();
+
+      const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       if (existing) {
         await db.update(jobsTable)
           .set({
@@ -100,11 +116,13 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
             stLocationId: formatted.stLocationId || existing.stLocationId,
             jobTypeName: formatted.jobTypeName || existing.jobTypeName,
             businessUnit: formatted.businessUnit || existing.businessUnit,
+            stJobIdHash: jobIdHash,
+            stDataExpiresAt,
             updatedAt: new Date(),
           })
           .where(eq(jobsTable.id, existing.id));
       } else {
-        await db.insert(jobsTable).values({ tenantId, ...formatted });
+        await db.insert(jobsTable).values({ tenantId, ...formatted, stJobIdHash: jobIdHash, stDataExpiresAt });
       }
       synced++;
     }
@@ -118,6 +136,16 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     ]).catch((err) => {
       console.warn(`[Sync] Background enrichment failed for tenant ${tenantId}:`, (err as Error).message);
     });
+
+    if (synced > 0) {
+      const reconciliationDelay = 60 * 60 * 1000;
+      setTimeout(() => {
+        console.log(`[Sync] Triggering post-sync reconciliation for tenant ${tenantId}`);
+        runReconciliation(tenantId, "scheduled").catch((err) => {
+          console.error(`[Sync] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
+        });
+      }, reconciliationDelay);
+    }
 
     return { synced };
   } catch (err) {
