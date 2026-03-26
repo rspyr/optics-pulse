@@ -724,10 +724,10 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                   <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
                 {roiMode !== "allcosts" && (
-                  <Bar yAxisId="left" dataKey="googleSpend" name="Google Ads" fill="#4285F4" radius={[0, 0, 0, 0]} maxBarSize={32} stackId="spend" />
+                  <Bar yAxisId="left" dataKey="googleSpend" name="Google Ads" fill="#34A853" radius={[0, 0, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
                 {roiMode !== "allcosts" && (
-                  <Bar yAxisId="left" dataKey="metaSpend" name="Meta Ads" fill="#0668E1" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
+                  <Bar yAxisId="left" dataKey="metaSpend" name="Meta Ads" fill="#1877F2" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
                 <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill="#F20505" radius={[3, 3, 0, 0]} maxBarSize={32} />
                 {showChangeLog && changeLogs && changeLogs.map((log, i) => (
