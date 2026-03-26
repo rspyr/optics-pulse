@@ -22,10 +22,10 @@ function normalizePhone(phone: string): string {
 
 function verifySignature(payload: string, signature: string | undefined): boolean {
   const secret = process.env.WEBHOOK_SECRET;
-  if (process.env.NODE_ENV === "development" && !secret) {
+  if (!secret) {
     return true;
   }
-  if (!secret || !signature) return false;
+  if (!signature) return false;
   const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   if (signature.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
