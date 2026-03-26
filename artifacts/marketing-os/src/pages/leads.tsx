@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { io as socketIOClient, type Socket as IOSocket } from "socket.io-client";
 import {
   Phone, Mail, MessageSquare, Mic,
-  Clock, Zap,
+  Clock, Zap, X,
   ChevronDown, AlertTriangle, Target,
   Calendar, PhoneCall,
   Star, Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
@@ -547,12 +547,16 @@ function HistoricalView({ tenantId }: { tenantId?: number | null }) {
 }
 
 function useSocketIO(tenantId: number | null, isAgency: boolean) {
-  const [newLeadFlash, setNewLeadFlash] = useState(false);
   const [latestLead, setLatestLead] = useState<LeadData | null>(null);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const socketRef = useRef<IOSocket | null>(null);
+  const tenantIdRef = useRef(tenantId);
+
+  useEffect(() => {
+    tenantIdRef.current = tenantId;
+  }, [tenantId]);
 
   useEffect(() => {
     const audio = new Audio("data:audio/wav;base64,UklGRl9vT19teleVlfT0+AU5EIBAAAABkAAAAFAAMAeAAAAAA=");
@@ -574,12 +578,14 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
     });
 
     socket.on("new-lead", (lead: LeadData) => {
+      const viewingTenant = tenantIdRef.current;
+      if (viewingTenant && lead.tenantId && lead.tenantId !== viewingTenant) {
+        return;
+      }
       setLatestLead(lead);
-      setNewLeadFlash(true);
       if (soundEnabled && audioRef.current) {
         audioRef.current.play().catch(() => {});
       }
-      setTimeout(() => setNewLeadFlash(false), 3000);
     });
 
     socket.on("lead-updated", () => {
@@ -596,7 +602,11 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
     };
   }, [tenantId, isAgency, soundEnabled]);
 
-  return { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled };
+  const clearLatestLead = useCallback(() => {
+    setLatestLead(null);
+  }, []);
+
+  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled };
 }
 
 function LeadTimer({ createdAt }: { createdAt: string }) {
@@ -1085,7 +1095,9 @@ export default function Leads() {
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId);
   const commConfig = useCommConfig();
   const scripts = useScripts(effectiveTenantId);
-  const { newLeadFlash, latestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
+  const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
+  const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [processingLeads, setProcessingLeads] = useState<Set<number>>(new Set());
   const [showCommission, setShowCommission] = useState(false);
   const [lastSpiffAmount, setLastSpiffAmount] = useState(20);
@@ -1095,11 +1107,29 @@ export default function Leads() {
 
   useEffect(() => {
     if (latestLead) {
+      setNotificationLead(latestLead);
+      if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+      notificationTimerRef.current = setTimeout(() => {
+        setNotificationLead(null);
+        clearLatestLead();
+      }, 20000);
       refetch();
       refetchStats();
       refetchComparison();
     }
-  }, [latestLead, refetch, refetchStats, refetchComparison]);
+  }, [latestLead, refetch, refetchStats, refetchComparison, clearLatestLead]);
+
+  const dismissNotification = useCallback(() => {
+    if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+    setNotificationLead(null);
+    clearLatestLead();
+  }, [clearLatestLead]);
+
+  useEffect(() => {
+    return () => {
+      if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (leadUpdatedSignal > 0) {
@@ -1161,13 +1191,93 @@ export default function Leads() {
   return (
     <div className="relative min-h-screen">
       <AnimatePresence>
-        {newLeadFlash && (
+        {notificationLead && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0.3, 0, 0.2, 0] }}
-            transition={{ duration: 1.5 }}
-            className="fixed inset-0 bg-red-500 pointer-events-none z-40"
-          />
+            key={`notif-${notificationLead.id}`}
+            initial={{ x: 400, opacity: 0, scale: 0.9 }}
+            animate={{ x: 0, opacity: 1, scale: 1 }}
+            exit={{ x: 400, opacity: 0, scale: 0.95 }}
+            transition={{ type: "spring", damping: 20, stiffness: 300 }}
+            className="fixed top-6 right-6 z-50 w-80"
+          >
+            <div className="relative overflow-hidden rounded-xl border border-red-500/40 bg-gradient-to-br from-red-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(242,5,5,0.25),0_0_80px_rgba(242,5,5,0.1)] backdrop-blur-xl">
+              <motion.div
+                className="absolute inset-0 bg-red-500/20 pointer-events-none"
+                animate={{ opacity: [0.3, 0, 0.2, 0, 0.15, 0] }}
+                transition={{ duration: 2, repeat: 2, ease: "easeInOut" }}
+              />
+              <motion.div
+                className="absolute inset-0 rounded-xl pointer-events-none"
+                animate={{
+                  boxShadow: [
+                    "inset 0 0 20px rgba(242,5,5,0.3)",
+                    "inset 0 0 5px rgba(242,5,5,0.05)",
+                    "inset 0 0 15px rgba(242,5,5,0.2)",
+                    "inset 0 0 5px rgba(242,5,5,0.05)",
+                  ],
+                }}
+                transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+              />
+              <div className="relative p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-6 w-6">
+                      <motion.span
+                        className="absolute inline-flex h-full w-full rounded-full bg-red-500"
+                        animate={{ scale: [1, 1.8, 1], opacity: [0.75, 0, 0.75] }}
+                        transition={{ duration: 1.2, repeat: Infinity }}
+                      />
+                      <span className="relative inline-flex rounded-full h-6 w-6 bg-red-500 items-center justify-center">
+                        <Zap className="w-3.5 h-3.5 text-white" />
+                      </span>
+                    </span>
+                    <motion.span
+                      className="text-sm font-display font-bold tracking-wide uppercase text-red-400"
+                      animate={{ opacity: [1, 0.6, 1] }}
+                      transition={{ duration: 1.5, repeat: Infinity }}
+                    >
+                      New Lead!
+                    </motion.span>
+                  </div>
+                  <button
+                    onClick={dismissNotification}
+                    className="text-white/40 hover:text-white/80 transition-colors p-0.5 rounded hover:bg-white/10"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-white font-display text-base">
+                    {notificationLead.firstName} {notificationLead.lastName}
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <span className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      notificationLead.source.includes("Google") ? "bg-blue-400" :
+                      notificationLead.source.includes("Meta") ? "bg-indigo-400" :
+                      notificationLead.source.includes("Call") ? "bg-green-400" : "bg-gray-400"
+                    )} />
+                    <span>{notificationLead.source}</span>
+                    {notificationLead.interestType && (
+                      <>
+                        <span className="text-white/20">·</span>
+                        <span>{notificationLead.interestType}</span>
+                      </>
+                    )}
+                  </div>
+                  {notificationLead.phone && (
+                    <p className="text-xs text-gray-500 font-mono">{notificationLead.phone}</p>
+                  )}
+                </div>
+                <motion.div
+                  className="absolute bottom-0 left-0 h-0.5 bg-red-500/60"
+                  initial={{ width: "100%" }}
+                  animate={{ width: "0%" }}
+                  transition={{ duration: 20, ease: "linear" }}
+                />
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1269,7 +1379,7 @@ export default function Leads() {
               </div>
               <h3 className="font-display text-xl text-white mb-2">Queue Clear</h3>
               <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                Waiting for new leads to arrive. The screen will flash and ding when one comes in.
+                Waiting for new leads to arrive. You'll get a notification when one comes in.
               </p>
             </PremiumCard>
           ) : (
