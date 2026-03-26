@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { formatCurrency, formatPercentage } from "@/lib/utils";
+import { formatCurrency, formatPercentage, PLATFORM_COLORS } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
@@ -184,8 +184,8 @@ export default function Dashboard() {
                   itemStyle={{ color: '#fff' }}
                 />
                 <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                <Bar yAxisId="left" dataKey="spend" name="Ad Spend" fill="#002D5E" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                <Bar yAxisId="right" dataKey="revenue" name="ST Revenue" fill="#F20505" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                <Bar yAxisId="left" dataKey="spend" name="Ad Spend" fill={PLATFORM_COLORS.totalCost} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                <Bar yAxisId="right" dataKey="revenue" name="ST Revenue" fill={PLATFORM_COLORS.revenue} radius={[4, 4, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
           </div>

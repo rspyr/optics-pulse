@@ -14,6 +14,13 @@ export function formatCurrency(value: number): string {
   }).format(value);
 }
 
+export const PLATFORM_COLORS = {
+  google: "#34A853",
+  meta: "#1877F2",
+  revenue: "#F20505",
+  totalCost: "#002D5E",
+} as const;
+
 export function formatPercentage(value: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'percent',

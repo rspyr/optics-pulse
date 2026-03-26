@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
 import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, PLATFORM_COLORS } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import {
   ArrowUpRight, ArrowDownRight, Target, Flame, CheckCircle,
@@ -721,15 +721,15 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                 />
                 <Legend wrapperStyle={{ paddingTop: "16px", fontSize: "12px" }} />
                 {roiMode === "allcosts" && (
-                  <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill="#002D5E" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
+                  <Bar yAxisId="left" dataKey="totalCost" name="Total Cost (Ad + Fee)" fill={PLATFORM_COLORS.totalCost} radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
                 {roiMode !== "allcosts" && (
-                  <Bar yAxisId="left" dataKey="googleSpend" name="Google Ads" fill="#34A853" radius={[0, 0, 0, 0]} maxBarSize={32} stackId="spend" />
+                  <Bar yAxisId="left" dataKey="googleSpend" name="Google Ads" fill={PLATFORM_COLORS.google} radius={[0, 0, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
                 {roiMode !== "allcosts" && (
-                  <Bar yAxisId="left" dataKey="metaSpend" name="Meta Ads" fill="#1877F2" radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
+                  <Bar yAxisId="left" dataKey="metaSpend" name="Meta Ads" fill={PLATFORM_COLORS.meta} radius={[3, 3, 0, 0]} maxBarSize={32} stackId="spend" />
                 )}
-                <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill="#F20505" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill={PLATFORM_COLORS.revenue} radius={[3, 3, 0, 0]} maxBarSize={32} />
                 {showChangeLog && changeLogs && changeLogs.map((log, i) => (
                   <ReferenceLine
                     key={i}
@@ -887,11 +887,11 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
               </div>
               <div className="border-t border-white/5 pt-2 space-y-2">
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: "#4285F4" }} />Google Ads</span>
+                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: PLATFORM_COLORS.google }} />Google Ads</span>
                   <span className="text-red-400/70">- {formatCurrency(d.googleSpend)}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: "#0668E1" }} />Meta Ads</span>
+                  <span className="text-gray-400 flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm" style={{ backgroundColor: PLATFORM_COLORS.meta }} />Meta Ads</span>
                   <span className="text-red-400/70">- {formatCurrency(d.metaSpend)}</span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-white/5">
