@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, sql, isNotNull, or } from "drizzle-orm";
+import { eq, and, sql, isNotNull, or } from "drizzle-orm";
 
 interface Migration {
   id: string;

@@ -1,4 +1,4 @@
-import { db, jobsTable, integrationSyncLogsTable } from "@workspace/db";
+import { db, jobsTable, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
 import { and, or, isNotNull, lte, eq, sql } from "drizzle-orm";
 
 async function purgeExpiredStData(): Promise<void> {
@@ -26,6 +26,18 @@ async function purgeExpiredStData(): Promise<void> {
   );
 
   if (expiredJobs.length === 0) {
+    const tenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      await db.insert(integrationSyncLogsTable).values({
+        tenantId: tenant.id,
+        integration: "service_titan",
+        syncType: "st_data_purge",
+        status: "completed",
+        recordsProcessed: 0,
+        startedAt: now,
+        completedAt: new Date(),
+      });
+    }
     console.log("[ST Purge] No expired ST data to purge");
     return;
   }
