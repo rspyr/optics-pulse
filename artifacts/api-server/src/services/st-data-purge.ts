@@ -1,5 +1,5 @@
 import { db, jobsTable, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
-import { and, or, isNotNull, lte, eq, sql } from "drizzle-orm";
+import { and, or, isNull, isNotNull, lte, eq, sql } from "drizzle-orm";
 
 async function purgeExpiredStData(): Promise<void> {
   const now = new Date();
@@ -14,14 +14,18 @@ async function purgeExpiredStData(): Promise<void> {
     isNotNull(jobsTable.stLocationId),
   );
 
+  const fallbackCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
   const expiredJobs = await db.select({
     id: jobsTable.id,
     tenantId: jobsTable.tenantId,
   }).from(jobsTable).where(
     and(
-      isNotNull(jobsTable.stDataExpiresAt),
-      lte(jobsTable.stDataExpiresAt, now),
       hasAnyStPii,
+      or(
+        and(isNotNull(jobsTable.stDataExpiresAt), lte(jobsTable.stDataExpiresAt, now)),
+        and(isNull(jobsTable.stDataExpiresAt), lte(jobsTable.createdAt, fallbackCutoff)),
+      ),
     )
   );
 

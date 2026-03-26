@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, sql, isNotNull, or } from "drizzle-orm";
+import { eq, and, sql, isNull, isNotNull, or } from "drizzle-orm";
 
 interface Migration {
   id: string;
@@ -30,7 +30,8 @@ const migrations: Migration[] = [
     id: "2026-03-26_purge-historical-st-pii",
     description: "NULL out ST PII fields on all existing jobs for 24h data retention compliance",
     run: async () => {
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const hasAnyStPii = or(
         isNotNull(jobsTable.customerName),
         isNotNull(jobsTable.customerPhone),
@@ -40,7 +41,8 @@ const migrations: Migration[] = [
         isNotNull(jobsTable.stCustomerId),
         isNotNull(jobsTable.stLocationId),
       );
-      const result = await db.update(jobsTable)
+
+      const purged = await db.update(jobsTable)
         .set({
           customerName: null,
           customerPhone: null,
@@ -50,14 +52,26 @@ const migrations: Migration[] = [
           stCustomerId: null,
           stLocationId: null,
           stDataExpiresAt: null,
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(and(
           hasAnyStPii!,
           sql`${jobsTable.createdAt} <= ${cutoff}`,
         ))
         .returning({ id: jobsTable.id });
-      console.log(`[Migration] Purged ST PII from ${result.length} historical job(s) older than 24h`);
+      console.log(`[Migration] Purged ST PII from ${purged.length} historical job(s) older than 24h`);
+
+      const backfilled = await db.update(jobsTable)
+        .set({
+          stDataExpiresAt: sql`${jobsTable.createdAt} + interval '24 hours'`,
+          updatedAt: now,
+        })
+        .where(and(
+          hasAnyStPii!,
+          isNull(jobsTable.stDataExpiresAt),
+        ))
+        .returning({ id: jobsTable.id });
+      console.log(`[Migration] Backfilled stDataExpiresAt on ${backfilled.length} recent job(s) with ST PII`);
     },
   },
 ];
