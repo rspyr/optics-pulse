@@ -707,6 +707,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                 <Tooltip
                   cursor={{ fill: "rgba(255,255,255,0.03)" }}
                   contentStyle={{ backgroundColor: "#0A0F1F", borderColor: "#1E293B", borderRadius: "8px", color: "#fff", fontSize: "12px" }}
+                  itemStyle={{ color: "#fff" }}
                   labelFormatter={v => {
                     const d = new Date(v + "T00:00:00");
                     const logsForDate = changeLogLookup.get(v as string);
