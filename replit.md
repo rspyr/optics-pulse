@@ -26,7 +26,7 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 **Feature Specifications:**
 - **Attribution Engine:** A 4-level waterfall attribution model tracks lead sources. It includes a Reconciliation Engine for OCI payloads and Enhanced Conversions.
 - **Leads HUD:** A gamified interface for lead management with real-time queues, quick actions, disposition logging, and performance statistics. Features include smart scheduling, historical stats, and comparison cards.
-- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history and CRUD API.
+- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history and CRUD API. Scripts support `sourceFilter`, `stageFilter`, and `dispositionFilter` for targeted matching. Disposition-based scripts (callback_requested, already_had_estimate, dont_remember, never_answered) override source/stage matching in the Pulse queue.
 - **Media Buying Automation:** Rules-based system for managing marketing campaigns, including condition-based alerts and actions.
 - **Budget Controls:** Campaign management integrated with budget API calls.
 - **Spiff Configuration:** Per-tenant configurable spiff amounts for bookings, overriding values for specific lead types.

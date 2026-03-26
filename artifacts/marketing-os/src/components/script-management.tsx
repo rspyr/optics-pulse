@@ -15,6 +15,7 @@ interface Script {
   name: string;
   sourceFilter: string | null;
   stageFilter: string | null;
+  dispositionFilter: string | null;
   content: string;
   version: number;
   isActive: boolean;
@@ -30,6 +31,7 @@ interface ScriptVersion {
   name: string;
   sourceFilter: string | null;
   stageFilter: string | null;
+  dispositionFilter: string | null;
   createdAt: string;
 }
 
@@ -48,6 +50,13 @@ const STAGES = [
   { value: "re-engage-3mo", label: "3 Month Re-engagement" },
   { value: "re-engage-6mo", label: "6 Month Re-engagement" },
   { value: "re-engage-9mo", label: "9 Month Re-engagement" },
+];
+const DISPOSITIONS = [
+  { value: "", label: "Any Disposition" },
+  { value: "callback_requested", label: "Callback Requested" },
+  { value: "already_had_estimate", label: "Already Had Estimate" },
+  { value: "dont_remember", label: "Don't Remember Form" },
+  { value: "never_answered", label: "Never Answered" },
 ];
 
 function computeDiff(oldText: string, newText: string): { type: "same" | "added" | "removed"; text: string }[] {
@@ -93,6 +102,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
   const [editContent, setEditContent] = useState("");
   const [editSource, setEditSource] = useState("");
   const [editStage, setEditStage] = useState("");
+  const [editDisposition, setEditDisposition] = useState("");
 
   const tq = tenantId ? `?tenantId=${tenantId}` : "";
 
@@ -124,6 +134,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
     setEditContent(script.content);
     setEditSource(script.sourceFilter || "");
     setEditStage(script.stageFilter || "");
+    setEditDisposition(script.dispositionFilter || "");
     setEditing(true);
     setCreating(false);
     setShowVersions(false);
@@ -135,6 +146,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
     setEditContent("");
     setEditSource("");
     setEditStage("");
+    setEditDisposition("");
     setEditing(true);
     setCreating(true);
     setShowVersions(false);
@@ -158,6 +170,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
         content: editContent.trim(),
         sourceFilter: editSource || null,
         stageFilter: editStage || null,
+        dispositionFilter: editDisposition || null,
       };
 
       let res: Response;
@@ -317,6 +330,9 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                     {script.stageFilter && (
                       <span className="text-[10px] text-white/30">{script.stageFilter}</span>
                     )}
+                    {script.dispositionFilter && (
+                      <span className="text-[10px] text-blue-400/60">{DISPOSITIONS.find(d => d.value === script.dispositionFilter)?.label || script.dispositionFilter}</span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -390,15 +406,27 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                 </div>
               </div>
 
-              <div>
-                <label className="text-[10px] text-white/30 uppercase tracking-wider">Lead Stage</label>
-                <select
-                  value={editStage}
-                  onChange={e => setEditStage(e.target.value)}
-                  className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-                >
-                  {STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Lead Stage</label>
+                  <select
+                    value={editStage}
+                    onChange={e => setEditStage(e.target.value)}
+                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    {STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Disposition</label>
+                  <select
+                    value={editDisposition}
+                    onChange={e => setEditDisposition(e.target.value)}
+                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    {DISPOSITIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -447,6 +475,9 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                     )}
                     {selectedScript.stageFilter && (
                       <span className="text-[10px] bg-white/5 text-white/40 px-1.5 py-0.5 rounded">{selectedScript.stageFilter}</span>
+                    )}
+                    {selectedScript.dispositionFilter && (
+                      <span className="text-[10px] bg-blue-500/10 text-blue-400/70 px-1.5 py-0.5 rounded">{DISPOSITIONS.find(d => d.value === selectedScript.dispositionFilter)?.label || selectedScript.dispositionFilter}</span>
                     )}
                   </div>
                 </div>

@@ -9,6 +9,7 @@ export const scriptsTable = pgTable("scripts", {
   name: text("name").notNull(),
   sourceFilter: text("source_filter"),
   stageFilter: text("stage_filter"),
+  dispositionFilter: text("disposition_filter"),
   content: text("content").notNull(),
   version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(true),
@@ -25,6 +26,7 @@ export const scriptVersionsTable = pgTable("script_versions", {
   name: text("name").notNull(),
   sourceFilter: text("source_filter"),
   stageFilter: text("stage_filter"),
+  dispositionFilter: text("disposition_filter"),
   editedBy: integer("edited_by").references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

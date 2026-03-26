@@ -88,6 +88,7 @@ interface ScriptRecord {
   name: string;
   sourceFilter: string | null;
   stageFilter: string | null;
+  dispositionFilter: string | null;
   content: string;
   isActive: boolean;
 }
@@ -106,16 +107,22 @@ function useScripts(tenantId?: number | null) {
   return scripts;
 }
 
-function findScript(scripts: ScriptRecord[], type: string, source: string, stage?: string): string | null {
+function findScript(scripts: ScriptRecord[], type: string, source: string, stage?: string, disposition?: string | null): string | null {
   if (!scripts || !Array.isArray(scripts)) return null;
   const active = scripts.filter(s => s.type === type && s.isActive);
-  const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null));
+
+  if (disposition) {
+    const byDisposition = active.find(s => s.dispositionFilter === disposition);
+    if (byDisposition) return byDisposition.content;
+  }
+
+  const bySourceAndStage = active.find(s => s.sourceFilter === source && s.stageFilter === (stage || null) && !s.dispositionFilter);
   if (bySourceAndStage) return bySourceAndStage.content;
-  const bySource = active.find(s => s.sourceFilter === source && !s.stageFilter);
+  const bySource = active.find(s => s.sourceFilter === source && !s.stageFilter && !s.dispositionFilter);
   if (bySource) return bySource.content;
-  const byStage = active.find(s => !s.sourceFilter && s.stageFilter === (stage || null));
+  const byStage = active.find(s => !s.sourceFilter && s.stageFilter === (stage || null) && !s.dispositionFilter);
   if (byStage) return byStage.content;
-  const generic = active.find(s => !s.sourceFilter && !s.stageFilter);
+  const generic = active.find(s => !s.sourceFilter && !s.stageFilter && !s.dispositionFilter);
   if (generic) return generic.content;
   return null;
 }
@@ -778,8 +785,8 @@ function LeadCard({
   const [showWhyOrder, setShowWhyOrder] = useState(false);
   const suggestion = lead._suggestion;
   const dispScripts = lead.disposition ? DISPOSITION_SCRIPTS[lead.disposition] : null;
-  const script = dispScripts?.call || findScript(scripts, "call", lead.source, lead.status) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
-  const vmScript = dispScripts?.vm || findScript(scripts, "voicemail", lead.source, lead.status) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
+  const script = findScript(scripts, "call", lead.source, lead.status, lead.disposition) || dispScripts?.call || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
+  const vmScript = findScript(scripts, "voicemail", lead.source, lead.status, lead.disposition) || dispScripts?.vm || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
   const personalizedVm = vmScript
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -830,7 +837,7 @@ function LeadCard({
 
   const handleText = async () => {
     if (!lead.phone) return;
-    const textTemplate = dispScripts?.text || findScript(scripts, "text", lead.source, lead.status) || FALLBACK_TEXT;
+    const textTemplate = findScript(scripts, "text", lead.source, lead.status, lead.disposition) || dispScripts?.text || FALLBACK_TEXT;
     const msg = textTemplate
       .replace("[NAME]", lead.firstName)
       .replace("[INTEREST]", lead.interestType || "HVAC")

@@ -6,22 +6,34 @@ import { requireRole } from "../middleware/auth";
 const router: IRouter = Router();
 
 const DEFAULT_SCRIPTS = [
-  { type: "call", name: "Google Ads", sourceFilter: "Google Ads", stageFilter: null, content: "Hi [NAME], this is [REP] from [COMPANY]. I see you were looking into [INTEREST] — we have availability this week. Would you like to schedule a free estimate?" },
-  { type: "call", name: "Meta Leads", sourceFilter: "Meta Leads", stageFilter: null, content: "Hey [NAME]! Thanks for filling out our form on Facebook. I'd love to help you with your [INTEREST] needs. Do you have a moment to chat about scheduling?" },
-  { type: "call", name: "CallRail", sourceFilter: "CallRail", stageFilter: null, content: "Hi [NAME], I'm returning your call about [INTEREST]. We'd love to get you on the schedule. What times work best for you this week?" },
-  { type: "call", name: "Organic Search", sourceFilter: "Organic Search", stageFilter: null, content: "Hello [NAME], this is [REP] with [COMPANY]. You visited our website about [INTEREST] — we're running a special this month. Can I tell you about it?" },
-  { type: "call", name: "Direct", sourceFilter: "Direct", stageFilter: null, content: "Hi [NAME], thank you for reaching out! I'd love to help you with [INTEREST]. Let me find the best time for an estimate." },
-  { type: "call", name: "Referral", sourceFilter: "Referral", stageFilter: null, content: "Hi [NAME]! You were referred to us for [INTEREST]. We'd love to take care of you. When would be a good time for a technician to come out?" },
-  { type: "text", name: "Follow-up Text", sourceFilter: null, stageFilter: null, content: "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!" },
-  { type: "text", name: "Same-Day Availability", sourceFilter: null, stageFilter: null, content: "Hey [NAME], we have same-day availability for [INTEREST] estimates. Want me to reserve a spot for you today?" },
-  { type: "voicemail", name: "Google Ads VM", sourceFilter: "Google Ads", stageFilter: null, content: "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry. We have great availability this week for a free estimate. Please call us back at your earliest convenience. Again, this is [REP] at [COMPANY]. Have a great day!" },
-  { type: "voicemail", name: "Meta Leads VM", sourceFilter: "Meta Leads", stageFilter: null, content: "Hey [NAME], this is [REP] from [COMPANY]. You filled out a form about [INTEREST] and I wanted to reach out personally. We'd love to help — call us back when you get a chance and we'll get you scheduled. Thanks!" },
-  { type: "voicemail", name: "CallRail VM", sourceFilter: "CallRail", stageFilter: null, content: "Hi [NAME], [REP] here from [COMPANY], returning your call about [INTEREST]. Sorry I missed you — please give us a ring back and we'll take care of you. Talk soon!" },
-  { type: "voicemail", name: "Default VM", sourceFilter: null, stageFilter: null, content: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!" },
-  { type: "email", name: "Follow-up Email", sourceFilter: null, stageFilter: null, content: "Hi [NAME],\n\nThank you for your interest in [INTEREST]. I'd love to help you schedule a free estimate at your convenience.\n\nWe have availability this week and our team is ready to assist. Simply reply to this email or call us to get started.\n\nBest regards,\n[REP]\n[COMPANY]" },
-  { type: "text", name: "3 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-3mo", content: "Hi [NAME], it's [REP] from [COMPANY]. It's been a few months since we last connected about [INTEREST]. We have some great seasonal specials running — would you like to hear about them?" },
-  { type: "text", name: "6 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-6mo", content: "Hey [NAME]! [REP] here from [COMPANY]. It's been about 6 months since your [INTEREST] inquiry. Just checking in — are you still looking for help? We'd love to get you taken care of!" },
-  { type: "text", name: "9 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-9mo", content: "Hi [NAME], this is [REP] from [COMPANY]. It's been a while since we chatted about [INTEREST]. I wanted to reach out one more time — we have some end-of-season deals that might interest you. Let me know!" },
+  { type: "call", name: "Google Ads", sourceFilter: "Google Ads", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], this is [REP] from [COMPANY]. I see you were looking into [INTEREST] — we have availability this week. Would you like to schedule a free estimate?" },
+  { type: "call", name: "Meta Leads", sourceFilter: "Meta Leads", stageFilter: null, dispositionFilter: null, content: "Hey [NAME]! Thanks for filling out our form on Facebook. I'd love to help you with your [INTEREST] needs. Do you have a moment to chat about scheduling?" },
+  { type: "call", name: "CallRail", sourceFilter: "CallRail", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], I'm returning your call about [INTEREST]. We'd love to get you on the schedule. What times work best for you this week?" },
+  { type: "call", name: "Organic Search", sourceFilter: "Organic Search", stageFilter: null, dispositionFilter: null, content: "Hello [NAME], this is [REP] with [COMPANY]. You visited our website about [INTEREST] — we're running a special this month. Can I tell you about it?" },
+  { type: "call", name: "Direct", sourceFilter: "Direct", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], thank you for reaching out! I'd love to help you with [INTEREST]. Let me find the best time for an estimate." },
+  { type: "call", name: "Referral", sourceFilter: "Referral", stageFilter: null, dispositionFilter: null, content: "Hi [NAME]! You were referred to us for [INTEREST]. We'd love to take care of you. When would be a good time for a technician to come out?" },
+  { type: "text", name: "Follow-up Text", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!" },
+  { type: "text", name: "Same-Day Availability", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hey [NAME], we have same-day availability for [INTEREST] estimates. Want me to reserve a spot for you today?" },
+  { type: "voicemail", name: "Google Ads VM", sourceFilter: "Google Ads", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry. We have great availability this week for a free estimate. Please call us back at your earliest convenience. Again, this is [REP] at [COMPANY]. Have a great day!" },
+  { type: "voicemail", name: "Meta Leads VM", sourceFilter: "Meta Leads", stageFilter: null, dispositionFilter: null, content: "Hey [NAME], this is [REP] from [COMPANY]. You filled out a form about [INTEREST] and I wanted to reach out personally. We'd love to help — call us back when you get a chance and we'll get you scheduled. Thanks!" },
+  { type: "voicemail", name: "CallRail VM", sourceFilter: "CallRail", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], [REP] here from [COMPANY], returning your call about [INTEREST]. Sorry I missed you — please give us a ring back and we'll take care of you. Talk soon!" },
+  { type: "voicemail", name: "Default VM", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!" },
+  { type: "email", name: "Follow-up Email", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hi [NAME],\n\nThank you for your interest in [INTEREST]. I'd love to help you schedule a free estimate at your convenience.\n\nWe have availability this week and our team is ready to assist. Simply reply to this email or call us to get started.\n\nBest regards,\n[REP]\n[COMPANY]" },
+  { type: "text", name: "3 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-3mo", dispositionFilter: null, content: "Hi [NAME], it's [REP] from [COMPANY]. It's been a few months since we last connected about [INTEREST]. We have some great seasonal specials running — would you like to hear about them?" },
+  { type: "text", name: "6 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-6mo", dispositionFilter: null, content: "Hey [NAME]! [REP] here from [COMPANY]. It's been about 6 months since your [INTEREST] inquiry. Just checking in — are you still looking for help? We'd love to get you taken care of!" },
+  { type: "text", name: "9 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-9mo", dispositionFilter: null, content: "Hi [NAME], this is [REP] from [COMPANY]. It's been a while since we chatted about [INTEREST]. I wanted to reach out one more time — we have some end-of-season deals that might interest you. Let me know!" },
+  { type: "call", name: "Callback Requested", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME], this is [REP] from [COMPANY] calling you back as requested. I'd love to get you scheduled for [INTEREST]. Do you have a moment?" },
+  { type: "text", name: "Callback Requested Text", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME]! This is [REP] from [COMPANY] — following up as you requested. Ready to schedule your [INTEREST] appointment? Reply YES and I'll get you set up!" },
+  { type: "voicemail", name: "Callback Requested VM", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME], this is [REP] from [COMPANY] returning your call as you requested. We'd love to get you scheduled for [INTEREST]. Please call us back at your convenience!" },
+  { type: "call", name: "Already Had Estimate", sourceFilter: null, stageFilter: null, dispositionFilter: "already_had_estimate", content: "Hi [NAME], this is [REP] from [COMPANY]. I understand you've already had an estimate for [INTEREST]. I'd love to see if we can offer you a competitive option — do you have a moment?" },
+  { type: "text", name: "Already Had Estimate Text", sourceFilter: null, stageFilter: null, dispositionFilter: "already_had_estimate", content: "Hi [NAME]! [REP] from [COMPANY] here. I see you've already had an estimate for [INTEREST] — we'd love the chance to offer a competitive bid. Interested? Reply YES!" },
+  { type: "voicemail", name: "Already Had Estimate VM", sourceFilter: null, stageFilter: null, dispositionFilter: "already_had_estimate", content: "Hi [NAME], this is [REP] from [COMPANY]. I understand you've already received an estimate for [INTEREST]. We'd love the opportunity to give you a second opinion. Give us a call back when you can!" },
+  { type: "call", name: "Don't Remember Form", sourceFilter: null, stageFilter: null, dispositionFilter: "dont_remember", content: "Hi [NAME], this is [REP] from [COMPANY]. You recently submitted an inquiry about [INTEREST] through our website. I'd love to help you out — do you still need help with that?" },
+  { type: "text", name: "Don't Remember Text", sourceFilter: null, stageFilter: null, dispositionFilter: "dont_remember", content: "Hi [NAME]! [REP] from [COMPANY] here. You recently reached out about [INTEREST] services. Still looking for help? Reply YES and I'll get you scheduled!" },
+  { type: "voicemail", name: "Don't Remember VM", sourceFilter: null, stageFilter: null, dispositionFilter: "dont_remember", content: "Hi [NAME], this is [REP] from [COMPANY]. You recently inquired about [INTEREST] through our site. If you're still interested, we'd love to help. Please call us back!" },
+  { type: "call", name: "Never Answered", sourceFilter: null, stageFilter: null, dispositionFilter: "never_answered", content: "Hi [NAME], this is [REP] from [COMPANY] trying to reach you again about your [INTEREST] inquiry. I'd love to help — do you have a quick moment?" },
+  { type: "text", name: "Never Answered Text", sourceFilter: null, stageFilter: null, dispositionFilter: "never_answered", content: "Hi [NAME]! [REP] from [COMPANY] here — we've been trying to reach you about your [INTEREST] inquiry. Still interested? Reply YES and I'll find a time that works!" },
+  { type: "voicemail", name: "Never Answered VM", sourceFilter: null, stageFilter: null, dispositionFilter: "never_answered", content: "Hi [NAME], this is [REP] from [COMPANY] following up again on your [INTEREST] inquiry. We really want to help! Please give us a call back when you get a chance." },
 ];
 
 async function seedDefaultScripts(tenantId: number, userId: number | null) {
@@ -37,6 +49,7 @@ async function seedDefaultScripts(tenantId: number, userId: number | null) {
       name: s.name,
       sourceFilter: s.sourceFilter,
       stageFilter: s.stageFilter,
+      dispositionFilter: s.dispositionFilter,
       content: s.content,
       version: 1,
       isActive: true,
@@ -106,7 +119,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
   const VALID_TYPES = ["call", "voicemail", "text", "email", "objection", "closing", "follow-up", "re-engagement"];
-  const { type, name, sourceFilter, stageFilter, content } = req.body;
+  const { type, name, sourceFilter, stageFilter, dispositionFilter, content } = req.body;
   if (!type || !name || !content) {
     res.status(400).json({ error: "type, name, and content are required" });
     return;
@@ -122,6 +135,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
     name,
     sourceFilter: sourceFilter || null,
     stageFilter: stageFilter || null,
+    dispositionFilter: dispositionFilter || null,
     content,
     version: 1,
     isActive: true,
@@ -132,7 +146,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
     tenantId,
     date: new Date().toISOString().split("T")[0],
     title: `New ${type} script: "${name}"`,
-    description: `Created new ${type} script "${name}"${sourceFilter ? ` for ${sourceFilter} leads` : ""}${stageFilter ? ` (stage: ${stageFilter})` : ""}.`,
+    description: `Created new ${type} script "${name}"${sourceFilter ? ` for ${sourceFilter} leads` : ""}${stageFilter ? ` (stage: ${stageFilter})` : ""}${dispositionFilter ? ` (disposition: ${dispositionFilter})` : ""}.`,
     category: "scripts",
   });
 
@@ -149,7 +163,7 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
 
   if (!existing) { res.status(404).json({ error: "Script not found" }); return; }
 
-  const { name, sourceFilter, stageFilter, content, isActive } = req.body;
+  const { name, sourceFilter, stageFilter, dispositionFilter, content, isActive } = req.body;
 
   await db.insert(scriptVersionsTable).values({
     scriptId: existing.id,
@@ -158,6 +172,7 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
     name: existing.name,
     sourceFilter: existing.sourceFilter,
     stageFilter: existing.stageFilter,
+    dispositionFilter: existing.dispositionFilter,
     editedBy: req.session.userId ?? null,
   });
 
@@ -170,6 +185,7 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
   }
   if (sourceFilter !== undefined && sourceFilter !== existing.sourceFilter) changes.push(`source filter: "${existing.sourceFilter || "any"}" → "${sourceFilter || "any"}"`);
   if (stageFilter !== undefined && stageFilter !== existing.stageFilter) changes.push(`stage filter: "${existing.stageFilter || "any"}" → "${stageFilter || "any"}"`);
+  if (dispositionFilter !== undefined && dispositionFilter !== existing.dispositionFilter) changes.push(`disposition filter: "${existing.dispositionFilter || "any"}" → "${dispositionFilter || "any"}"`);
   if (isActive !== undefined && isActive !== existing.isActive) changes.push(isActive ? "reactivated" : "deactivated");
 
   const newVersion = existing.version + 1;
@@ -178,6 +194,7 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
   if (content !== undefined) updates.content = content;
   if (sourceFilter !== undefined) updates.sourceFilter = sourceFilter || null;
   if (stageFilter !== undefined) updates.stageFilter = stageFilter || null;
+  if (dispositionFilter !== undefined) updates.dispositionFilter = dispositionFilter || null;
   if (isActive !== undefined) updates.isActive = isActive;
 
   const [updated] = await db.update(scriptsTable).set(updates)
@@ -217,6 +234,7 @@ router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_
     name: existing.name,
     sourceFilter: existing.sourceFilter,
     stageFilter: existing.stageFilter,
+    dispositionFilter: existing.dispositionFilter,
     editedBy: req.session.userId ?? null,
   });
 
@@ -226,6 +244,7 @@ router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_
     name: targetVersion.name,
     sourceFilter: targetVersion.sourceFilter,
     stageFilter: targetVersion.stageFilter,
+    dispositionFilter: targetVersion.dispositionFilter,
     version: newVersion,
     updatedAt: new Date(),
   }).where(eq(scriptsTable.id, id)).returning();
