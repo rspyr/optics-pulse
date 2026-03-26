@@ -44,7 +44,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
       .groupBy(campaignsTable.platform),
   ]);
 
-  const googleSpend = Number(platformSpendResult.find(r => r.platform === "google_ads")?.total || 0);
+  const googleSpend = platformSpendResult.filter(r => r.platform === "google_ads" || r.platform === "google").reduce((s, r) => s + Number(r.total || 0), 0);
   const metaSpend = Number(platformSpendResult.find(r => r.platform === "meta")?.total || 0);
   const totalSpend = platformSpendResult.reduce((sum, r) => sum + Number(r.total || 0), 0);
 
@@ -146,7 +146,7 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
     const existing = dailyMap.get(dateStr) || { spend: 0, googleSpend: 0, metaSpend: 0, revenue: 0 };
     const amount = s.spend || 0;
     existing.spend += amount;
-    if (s.platform === "google_ads") {
+    if (s.platform === "google_ads" || s.platform === "google") {
       existing.googleSpend += amount;
     } else if (s.platform === "meta") {
       existing.metaSpend += amount;
