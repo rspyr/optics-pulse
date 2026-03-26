@@ -42,6 +42,40 @@ const FALLBACK_SCRIPTS: Record<string, string> = {
 
 const FALLBACK_TEXT = "Hi [NAME]! This is [REP] from [COMPANY]. Just following up on your [INTEREST] inquiry. Would you like to schedule a free estimate? Reply YES and I'll get you on the calendar!";
 
+const DISPOSITION_LABELS: Record<string, { label: string; color: string }> = {
+  booked: { label: "Booked", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" },
+  callback_requested: { label: "Callback Requested", color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+  not_interested: { label: "Not Interested", color: "text-red-400 bg-red-500/10 border-red-500/20" },
+  never_answered: { label: "Never Answered", color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+  out_of_area: { label: "Out of Area", color: "text-red-400 bg-red-500/10 border-red-500/20" },
+  looking_for_job: { label: "Looking for Job", color: "text-gray-400 bg-white/5 border-white/10" },
+  already_had_estimate: { label: "Already Had Estimate", color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
+  dont_remember: { label: "Don't Remember Form", color: "text-gray-400 bg-white/5 border-white/10" },
+};
+
+const DISPOSITION_SCRIPTS: Record<string, { call: string; text: string; vm: string }> = {
+  callback_requested: {
+    call: "Hi [NAME], this is [REP] from [COMPANY] calling you back as requested. I'd love to get you scheduled for [INTEREST]. Do you have a moment?",
+    text: "Hi [NAME]! This is [REP] from [COMPANY] — following up as you requested. Ready to schedule your [INTEREST] appointment? Reply YES and I'll get you set up!",
+    vm: "Hi [NAME], this is [REP] from [COMPANY] returning your call as you requested. We'd love to get you scheduled for [INTEREST]. Please call us back at your convenience!",
+  },
+  already_had_estimate: {
+    call: "Hi [NAME], this is [REP] from [COMPANY]. I understand you've already had an estimate for [INTEREST]. I'd love to see if we can offer you a competitive option — do you have a moment?",
+    text: "Hi [NAME]! [REP] from [COMPANY] here. I see you've already had an estimate for [INTEREST] — we'd love the chance to offer a competitive bid. Interested? Reply YES!",
+    vm: "Hi [NAME], this is [REP] from [COMPANY]. I understand you've already received an estimate for [INTEREST]. We'd love the opportunity to give you a second opinion. Give us a call back when you can!",
+  },
+  dont_remember: {
+    call: "Hi [NAME], this is [REP] from [COMPANY]. You recently submitted an inquiry about [INTEREST] through our website. I'd love to help you out — do you still need help with that?",
+    text: "Hi [NAME]! [REP] from [COMPANY] here. You recently reached out about [INTEREST] services. Still looking for help? Reply YES and I'll get you scheduled!",
+    vm: "Hi [NAME], this is [REP] from [COMPANY]. You recently inquired about [INTEREST] through our site. If you're still interested, we'd love to help. Please call us back!",
+  },
+  never_answered: {
+    call: "Hi [NAME], this is [REP] from [COMPANY] trying to reach you again about your [INTEREST] inquiry. I'd love to help — do you have a quick moment?",
+    text: "Hi [NAME]! [REP] from [COMPANY] here — we've been trying to reach you about your [INTEREST] inquiry. Still interested? Reply YES and I'll find a time that works!",
+    vm: "Hi [NAME], this is [REP] from [COMPANY] following up again on your [INTEREST] inquiry. We really want to help! Please give us a call back when you get a chance.",
+  },
+};
+
 const FALLBACK_VM: Record<string, string> = {
   "Google Ads": "Hi [NAME], this is [REP] with [COMPANY]. I'm calling about your [INTEREST] inquiry from our Google listing. We'd love to schedule a free estimate at your convenience. Please call us back at your earliest convenience. Thanks!",
   "Meta Leads": "Hi [NAME], this is [REP] from [COMPANY] following up on your interest in [INTEREST]. We have openings this week for a free estimate. Give us a call back when you can!",
@@ -743,8 +777,9 @@ function LeadCard({
   const [actionFeedback, setActionFeedback] = useState<{ status: "success" | "error"; message: string } | null>(null);
   const [showWhyOrder, setShowWhyOrder] = useState(false);
   const suggestion = lead._suggestion;
-  const script = findScript(scripts, "call", lead.source, lead.status) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
-  const vmScript = findScript(scripts, "voicemail", lead.source, lead.status) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
+  const dispScripts = lead.disposition ? DISPOSITION_SCRIPTS[lead.disposition] : null;
+  const script = dispScripts?.call || findScript(scripts, "call", lead.source, lead.status) || FALLBACK_SCRIPTS[lead.source] || FALLBACK_SCRIPTS["Direct"];
+  const vmScript = dispScripts?.vm || findScript(scripts, "voicemail", lead.source, lead.status) || FALLBACK_VM[lead.source] || FALLBACK_VM["default"];
   const personalizedVm = vmScript
     .replace("[NAME]", lead.firstName)
     .replace("[INTEREST]", lead.interestType || "HVAC service")
@@ -755,6 +790,7 @@ function LeadCard({
     .replace("[INTEREST]", lead.interestType || "HVAC service")
     .replace("[REP]", "your name")
     .replace("[COMPANY]", "our company");
+  const dispLabel = lead.disposition ? DISPOSITION_LABELS[lead.disposition] : null;
 
   const showFeedback = (status: "success" | "error", message: string) => {
     setActionFeedback({ status, message });
@@ -794,7 +830,7 @@ function LeadCard({
 
   const handleText = async () => {
     if (!lead.phone) return;
-    const textTemplate = findScript(scripts, "text", lead.source, lead.status) || FALLBACK_TEXT;
+    const textTemplate = dispScripts?.text || findScript(scripts, "text", lead.source, lead.status) || FALLBACK_TEXT;
     const msg = textTemplate
       .replace("[NAME]", lead.firstName)
       .replace("[INTEREST]", lead.interestType || "HVAC")
@@ -864,6 +900,11 @@ function LeadCard({
             </Badge>
             {lead.isNewCustomer && (
               <Badge variant="success" className="text-[10px]">NEW CUSTOMER</Badge>
+            )}
+            {dispLabel && (
+              <span className={cn("text-[10px] px-2 py-0.5 rounded-full border font-medium", dispLabel.color)}>
+                {dispLabel.label}
+              </span>
             )}
           </div>
 
@@ -993,7 +1034,17 @@ function LeadCard({
           <PlatformBadge platform={commConfig.textPlatform} />
         </button>
         <a
-          href={lead.email ? `mailto:${lead.email}?subject=Your HVAC Inquiry&body=${encodeURIComponent(`Hi ${lead.firstName},\n\nThank you for your interest in ${lead.interestType || 'our HVAC services'}. I'd love to schedule a time to discuss your needs.\n\nBest regards`)}` : "#"}
+          href={lead.email ? `mailto:${lead.email}?subject=Your HVAC Inquiry&body=${encodeURIComponent(
+            lead.disposition === "already_had_estimate"
+              ? `Hi ${lead.firstName},\n\nI understand you've already received an estimate for ${lead.interestType || 'HVAC services'}. We'd love the opportunity to offer you a competitive second opinion — no pressure at all.\n\nWould you be open to a quick call?\n\nBest regards`
+              : lead.disposition === "callback_requested"
+                ? `Hi ${lead.firstName},\n\nFollowing up as you requested regarding your ${lead.interestType || 'HVAC'} inquiry. I'd love to find a time that works for you.\n\nBest regards`
+                : lead.disposition === "dont_remember"
+                  ? `Hi ${lead.firstName},\n\nYou recently submitted an inquiry about ${lead.interestType || 'HVAC services'} through our website. I'd love to help if you're still interested.\n\nBest regards`
+                  : lead.disposition === "never_answered"
+                    ? `Hi ${lead.firstName},\n\nI've been trying to reach you about your ${lead.interestType || 'HVAC'} inquiry. Just wanted to make sure you got our message. We'd love to help!\n\nBest regards`
+                    : `Hi ${lead.firstName},\n\nThank you for your interest in ${lead.interestType || 'our HVAC services'}. I'd love to schedule a time to discuss your needs.\n\nBest regards`
+          )}` : "#"}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-medium hover:bg-purple-500/20 transition-colors"
         >
           <Mail className="w-3.5 h-3.5" /> Email
@@ -1066,7 +1117,7 @@ function LeadCard({
             className="overflow-hidden"
           >
             <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/5">
-              <p className="text-xs text-white/50 uppercase tracking-wider mb-1.5 font-medium">Call Script — {lead.source}</p>
+              <p className="text-xs text-white/50 uppercase tracking-wider mb-1.5 font-medium">Call Script — {dispScripts ? (dispLabel?.label || lead.disposition) : lead.source}</p>
               <p className="text-sm text-gray-300 leading-relaxed">{personalizedScript}</p>
             </div>
           </motion.div>
