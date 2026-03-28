@@ -1341,7 +1341,7 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
   );
 }
 
-function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
+function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void; canEdit: boolean }) {
   const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
   const [sheetId, setSheetId] = useState("");
   const [sheetTab, setSheetTab] = useState("");
@@ -1413,6 +1413,9 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
       <div className="flex items-center gap-2">
         <Table2 className="w-4 h-4 text-primary" />
         <span className="text-sm font-display text-white">Google Sheet Config (per Funnel)</span>
+        {!canEdit && (
+          <span className="text-[10px] text-amber-400/60 bg-amber-500/10 px-2 py-0.5 rounded ml-auto">Agency access required to edit</span>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -1446,6 +1449,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                     Import
                   </button>
                 )}
+                {canEdit && (
                 <button
                   onClick={() => editingFunnelId === funnel.id ? setEditingFunnelId(null) : startEdit(funnel)}
                   className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5"
@@ -1453,6 +1457,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                   {savedId === funnel.id ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <SettingsIcon className="w-3 h-3" />}
                   {savedId === funnel.id ? "Saved" : "Configure"}
                 </button>
+                )}
               </div>
             </div>
 
@@ -1510,13 +1515,13 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   );
 }
 
-function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
+function SettingsTab({ tenantId, funnels, onRefetchFunnels, isAgency }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void; isAgency: boolean }) {
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} />
 
       <div className="border-t border-white/5 pt-6">
-        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />
+        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} canEdit={isAgency} />
       </div>
 
       <div className="border-t border-white/5 pt-6">
@@ -1664,7 +1669,7 @@ export default function SalesManager() {
           />
         )}
         {tab === "settings" && (
-          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />
+          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} isAgency={isAgency} />
         )}
       </div>
     </div>
