@@ -95,20 +95,19 @@ Respond with ONLY valid JSON. Example:
       parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     }
 
+    const validFieldSet = new Set(INTERNAL_FIELDS.map(f => f.field));
     const mapping: Record<string, string> = {};
     const confidences: Record<string, number> = {};
-    for (const [header, val] of Object.entries(parsed)) {
-      if (val && typeof val === "object" && typeof val.field === "string") {
-        const validField = INTERNAL_FIELDS.find(f => f.field === val.field);
-        mapping[header] = validField ? val.field : "__skip__";
-        confidences[header] = typeof val.confidence === "number" ? val.confidence : 0.5;
-      }
-    }
 
     for (const h of headers) {
-      if (!(h in mapping)) {
+      const val = parsed[h];
+      if (val && typeof val === "object" && typeof val.field === "string" && validFieldSet.has(val.field)) {
+        mapping[h] = val.field;
+        confidences[h] = typeof val.confidence === "number" ? Math.max(0, Math.min(1, val.confidence)) : 0.5;
+      } else {
         mapping[h] = "__skip__";
-        confidences[h] = 0;
+        confidences[h] = val && typeof val === "object" && typeof val.confidence === "number"
+          ? Math.max(0, Math.min(1, val.confidence)) : 0;
       }
     }
 
