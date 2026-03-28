@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncServiceTitanJobs, syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
+import { syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
 
 const router: IRouter = Router();
@@ -18,10 +18,13 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
 
   let result: { synced: number; error?: string };
 
+  const pausedIntegrations = ["service_titan", "podium", "callrail", "ghl"];
+  if (pausedIntegrations.includes(integration)) {
+    res.json({ success: false, synced: 0, error: `${integration} integration is currently paused` });
+    return;
+  }
+
   switch (integration) {
-    case "service_titan":
-      result = await syncServiceTitanJobs(tenantId);
-      break;
     case "google_ads":
       result = await syncGoogleAdsCampaigns(tenantId);
       break;

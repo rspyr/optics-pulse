@@ -37,14 +37,20 @@ router.get("/leads-hub/queue", async (req, res) => {
 
   try {
     const newLeads = (tab === "all" || tab === "new") ? await db.select().from(leadsTable)
-      .where(and(...baseConds, eq(leadsTable.hubStatus, "day_1"), isNull(leadsTable.callbackAt)))
+      .where(and(
+        ...baseConds,
+        eq(leadsTable.hubStatus, "day_1"),
+        isNull(leadsTable.callbackAt),
+        sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+      ))
       .orderBy(asc(leadsTable.createdAt)).limit(100) : [];
 
     const todayLeads = (tab === "all" || tab === "today") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
         inArray(leadsTable.hubStatus, activeStatuses),
-        ne(leadsTable.hubStatus, "day_1"),
+        sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+        gte(leadsTable.updatedAt, todayStart),
       ))
       .orderBy(asc(leadsTable.updatedAt)).limit(100) : [];
 
