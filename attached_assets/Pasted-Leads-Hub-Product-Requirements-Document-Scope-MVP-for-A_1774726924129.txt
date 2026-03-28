@@ -1,0 +1,658 @@
+Leads Hub — Product Requirements Document
+
+
+
+Scope: MVP for Advantage HVAC. No ServiceTitan, Podium, or CallRail integrations in this version. All data is manually logged by CSRs through the UI.
+
+
+
+1. Personas
+
+
+
+
+
+
+
+Persona
+
+
+
+Role
+
+
+
+Default Landing View
+
+
+
+
+
+CSR (e.g. Corey)
+
+
+
+Works the queue, logs every touchpoint
+
+
+
+My Queue
+
+
+
+
+
+Sales Manager (Brandon)
+
+
+
+Monitors performance, configures routing and scripts
+
+
+
+Manager Dashboard
+
+
+
+2. Lead Data Model
+
+Every lead record contains the following fields:
+
+Core Identity
+
+
+
+
+
+Name — First + last
+
+
+
+Phone — Primary contact number
+
+
+
+Lead Source — Meta · Google · Facebook · Instagram · Direct Mail · YouTube · TikTok · Email · ETO Website · EGIA
+
+
+
+Service Type — Heat Pump · Service · A/C · Zoning · Furnace · HEPA · Air Scrubber · Full System · Mini Split · Generator (customizable by sales manager and agency per tenant)
+
+
+
+Funnel — dynamically loaded from Agency funnel settings and leads metadata
+
+
+
+Intake Date — Auto-set when lead is created
+
+
+
+Assigned CSR — Set at intake or via routing logic
+
+Status & Sequence
+
+
+
+
+
+Lead Status — 1 · 2 · 3 · 4 · 5 - OLD · APPT SET · CALL BACK · DEAD
+
+
+
+
+
+Values 1–4 = active days in the 5-day outreach sequence
+
+
+
+5 - OLD = sequence ended, lead enters re-engagement pool
+
+
+
+APPT SET = terminal positive outcome
+
+
+
+CALL BACK = CSR has a scheduled follow-up time set
+
+
+
+DEAD = out of service area or DNC
+
+
+
+Day-in-Sequence — Numeric (1–5). Auto-increments each time a daily action is logged. Separate from status — a lead can be on Day 3 and reach 5 - OLD if marked OLD before completing the sequence.
+
+
+
+Revisit Date — Optional manual date set by CSR. Triggers re-surface in queue when date arrives.
+
+
+
+Callback Date/Time — Set when outcome = CALL BACK. Auto-moves lead to the Callback tab and back to the priority queue when the scheduled time arrives.
+
+
+
+Dead - leaves all lists/queues/etc)
+
+Contact Flags
+
+
+
+
+
+Contact Preferences — Multi-select tags: Text Only · Spanish Speaking · Do Not Call
+
+
+
+
+
+Rendered as colored warning chips on the lead card and detail view
+
+
+
+Triggers a visible alert if CSR attempts a disallowed action (e.g., calling a Text Only lead)
+
+Outcome Tracking
+
+
+
+
+
+Call Result — Logged per-action: No Answer · Left Voicemail · VM Full · VM Not Setup · Bad Number · Spoke with Customer · Hung Up · Blocked · Out of Service Area
+
+
+
+VM Left — Yes · No · Bad Number · VM Full · VM Not Setup · Spoke with customer
+
+
+
+Text Result — Yes · Not able to · Dead · No need
+
+
+
+Dead Reason — Required when outcome leads to dead: Out of Service Area · Do Not Call
+
+
+
+Notes — Free-text, optional, logged per-action (not a single global field)
+
+Action History
+
+
+
+
+
+Append-only log of every touchpoint: action type, timestamp, result, notes
+
+
+
+Never editable after save
+
+
+
+3. Lead Lifecycle
+
+New Lead Created
+       │
+       ▼
+  Queue (Day 1)
+  CSR logs a touchpoint → Day auto-increments
+       │
+   ┌───┴────────────────────────────┐
+   │                                │
+APPT SET                      CALL BACK ──► Callback tab
+(exits queue)                 (returns to queue at scheduled time)
+                                    │
+                              5 - OLD
+                                    │
+                    ┌───────────────┴───────────────┐
+                    │                               │
+            Dead Reason =                   OLD Reason =
+          Out of Service Area or DNC
+          (permanently removed)
+                                               │
+                                    All other old reasons
+                                               │
+                                       Re-engagement Pool
+                                    (surfaces on Revisit Date
+                                     or when lead flow is slow)
+
+Old Leads — Leads that were never fully worked (e.g., came in and aged out before being touched) are moved to a separate Old Leads tab. CSRs can access this tab during slow periods to work through the backlog. Old leads are distinct from dead leads and are not removed.
+
+Dead Leads — Leads marked dead with reason Out of Service Area or Do Not Call are permanently removed from all queues and tabs. They do not appear in the re-engagement pool or old leads list.
+
+
+
+4. CSR Experience
+
+4.1 The Queue
+
+The CSR's default view. Leads are pre-sorted into priority tabs — no manual sorting required.
+
+Tabs:
+
+
+
+
+
+New — Arrived, never touched. Highest urgency.
+
+
+
+Today — Active sequence (Day 1–4), due for a touchpoint today.
+
+
+
+Callbacks — Leads the CSR has a scheduled callback time set for. Auto-resurfaces at the scheduled time and moves to top of Today tab.
+
+
+
+Re-engagement — DEAD leads whose revisit date has arrived.
+
+
+
+Old Leads — Leads that aged out before being worked. CSRs use this during slow periods.
+
+
+
+Archive — All closed leads (APPT SET + true dead). Searchable, read-only, filterable by month.
+
+Lead card displays:
+
+
+
+
+
+Name + phone (large, tappable to open detail)
+
+
+
+Source tag
+
+
+
+Service type badge
+
+
+
+Day-in-sequence badge: D1 D2 D3 D4 DEAD
+
+
+
+Time since last contact
+
+
+
+Contact flags rendered as colored chips (Text Only, Spanish, DNC)
+
+
+
+Last logged outcome in muted text: "VM Full · 3/27 9:42am"
+
+
+
+4.2 Lead Detail + Action View
+
+Tapping a lead card opens the detail view. All actions happen here — no navigation away required.
+
+Layout (top to bottom):
+
+
+
+
+
+Lead info header — Name, phone, source, service type, contact flags
+
+
+
+Action buttons — CALL · TEXT · VOICEMAIL DROP
+
+
+
+Action history timeline — Collapsible, read-only
+
+
+
+4.3 Action → Log Micro-Flow
+
+The core ergonomic interaction. Every action immediately triggers a structured logging prompt.
+
+CALL
+
+
+
+
+
+CSR taps CALL
+
+
+
+Button immediately becomes CALLED ✓ + timestamp auto-logged
+
+
+
+Bottom sheet rises: "How'd it go?"
+
+
+
+
+
+No Answer → closes, day-in-sequence auto-increments
+
+
+
+Left Voicemail → sub-select: Yes · No · VM Full · VM Not Setup · Bad Number
+
+
+
+Spoke with Customer → secondary prompt: "What's the outcome?"
+
+
+
+
+
+Appointment Set → lead marked APPT SET, exits queue
+
+
+
+Callback → date/time picker appears; lead moves to Callback tab; auto-returns to priority queue at scheduled time
+
+
+
+Not Interested / Dead → dead reason prompt (required): Out of Service Area · DNC · Not Interested · Too Expensive · No Response · Other
+
+
+
+Hung Up / Blocked / Out of Service Area / Bad Number — selectable outcomes
+
+
+
+Optional one-line notes field (not required)
+
+
+
+Done saves everything, dismisses sheet, returns to queue
+
+TEXT
+
+
+
+
+
+CSR taps TEXT
+
+
+
+Button becomes TEXTED ✓ + timestamp auto-logged
+
+
+
+Bottom sheet: "Text sent?"
+
+
+
+
+
+Yes · Not able to · Dead · No need
+
+
+
+Optional notes
+
+
+
+Done saves + dismisses
+
+One-click copy messages: Below the TEXT button, the CSR sees a list of pre-written scripts configured by the manager. Tapping one copies it to clipboard. Scripts support smart fields: {{lead_name}}, {{csr_name}}, {{service_type}}, {{funnel}}. Manager can customize these per funnel and service type.
+
+VOICEMAIL DROP
+
+
+
+
+
+CSR taps VOICEMAIL DROP
+
+
+
+Logs timestamp + voicemail type
+
+
+
+No result prompt needed
+
+
+
+Auto-increments day-in-sequence
+
+
+
+4.4 Action History Timeline
+
+Collapsible accordion below the action buttons. Read-only.
+
+📞 Called · 3/28 10:42am → Spoke with Customer → Callback set: 3/31 2:00pm
+💬 Texted · 3/26 2:15pm → Yes
+📞 Called · 3/25 11:03am → VM Full
+─── Lead created 3/24 · Source/Funnel: Meta, FIT Funnel · Looking for: Heat Pump ───
+
+Context for CSRs re-engaging leads from months ago. Always visible, never editable.
+
+
+
+4.5 Manual Lead Transfer
+
+Any CSR can transfer an assigned lead to another CSR at any time from the lead detail view. The receiving CSR gets the lead in their queue with full history intact.
+
+
+
+5. Manager Experience
+
+5.1 Manager Dashboard
+
+Brandon's default view.
+
+Stats Panel
+
+Aggregate stats (across all reps):
+
+
+
+
+
+Avg booking rate across all reps and all funnels
+
+
+
+Avg booking rate by specific funnel (selectable filter)
+
+
+
+Total calls made (with funnel type breakdown)
+
+
+
+Total appointments set (with funnel type breakdown)
+
+Per-CSR stats:
+
+
+
+
+
+Calls made
+
+
+
+VMs left
+
+
+
+Texts sent
+
+
+
+Appointments booked
+
+
+
+Booking rate %
+
+
+
+Booking rate broken down by funnel type (collapsible per CSR row)
+
+Per-source stats:
+
+
+
+
+
+Lead volume by source
+
+
+
+Appointment rate by source
+
+All stats are filterable by date range.
+
+
+
+5.2 Round-Robin Routing Configuration
+
+Controls how incoming leads are assigned to CSRs.
+
+Settings Brandon can configure:
+
+
+
+
+
+Cascade order by funnel — For each lead source/funnel type, specify which CSR gets first assignment, second, third, etc.
+
+
+
+Time interval to pass — If a CSR doesn't touch a lead within X hours/days, the lead auto-passes to the next CSR in the cascade.
+
+
+
+Pass-back allowed — Toggle whether a lead can be passed back to a previously assigned CSR.
+
+
+
+CSR Pause / Schedule:
+
+
+
+
+
+Mark a specific CSR as paused (e.g., out of office)
+
+
+
+Set a schedule with start and end time for the pause — CSR auto-activates again at the scheduled end time
+
+
+
+While paused, that CSR is skipped in all routing logic; their existing leads remain with them unless manually transferred
+
+
+
+5.3 Script Library
+
+Manager-controlled templates for CSRs to use during outreach.
+
+Types:
+
+
+
+
+
+Text message scripts
+
+
+
+Call scripts
+
+
+
+Voicemail scripts
+
+Customization:
+
+
+
+
+
+Templates are organized by funnel type and/or service type
+
+
+
+Smart fields auto-populate: {{lead_name}}, {{csr_name}}, {{service_type}}, {{funnel}}
+
+
+
+Manager can create, edit, and delete templates at any time
+
+
+
+Changes reflect immediately in the CSR's action view
+
+
+
+6. Lead Intake
+
+Leads are entered manually (MVP). Required fields at intake:
+
+
+
+
+
+Name
+
+
+
+Phone
+
+
+
+Lead Source
+
+
+
+Service Type
+
+
+
+Assigned CSR (or auto-assigned via routing logic)
+
+
+
+Contact flags (optional at intake, editable later)
+
+Intake date is auto-set. Lead enters the queue at Day 1 / New status.
+
+
+
+7. Archive & History
+
+
+
+
+
+All leads remain in the system indefinitely
+
+
+
+Archive tab is filterable by month, source, service type, CSR, and status
+
+
+
+Useful for working old lists during slow lead flow
+
+
+
+Read-only — no actions can be taken from the archive view (lead must be moved back to active queue explicitly)
+
