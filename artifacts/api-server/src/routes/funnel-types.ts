@@ -127,8 +127,8 @@ router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
   const { googleSheetId, googleSheetTab } = req.body;
 
-  const userRole = (req as any).session?.role;
-  const userTenantId = (req as any).session?.tenantId;
+  const userRole = req.session.userRole;
+  const userTenantId = req.session.tenantId;
   if (userRole === "client_admin" && userTenantId !== tenantId) {
     res.status(403).json({ error: "You can only configure sheet settings for your own tenant" });
     return;
