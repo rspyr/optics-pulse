@@ -171,6 +171,42 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
     return true;
   });
 
+  const groupedScripts = (() => {
+    const groups: Record<string, Script[]> = {};
+    for (const s of filteredScripts) {
+      let groupKey = "General";
+      if (funnelFilter) {
+        groupKey = funnels.find(f => f.slug === funnelFilter)?.name || funnelFilter;
+      } else if (serviceFilter) {
+        groupKey = serviceFilter;
+      } else {
+        const matchedFunnel = funnels.find(f =>
+          s.name.toLowerCase().includes(f.slug.toLowerCase()) ||
+          s.name.toLowerCase().includes(f.name.toLowerCase()) ||
+          s.sourceFilter?.toLowerCase().includes(f.slug.toLowerCase()) ||
+          s.content.toLowerCase().includes(f.slug.toLowerCase())
+        );
+        if (matchedFunnel) {
+          groupKey = matchedFunnel.name;
+        } else {
+          const matchedService = SERVICE_TYPES.find(svc =>
+            s.name.toLowerCase().includes(svc.toLowerCase()) ||
+            s.content.toLowerCase().includes(svc.toLowerCase())
+          );
+          if (matchedService) groupKey = matchedService;
+        }
+      }
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(s);
+    }
+    const sorted = Object.entries(groups).sort(([a], [b]) => {
+      if (a === "General") return 1;
+      if (b === "General") return -1;
+      return a.localeCompare(b);
+    });
+    return sorted;
+  })();
+
   const showMsg = (type: "success" | "error", msg: string) => {
     setFeedback({ type, msg });
     setTimeout(() => setFeedback(null), 3000);
@@ -379,7 +415,17 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
             </button>
           </div>
 
-          {filteredScripts.map(script => (
+          {groupedScripts.map(([groupName, groupScripts]) => (
+            <div key={groupName}>
+              {groupedScripts.length > 1 && (
+                <div className="flex items-center gap-2 mb-1 mt-2 first:mt-0">
+                  <div className="h-px flex-1 bg-white/5" />
+                  <span className="text-[9px] text-white/20 uppercase tracking-widest font-mono">{groupName}</span>
+                  <span className="text-[9px] text-white/10 font-mono">({groupScripts.length})</span>
+                  <div className="h-px flex-1 bg-white/5" />
+                </div>
+              )}
+              {groupScripts.map(script => (
             <PremiumCard
               key={script.id}
               className={cn(
@@ -427,6 +473,8 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                 </div>
               </div>
             </PremiumCard>
+          ))}
+            </div>
           ))}
 
           {filteredScripts.length === 0 && (

@@ -388,31 +388,58 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
       <PremiumCard className="p-5">
         <div className="flex items-center gap-2 mb-4">
           <Phone className="w-4 h-4 text-primary" />
-          <span className="text-sm font-display text-white">Calls & Activity by Funnel</span>
+          <span className="text-sm font-display text-white">Total Calls with Funnel Breakdown</span>
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
+            <p className="text-2xl font-display text-white">{stats?.byCsr.reduce((s, c) => s + c.calls, 0) || 0}</p>
+            <p className="text-[10px] text-white/30 uppercase">Total Calls</p>
+          </div>
+          <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
+            <p className="text-2xl font-display text-blue-400">{stats?.byCsr.reduce((s, c) => s + c.texts, 0) || 0}</p>
+            <p className="text-[10px] text-white/30 uppercase">Total Texts</p>
+          </div>
+          <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
+            <p className="text-2xl font-display text-purple-400">{stats?.byCsr.reduce((s, c) => s + c.vms, 0) || 0}</p>
+            <p className="text-[10px] text-white/30 uppercase">Total VMs</p>
+          </div>
         </div>
         {(stats?.byFunnel || []).length === 0 ? (
-          <p className="text-xs text-white/30 text-center py-4">No funnel call data</p>
+          <p className="text-xs text-white/30 text-center py-4">No funnel data</p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="space-y-2">
             {stats!.byFunnel.map(f => {
               const funnelName = funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`;
-              const funnelCalls = stats!.byCsr.reduce((s, c) => s + c.calls, 0);
-              const proportion = stats!.totalLeads > 0 ? f.total / stats!.totalLeads : 0;
-              const estimatedCalls = Math.round(funnelCalls * proportion);
+              const leadShare = stats!.totalLeads > 0 ? Math.round((f.total / stats!.totalLeads) * 100) : 0;
               return (
-                <PremiumCard key={f.funnelId} className="p-3">
-                  <p className="text-[10px] text-white/30 uppercase tracking-wider font-mono mb-1 truncate">{funnelName}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-lg font-display text-white">{estimatedCalls}</p>
-                      <p className="text-[9px] text-white/20 uppercase">est. calls</p>
+                <div key={f.funnelId} className="flex items-center gap-3 p-2 rounded bg-white/[0.02] border border-white/5">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-white/70 truncate">{funnelName}</span>
+                      <span className="text-[9px] text-white/20 font-mono">{leadShare}% of leads</span>
                     </div>
-                    <div>
-                      <p className="text-lg font-display text-emerald-400">{f.appointments}</p>
-                      <p className="text-[9px] text-white/20 uppercase">appts</p>
+                    <div className="mt-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div className="h-full rounded-full bg-primary/40" style={{ width: `${leadShare}%` }} />
                     </div>
                   </div>
-                </PremiumCard>
+                  <div className="flex items-center gap-4 flex-shrink-0">
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-white">{f.total}</p>
+                      <p className="text-[9px] text-white/20 uppercase">leads</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-emerald-400">{f.appointments}</p>
+                      <p className="text-[9px] text-white/20 uppercase">appts</p>
+                    </div>
+                    <div className="text-right min-w-[40px]">
+                      <p className={cn(
+                        "text-xs font-mono",
+                        f.bookingRate >= 30 ? "text-emerald-400" : f.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
+                      )}>{f.bookingRate}%</p>
+                      <p className="text-[9px] text-white/20 uppercase">rate</p>
+                    </div>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -453,13 +480,7 @@ function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: Funn
     }
   });
 
-  const teamFunnelBreakdown = (stats?.byFunnel || []).map(f => ({
-    funnelId: f.funnelId,
-    funnelName: funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`,
-    total: f.total,
-    appointments: f.appointments,
-    bookingRate: f.bookingRate,
-  }));
+  const totalTeamCalls = csrStats.reduce((s, c) => s + c.calls, 0);
 
   return (
     <div className="space-y-6">
@@ -581,26 +602,24 @@ function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: Funn
 
                 {expandedId === csr.csrId && (
                   <div className="ml-11 mt-1 p-3 rounded-lg bg-white/[0.01] border border-white/5">
-                    <p className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Team Funnel Breakdown</p>
-                    {teamFunnelBreakdown.length === 0 ? (
-                      <p className="text-xs text-white/20">No funnel data available</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {teamFunnelBreakdown.map(f => (
-                          <div key={f.funnelId} className="flex items-center justify-between text-xs">
-                            <span className="text-white/50">{f.funnelName}</span>
-                            <div className="flex items-center gap-4">
-                              <span className="font-mono text-white/40">{f.total} leads</span>
-                              <span className="font-mono text-emerald-400/70">{f.appointments} appts</span>
-                              <span className={cn(
-                                "font-mono",
-                                f.bookingRate >= 30 ? "text-emerald-400/70" : f.bookingRate >= 15 ? "text-amber-400/70" : "text-red-400/70"
-                              )}>{f.bookingRate}%</span>
-                            </div>
-                          </div>
-                        ))}
+                    <p className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Activity Breakdown</p>
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div className="p-2 rounded bg-white/[0.02]">
+                        <p className="text-[10px] text-white/30 uppercase">Contact Rate</p>
+                        <p className="text-sm font-mono text-white">{csr.calls > 0 ? Math.round((csr.appointments / csr.calls) * 100) : 0}%</p>
+                        <p className="text-[9px] text-white/20">{csr.appointments} appts / {csr.calls} calls</p>
                       </div>
-                    )}
+                      <div className="p-2 rounded bg-white/[0.02]">
+                        <p className="text-[10px] text-white/30 uppercase">Leads Handled</p>
+                        <p className="text-sm font-mono text-white">{csr.total}</p>
+                        <p className="text-[9px] text-white/20">{totalTeamCalls > 0 ? Math.round((csr.calls / totalTeamCalls) * 100) : 0}% of team calls</p>
+                      </div>
+                      <div className="p-2 rounded bg-white/[0.02]">
+                        <p className="text-[10px] text-white/30 uppercase">Outreach Mix</p>
+                        <p className="text-sm font-mono text-white">{csr.calls + csr.texts + csr.vms}</p>
+                        <p className="text-[9px] text-white/20">{csr.calls}c / {csr.texts}t / {csr.vms}vm</p>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
