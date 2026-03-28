@@ -620,6 +620,8 @@ router.get("/leads-hub/stats", async (req, res) => {
   const bySource: Record<string, { total: number; appointments: number }> = {};
   const byFunnel: Record<number, { total: number; appointments: number }> = {};
   const byCsr: Record<number, { total: number; appointments: number }> = {};
+  const byCsrByFunnel: Record<string, { csrId: number; funnelId: number; total: number; appointments: number }> = {};
+  const leadFunnelMap: Record<number, number> = {};
 
   for (const l of leads) {
     if (!bySource[l.source]) bySource[l.source] = { total: 0, appointments: 0 };
@@ -630,12 +632,20 @@ router.get("/leads-hub/stats", async (req, res) => {
       if (!byFunnel[l.funnelId]) byFunnel[l.funnelId] = { total: 0, appointments: 0 };
       byFunnel[l.funnelId].total++;
       if (l.hubStatus === "appt_set") byFunnel[l.funnelId].appointments++;
+      leadFunnelMap[l.id] = l.funnelId;
     }
 
     if (l.assignedCsrId) {
       if (!byCsr[l.assignedCsrId]) byCsr[l.assignedCsrId] = { total: 0, appointments: 0 };
       byCsr[l.assignedCsrId].total++;
       if (l.hubStatus === "appt_set") byCsr[l.assignedCsrId].appointments++;
+
+      if (l.funnelId) {
+        const key = `${l.assignedCsrId}_${l.funnelId}`;
+        if (!byCsrByFunnel[key]) byCsrByFunnel[key] = { csrId: l.assignedCsrId, funnelId: l.funnelId, total: 0, appointments: 0 };
+        byCsrByFunnel[key].total++;
+        if (l.hubStatus === "appt_set") byCsrByFunnel[key].appointments++;
+      }
     }
   }
 
@@ -661,6 +671,24 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (s.actionType === "voicemail_drop") csrCallStats[s.userId].vms = s.count;
   }
 
+  const callsByFunnelRaw = leads.length > 0 ? await db.select({
+    leadId: callAttemptsTable.leadId,
+    actionType: callAttemptsTable.actionType,
+    count: count(),
+  }).from(callAttemptsTable)
+    .where(and(...callConds))
+    .groupBy(callAttemptsTable.leadId, callAttemptsTable.actionType) : [];
+
+  const callsByFunnel: Record<number, { calls: number; texts: number; vms: number }> = {};
+  for (const r of callsByFunnelRaw) {
+    const fId = leadFunnelMap[r.leadId];
+    if (!fId) continue;
+    if (!callsByFunnel[fId]) callsByFunnel[fId] = { calls: 0, texts: 0, vms: 0 };
+    if (r.actionType === "call") callsByFunnel[fId].calls += r.count;
+    if (r.actionType === "text") callsByFunnel[fId].texts += r.count;
+    if (r.actionType === "voicemail_drop") callsByFunnel[fId].vms += r.count;
+  }
+
   res.json({
     totalLeads,
     appointments,
@@ -674,12 +702,17 @@ router.get("/leads-hub/stats", async (req, res) => {
       funnelId: Number(funnelId),
       ...data,
       bookingRate: data.total > 0 ? Math.round((data.appointments / data.total) * 100) : 0,
+      ...(callsByFunnel[Number(funnelId)] || { calls: 0, texts: 0, vms: 0 }),
     })),
     byCsr: Object.entries(byCsr).map(([csrId, data]) => ({
       csrId: Number(csrId),
       ...data,
       bookingRate: data.total > 0 ? Math.round((data.appointments / data.total) * 100) : 0,
       ...(csrCallStats[Number(csrId)] || { calls: 0, texts: 0, vms: 0 }),
+    })),
+    byCsrByFunnel: Object.values(byCsrByFunnel).map(d => ({
+      ...d,
+      bookingRate: d.total > 0 ? Math.round((d.appointments / d.total) * 100) : 0,
     })),
   });
 });

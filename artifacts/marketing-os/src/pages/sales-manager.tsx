@@ -32,8 +32,9 @@ interface StatsData {
   appointments: number;
   bookingRate: number;
   bySource: { source: string; total: number; appointments: number; bookingRate: number }[];
-  byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number }[];
+  byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
   byCsr: { csrId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
+  byCsrByFunnel: { csrId: number; funnelId: number; total: number; appointments: number; bookingRate: number }[];
 }
 
 interface CsrData {
@@ -410,19 +411,18 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
           <div className="space-y-2">
             {stats!.byFunnel.map(f => {
               const funnelName = funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`;
-              const leadShare = stats!.totalLeads > 0 ? Math.round((f.total / stats!.totalLeads) * 100) : 0;
               return (
                 <div key={f.funnelId} className="flex items-center gap-3 p-2 rounded bg-white/[0.02] border border-white/5">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-white/70 truncate">{funnelName}</span>
-                      <span className="text-[9px] text-white/20 font-mono">{leadShare}% of leads</span>
-                    </div>
-                    <div className="mt-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
-                      <div className="h-full rounded-full bg-primary/40" style={{ width: `${leadShare}%` }} />
-                    </div>
-                  </div>
+                  <span className="text-xs text-white/70 truncate min-w-0 flex-1">{funnelName}</span>
                   <div className="flex items-center gap-4 flex-shrink-0">
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-white">{f.calls}</p>
+                      <p className="text-[9px] text-white/20 uppercase">calls</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-blue-400">{f.texts}</p>
+                      <p className="text-[9px] text-white/20 uppercase">texts</p>
+                    </div>
                     <div className="text-right">
                       <p className="text-xs font-mono text-white">{f.total}</p>
                       <p className="text-[9px] text-white/20 uppercase">leads</p>
@@ -600,7 +600,9 @@ function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: Funn
                   )}
                 </button>
 
-                {expandedId === csr.csrId && (
+                {expandedId === csr.csrId && (() => {
+                  const csrFunnels = (stats?.byCsrByFunnel || []).filter(cf => cf.csrId === csr.csrId);
+                  return (
                   <div className="ml-11 mt-1 p-3 rounded-lg bg-white/[0.01] border border-white/5">
                     <p className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Activity Breakdown</p>
                     <div className="grid grid-cols-3 gap-3 mb-3">
@@ -620,8 +622,32 @@ function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: Funn
                         <p className="text-[9px] text-white/20">{csr.calls}c / {csr.texts}t / {csr.vms}vm</p>
                       </div>
                     </div>
+                    {csrFunnels.length > 0 && (
+                      <>
+                        <p className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Booking Rate by Funnel</p>
+                        <div className="space-y-1">
+                          {csrFunnels.map(cf => {
+                            const fName = funnels.find(ft => ft.id === cf.funnelId)?.name || `Funnel #${cf.funnelId}`;
+                            return (
+                              <div key={cf.funnelId} className="flex items-center justify-between text-xs">
+                                <span className="text-white/50">{fName}</span>
+                                <div className="flex items-center gap-4">
+                                  <span className="font-mono text-white/40">{cf.total} leads</span>
+                                  <span className="font-mono text-emerald-400/70">{cf.appointments} appts</span>
+                                  <span className={cn(
+                                    "font-mono",
+                                    cf.bookingRate >= 30 ? "text-emerald-400/70" : cf.bookingRate >= 15 ? "text-amber-400/70" : "text-red-400/70"
+                                  )}>{cf.bookingRate}%</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
-                )}
+                  );
+                })()}
               </div>
             ))}
           </div>
