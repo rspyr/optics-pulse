@@ -81,54 +81,12 @@ router.post("/call-attempts", async (req: Request, res): Promise<void> => {
   res.status(201).json(attempt);
 });
 
-router.patch("/call-attempts/:id", async (req: Request, res): Promise<void> => {
-  const id = parseInt(String(req.params.id));
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid attempt id" }); return; }
-
-  const [existing] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, id)).limit(1);
-  if (!existing) { res.status(404).json({ error: "Attempt not found" }); return; }
-
-  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
-
-  const updates: Record<string, unknown> = {};
-  if (req.body.outcome) {
-    if (!VALID_OUTCOMES.includes(req.body.outcome)) {
-      res.status(400).json({ error: `Invalid outcome. Must be one of: ${VALID_OUTCOMES.join(", ")}` });
-      return;
-    }
-    updates.outcome = req.body.outcome;
-  }
-  if (req.body.notes !== undefined) updates.notes = req.body.notes;
-
-  if (Object.keys(updates).length === 0) {
-    res.status(400).json({ error: "No valid fields to update" });
-    return;
-  }
-
-  const [updated] = await db.update(callAttemptsTable)
-    .set(updates)
-    .where(eq(callAttemptsTable.id, id))
-    .returning();
-  res.json(updated);
+router.patch("/call-attempts/:id", async (_req: Request, res): Promise<void> => {
+  res.status(403).json({ error: "Action logs are append-only and cannot be modified" });
 });
 
-router.delete("/call-attempts/:id", async (req: Request, res): Promise<void> => {
-  const id = parseInt(String(req.params.id));
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid attempt id" }); return; }
-
-  const [existing] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, id)).limit(1);
-  if (!existing) { res.status(404).json({ error: "Attempt not found" }); return; }
-
-  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
-
-  await db.delete(callAttemptsTable).where(eq(callAttemptsTable.id, id));
-  res.json({ success: true });
+router.delete("/call-attempts/:id", async (_req: Request, res): Promise<void> => {
+  res.status(403).json({ error: "Action logs are append-only and cannot be deleted" });
 });
 
 router.get("/call-attempts/:leadId/suggest", async (req: Request, res): Promise<void> => {

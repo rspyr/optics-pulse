@@ -8,6 +8,9 @@ import { emitLeadUpdated, emitNewLead } from "../socket";
 
 const router: IRouter = Router();
 
+const VALID_HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "call_back", "dead"] as const;
+type HubStatus = typeof VALID_HUB_STATUSES[number];
+
 function resolveTenantId(req: Request): number | null {
   const session = req.session as Record<string, unknown> | undefined;
   const role = session?.userRole as string | undefined;
