@@ -187,7 +187,7 @@ router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole(
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
 
   const role = (req.session as unknown as Record<string, unknown>).userRole as string;
-  if (role === "client_admin" || role === "client_user") {
+  if (role === "client_admin") {
     const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
     if (sessionTenantId !== tenantId) {
       res.status(403).json({ error: "Access denied" });

@@ -138,14 +138,19 @@ router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
   if (!existing) { res.status(404).json({ error: "Tenant funnel type association not found" }); return; }
 
+  const newSheetId = googleSheetId !== undefined ? googleSheetId : existing.googleSheetId;
+  const newSheetTab = googleSheetTab !== undefined ? googleSheetTab : existing.googleSheetTab;
+  const sheetChanged = newSheetId !== existing.googleSheetId || newSheetTab !== existing.googleSheetTab;
+
   await db.update(tenantFunnelTypesTable)
     .set({
-      googleSheetId: googleSheetId !== undefined ? googleSheetId : existing.googleSheetId,
-      googleSheetTab: googleSheetTab !== undefined ? googleSheetTab : existing.googleSheetTab,
+      googleSheetId: newSheetId,
+      googleSheetTab: newSheetTab,
+      ...(sheetChanged ? { columnMapping: null, mappingHeaders: null } : {}),
     })
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
 
-  res.json({ tenantId, funnelTypeId, googleSheetId: googleSheetId ?? existing.googleSheetId, googleSheetTab: googleSheetTab ?? existing.googleSheetTab });
+  res.json({ tenantId, funnelTypeId, googleSheetId: newSheetId, googleSheetTab: newSheetTab });
 });
 
 router.delete("/tenants/:id/funnel-types/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
