@@ -974,7 +974,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
   );
 }
 
-function ArchiveView({ tenantId }: { tenantId: number }) {
+function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: number; timezone?: string }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { data, loading } = useArchive(tenantId, filters);
   const [showFilters, setShowFilters] = useState(false);
@@ -1072,7 +1072,7 @@ function ArchiveView({ tenantId }: { tenantId: number }) {
                 </div>
                 <div className="flex items-center gap-2">
                   {lead.assignedTo && <span className="text-[10px] text-white/25">{lead.assignedTo}</span>}
-                  <span className="text-[10px] text-white/20 font-mono">{new Date(lead.createdAt).toLocaleDateString()}</span>
+                  <span className="text-[10px] text-white/20 font-mono">{formatInTz(lead.createdAt, timezone, { month: "short", day: "numeric" })}</span>
                 </div>
               </div>
               {lead.phone && <p className="text-[11px] text-white/30 font-mono mt-1">{lead.phone}</p>}
@@ -1275,7 +1275,7 @@ export default function Leads() {
           </div>
 
           {activeTab === "archive" ? (
-            effectiveTenantId ? <ArchiveView tenantId={effectiveTenantId} /> : <p className="text-sm text-white/30">Select a tenant</p>
+            effectiveTenantId ? <ArchiveView tenantId={effectiveTenantId} timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"} /> : <p className="text-sm text-white/30">Select a tenant</p>
           ) : selectedLead && effectiveTenantId ? (
             <LeadDetailView
               lead={selectedLead}

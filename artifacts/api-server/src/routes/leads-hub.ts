@@ -93,7 +93,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         ...baseConds,
         eq(leadsTable.hubStatus, "day_5_old"),
         isNotNull(leadsTable.revisitDate),
-        lte(leadsTable.revisitDate, now.toISOString().split("T")[0]),
+        lte(leadsTable.revisitDate, todayInTz.toISOString().split("T")[0]),
       ))
       .orderBy(asc(leadsTable.revisitDate)).limit(100) : [];
 
@@ -101,7 +101,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       .where(and(
         ...baseConds,
         eq(leadsTable.hubStatus, "day_5_old"),
-        or(isNull(leadsTable.revisitDate), sql`${leadsTable.revisitDate} > CURRENT_DATE`),
+        or(isNull(leadsTable.revisitDate), sql`${leadsTable.revisitDate} > ${todayInTz.toISOString().split("T")[0]}`),
       ))
       .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
 

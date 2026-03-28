@@ -81,7 +81,16 @@ interface CoachingInsight {
   value?: number;
 }
 
-interface TenantOption { id: number; name: string; }
+interface TenantOption { id: number; name: string; timezone?: string; }
+
+function formatInTz(dateStr: string | Date, tz: string, opts?: Intl.DateTimeFormatOptions): string {
+  const d = typeof dateStr === "string" ? new Date(dateStr) : dateStr;
+  return d.toLocaleString("en-US", { timeZone: tz, ...opts });
+}
+
+function formatDateTimeInTz(dateStr: string | Date, tz: string): string {
+  return formatInTz(dateStr, tz, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 function useFunnelTypes(tenantId: number | null) {
   const [funnels, setFunnels] = useState<FunnelType[]>([]);
@@ -459,7 +468,7 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
   );
 }
 
-function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+function TeamTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantId: number | null; funnels: FunnelType[]; timezone?: string }) {
   const [datePreset, setDatePreset] = useState("today");
   const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null);
@@ -957,7 +966,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                   </div>
                   {csr.isPaused && csr.pauseEnd && scheduleEditId !== csr.id && (
                     <p className="text-[10px] text-amber-400/60 mt-1">
-                      Paused until {new Date(csr.pauseEnd).toLocaleString()}
+                      Paused until {formatDateTimeInTz(csr.pauseEnd, timezone)}
                     </p>
                   )}
                   {scheduleEditId === csr.id && (
@@ -1625,7 +1634,7 @@ export default function SalesManager() {
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
-          setTenants(data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name })));
+          setTenants(data.map((t: { id: number; name: string; timezone?: string }) => ({ id: t.id, name: t.name, timezone: t.timezone })));
           if (!selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
         }
       })
@@ -1634,6 +1643,8 @@ export default function SalesManager() {
 
   const effectiveTenantId = isAgency ? selectedTenantId : (user?.tenantId ?? null);
   const isClientUser = !isAgency && user?.role === "client_user";
+
+  const tenantTz = tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York";
 
   const { funnels, refetch: refetchFunnels } = useFunnelTypes(effectiveTenantId);
   const { activities, loading: activityLoading, refetch: refetchActivity } = useActivityFeed(effectiveTenantId);
@@ -1715,7 +1726,7 @@ export default function SalesManager() {
           <DashboardTab tenantId={effectiveTenantId} funnels={funnels} />
         )}
         {tab === "team" && (
-          <TeamTab tenantId={effectiveTenantId} funnels={funnels} />
+          <TeamTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} />
         )}
         {tab === "scripts" && (
           <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
