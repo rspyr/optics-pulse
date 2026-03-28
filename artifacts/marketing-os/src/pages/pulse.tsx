@@ -11,7 +11,7 @@ import {
   Calendar, PhoneCall, Check,
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
-  Filter, PhoneOff, Ban, Globe, AlertCircle
+  Filter, PhoneOff, Ban, Globe, AlertCircle, FileText
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -86,7 +86,28 @@ const SMART_FIELD_SCRIPTS = {
     { name: "Follow-Up", content: "Hi {{lead_name}}, {{csr_name}} here from {{funnel}}. Just following up on your {{service_type}} inquiry. Still interested? Reply YES and I'll get you on the calendar!" },
     { name: "Re-Engagement", content: "Hi {{lead_name}}! It's {{csr_name}}. We helped you with {{service_type}} a while back. We're running a special this month — interested? Reply YES!" },
   ],
+  call: [
+    { name: "Opening", content: "Hi, may I speak with {{lead_name}}? This is {{csr_name}} calling about your {{service_type}} inquiry from {{funnel}}." },
+    { name: "Value Pitch", content: "We'd love to get a technician out to take a look at your {{service_type}} needs. We offer free estimates and our team has years of experience." },
+    { name: "Close for Appointment", content: "I have availability this week — would a morning or afternoon appointment work better for you?" },
+  ],
+  voicemail: [
+    { name: "Voicemail Script", content: "Hi {{lead_name}}, this is {{csr_name}} calling about your {{service_type}} inquiry from {{funnel}}. We'd love to help you out — please give us a call back at your earliest convenience. Thanks!" },
+  ],
 };
+
+function formatInTz(dateStr: string | Date, tz: string, opts?: Intl.DateTimeFormatOptions): string {
+  const d = typeof dateStr === "string" ? new Date(dateStr) : dateStr;
+  return d.toLocaleString("en-US", { timeZone: tz, ...opts });
+}
+
+function formatTimeInTz(dateStr: string | Date, tz: string): string {
+  return formatInTz(dateStr, tz, { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDateTimeInTz(dateStr: string | Date, tz: string): string {
+  return formatInTz(dateStr, tz, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 interface LeadData {
   id: number;
@@ -175,6 +196,7 @@ function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean) {
   const [data, setData] = useState<{
     newLeads: LeadData[]; today: LeadData[]; callbacks: LeadData[];
     reengagement: LeadData[]; oldLeads: LeadData[]; total: number;
+    timezone?: string;
   }>({ newLeads: [], today: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const shouldFetch = !isAgency || tenantId !== null;
@@ -337,7 +359,7 @@ function LeadCard({ lead, onClick }: { lead: LeadData; onClick: () => void }) {
   );
 }
 
-function ActionHistoryTimeline({ leadId, tenantId }: { leadId: number; tenantId: number }) {
+function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number; tenantId: number; timezone: string }) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -384,9 +406,7 @@ function ActionHistoryTimeline({ leadId, tenantId }: { leadId: number; tenantId:
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-white/30 font-mono shrink-0">
-                {new Date(entry.attemptedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                {" "}
-                {new Date(entry.attemptedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                {formatDateTimeInTz(entry.attemptedAt, timezone)}
               </span>
               <span className="text-[10px] text-white/50">{entry.csrName}</span>
               <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
@@ -404,10 +424,10 @@ function ActionHistoryTimeline({ leadId, tenantId }: { leadId: number; tenantId:
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/New_York" }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; timezone?: string;
 }) {
-  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result">(null);
+  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
   const [actionLoading, setActionLoading] = useState(false);
@@ -416,7 +436,10 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
   const [csrs, setCsrs] = useState<CsrOption[]>([]);
   const [selectedCsr, setSelectedCsr] = useState<number | null>(null);
   const [showScripts, setShowScripts] = useState(false);
+  const [showCallScripts, setShowCallScripts] = useState(false);
+  const [showVmScripts, setShowVmScripts] = useState(false);
   const [callbackDate, setCallbackDate] = useState("");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const contactPrefs = (lead.contactPreferences || []) as string[];
   const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
@@ -474,6 +497,10 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
   };
 
   const handleVmDrop = () => {
+    setActionStep("vm_done" as typeof actionStep);
+  };
+
+  const confirmVmDrop = () => {
     logAction({ actionType: "voicemail_drop" });
   };
 
@@ -544,7 +571,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
             )}
             {lead.callbackAt && (
               <p className="text-xs text-amber-400/70 mt-1 flex items-center gap-1">
-                <Calendar className="w-3 h-3" /> Callback: {new Date(lead.callbackAt).toLocaleString()}
+                <Calendar className="w-3 h-3" /> Callback: {formatDateTimeInTz(lead.callbackAt, timezone)}
               </p>
             )}
           </div>
@@ -660,8 +687,30 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
               <div className="flex items-center gap-2 mb-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 <span className="text-sm font-medium text-emerald-400">CALLED</span>
-                <span className="text-[10px] text-white/30 font-mono">{new Date().toLocaleTimeString()}</span>
+                <span className="text-[10px] text-white/30 font-mono">{formatTimeInTz(new Date(), timezone)}</span>
               </div>
+
+              <button
+                onClick={() => setShowCallScripts(!showCallScripts)}
+                className="flex items-center gap-1.5 text-xs text-primary/60 hover:text-primary mb-3 transition-colors"
+              >
+                <FileText className="w-3 h-3" /> {showCallScripts ? "Hide" : "Show"} Call Scripts
+              </button>
+
+              {showCallScripts && (
+                <div className="space-y-2 mb-3">
+                  {SMART_FIELD_SCRIPTS.call.map((s, i) => {
+                    const filled = substituteSmartFields(s.content);
+                    return (
+                      <div key={i} className="p-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
+                        <span className="text-[10px] text-emerald-400/60 font-medium block mb-1">{s.name}</span>
+                        <p className="text-xs text-white/60 leading-relaxed">{filled}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <p className="text-sm text-white/60 mb-3">How'd it go?</p>
               <div className="grid grid-cols-2 gap-2">
                 {CALL_RESULTS.map(r => (
@@ -792,7 +841,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
               <div className="flex items-center gap-2 mb-3">
                 <CheckCircle2 className="w-5 h-5 text-blue-400" />
                 <span className="text-sm font-medium text-blue-400">TEXTED</span>
-                <span className="text-[10px] text-white/30 font-mono">{new Date().toLocaleTimeString()}</span>
+                <span className="text-[10px] text-white/30 font-mono">{formatTimeInTz(new Date(), timezone)}</span>
               </div>
 
               <button
@@ -806,19 +855,26 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
                 <div className="space-y-2 mb-3">
                   {SMART_FIELD_SCRIPTS.text.map((s, i) => {
                     const filled = substituteSmartFields(s.content);
+                    const isCopied = copiedIndex === i;
                     return (
-                      <div key={i} className="p-2.5 rounded-lg bg-blue-500/5 border border-blue-500/10">
+                      <div
+                        key={i}
+                        onClick={() => {
+                          navigator.clipboard.writeText(filled);
+                          setCopiedIndex(i);
+                          setTimeout(() => setCopiedIndex(prev => prev === i ? null : prev), 10000);
+                        }}
+                        className="p-2.5 rounded-lg bg-blue-500/5 border border-blue-500/10 cursor-pointer hover:bg-blue-500/10 transition-colors"
+                      >
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-[10px] text-blue-400/60 font-medium">{s.name}</span>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(filled);
-                              showFeedback("success", "Script copied!");
-                            }}
-                            className="flex items-center gap-1 text-[9px] text-blue-400/50 hover:text-blue-400 transition-colors"
-                          >
-                            <Copy className="w-2.5 h-2.5" /> Copy
-                          </button>
+                          <span className={cn(
+                            "flex items-center gap-1 text-[9px] transition-colors",
+                            isCopied ? "text-emerald-400" : "text-blue-400/50"
+                          )}>
+                            {isCopied ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                            {isCopied ? "Copied" : "Copy"}
+                          </span>
                         </div>
                         <p className="text-xs text-white/60 leading-relaxed">{filled}</p>
                       </div>
@@ -862,10 +918,57 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate }: {
             </PremiumCard>
           </motion.div>
         )}
+
+        {actionStep === "vm_done" && (
+          <motion.div
+            key="vm-done"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+          >
+            <PremiumCard className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Mic className="w-5 h-5 text-orange-400" />
+                <span className="text-sm font-medium text-orange-400">VM DROP</span>
+                <span className="text-[10px] text-white/30 font-mono">{formatTimeInTz(new Date(), timezone)}</span>
+              </div>
+
+              <button
+                onClick={() => setShowVmScripts(!showVmScripts)}
+                className="flex items-center gap-1.5 text-xs text-primary/60 hover:text-primary mb-3 transition-colors"
+              >
+                <FileText className="w-3 h-3" /> {showVmScripts ? "Hide" : "Show"} Voicemail Scripts
+              </button>
+
+              {showVmScripts && (
+                <div className="space-y-2 mb-3">
+                  {SMART_FIELD_SCRIPTS.voicemail.map((s, i) => {
+                    const filled = substituteSmartFields(s.content);
+                    return (
+                      <div key={i} className="p-2.5 rounded-lg bg-orange-500/5 border border-orange-500/10">
+                        <span className="text-[10px] text-orange-400/60 font-medium block mb-1">{s.name}</span>
+                        <p className="text-xs text-white/60 leading-relaxed">{filled}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                onClick={confirmVmDrop}
+                disabled={actionLoading}
+                className="w-full px-3 py-2 rounded-lg bg-orange-500/20 text-orange-400 text-sm font-medium hover:bg-orange-500/30 disabled:opacity-50 transition-colors mb-2"
+              >
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Log VM Drop"}
+              </button>
+              <button onClick={() => setActionStep(null)} className="mt-1 text-[10px] text-white/30 hover:text-white/50">Cancel</button>
+            </PremiumCard>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       <PremiumCard className="p-4">
-        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} />
+        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} />
       </PremiumCard>
     </div>
   );
@@ -1179,6 +1282,7 @@ export default function Leads() {
               tenantId={effectiveTenantId}
               onBack={() => setSelectedLead(null)}
               onUpdate={() => { refetch(); refetchStats(); }}
+              timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">

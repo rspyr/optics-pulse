@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
+  tenantsTable,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
@@ -42,9 +43,16 @@ router.get("/leads-hub/queue", async (req, res) => {
 
   const tab = (req.query.tab as string) || "all";
   const assignedCsrId = req.query.csrId ? Number(req.query.csrId) : null;
+
+  const [tenant] = await db.select({ timezone: tenantsTable.timezone }).from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  const tz = tenant?.timezone || "America/New_York";
+
   const now = new Date();
-  const todayStart = new Date(now);
+  const todayInTz = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+  const todayStart = new Date(todayInTz);
   todayStart.setHours(0, 0, 0, 0);
+  const offsetMs = todayInTz.getTime() - now.getTime();
+  const todayStartUtc = new Date(todayStart.getTime() - offsetMs);
 
   const baseConds = [eq(leadsTable.tenantId, tenantId)];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
@@ -67,7 +75,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         ...baseConds,
         inArray(leadsTable.hubStatus, activeStatuses),
         sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
-        gte(leadsTable.updatedAt, todayStart),
+        gte(leadsTable.updatedAt, todayStartUtc),
       ))
       .orderBy(asc(leadsTable.updatedAt)).limit(100) : [];
 
@@ -107,6 +115,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       reengagement,
       oldLeads,
       total: totalResult.count,
+      timezone: tz,
     });
   } catch (err) {
     console.error("[LeadsHub Queue]", err);

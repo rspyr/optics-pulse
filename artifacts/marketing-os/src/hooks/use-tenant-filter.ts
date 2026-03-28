@@ -6,6 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL || "/api";
 export interface TenantOption {
   id: number;
   name: string;
+  timezone?: string;
 }
 
 export function useTenantFilter(tenantIdOverride?: number) {
@@ -39,9 +40,10 @@ export function useTenantFilter(tenantIdOverride?: number) {
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
-          const mapped = data.map((t: { id: number; name: string }) => ({
+          const mapped = data.map((t: { id: number; name: string; timezone?: string }) => ({
             id: t.id,
             name: t.name,
+            timezone: t.timezone,
           }));
           setTenants(mapped);
           setLocalTenantId(prev => {
