@@ -214,6 +214,14 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
     return;
   }
 
+  if (!assoc.columnMapping || !assoc.mappingHeaders) {
+    res.status(400).json({
+      error: "Column mapping has not been approved yet. Please analyze and approve the column mapping in Settings before importing.",
+      mappingRequired: true,
+    });
+    return;
+  }
+
   if (assoc.columnMapping && assoc.mappingHeaders) {
     try {
       const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);

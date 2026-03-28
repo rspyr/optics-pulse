@@ -1406,6 +1406,14 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
       .catch(() => {});
   }, [tenantId, funnelId, funnel.googleSheetId]);
 
+  useEffect(() => {
+    const el = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
+    if (!el) return;
+    const listener = () => { handleAnalyze(); };
+    el.addEventListener("trigger-analyze", listener);
+    return () => { el.removeEventListener("trigger-analyze", listener); };
+  });
+
   const handleAnalyze = async () => {
     setAnalyzing(true);
     setError(null);
@@ -1456,7 +1464,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
   const hasExistingMapping = !!funnel.columnMapping;
 
   return (
-    <div className="mt-3 pt-3 border-t border-white/5">
+    <div className="mt-3 pt-3 border-t border-white/5" data-mapping-funnel={funnelId}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Wand2 className="w-3.5 h-3.5 text-violet-400" />
@@ -1660,6 +1668,8 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
         setIngestResult({ funnelId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped`, type: "success" });
       } else if (res.status === 409 && data.headersChanged) {
         setIngestResult({ funnelId, msg: "Sheet headers have changed — please re-analyze and approve the column mapping before importing.", type: "error" });
+      } else if (data.mappingRequired) {
+        setIngestResult({ funnelId, msg: "Column mapping must be analyzed and approved before importing. Click 'Analyze with AI' below.", type: "error" });
       } else {
         setIngestResult({ funnelId, msg: data.error || "Ingest failed", type: "error" });
       }
@@ -1678,13 +1688,23 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
       });
       const data = await res.json();
       if (res.ok) {
-        setPreviewData({ funnelId, rows: data.rows || [], columns: data.columns || [] });
+        setPreviewData({ funnelId, rows: data.sampleRows || [], columns: data.headers || [] });
+        if (isAgency && (!data.hasMapping || data.headersChanged)) {
+          triggerAnalysis(funnelId);
+        }
       } else {
         setIngestResult({ funnelId, msg: data.error || "Preview failed", type: "error" });
       }
     } catch {
       setIngestResult({ funnelId, msg: "Connection error during preview", type: "error" });
     } finally { setPreviewing(null); }
+  };
+
+  const triggerAnalysis = (funnelId: number) => {
+    const mappingRef = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
+    if (mappingRef) {
+      mappingRef.dispatchEvent(new CustomEvent("trigger-analyze"));
+    }
   };
 
   if (funnels.length === 0) {
