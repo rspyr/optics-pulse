@@ -5,7 +5,13 @@ import { tenantsTable } from "./tenants";
 import { usersTable } from "./users";
 import { funnelTypesTable } from "./funnel-types";
 
+/** @deprecated Legacy enum kept for backward compat only; all new code should use hubStatus */
 export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "booked", "sold", "lost", "cancelled"]);
+
+export const hubStatusEnum = pgEnum("hub_status_enum", [
+  "day_1", "day_2", "day_3", "day_4", "day_5_old",
+  "appt_set", "call_back", "dead",
+]);
 
 export const leadsTable = pgTable("leads", {
   id: serial("id").primaryKey(),
@@ -17,6 +23,7 @@ export const leadsTable = pgTable("leads", {
   source: text("source").notNull(),
   leadType: text("lead_type"),
   interestType: text("interest_type"),
+  /** @deprecated Use hubStatus instead. Kept for backward compat. */
   status: leadStatusEnum("status").notNull().default("new"),
   isNewCustomer: boolean("is_new_customer").notNull().default(true),
   matchedGclid: text("matched_gclid"),
@@ -26,7 +33,7 @@ export const leadsTable = pgTable("leads", {
   serviceType: text("service_type"),
   funnelId: integer("funnel_id").references(() => funnelTypesTable.id),
   assignedCsrId: integer("assigned_csr_id").references(() => usersTable.id),
-  hubStatus: text("hub_status").notNull().default("day_1"),
+  hubStatus: hubStatusEnum("hub_status").notNull().default("day_1"),
   dayInSequence: integer("day_in_sequence").notNull().default(1),
   contactPreferences: jsonb("contact_preferences").$type<string[]>().default([]),
   callbackAt: timestamp("callback_at"),

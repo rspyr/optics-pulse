@@ -97,7 +97,7 @@ const migrations: Migration[] = [
     description: "Map existing lead_status values to new hub_status field for Leads Hub",
     run: async () => {
       await db.execute(sql`
-        UPDATE leads SET hub_status = CASE
+        UPDATE leads SET hub_status = (CASE
           WHEN status = 'new' THEN 'day_1'
           WHEN status = 'contacted' THEN 'day_2'
           WHEN status = 'booked' THEN 'appt_set'
@@ -105,8 +105,8 @@ const migrations: Migration[] = [
           WHEN status = 'lost' THEN 'day_5_old'
           WHEN status = 'cancelled' THEN 'dead'
           ELSE 'day_1'
-        END
-        WHERE hub_status = 'day_1' AND status != 'new'
+        END)::hub_status_enum
+        WHERE hub_status = 'day_1'::hub_status_enum AND status != 'new'
       `);
       console.log("[Migration] Backfilled hub_status from existing lead_status values");
 

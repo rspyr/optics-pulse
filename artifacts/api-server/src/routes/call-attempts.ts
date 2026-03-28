@@ -21,8 +21,12 @@ async function verifyLeadTenantAccess(leadId: number, session: SessionData): Pro
   return lead?.tenantId === tenantId;
 }
 
-const VALID_METHODS = ["call", "text", "email", "voicemail"] as const;
-const VALID_OUTCOMES = ["answered", "voicemail", "no_answer", "busy", "sent"] as const;
+const VALID_METHODS = ["call", "text", "email", "voicemail", "transfer", "voicemail_drop"] as const;
+const VALID_OUTCOMES = [
+  "answered", "voicemail", "no_answer", "busy", "sent",
+  "left_voicemail", "vm_full", "vm_not_setup", "hung_up",
+  "appointment_set", "call_back", "dead", "auto_passed",
+] as const;
 
 router.get("/call-attempts/:leadId", async (req: Request, res): Promise<void> => {
   const leadId = parseInt(String(req.params.leadId));
