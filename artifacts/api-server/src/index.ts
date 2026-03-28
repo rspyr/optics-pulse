@@ -3,6 +3,7 @@ import app, { sessionMiddleware } from "./app";
 import { initSocketIO } from "./socket";
 import { startReconciliationCron } from "./services/cron";
 import { startSyncScheduler } from "./services/sync-scheduler";
+import { evaluateAutoPass } from "./routes/leads-hub";
 import { startTrainingAlertScheduler } from "./services/training-scheduler";
 import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
@@ -39,4 +40,12 @@ httpServer.listen(port, async () => {
   startClientAlertScheduler();
   startNightlyAggregation();
   startStDataPurgeScheduler();
+  setInterval(async () => {
+    try {
+      const count = await evaluateAutoPass();
+      if (count > 0) console.log(`[auto-pass] Reassigned ${count} stale leads`);
+    } catch (err) {
+      console.error("[auto-pass] Error:", err);
+    }
+  }, 15 * 60 * 1000);
 });

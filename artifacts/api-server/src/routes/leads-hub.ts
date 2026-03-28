@@ -323,6 +323,20 @@ router.post("/leads-hub/create", async (req, res) => {
     return;
   }
 
+  let validatedCsrId: number | null = null;
+  let csrName: string | null = null;
+  if (assignedCsrId) {
+    const [user] = await db.select({ id: usersTable.id, name: usersTable.name, isActive: usersTable.isActive })
+      .from(usersTable)
+      .where(and(eq(usersTable.id, assignedCsrId), eq(usersTable.tenantId, tenantId)));
+    if (!user || !user.isActive) {
+      res.status(400).json({ error: "Invalid or inactive CSR for this tenant" });
+      return;
+    }
+    validatedCsrId = user.id;
+    csrName = user.name;
+  }
+
   const [lead] = await db.insert(leadsTable).values({
     tenantId,
     firstName,
@@ -332,21 +346,13 @@ router.post("/leads-hub/create", async (req, res) => {
     source,
     serviceType: serviceType || null,
     funnelId: funnelId || null,
-    assignedCsrId: assignedCsrId || null,
-    assignedTo: null,
+    assignedCsrId: validatedCsrId,
+    assignedTo: csrName,
     contactPreferences: contactPreferences || [],
     hubStatus: "day_1",
     dayInSequence: 1,
     status: "new",
   }).returning();
-
-  if (assignedCsrId) {
-    const [user] = await db.select({ name: usersTable.name }).from(usersTable)
-      .where(and(eq(usersTable.id, assignedCsrId), eq(usersTable.tenantId, tenantId)));
-    if (user) {
-      await db.update(leadsTable).set({ assignedTo: user.name }).where(eq(leadsTable.id, lead.id));
-    }
-  }
 
   emitNewLead(tenantId, lead as unknown as Record<string, unknown>);
   res.status(201).json(lead);
@@ -567,13 +573,20 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     }
   }
 
-  const [user] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, selectedCsrId));
+  const [user] = await db.select({ name: usersTable.name, isActive: usersTable.isActive })
+    .from(usersTable)
+    .where(and(eq(usersTable.id, selectedCsrId), eq(usersTable.tenantId, tenantId)));
+  if (!user || !user.isActive) {
+    res.json({ assignedCsrId: null, reason: "Selected CSR not found or inactive in this tenant" });
+    return;
+  }
+
   const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: selectedCsrId, assignedTo: user?.name || null, updatedAt: new Date() })
+    .set({ assignedCsrId: selectedCsrId, assignedTo: user.name, updatedAt: new Date() })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
-  res.json({ assignedCsrId: selectedCsrId, csrName: user?.name, lead: updated });
+  res.json({ assignedCsrId: selectedCsrId, csrName: user.name, lead: updated });
 });
 
 router.get("/leads-hub/stats", async (req, res) => {
@@ -670,5 +683,81 @@ router.get("/leads-hub/stats", async (req, res) => {
     })),
   });
 });
+
+export async function evaluateAutoPass(): Promise<number> {
+  let passed = 0;
+  const configs = await db.select().from(routingConfigTable)
+    .where(eq(routingConfigTable.isActive, true));
+
+  for (const config of configs) {
+    const passHours = config.passIntervalHours ?? 24;
+    const cutoff = new Date(Date.now() - passHours * 60 * 60 * 1000);
+
+    const staleLeads = await db.select({
+      id: leadsTable.id,
+      assignedCsrId: leadsTable.assignedCsrId,
+      tenantId: leadsTable.tenantId,
+    }).from(leadsTable)
+      .where(and(
+        eq(leadsTable.tenantId, config.tenantId),
+        inArray(leadsTable.hubStatus, ["day_1", "day_2", "day_3", "day_4"]),
+        isNotNull(leadsTable.assignedCsrId),
+        lte(leadsTable.updatedAt, cutoff),
+      ))
+      .limit(50);
+
+    if (staleLeads.length === 0) continue;
+
+    const cascadeOrder = (config.cascadeOrder as number[]) || [];
+    if (cascadeOrder.length < 2) continue;
+
+    const now = new Date();
+    const pausedSchedules = await db.select().from(csrScheduleTable)
+      .where(and(eq(csrScheduleTable.tenantId, config.tenantId), eq(csrScheduleTable.isPaused, true)));
+    const pausedIds = new Set(
+      pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now).map(s => s.userId)
+    );
+    const activeOrder = cascadeOrder.filter(id => !pausedIds.has(id));
+    if (activeOrder.length < 2) continue;
+
+    for (const lead of staleLeads) {
+      const currentIdx = activeOrder.indexOf(lead.assignedCsrId!);
+      let nextCsrId: number;
+
+      if (config.allowPassBack) {
+        nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+      } else {
+        if (currentIdx < activeOrder.length - 1) {
+          nextCsrId = activeOrder[currentIdx + 1];
+        } else {
+          continue;
+        }
+      }
+
+      const [nextUser] = await db.select({ name: usersTable.name })
+        .from(usersTable)
+        .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, config.tenantId)));
+      if (!nextUser) continue;
+
+      await db.update(leadsTable)
+        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date() })
+        .where(eq(leadsTable.id, lead.id));
+
+      await db.insert(callAttemptsTable).values({
+        leadId: lead.id,
+        userId: nextCsrId,
+        method: "transfer",
+        outcome: "auto_passed",
+        platform: "native",
+        actionType: "call",
+        notes: `Auto-passed after ${passHours}h inactivity`,
+      });
+
+      passed++;
+    }
+  }
+
+  return passed;
+}
 
 export default router;
