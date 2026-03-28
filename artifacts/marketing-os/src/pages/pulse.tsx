@@ -1,18 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
+import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { motion, AnimatePresence } from "framer-motion";
-import { io as socketIOClient, type Socket as IOSocket } from "socket.io-client";
+import { io as socketIOClient } from "socket.io-client";
 import {
   Phone, MessageSquare, Mic,
   Clock, Zap, X, Copy,
-  ChevronDown, ChevronRight, AlertTriangle,
+  ChevronDown, ChevronRight,
   Calendar, PhoneCall, Check,
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
-  ArrowUpRight, ArrowDownRight, Minus,
-  BarChart3, History, UserPlus, Archive, RefreshCw,
-  Filter, Search, PhoneOff, Ban, Globe, AlertCircle
+  History, UserPlus, Archive, RefreshCw,
+  Filter, PhoneOff, Ban, Globe, AlertCircle
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -320,6 +319,11 @@ function LeadCard({ lead, onClick }: { lead: LeadData; onClick: () => void }) {
             {lead.phone && <span className="text-[11px] text-white/40 font-mono">{lead.phone}</span>}
           </div>
           <ContactFlags preferences={lead.contactPreferences} />
+          {lead.disposition && (
+            <span className="text-[10px] text-white/30 mt-1">
+              Last: <span className="text-white/45">{lead.disposition.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())}</span>
+            </span>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className="text-[10px] text-white/30 font-mono">{timeSince(lead.updatedAt)}</span>
@@ -871,6 +875,14 @@ function ArchiveView({ tenantId }: { tenantId: number }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { data, loading } = useArchive(tenantId, filters);
   const [showFilters, setShowFilters] = useState(false);
+  const [csrs, setCsrs] = useState<CsrOption[]>([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/leads-hub/csrs?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setCsrs(d.csrs || []))
+      .catch(() => {});
+  }, [tenantId]);
 
   const updateFilter = (key: string, value: string) => {
     setFilters(prev => {
@@ -896,7 +908,7 @@ function ArchiveView({ tenantId }: { tenantId: number }) {
       </div>
 
       {showFilters && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
           <input
             type="month"
             value={filters.month || ""}
@@ -918,6 +930,14 @@ function ArchiveView({ tenantId }: { tenantId: number }) {
             className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70 placeholder-white/20"
             placeholder="Service type..."
           />
+          <select
+            value={filters.csrId || ""}
+            onChange={e => updateFilter("csrId", e.target.value)}
+            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70"
+          >
+            <option value="">All CSRs</option>
+            {csrs.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          </select>
           <select
             value={filters.status || ""}
             onChange={e => updateFilter("status", e.target.value)}
@@ -960,32 +980,6 @@ function ArchiveView({ tenantId }: { tenantId: number }) {
       )}
     </div>
   );
-}
-
-interface StatDelta {
-  value: number;
-  baseline: number;
-  delta: number;
-  percentChange: number;
-  direction: "up" | "down" | "flat";
-}
-
-function DeltaIndicator({ delta, invertColor = false, compact = false }: { delta: StatDelta | undefined; invertColor?: boolean; compact?: boolean }) {
-  if (!delta || (delta.baseline === 0 && delta.value === 0)) return null;
-  const isPositive = delta.direction === "up";
-  const isNegative = delta.direction === "down";
-  const goodDirection = invertColor ? isNegative : isPositive;
-  const badDirection = invertColor ? isPositive : isNegative;
-  const colorClass = goodDirection ? "text-emerald-400" : badDirection ? "text-red-400" : "text-white/40";
-  const Icon = isPositive ? ArrowUpRight : isNegative ? ArrowDownRight : Minus;
-  if (compact) {
-    return (
-      <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-mono", colorClass)}>
-        <Icon className="w-2.5 h-2.5" />{Math.abs(delta.percentChange)}%
-      </span>
-    );
-  }
-  return null;
 }
 
 export default function Leads() {
