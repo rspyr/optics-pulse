@@ -26,6 +26,8 @@ const VALID_OUTCOMES = [
   "answered", "voicemail", "no_answer", "busy", "sent",
   "left_voicemail", "vm_full", "vm_not_setup", "hung_up",
   "appointment_set", "call_back", "dead", "auto_passed",
+  "transferred", "bad_number", "blocked", "out_of_service_area",
+  "not_interested", "too_expensive", "no_response",
 ] as const;
 
 router.get("/call-attempts/:leadId", async (req: Request, res): Promise<void> => {

@@ -26,7 +26,7 @@ function hubStatusToLegacy(hubStatus: HubStatus): string {
 }
 
 function resolveTenantId(req: Request): number | null {
-  const session = req.session as Record<string, unknown> | undefined;
+  const session = req.session as unknown as Record<string, unknown> | undefined;
   const role = session?.userRole as string | undefined;
   if (role === "super_admin" || role === "agency_user") {
     const queryTid = (req.query as Record<string, string>).tenantId;

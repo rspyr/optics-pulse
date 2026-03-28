@@ -11,9 +11,9 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
   const tenantId = parseInt(String(req.params.tenantId));
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
 
-  const role = (req.session as Record<string, unknown>).userRole as string;
+  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
   if (role === "client_admin" || role === "client_user") {
-    const sessionTenantId = (req.session as Record<string, unknown>).tenantId as number | undefined;
+    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
     if (sessionTenantId !== tenantId) {
       res.status(403).json({ error: "Access denied" });
       return;
@@ -115,9 +115,9 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
   const tenantId = parseInt(String(req.params.tenantId));
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
 
-  const role = (req.session as Record<string, unknown>).userRole as string;
+  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
   if (role === "client_admin" || role === "client_user") {
-    const sessionTenantId = (req.session as Record<string, unknown>).tenantId as number | undefined;
+    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
     if (sessionTenantId !== tenantId) {
       res.status(403).json({ error: "Access denied" });
       return;
