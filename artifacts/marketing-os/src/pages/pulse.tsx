@@ -512,7 +512,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
   };
 
   const handleVmDrop = () => {
-    setActionStep("vm_done" as typeof actionStep);
+    setActionStep("vm_done");
   };
 
   const confirmVmDrop = () => {

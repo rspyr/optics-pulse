@@ -49,17 +49,21 @@ router.get("/leads-hub/queue", async (req, res) => {
 
   const now = new Date();
 
-  const tzParts = new Intl.DateTimeFormat("en-US", {
+  const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  }).formatToParts(now);
+  });
+  const tzParts = fmt.formatToParts(now);
   const g = (t: string) => parseInt(tzParts.find(p => p.type === t)?.value || "0");
   const todayDateStr = `${g("year")}-${String(g("month")).padStart(2, "0")}-${String(g("day")).padStart(2, "0")}`;
 
   const midnightWallUtc = Date.UTC(g("year"), g("month") - 1, g("day"), 0, 0, 0);
-  const wallNowUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") === 24 ? 0 : g("hour"), g("minute"), g("second"));
-  const offsetMs = wallNowUtc - now.getTime();
-  const todayStartUtc = new Date(midnightWallUtc - offsetMs);
+  const approxMidnightUtc = new Date(midnightWallUtc);
+  const midParts = fmt.formatToParts(approxMidnightUtc);
+  const gm = (t: string) => parseInt(midParts.find(p => p.type === t)?.value || "0");
+  const wallAtMidnight = Date.UTC(gm("year"), gm("month") - 1, gm("day"), gm("hour") === 24 ? 0 : gm("hour"), gm("minute"), gm("second"));
+  const midnightOffset = wallAtMidnight - approxMidnightUtc.getTime();
+  const todayStartUtc = new Date(midnightWallUtc - midnightOffset);
 
   const baseConds = [eq(leadsTable.tenantId, tenantId)];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
