@@ -133,9 +133,13 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
   const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
 
   if (mapping === null && headers === null) {
-    await db.update(tenantFunnelTypesTable)
+    const clearResult = await db.update(tenantFunnelTypesTable)
       .set({ columnMapping: null, mappingHeaders: null })
       .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+    if (!clearResult.rowCount || clearResult.rowCount === 0) {
+      res.status(404).json({ error: "Funnel type not associated with tenant" });
+      return;
+    }
     res.json({ success: true, cleared: true });
     return;
   }
