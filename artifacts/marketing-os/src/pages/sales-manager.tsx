@@ -1629,13 +1629,12 @@ export default function SalesManager() {
   }, [setGlobalTenantId]);
 
   useEffect(() => {
-    if (!isAgency) return;
     fetch(`${API_BASE}/tenants`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
           setTenants(data.map((t: { id: number; name: string; timezone?: string }) => ({ id: t.id, name: t.name, timezone: t.timezone })));
-          if (!selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
+          if (isAgency && !selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
         }
       })
       .catch(() => {});

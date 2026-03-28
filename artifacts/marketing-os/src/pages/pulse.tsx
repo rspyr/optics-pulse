@@ -109,6 +109,13 @@ function formatDateTimeInTz(dateStr: string | Date, tz: string): string {
   return formatInTz(dateStr, tz, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function localInputToUtcIso(datetimeLocal: string, tz: string): string {
+  const fakeUtc = new Date(datetimeLocal + "Z");
+  const inTz = new Date(fakeUtc.toLocaleString("en-US", { timeZone: tz }));
+  const offsetMs = inTz.getTime() - fakeUtc.getTime();
+  return new Date(fakeUtc.getTime() - offsetMs).toISOString();
+}
+
 interface LeadData {
   id: number;
   firstName: string;
@@ -789,7 +796,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
                 className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white mb-3 [color-scheme:dark]"
               />
               <button
-                onClick={() => logAction({ actionType: "call", callResult: selectedCallResult, callbackAt: callbackDate })}
+                onClick={() => logAction({ actionType: "call", callResult: selectedCallResult, callbackAt: localInputToUtcIso(callbackDate, timezone) })}
                 disabled={actionLoading || !callbackDate}
                 className="w-full px-3 py-2 rounded-lg bg-amber-500/20 text-amber-400 text-sm font-medium hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
               >
