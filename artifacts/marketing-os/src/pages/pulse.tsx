@@ -109,11 +109,19 @@ function formatDateTimeInTz(dateStr: string | Date, tz: string): string {
   return formatInTz(dateStr, tz, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function tzOffsetMs(instant: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(instant);
+  const g = (t: string) => parseInt(parts.find(p => p.type === t)?.value || "0");
+  const wallUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") === 24 ? 0 : g("hour"), g("minute"), g("second"));
+  return wallUtc - instant.getTime();
+}
+
 function localInputToUtcIso(datetimeLocal: string, tz: string): string {
-  const fakeUtc = new Date(datetimeLocal + "Z");
-  const inTz = new Date(fakeUtc.toLocaleString("en-US", { timeZone: tz }));
-  const offsetMs = inTz.getTime() - fakeUtc.getTime();
-  return new Date(fakeUtc.getTime() - offsetMs).toISOString();
+  const asUtc = new Date(datetimeLocal + "Z");
+  return new Date(asUtc.getTime() - tzOffsetMs(asUtc, tz)).toISOString();
 }
 
 interface LeadData {

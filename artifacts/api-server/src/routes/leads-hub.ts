@@ -48,11 +48,18 @@ router.get("/leads-hub/queue", async (req, res) => {
   const tz = tenant?.timezone || "America/New_York";
 
   const now = new Date();
-  const todayInTz = new Date(now.toLocaleString("en-US", { timeZone: tz }));
-  const todayStart = new Date(todayInTz);
-  todayStart.setHours(0, 0, 0, 0);
-  const offsetMs = todayInTz.getTime() - now.getTime();
-  const todayStartUtc = new Date(todayStart.getTime() - offsetMs);
+
+  const tzParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const g = (t: string) => parseInt(tzParts.find(p => p.type === t)?.value || "0");
+  const todayDateStr = `${g("year")}-${String(g("month")).padStart(2, "0")}-${String(g("day")).padStart(2, "0")}`;
+
+  const midnightWallUtc = Date.UTC(g("year"), g("month") - 1, g("day"), 0, 0, 0);
+  const wallNowUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") === 24 ? 0 : g("hour"), g("minute"), g("second"));
+  const offsetMs = wallNowUtc - now.getTime();
+  const todayStartUtc = new Date(midnightWallUtc - offsetMs);
 
   const baseConds = [eq(leadsTable.tenantId, tenantId)];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
@@ -93,7 +100,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         ...baseConds,
         eq(leadsTable.hubStatus, "day_5_old"),
         isNotNull(leadsTable.revisitDate),
-        lte(leadsTable.revisitDate, todayInTz.toISOString().split("T")[0]),
+        lte(leadsTable.revisitDate, todayDateStr),
       ))
       .orderBy(asc(leadsTable.revisitDate)).limit(100) : [];
 
@@ -101,7 +108,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       .where(and(
         ...baseConds,
         eq(leadsTable.hubStatus, "day_5_old"),
-        or(isNull(leadsTable.revisitDate), sql`${leadsTable.revisitDate} > ${todayInTz.toISOString().split("T")[0]}`),
+        or(isNull(leadsTable.revisitDate), sql`${leadsTable.revisitDate} > ${todayDateStr}`),
       ))
       .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
 
