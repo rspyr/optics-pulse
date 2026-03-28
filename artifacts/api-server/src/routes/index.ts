@@ -23,6 +23,8 @@ import budgetRouter from "./budget";
 import reviewsRouter from "./reviews";
 import scriptsRouter from "./scripts";
 import salesManagerRouter from "./sales-manager";
+import leadsHubRouter from "./leads-hub";
+import googleSheetsIngestRouter from "./google-sheets-ingest";
 import googleOAuthRouter from "./google-oauth";
 import metaOAuthRouter from "./meta-oauth";
 
@@ -60,6 +62,8 @@ router.use(drilldownRouter);
 router.use(budgetRouter);
 router.use(scriptsRouter);
 router.use(salesManagerRouter);
+router.use(leadsHubRouter);
+router.use(googleSheetsIngestRouter);
 
 export default router;
 

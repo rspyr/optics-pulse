@@ -104,7 +104,7 @@ router.get("/funnel-types/script/:tenantId", async (req, res) => {
 
 router.post("/tenants/:id/funnel-types", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const tenantId = parseInt(String(req.params.id));
-  const { funnelTypeId } = req.body;
+  const { funnelTypeId, googleSheetId, googleSheetTab } = req.body;
   if (!funnelTypeId) { res.status(400).json({ error: "funnelTypeId is required" }); return; }
 
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
@@ -113,9 +113,32 @@ router.post("/tenants/:id/funnel-types", requireRole("super_admin", "agency_user
   const [ft] = await db.select().from(funnelTypesTable).where(eq(funnelTypesTable.id, funnelTypeId));
   if (!ft) { res.status(404).json({ error: "Funnel type not found" }); return; }
 
-  await db.insert(tenantFunnelTypesTable).values({ tenantId, funnelTypeId })
-    .onConflictDoNothing();
-  res.status(201).json({ tenantId, funnelTypeId });
+  await db.insert(tenantFunnelTypesTable).values({
+    tenantId,
+    funnelTypeId,
+    googleSheetId: googleSheetId || null,
+    googleSheetTab: googleSheetTab || null,
+  }).onConflictDoNothing();
+  res.status(201).json({ tenantId, funnelTypeId, googleSheetId: googleSheetId || null, googleSheetTab: googleSheetTab || null });
+});
+
+router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const tenantId = parseInt(String(req.params.id));
+  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+  const { googleSheetId, googleSheetTab } = req.body;
+
+  const [existing] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+  if (!existing) { res.status(404).json({ error: "Tenant funnel type association not found" }); return; }
+
+  await db.update(tenantFunnelTypesTable)
+    .set({
+      googleSheetId: googleSheetId !== undefined ? googleSheetId : existing.googleSheetId,
+      googleSheetTab: googleSheetTab !== undefined ? googleSheetTab : existing.googleSheetTab,
+    })
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  res.json({ tenantId, funnelTypeId, googleSheetId: googleSheetId ?? existing.googleSheetId, googleSheetTab: googleSheetTab ?? existing.googleSheetTab });
 });
 
 router.delete("/tenants/:id/funnel-types/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
@@ -129,7 +152,11 @@ router.delete("/tenants/:id/funnel-types/:funnelTypeId", requireRole("super_admi
 
 router.get("/tenants/:id/funnel-types", async (req, res) => {
   const tenantId = parseInt(String(req.params.id));
-  const associations = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
+  const associations = await db.select({
+    funnelTypeId: tenantFunnelTypesTable.funnelTypeId,
+    googleSheetId: tenantFunnelTypesTable.googleSheetId,
+    googleSheetTab: tenantFunnelTypesTable.googleSheetTab,
+  })
     .from(tenantFunnelTypesTable)
     .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
   const ids = associations.map(a => a.funnelTypeId);
@@ -137,7 +164,18 @@ router.get("/tenants/:id/funnel-types", async (req, res) => {
   const types = await db.select().from(funnelTypesTable)
     .where(inArray(funnelTypesTable.id, ids))
     .orderBy(funnelTypesTable.name);
-  res.json(types);
+
+  const sheetConfigMap: Record<number, { googleSheetId: string | null; googleSheetTab: string | null }> = {};
+  for (const a of associations) {
+    sheetConfigMap[a.funnelTypeId] = { googleSheetId: a.googleSheetId, googleSheetTab: a.googleSheetTab };
+  }
+
+  const enriched = types.map(t => ({
+    ...t,
+    googleSheetId: sheetConfigMap[t.id]?.googleSheetId || null,
+    googleSheetTab: sheetConfigMap[t.id]?.googleSheetTab || null,
+  }));
+  res.json(enriched);
 });
 
 export default router;

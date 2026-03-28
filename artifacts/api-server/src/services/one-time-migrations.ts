@@ -92,6 +92,36 @@ const migrations: Migration[] = [
       console.log("[Migration] Created index on attribution_events(tenant_id, external_id)");
     },
   },
+  {
+    id: "2026-03-28_backfill-leads-hub-status",
+    description: "Map existing lead_status values to new hub_status field for Leads Hub",
+    run: async () => {
+      await db.execute(sql`
+        UPDATE leads SET hub_status = CASE
+          WHEN status = 'new' THEN 'day_1'
+          WHEN status = 'contacted' THEN 'day_2'
+          WHEN status = 'booked' THEN 'appt_set'
+          WHEN status = 'sold' THEN 'appt_set'
+          WHEN status = 'lost' THEN 'day_5_old'
+          WHEN status = 'cancelled' THEN 'dead'
+          ELSE 'day_1'
+        END
+        WHERE hub_status = 'day_1' AND status != 'new'
+      `);
+      console.log("[Migration] Backfilled hub_status from existing lead_status values");
+
+      await db.execute(sql`
+        UPDATE call_attempts SET action_type = CASE
+          WHEN method = 'call' THEN 'call'
+          WHEN method = 'text' THEN 'text'
+          WHEN method = 'email' THEN 'call'
+          ELSE 'call'
+        END
+        WHERE action_type = 'call' AND method != 'call'
+      `);
+      console.log("[Migration] Backfilled action_type from existing call_attempts method values");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

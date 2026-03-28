@@ -25,8 +25,8 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 
 **Feature Specifications:**
 - **Attribution Engine:** A 4-level waterfall attribution model tracks lead sources. It includes a Reconciliation Engine for OCI payloads and Enhanced Conversions.
-- **Leads HUD:** A gamified interface for lead management with real-time queues, quick actions, disposition logging, and performance statistics. Features include smart scheduling, historical stats, and comparison cards.
-- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history and CRUD API. Scripts support `sourceFilter`, `stageFilter`, and `dispositionFilter` for targeted matching. Disposition-based scripts (callback_requested, already_had_estimate, dont_remember, never_answered) override source/stage matching in the Pulse queue.
+- **Leads Hub:** A comprehensive lead management system with a 5-day outreach sequence lifecycle. Leads flow through statuses: day_1 through day_4 (active), day_5_old (re-engagement pool), appt_set (booked), call_back (scheduled follow-up), and dead (removed). Features tabbed CSR queues (New, Today, Callbacks, Re-engagement, Old Leads, Archive), structured action logging (call/text/voicemail_drop with full outcome taxonomy), round-robin routing with cascade ordering and CSR pause/schedule, and lead transfer. Google Sheets integration provides lead ingestion per-funnel via `google_sheet_id` and `google_sheet_tab` fields on `tenant_funnel_types`.
+- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history and CRUD API. Scripts support `sourceFilter`, `stageFilter`, `dispositionFilter`, `funnelFilter`, and `serviceTypeFilter` for targeted matching. Disposition-based scripts (callback_requested, already_had_estimate, dont_remember, never_answered) override source/stage matching in the Pulse queue.
 - **Media Buying Automation:** Rules-based system for managing marketing campaigns, including condition-based alerts and actions.
 - **Budget Controls:** Campaign management integrated with budget API calls.
 - **Spiff Configuration:** Per-tenant configurable spiff amounts for bookings, overriding values for specific lead types.
@@ -43,11 +43,12 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 
 ## External Dependencies
 
-- **ServiceTitan:** OAuth2 client for fetching jobs, customers, and locations. Includes a 24-hour data retention compliance mechanism for PII.
+- **Google Sheets API:** Lead ingestion from Google Sheets via Replit Connectors integration (`googleapis` package). Each funnel can have its own Google Sheet ID + tab name configured per tenant.
+- **ServiceTitan:** PAUSED — OAuth2 client code preserved but sync disabled and data wiped for compliance.
 - **Google Ads API:** Used for campaign performance queries, Offline Conversion Import (OCI), and Enhanced Conversions uploads, with OAuth2 for authentication.
 - **Meta Marketing API:** For fetching campaign insights and server-side event uploads via Conversions API (CAPI), with OAuth2 for authentication.
-- **CallRail API:** Webhook ingestion with HMAC-SHA256 signature verification.
-- **Podium API:** For review data synchronization and webhook handling.
+- **CallRail API:** PAUSED — Webhook ingestion code preserved but communication integration disabled.
+- **Podium API:** PAUSED — Review sync and communication integration disabled.
 - **PostgreSQL:** Primary database.
 - **Express:** Web application framework for the API server.
 - **React:** Frontend library.

@@ -10,6 +10,8 @@ export const scriptsTable = pgTable("scripts", {
   sourceFilter: text("source_filter"),
   stageFilter: text("stage_filter"),
   dispositionFilter: text("disposition_filter"),
+  funnelFilter: text("funnel_filter"),
+  serviceTypeFilter: text("service_type_filter"),
   content: text("content").notNull(),
   version: integer("version").notNull().default(1),
   isActive: boolean("is_active").notNull().default(true),
