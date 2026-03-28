@@ -82,7 +82,7 @@ Respond with ONLY valid JSON. Example:
 {"First Name": {"field": "firstName", "confidence": 1.0}, "Ph #": {"field": "phone", "confidence": 0.9}}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: { responseMimeType: "application/json", maxOutputTokens: 2048 },
     });

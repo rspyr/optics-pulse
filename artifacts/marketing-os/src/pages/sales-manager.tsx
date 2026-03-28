@@ -1862,11 +1862,15 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
             {editingFunnelId === funnel.id && (
               <div className="mt-3 pt-3 border-t border-white/5 space-y-3">
                 <div>
-                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet ID</label>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet URL or ID</label>
                   <input
                     value={sheetId}
-                    onChange={e => setSheetId(e.target.value)}
-                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+                    onChange={e => {
+                      const val = e.target.value.trim();
+                      const urlMatch = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+                      setSheetId(urlMatch ? urlMatch[1] : val);
+                    }}
+                    placeholder="Paste a Google Sheets URL or sheet ID"
                     className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
                   />
                 </div>
