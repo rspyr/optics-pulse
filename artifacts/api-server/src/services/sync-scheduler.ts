@@ -463,11 +463,7 @@ export function startSyncScheduler() {
   const campaignSyncInterval = 60 * 60 * 1000;
 
   const jobsTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting ServiceTitan jobs sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
-      await syncServiceTitanJobs(tenant.id);
-    }
+    console.log("[SyncScheduler] ServiceTitan jobs sync PAUSED — integration disabled");
   }, jobsSyncInterval);
 
   const campaignTimer = setInterval(async () => {
@@ -481,45 +477,16 @@ export function startSyncScheduler() {
 
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
   const reviewTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting Podium review sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
-      const config = getTenantConfig(tenant);
-      if (config?.podiumApiToken && config?.podiumLocationId) {
-        await syncPodiumReviews(tenant.id, {
-          apiToken: config.podiumApiToken,
-          locationId: config.podiumLocationId,
-        });
-      }
-    }
+    console.log("[SyncScheduler] Podium review sync PAUSED — integration disabled");
   }, reviewSyncInterval);
 
   const callRailSyncInterval = 30 * 60 * 1000;
   const callRailTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting CallRail call-log sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
-      const config = getTenantConfig(tenant);
-      if (config?.callRailApiKey && config?.callRailAccountId) {
-        const syncLog = await logSync(tenant.id, "callrail", "calls", new Date());
-        try {
-          const result = await syncCallRailCalls(tenant.id, {
-            apiKey: config.callRailApiKey,
-            accountId: config.callRailAccountId,
-            companyId: config.callRailCompanyId,
-          });
-          await completeSyncLog(syncLog.id, "completed", result.synced);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await completeSyncLog(syncLog.id, "error", 0, message);
-          console.error(`[Sync] CallRail error for tenant ${tenant.id}:`, message);
-        }
-      }
-    }
+    console.log("[SyncScheduler] CallRail sync PAUSED — integration disabled");
   }, callRailSyncInterval);
 
   syncTimers = [jobsTimer, campaignTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: jobs every 15min, campaigns every 60min, reviews every 6hr, callrail every 30min");
+  console.log("[SyncScheduler] Started: ST/Podium/CallRail PAUSED, campaigns every 60min");
 }
 
 export function stopSyncScheduler() {

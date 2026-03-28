@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
@@ -8,12 +8,15 @@ import { emitLeadUpdated, emitNewLead } from "../socket";
 
 const router: IRouter = Router();
 
-function resolveTenantId(req: any): number | null {
-  const role = req.session?.userRole;
+function resolveTenantId(req: Request): number | null {
+  const session = req.session as Record<string, unknown> | undefined;
+  const role = session?.userRole as string | undefined;
   if (role === "super_admin" || role === "agency_user") {
-    return req.query.tenantId ? Number(req.query.tenantId) : req.body?.tenantId ? Number(req.body.tenantId) : req.session.tenantId ?? null;
+    const queryTid = (req.query as Record<string, string>).tenantId;
+    const bodyTid = (req.body as Record<string, unknown>)?.tenantId;
+    return queryTid ? Number(queryTid) : bodyTid ? Number(bodyTid) : (session?.tenantId as number) ?? null;
   }
-  return req.session?.tenantId ?? null;
+  return (session?.tenantId as number) ?? null;
 }
 
 router.get("/leads-hub/queue", async (req, res) => {
@@ -491,6 +494,9 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     return;
   }
 
+  const passHours = config.passIntervalHours ?? 24;
+  const passWindow = new Date(now.getTime() - passHours * 60 * 60 * 1000);
+
   const recentAssignments = await db.select({
     assignedCsrId: leadsTable.assignedCsrId,
     count: count(),
@@ -498,7 +504,7 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     .where(and(
       eq(leadsTable.tenantId, tenantId),
       isNotNull(leadsTable.assignedCsrId),
-      gte(leadsTable.createdAt, new Date(now.getTime() - 24 * 60 * 60 * 1000)),
+      gte(leadsTable.createdAt, passWindow),
     ))
     .groupBy(leadsTable.assignedCsrId);
 
@@ -514,6 +520,23 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     if (c < minAssignments) {
       minAssignments = c;
       selectedCsrId = csrId;
+    }
+  }
+
+  if (!config.allowPassBack) {
+    const [currentLead] = await db.select({ assignedCsrId: leadsTable.assignedCsrId })
+      .from(leadsTable).where(eq(leadsTable.id, leadId));
+    if (currentLead?.assignedCsrId === selectedCsrId) {
+      const alternates = order.filter(id => id !== selectedCsrId);
+      if (alternates.length > 0) {
+        let altMin = assignmentCounts[alternates[0]] || 0;
+        let altSelected = alternates[0];
+        for (const id of alternates) {
+          const c = assignmentCounts[id] || 0;
+          if (c < altMin) { altMin = c; altSelected = id; }
+        }
+        selectedCsrId = altSelected;
+      }
     }
   }
 

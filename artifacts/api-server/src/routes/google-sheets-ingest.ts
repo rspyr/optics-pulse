@@ -50,7 +50,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
 
     let imported = 0;
     let skipped = 0;
-    const newLeads: any[] = [];
+    const newLeads: (typeof leadsTable.$inferSelect)[] = [];
 
     for (const row of rows) {
       const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
