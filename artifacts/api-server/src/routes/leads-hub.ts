@@ -11,6 +11,20 @@ const router: IRouter = Router();
 const VALID_HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "call_back", "dead"] as const;
 type HubStatus = typeof VALID_HUB_STATUSES[number];
 
+function hubStatusToLegacy(hubStatus: HubStatus): string {
+  switch (hubStatus) {
+    case "day_1": return "new";
+    case "day_2":
+    case "day_3":
+    case "day_4":
+    case "day_5_old":
+    case "call_back": return "contacted";
+    case "appt_set": return "booked";
+    case "dead": return "lost";
+    default: return "new";
+  }
+}
+
 function resolveTenantId(req: Request): number | null {
   const session = req.session as Record<string, unknown> | undefined;
   const role = session?.userRole as string | undefined;
@@ -204,6 +218,10 @@ router.post("/leads-hub/action", async (req, res) => {
     } else if (newDay <= 4) {
       updates.hubStatus = `day_${newDay}`;
     }
+  }
+
+  if (updates.hubStatus) {
+    updates.status = hubStatusToLegacy(updates.hubStatus as HubStatus);
   }
 
   const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
