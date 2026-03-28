@@ -153,6 +153,13 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
     }
   }
 
+  const mappingKeys = Object.keys(mapping).sort();
+  const headerKeys = [...headers].sort();
+  if (mappingKeys.length !== headerKeys.length || !mappingKeys.every((k, i) => k === headerKeys[i])) {
+    res.status(400).json({ error: "Mapping keys must match the provided headers exactly" });
+    return;
+  }
+
   const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__");
   const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i);
   if (duplicates.length > 0) {
@@ -160,9 +167,14 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
     return;
   }
 
-  await db.update(tenantFunnelTypesTable)
+  const result = await db.update(tenantFunnelTypesTable)
     .set({ columnMapping: mapping, mappingHeaders: headers })
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  if (!result.rowCount || result.rowCount === 0) {
+    res.status(404).json({ error: "Funnel type not associated with tenant" });
+    return;
+  }
 
   res.json({ success: true });
 });
