@@ -1459,6 +1459,24 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     } finally { setSaving(false); }
   };
 
+  const handleDiscard = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mapping: null, headers: null }),
+      });
+      if (res.ok) {
+        setAnalysis(null);
+        setMapping({});
+        setExpanded(false);
+        onMappingSaved();
+      }
+    } catch {} finally { setSaving(false); }
+  };
+
   if (!isAgency || !funnel.googleSheetId) return null;
 
   const hasExistingMapping = !!funnel.columnMapping;
@@ -1596,13 +1614,33 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
               <p className="text-[10px] text-white/25">
                 {analysis.totalRows} rows in sheet
               </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setAnalysis(null); setMapping({}); setExpanded(false); }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] text-white/40 hover:text-white/60 hover:bg-white/5"
+                >
+                  Discard
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-medium hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                  Approve Mapping
+                </button>
+              </div>
+            </div>
+          )}
+
+          {hasExistingMapping && !analysis && expanded && (
+            <div className="flex justify-end pt-2">
               <button
-                onClick={handleSave}
+                onClick={handleDiscard}
                 disabled={saving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-medium hover:bg-emerald-500 disabled:opacity-50"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[10px] text-red-400/70 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-50"
               >
-                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
-                Approve Mapping
+                Remove Approved Mapping
               </button>
             </div>
           )}

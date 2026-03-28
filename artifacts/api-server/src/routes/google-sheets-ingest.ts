@@ -132,8 +132,31 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
   const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
 
+  if (mapping === null && headers === null) {
+    await db.update(tenantFunnelTypesTable)
+      .set({ columnMapping: null, mappingHeaders: null })
+      .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+    res.json({ success: true, cleared: true });
+    return;
+  }
+
   if (!mapping || !headers || !Array.isArray(headers)) {
     res.status(400).json({ error: "mapping and headers are required" });
+    return;
+  }
+
+  const allowedFields = new Set(INTERNAL_FIELDS.map(f => f.field));
+  for (const [header, field] of Object.entries(mapping)) {
+    if (typeof field !== "string" || !allowedFields.has(field)) {
+      res.status(400).json({ error: `Invalid mapping: "${header}" maps to unknown field "${field}"` });
+      return;
+    }
+  }
+
+  const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__");
+  const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i);
+  if (duplicates.length > 0) {
+    res.status(400).json({ error: `Duplicate field assignment: "${[...new Set(duplicates)].join(", ")}" is mapped to multiple columns` });
     return;
   }
 
