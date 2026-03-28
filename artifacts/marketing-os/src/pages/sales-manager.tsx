@@ -254,10 +254,16 @@ function getDateRange(preset: string): [string, string] {
   return [start.toISOString(), end];
 }
 
+function useDateRange(preset: string): [string, string] {
+  const [range, setRange] = useState<[string, string]>(() => getDateRange(preset));
+  useEffect(() => { setRange(getDateRange(preset)); }, [preset]);
+  return range;
+}
+
 function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
   const [datePreset, setDatePreset] = useState("today");
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
-  const [startDate, endDate] = getDateRange(datePreset);
+  const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter);
 
   if (loading) {
@@ -378,13 +384,47 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
           )}
         </PremiumCard>
       </div>
+
+      <PremiumCard className="p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Phone className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Calls & Activity by Funnel</span>
+        </div>
+        {(stats?.byFunnel || []).length === 0 ? (
+          <p className="text-xs text-white/30 text-center py-4">No funnel call data</p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {stats!.byFunnel.map(f => {
+              const funnelName = funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`;
+              const funnelCalls = stats!.byCsr.reduce((s, c) => s + c.calls, 0);
+              const proportion = stats!.totalLeads > 0 ? f.total / stats!.totalLeads : 0;
+              const estimatedCalls = Math.round(funnelCalls * proportion);
+              return (
+                <PremiumCard key={f.funnelId} className="p-3">
+                  <p className="text-[10px] text-white/30 uppercase tracking-wider font-mono mb-1 truncate">{funnelName}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-lg font-display text-white">{estimatedCalls}</p>
+                      <p className="text-[9px] text-white/20 uppercase">est. calls</p>
+                    </div>
+                    <div>
+                      <p className="text-lg font-display text-emerald-400">{f.appointments}</p>
+                      <p className="text-[9px] text-white/20 uppercase">appts</p>
+                    </div>
+                  </div>
+                </PremiumCard>
+              );
+            })}
+          </div>
+        )}
+      </PremiumCard>
     </div>
   );
 }
 
 function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
   const [datePreset, setDatePreset] = useState("today");
-  const [startDate, endDate] = getDateRange(datePreset);
+  const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null);
   const { csrs, loading: csrsLoading } = useCsrs(tenantId);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -582,6 +622,9 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
+  const [scheduleEditId, setScheduleEditId] = useState<number | null>(null);
+  const [schedPauseStart, setSchedPauseStart] = useState("");
+  const [schedPauseEnd, setSchedPauseEnd] = useState("");
 
   const loading = configsLoading || csrsLoading;
 
@@ -629,7 +672,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
     } finally { setSaving(false); }
   };
 
-  const toggleCsrPause = async (userId: number, isPaused: boolean, pauseEnd?: string) => {
+  const toggleCsrPause = async (userId: number, isPaused: boolean, pauseEnd?: string, pauseStart?: string) => {
     if (!tenantId) return;
     setScheduleSaving(userId);
     try {
@@ -639,7 +682,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
         credentials: "include",
         body: JSON.stringify({
           isPaused,
-          pauseStart: isPaused ? new Date().toISOString() : null,
+          pauseStart: isPaused ? (pauseStart || new Date().toISOString()) : null,
           pauseEnd: pauseEnd || null,
         }),
       });
@@ -823,6 +866,21 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                         {csr.isPaused ? "paused" : "active"}
                       </span>
                       <button
+                        onClick={() => {
+                          if (scheduleEditId === csr.id) {
+                            setScheduleEditId(null);
+                          } else {
+                            setScheduleEditId(csr.id);
+                            setSchedPauseStart(csr.pauseStart ? new Date(csr.pauseStart).toISOString().slice(0, 16) : "");
+                            setSchedPauseEnd(csr.pauseEnd ? new Date(csr.pauseEnd).toISOString().slice(0, 16) : "");
+                          }
+                        }}
+                        className="p-1.5 rounded text-white/30 hover:text-white/60 hover:bg-white/5"
+                        title="Schedule"
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
+                      </button>
+                      <button
                         onClick={() => toggleCsrPause(csr.id, !csr.isPaused)}
                         disabled={scheduleSaving === csr.id}
                         className={cn(
@@ -842,10 +900,70 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                       </button>
                     </div>
                   </div>
-                  {csr.isPaused && csr.pauseEnd && (
+                  {csr.isPaused && csr.pauseEnd && scheduleEditId !== csr.id && (
                     <p className="text-[10px] text-amber-400/60 mt-1">
                       Paused until {new Date(csr.pauseEnd).toLocaleString()}
                     </p>
+                  )}
+                  {scheduleEditId === csr.id && (
+                    <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-white/30 uppercase tracking-wider">Pause Start</label>
+                          <input
+                            type="datetime-local"
+                            value={schedPauseStart}
+                            onChange={e => setSchedPauseStart(e.target.value)}
+                            className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-white/30 uppercase tracking-wider">Pause End</label>
+                          <input
+                            type="datetime-local"
+                            value={schedPauseEnd}
+                            onChange={e => setSchedPauseEnd(e.target.value)}
+                            className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={async () => {
+                            await toggleCsrPause(
+                              csr.id,
+                              true,
+                              schedPauseEnd ? new Date(schedPauseEnd).toISOString() : undefined,
+                              schedPauseStart ? new Date(schedPauseStart).toISOString() : undefined
+                            );
+                            setScheduleEditId(null);
+                          }}
+                          disabled={scheduleSaving === csr.id}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded bg-amber-500/20 text-amber-400 text-xs font-medium hover:bg-amber-500/30 disabled:opacity-50"
+                        >
+                          {scheduleSaving === csr.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
+                          Schedule Pause
+                        </button>
+                        {csr.isPaused && (
+                          <button
+                            onClick={async () => {
+                              await toggleCsrPause(csr.id, false);
+                              setScheduleEditId(null);
+                            }}
+                            disabled={scheduleSaving === csr.id}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded bg-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 disabled:opacity-50"
+                          >
+                            <Play className="w-3 h-3" /> Resume Now
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setScheduleEditId(null)}
+                          className="px-2 py-1.5 text-xs text-white/40 hover:text-white/60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               ))}
