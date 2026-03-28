@@ -9,7 +9,7 @@ import {
   FileText, Activity, Brain, BarChart3, DollarSign, Target,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
   Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
-  Mic, GripVertical,
+  Mic, GripVertical, Eye,
 } from "lucide-react";
 import ScriptManagement from "@/components/script-management";
 
@@ -206,13 +206,14 @@ function useCoachingInsights(tenantId: number | null) {
   return { insights, loading, fetching };
 }
 
-function MetricCard({ label, value, icon: Icon, delta, format = "number", className }: {
+function MetricCard({ label, value, icon: Icon, delta, format = "number", className, subtitle }: {
   label: string;
   value: number;
   icon: React.ComponentType<{ className?: string }>;
   delta?: number;
   format?: "number" | "percent" | "currency" | "time";
   className?: string;
+  subtitle?: string;
 }) {
   const formatted = format === "percent" ? `${value}%`
     : format === "currency" ? `$${value}`
@@ -237,6 +238,9 @@ function MetricCard({ label, value, icon: Icon, delta, format = "number", classN
           </span>
         )}
       </div>
+      {subtitle && (
+        <p className="text-[9px] text-white/20 mt-1 font-mono">{subtitle}</p>
+      )}
     </PremiumCard>
   );
 }
@@ -266,8 +270,14 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
   const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter);
+  const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null);
 
-  if (loading) {
+  const overallBookingRate = allStats?.bookingRate ?? 0;
+  const selectedFunnelRate = funnelFilter
+    ? (allStats?.byFunnel.find(f => f.funnelId === funnelFilter)?.bookingRate ?? 0)
+    : null;
+
+  if (loading || allStatsLoading) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="w-6 h-6 text-primary animate-spin" />
@@ -307,7 +317,7 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard label="Total Leads" value={stats?.totalLeads || 0} icon={Users} />
         <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
-        <MetricCard label="Booking Rate" value={stats?.bookingRate || 0} icon={TrendingUp} format="percent" />
+        <MetricCard label={funnelFilter ? "Funnel Rate" : "Booking Rate"} value={stats?.bookingRate || 0} icon={TrendingUp} format="percent" subtitle={funnelFilter ? `Overall: ${overallBookingRate}%` : undefined} />
         <MetricCard label="Total Calls" value={stats?.byCsr.reduce((s, c) => s + c.calls, 0) || 0} icon={Phone} />
       </div>
 
@@ -1341,7 +1351,7 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
   );
 }
 
-function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void; canEdit: boolean }) {
+function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
   const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
   const [sheetId, setSheetId] = useState("");
   const [sheetTab, setSheetTab] = useState("");
@@ -1349,6 +1359,8 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
   const [savedId, setSavedId] = useState<number | null>(null);
   const [ingesting, setIngesting] = useState<number | null>(null);
   const [ingestResult, setIngestResult] = useState<{ funnelId: number; msg: string; type: "success" | "error" } | null>(null);
+  const [previewing, setPreviewing] = useState<number | null>(null);
+  const [previewData, setPreviewData] = useState<{ funnelId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
 
   const startEdit = (funnel: FunnelType) => {
     setEditingFunnelId(funnel.id);
@@ -1400,6 +1412,25 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
     } finally { setIngesting(null); }
   };
 
+  const handlePreview = async (funnelId: number) => {
+    if (!tenantId) return;
+    setPreviewing(funnelId);
+    setPreviewData(null);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/preview/${tenantId}/${funnelId}`, {
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPreviewData({ funnelId, rows: data.rows || [], columns: data.columns || [] });
+      } else {
+        setIngestResult({ funnelId, msg: data.error || "Preview failed", type: "error" });
+      }
+    } catch {
+      setIngestResult({ funnelId, msg: "Connection error during preview", type: "error" });
+    } finally { setPreviewing(null); }
+  };
+
   if (funnels.length === 0) {
     return (
       <PremiumCard className="p-4">
@@ -1413,9 +1444,6 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
       <div className="flex items-center gap-2">
         <Table2 className="w-4 h-4 text-primary" />
         <span className="text-sm font-display text-white">Google Sheet Config (per Funnel)</span>
-        {!canEdit && (
-          <span className="text-[10px] text-amber-400/60 bg-amber-500/10 px-2 py-0.5 rounded ml-auto">Agency access required to edit</span>
-        )}
       </div>
 
       <div className="space-y-2">
@@ -1440,16 +1468,25 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
               </div>
               <div className="flex items-center gap-2">
                 {funnel.googleSheetId && (
-                  <button
-                    onClick={() => handleIngest(funnel.id)}
-                    disabled={ingesting === funnel.id}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
-                  >
-                    {ingesting === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                    Import
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handlePreview(funnel.id)}
+                      disabled={previewing === funnel.id}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                    >
+                      {previewing === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                      Preview
+                    </button>
+                    <button
+                      onClick={() => handleIngest(funnel.id)}
+                      disabled={ingesting === funnel.id}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
+                    >
+                      {ingesting === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      Import
+                    </button>
+                  </>
                 )}
-                {canEdit && (
                 <button
                   onClick={() => editingFunnelId === funnel.id ? setEditingFunnelId(null) : startEdit(funnel)}
                   className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5"
@@ -1457,7 +1494,6 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
                   {savedId === funnel.id ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <SettingsIcon className="w-3 h-3" />}
                   {savedId === funnel.id ? "Saved" : "Configure"}
                 </button>
-                )}
               </div>
             </div>
 
@@ -1467,6 +1503,39 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
                 ingestResult.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
               )}>
                 {ingestResult.msg}
+              </div>
+            )}
+
+            {previewData?.funnelId === funnel.id && (
+              <div className="mt-3 pt-3 border-t border-white/5">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] text-white/30 uppercase tracking-wider">Sheet Preview ({previewData.rows.length} rows)</p>
+                  <button onClick={() => setPreviewData(null)} className="text-[10px] text-white/30 hover:text-white/50">Close</button>
+                </div>
+                {previewData.rows.length === 0 ? (
+                  <p className="text-xs text-white/20 py-2">No data rows found</p>
+                ) : (
+                  <div className="overflow-x-auto max-h-40">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="border-b border-white/5">
+                          {previewData.columns.map(col => (
+                            <th key={col} className="text-left py-1 px-2 text-white/30 font-mono">{col}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewData.rows.slice(0, 5).map((row, i) => (
+                          <tr key={i} className="border-b border-white/[0.03]">
+                            {previewData.columns.map(col => (
+                              <td key={col} className="py-1 px-2 text-white/50 truncate max-w-[150px]">{row[col] || ""}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1515,13 +1584,13 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, canEdit }: { t
   );
 }
 
-function SettingsTab({ tenantId, funnels, onRefetchFunnels, isAgency }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void; isAgency: boolean }) {
+function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} />
 
       <div className="border-t border-white/5 pt-6">
-        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} canEdit={isAgency} />
+        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />
       </div>
 
       <div className="border-t border-white/5 pt-6">
@@ -1669,7 +1738,7 @@ export default function SalesManager() {
           />
         )}
         {tab === "settings" && (
-          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} isAgency={isAgency} />
+          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />
         )}
       </div>
     </div>

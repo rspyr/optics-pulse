@@ -122,7 +122,7 @@ router.post("/tenants/:id/funnel-types", requireRole("super_admin", "agency_user
   res.status(201).json({ tenantId, funnelTypeId, googleSheetId: googleSheetId || null, googleSheetTab: googleSheetTab || null });
 });
 
-router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
   const tenantId = parseInt(String(req.params.id));
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
   const { googleSheetId, googleSheetTab } = req.body;
