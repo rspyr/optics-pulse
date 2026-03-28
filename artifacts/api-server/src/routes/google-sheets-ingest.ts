@@ -25,9 +25,10 @@ const INTERNAL_FIELDS = [
   { field: "__skip__", label: "Skip (Do Not Import)", description: "Ignore this column" },
 ];
 
-function arraysEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((v, i) => v === b[i]);
+function headersMatch(current: string[], saved: string[]): boolean {
+  if (current.length !== saved.length) return false;
+  const currentSet = new Set(current);
+  return saved.every(h => currentSet.has(h));
 }
 
 router.post("/google-sheets/analyze-mapping/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
@@ -210,7 +211,7 @@ router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole(
   if (hasMapping && assoc.googleSheetId && assoc.googleSheetTab) {
     try {
       const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      headersChanged = !arraysEqual(currentHeaders, assoc.mappingHeaders as string[]);
+      headersChanged = !headersMatch(currentHeaders, assoc.mappingHeaders as string[]);
     } catch {
       verificationError = true;
     }
@@ -265,7 +266,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
   if (assoc.columnMapping && assoc.mappingHeaders) {
     try {
       const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      if (!arraysEqual(currentHeaders, assoc.mappingHeaders as string[])) {
+      if (!headersMatch(currentHeaders, assoc.mappingHeaders as string[])) {
         res.status(409).json({
           error: "Sheet headers have changed since mapping was approved. Please re-analyze and approve the mapping.",
           headersChanged: true,
@@ -389,7 +390,7 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
 
     let headersChanged = false;
     if (assoc.mappingHeaders) {
-      headersChanged = !arraysEqual(rawHeaders, assoc.mappingHeaders as string[]);
+      headersChanged = !headersMatch(rawHeaders, assoc.mappingHeaders as string[]);
     }
 
     res.json({
