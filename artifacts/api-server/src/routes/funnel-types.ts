@@ -127,6 +127,13 @@ router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
   const { googleSheetId, googleSheetTab } = req.body;
 
+  const userRole = (req as any).session?.role;
+  const userTenantId = (req as any).session?.tenantId;
+  if (userRole === "client_admin" && userTenantId !== tenantId) {
+    res.status(403).json({ error: "You can only configure sheet settings for your own tenant" });
+    return;
+  }
+
   const [existing] = await db.select().from(tenantFunnelTypesTable)
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
   if (!existing) { res.status(404).json({ error: "Tenant funnel type association not found" }); return; }
