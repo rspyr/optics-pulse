@@ -9,7 +9,7 @@ import {
   FileText, Activity, Brain, BarChart3, DollarSign, Target,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
   Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
-  Mic, GripVertical, Eye,
+  Mic, GripVertical, Eye, Wand2, ShieldCheck, AlertCircle,
 } from "lucide-react";
 import ScriptManagement from "@/components/script-management";
 
@@ -25,6 +25,8 @@ interface FunnelType {
   isActive: boolean;
   googleSheetId?: string | null;
   googleSheetTab?: string | null;
+  columnMapping?: Record<string, string> | null;
+  mappingHeaders?: string[] | null;
 }
 
 interface StatsData {
@@ -1360,7 +1362,250 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
   );
 }
 
+interface MappingField {
+  field: string;
+  label: string;
+  description: string;
+}
+
+interface AnalysisResult {
+  headers: string[];
+  sampleData: Record<string, string>[];
+  proposedMapping: Record<string, string>;
+  confidences: Record<string, number>;
+  internalFields: MappingField[];
+  totalRows: number;
+}
+
+function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSaved }: {
+  tenantId: number;
+  funnelId: number;
+  funnel: FunnelType;
+  isAgency: boolean;
+  onMappingSaved: () => void;
+}) {
+  const [analyzing, setAnalyzing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [headersChanged, setHeadersChanged] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!funnel.googleSheetId) return;
+    fetch(`${API_BASE}/google-sheets/mapping-status/${tenantId}/${funnelId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (data.headersChanged) setHeadersChanged(true);
+        if (data.hasMapping && data.columnMapping) {
+          setMapping(data.columnMapping);
+        }
+      })
+      .catch(() => {});
+  }, [tenantId, funnelId, funnel.googleSheetId]);
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/analyze-mapping/${tenantId}/${funnelId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Analysis failed"); return; }
+      setAnalysis(data);
+      setMapping(data.proposedMapping);
+      setExpanded(true);
+      setHeadersChanged(false);
+    } catch {
+      setError("Connection error during analysis");
+    } finally { setAnalyzing(false); }
+  };
+
+  const handleSave = async () => {
+    if (!analysis) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mapping, headers: analysis.headers }),
+      });
+      if (res.ok) {
+        setSuccess(true);
+        setHeadersChanged(false);
+        setTimeout(() => setSuccess(false), 3000);
+        onMappingSaved();
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to save mapping");
+      }
+    } catch {
+      setError("Connection error saving mapping");
+    } finally { setSaving(false); }
+  };
+
+  if (!isAgency || !funnel.googleSheetId) return null;
+
+  const hasExistingMapping = !!funnel.columnMapping;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-white/5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Wand2 className="w-3.5 h-3.5 text-violet-400" />
+          <span className="text-[11px] font-medium text-white/70">Column Mapping</span>
+          {hasExistingMapping && !headersChanged && (
+            <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+              <ShieldCheck className="w-3 h-3" /> Approved
+            </span>
+          )}
+          {headersChanged && (
+            <span className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
+              <AlertCircle className="w-3 h-3" /> Headers Changed
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {hasExistingMapping && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="text-[10px] text-white/30 hover:text-white/50"
+            >
+              {expanded ? "Hide" : "View"} Mapping
+            </button>
+          )}
+          <button
+            onClick={handleAnalyze}
+            disabled={analyzing}
+            className={cn(
+              "flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium",
+              headersChanged
+                ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
+                : "bg-violet-500/20 text-violet-400 hover:bg-violet-500/30",
+              "disabled:opacity-50"
+            )}
+          >
+            {analyzing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            {hasExistingMapping ? "Re-analyze" : "Analyze with AI"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mt-2 px-3 py-1.5 rounded text-[10px] bg-red-500/10 text-red-400">{error}</div>
+      )}
+
+      {success && (
+        <div className="mt-2 px-3 py-1.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3" /> Mapping approved and saved
+        </div>
+      )}
+
+      {(expanded || analysis) && Object.keys(mapping).length > 0 && (
+        <div className="mt-3 space-y-2">
+          <div className="grid gap-1.5">
+            {Object.entries(mapping).map(([header, field]) => {
+              const confidence = analysis?.confidences?.[header];
+              const isLowConfidence = confidence !== undefined && confidence < 0.7;
+              const sampleValues = analysis?.sampleData
+                ?.map(row => row[header])
+                .filter(Boolean)
+                .slice(0, 3) || [];
+
+              return (
+                <div key={header} className={cn(
+                  "grid grid-cols-[1fr_auto_1fr] gap-2 items-center px-3 py-2 rounded-md",
+                  isLowConfidence ? "bg-amber-500/5 border border-amber-500/20" : "bg-white/[0.02] border border-white/5"
+                )}>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-white/80 font-mono truncate">{header}</p>
+                    {sampleValues.length > 0 && (
+                      <p className="text-[9px] text-white/25 truncate mt-0.5">
+                        e.g. {sampleValues.join(", ")}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90" />
+                    {confidence !== undefined && (
+                      <span className={cn(
+                        "text-[9px] font-mono px-1.5 py-0.5 rounded",
+                        confidence >= 0.9 ? "bg-emerald-500/10 text-emerald-400" :
+                        confidence >= 0.7 ? "bg-blue-500/10 text-blue-400" :
+                        "bg-amber-500/10 text-amber-400"
+                      )}>
+                        {Math.round(confidence * 100)}%
+                      </span>
+                    )}
+                  </div>
+
+                  <select
+                    value={field}
+                    onChange={e => setMapping(prev => ({ ...prev, [header]: e.target.value }))}
+                    className={cn(
+                      "bg-white/5 border rounded-md px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50",
+                      field === "__skip__" ? "border-white/5 text-white/30" : "border-white/10"
+                    )}
+                  >
+                    {analysis?.internalFields ? (
+                      analysis.internalFields.map(f => (
+                        <option key={f.field} value={f.field}>{f.label}</option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="firstName">First Name</option>
+                        <option value="lastName">Last Name</option>
+                        <option value="fullName">Full Name</option>
+                        <option value="phone">Phone</option>
+                        <option value="email">Email</option>
+                        <option value="source">Lead Source</option>
+                        <option value="serviceType">Service Type</option>
+                        <option value="status">Status</option>
+                        <option value="notes">Notes</option>
+                        <option value="address">Address</option>
+                        <option value="city">City</option>
+                        <option value="state">State</option>
+                        <option value="zip">Zip Code</option>
+                        <option value="__skip__">Skip (Do Not Import)</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+
+          {analysis && (
+            <div className="flex items-center justify-between pt-2">
+              <p className="text-[10px] text-white/25">
+                {analysis.totalRows} rows in sheet
+              </p>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-medium hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                Approve Mapping
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
+  const { isAgency } = useAuth();
   const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
   const [sheetId, setSheetId] = useState("");
   const [sheetTab, setSheetTab] = useState("");
@@ -1413,6 +1658,8 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
       const data = await res.json();
       if (res.ok) {
         setIngestResult({ funnelId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped`, type: "success" });
+      } else if (res.status === 409 && data.headersChanged) {
+        setIngestResult({ funnelId, msg: "Sheet headers have changed — please re-analyze and approve the column mapping before importing.", type: "error" });
       } else {
         setIngestResult({ funnelId, msg: data.error || "Ingest failed", type: "error" });
       }
@@ -1585,6 +1832,16 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                   </button>
                 </div>
               </div>
+            )}
+
+            {tenantId && (
+              <ColumnMappingReview
+                tenantId={tenantId}
+                funnelId={funnel.id}
+                funnel={funnel}
+                isAgency={!!isAgency}
+                onMappingSaved={onRefetch}
+              />
             )}
           </PremiumCard>
         ))}

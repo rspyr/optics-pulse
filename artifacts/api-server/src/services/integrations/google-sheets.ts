@@ -76,59 +76,75 @@ export interface SheetRow {
   [key: string]: string;
 }
 
+export async function readRawSheetData(
+  spreadsheetId: string,
+  tabName: string,
+): Promise<{ headers: string[]; rawRows: string[][] }> {
+  const client = await getUncachableGoogleSheetClient();
+  const range = `${tabName}!A:Z`;
+  const response = await client.spreadsheets.values.get({ spreadsheetId, range });
+  const values = response.data.values;
+  if (!values || values.length === 0) {
+    return { headers: [], rawRows: [] };
+  }
+  const headers = (values[0] as string[]).map(h => h.trim());
+  const rawRows = values.length > 1
+    ? values.slice(1).map(r => (r as string[]).map(c => (c || "").trim()))
+    : [];
+  return { headers, rawRows };
+}
+
+const DEFAULT_HEADER_MAP: Record<string, string> = {
+  "first name": "firstName",
+  "first_name": "firstName",
+  firstname: "firstName",
+  "last name": "lastName",
+  "last_name": "lastName",
+  lastname: "lastName",
+  name: "fullName",
+  phone: "phone",
+  "phone number": "phone",
+  phone_number: "phone",
+  email: "email",
+  "email address": "email",
+  source: "source",
+  "lead source": "source",
+  lead_source: "source",
+  "service type": "serviceType",
+  service_type: "serviceType",
+  servicetype: "serviceType",
+  service: "serviceType",
+  "looking for": "serviceType",
+  interest: "serviceType",
+};
+
 export async function readSheetRows(
   spreadsheetId: string,
   tabName: string,
+  customMapping?: Record<string, string> | null,
 ): Promise<{ headers: string[]; rows: SheetRow[] }> {
-  const client = await getUncachableGoogleSheetClient();
+  const { headers: rawHeaders, rawRows } = await readRawSheetData(spreadsheetId, tabName);
+  if (rawHeaders.length === 0) return { headers: [], rows: [] };
 
-  const range = `${tabName}!A:Z`;
-  const response = await client.spreadsheets.values.get({
-    spreadsheetId,
-    range,
-  });
-
-  const values = response.data.values;
-  if (!values || values.length < 2) {
-    return { headers: [], rows: [] };
-  }
-
-  const rawHeaders = values[0] as string[];
-  const headers = rawHeaders.map((h) => h.trim().toLowerCase());
-
-  const headerMap: Record<string, string> = {
-    "first name": "firstName",
-    "first_name": "firstName",
-    firstname: "firstName",
-    "last name": "lastName",
-    "last_name": "lastName",
-    lastname: "lastName",
-    name: "fullName",
-    phone: "phone",
-    "phone number": "phone",
-    phone_number: "phone",
-    email: "email",
-    "email address": "email",
-    source: "source",
-    "lead source": "source",
-    lead_source: "source",
-    "service type": "serviceType",
-    service_type: "serviceType",
-    servicetype: "serviceType",
-    service: "serviceType",
-    "looking for": "serviceType",
-    interest: "serviceType",
-  };
+  const headerMap = customMapping || DEFAULT_HEADER_MAP;
+  const useCustom = !!customMapping;
 
   const rows: SheetRow[] = [];
 
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i] as string[];
+  for (const row of rawRows) {
     const obj: Record<string, string> = {};
 
-    for (let j = 0; j < headers.length; j++) {
-      const normalized = headerMap[headers[j]] || headers[j];
-      obj[normalized] = (row[j] || "").trim();
+    for (let j = 0; j < rawHeaders.length; j++) {
+      const headerKey = rawHeaders[j];
+      let normalized: string;
+      if (useCustom) {
+        normalized = headerMap[headerKey] || headerKey;
+      } else {
+        normalized = headerMap[headerKey.toLowerCase()] || headerKey.toLowerCase();
+      }
+      if (normalized && normalized !== "__skip__") {
+        obj[normalized] = (row[j] || "").trim();
+      }
     }
 
     if (obj.fullName && !obj.firstName) {

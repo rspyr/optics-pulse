@@ -1,11 +1,189 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { readSheetRows } from "../services/integrations/google-sheets";
+import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
+import { ai } from "@workspace/integrations-gemini-ai";
 
 const router: IRouter = Router();
+
+const INTERNAL_FIELDS = [
+  { field: "firstName", label: "First Name", description: "Lead's first name" },
+  { field: "lastName", label: "Last Name", description: "Lead's last name" },
+  { field: "fullName", label: "Full Name", description: "Lead's full name (will be split into first/last)" },
+  { field: "phone", label: "Phone", description: "Phone number" },
+  { field: "email", label: "Email", description: "Email address" },
+  { field: "source", label: "Lead Source", description: "Where the lead came from (e.g., Google, Facebook, referral)" },
+  { field: "serviceType", label: "Service Type", description: "Type of HVAC service needed (e.g., Heat Pump, A/C, Furnace)" },
+  { field: "status", label: "Status", description: "Lead status (e.g., new, contacted, booked)" },
+  { field: "notes", label: "Notes", description: "Additional notes or comments about the lead" },
+  { field: "address", label: "Address", description: "Street address" },
+  { field: "city", label: "City", description: "City" },
+  { field: "state", label: "State", description: "State/province" },
+  { field: "zip", label: "Zip Code", description: "Zip/postal code" },
+  { field: "__skip__", label: "Skip (Do Not Import)", description: "Ignore this column" },
+];
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+router.post("/google-sheets/analyze-mapping/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const tenantId = parseInt(String(req.params.tenantId));
+  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  if (!assoc?.googleSheetId || !assoc?.googleSheetTab) {
+    res.status(400).json({ error: "Google Sheet not configured for this funnel" });
+    return;
+  }
+
+  try {
+    const { headers, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+    if (headers.length === 0) {
+      res.status(400).json({ error: "No headers found in sheet" });
+      return;
+    }
+
+    const sampleData = rawRows.slice(0, 5).map(row => {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+      return obj;
+    });
+
+    const prompt = `You are analyzing a Google Sheet from an HVAC marketing agency's client. The sheet contains lead data that needs to be mapped to internal fields.
+
+SHEET HEADERS: ${JSON.stringify(headers)}
+
+SAMPLE DATA (first ${sampleData.length} rows):
+${JSON.stringify(sampleData, null, 2)}
+
+INTERNAL FIELDS AVAILABLE:
+${INTERNAL_FIELDS.map(f => `- "${f.field}": ${f.label} — ${f.description}`).join("\n")}
+
+TASK: For each sheet header, determine which internal field it maps to. Return a JSON object where:
+- Keys are the exact sheet header names (matching case)
+- Values are objects with: "field" (internal field name), "confidence" (number 0-1)
+
+Rules:
+- Map columns that clearly correspond to internal fields
+- Use "fullName" if a single column contains both first and last names
+- Use "__skip__" for columns that don't map to any internal field (e.g., timestamps, IDs, internal notes)
+- Confidence: 1.0 = exact/obvious match, 0.7-0.9 = likely match, 0.5-0.69 = uncertain, <0.5 = guess
+- If a column header is ambiguous, look at the sample data to determine the best mapping
+- Each internal field should only be mapped once (except __skip__)
+
+Respond with ONLY valid JSON. Example:
+{"First Name": {"field": "firstName", "confidence": 1.0}, "Ph #": {"field": "phone", "confidence": 0.9}}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json", maxOutputTokens: 2048 },
+    });
+
+    const rawText = response.text?.trim() || "{}";
+    let parsed: Record<string, { field: string; confidence: number }>;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+    }
+
+    const mapping: Record<string, string> = {};
+    const confidences: Record<string, number> = {};
+    for (const [header, val] of Object.entries(parsed)) {
+      if (val && typeof val === "object" && typeof val.field === "string") {
+        const validField = INTERNAL_FIELDS.find(f => f.field === val.field);
+        mapping[header] = validField ? val.field : "__skip__";
+        confidences[header] = typeof val.confidence === "number" ? val.confidence : 0.5;
+      }
+    }
+
+    for (const h of headers) {
+      if (!(h in mapping)) {
+        mapping[h] = "__skip__";
+        confidences[h] = 0;
+      }
+    }
+
+    res.json({
+      headers,
+      sampleData,
+      proposedMapping: mapping,
+      confidences,
+      internalFields: INTERNAL_FIELDS,
+      totalRows: rawRows.length,
+    });
+  } catch (err) {
+    console.error("[GoogleSheets Mapping] LLM analysis error:", err);
+    const message = err instanceof Error ? err.message : "Failed to analyze sheet";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const tenantId = parseInt(String(req.params.tenantId));
+  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+  const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
+
+  if (!mapping || !headers || !Array.isArray(headers)) {
+    res.status(400).json({ error: "mapping and headers are required" });
+    return;
+  }
+
+  await db.update(tenantFunnelTypesTable)
+    .set({ columnMapping: mapping, mappingHeaders: headers })
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  res.json({ success: true });
+});
+
+router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
+  const tenantId = parseInt(String(req.params.tenantId));
+  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+
+  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
+  if (role === "client_admin" || role === "client_user") {
+    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
+    if (sessionTenantId !== tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  if (!assoc) {
+    res.status(404).json({ error: "Association not found" });
+    return;
+  }
+
+  const hasMapping = !!assoc.columnMapping && !!assoc.mappingHeaders;
+  let headersChanged = false;
+
+  if (hasMapping && assoc.googleSheetId && assoc.googleSheetTab) {
+    try {
+      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+      headersChanged = !arraysEqual(currentHeaders, assoc.mappingHeaders as string[]);
+    } catch {
+      headersChanged = false;
+    }
+  }
+
+  res.json({
+    hasMapping,
+    headersChanged,
+    columnMapping: assoc.columnMapping,
+    mappingHeaders: assoc.mappingHeaders,
+  });
+});
 
 router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
   const tenantId = parseInt(String(req.params.tenantId));
@@ -20,10 +198,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
     }
   }
 
-  const [assoc] = await db.select({
-    googleSheetId: tenantFunnelTypesTable.googleSheetId,
-    googleSheetTab: tenantFunnelTypesTable.googleSheetTab,
-  }).from(tenantFunnelTypesTable)
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
     .where(and(
       eq(tenantFunnelTypesTable.tenantId, tenantId),
       eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
@@ -39,10 +214,30 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
     return;
   }
 
+  if (assoc.columnMapping && assoc.mappingHeaders) {
+    try {
+      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+      if (!arraysEqual(currentHeaders, assoc.mappingHeaders as string[])) {
+        res.status(409).json({
+          error: "Sheet headers have changed since mapping was approved. Please re-analyze and approve the mapping.",
+          headersChanged: true,
+        });
+        return;
+      }
+    } catch (headerErr) {
+      console.error("[GoogleSheets Ingest] Failed to verify headers:", headerErr);
+      res.status(503).json({
+        error: "Unable to verify sheet headers against approved mapping. Please try again.",
+      });
+      return;
+    }
+  }
+
   const [funnel] = await db.select().from(funnelTypesTable).where(eq(funnelTypesTable.id, funnelTypeId));
 
   try {
-    const { rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab);
+    const customMapping = assoc.columnMapping as Record<string, string> | null;
+    const { rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab, customMapping);
 
     if (rows.length === 0) {
       res.json({ imported: 0, skipped: 0, message: "No rows found in sheet" });
@@ -124,10 +319,7 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
     }
   }
 
-  const [assoc] = await db.select({
-    googleSheetId: tenantFunnelTypesTable.googleSheetId,
-    googleSheetTab: tenantFunnelTypesTable.googleSheetTab,
-  }).from(tenantFunnelTypesTable)
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
     .where(and(
       eq(tenantFunnelTypesTable.tenantId, tenantId),
       eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
@@ -139,11 +331,21 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
   }
 
   try {
-    const { headers, rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab);
+    const customMapping = assoc.columnMapping as Record<string, string> | null;
+    const { headers, rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab, customMapping);
+
+    let headersChanged = false;
+    if (assoc.mappingHeaders) {
+      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+      headersChanged = !arraysEqual(currentHeaders, assoc.mappingHeaders as string[]);
+    }
+
     res.json({
       headers,
       sampleRows: rows.slice(0, 5),
       totalRows: rows.length,
+      hasMapping: !!assoc.columnMapping,
+      headersChanged,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to read Google Sheet";
