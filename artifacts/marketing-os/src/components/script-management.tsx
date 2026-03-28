@@ -3,7 +3,8 @@ import { PremiumCard } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import {
   Phone, MessageSquare, Mail, Mic, Plus, Save, X, History,
-  ChevronDown, Eye, RotateCcw, Trash2, Loader2, Check, AlertTriangle
+  ChevronDown, Eye, RotateCcw, Trash2, Loader2, Check, AlertTriangle,
+  Filter,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -35,6 +36,12 @@ interface ScriptVersion {
   createdAt: string;
 }
 
+interface FunnelType {
+  id: number;
+  name: string;
+  slug: string;
+}
+
 const TYPE_CONFIG = {
   call: { label: "Call Scripts", icon: Phone, color: "text-blue-400" },
   text: { label: "Text Templates", icon: MessageSquare, color: "text-emerald-400" },
@@ -42,7 +49,8 @@ const TYPE_CONFIG = {
   voicemail: { label: "Voicemail Scripts", icon: Mic, color: "text-purple-400" },
 };
 
-const SOURCES = ["Google Ads", "Meta Leads", "CallRail", "Organic Search", "Direct", "Referral"];
+const SOURCES = ["Google Ads", "Meta Leads", "Organic Search", "Direct", "Referral"];
+const SERVICE_TYPES = ["AC Repair", "AC Install", "Heating Repair", "Heating Install", "Maintenance", "Duct Work", "Indoor Air Quality", "Other"];
 const STAGES = [
   { value: "", label: "Any Stage" },
   { value: "new", label: "New Lead" },
@@ -57,6 +65,14 @@ const DISPOSITIONS = [
   { value: "already_had_estimate", label: "Already Had Estimate" },
   { value: "dont_remember", label: "Don't Remember Form" },
   { value: "never_answered", label: "Never Answered" },
+];
+
+const SMART_FIELDS = [
+  { token: "{{lead_name}}", label: "Lead Name", preview: "John" },
+  { token: "{{csr_name}}", label: "CSR Name", preview: "Sarah" },
+  { token: "{{service_type}}", label: "Service Type", preview: "AC Repair" },
+  { token: "{{funnel}}", label: "Funnel", preview: "Google Ads" },
+  { token: "{{company}}", label: "Company", preview: "CoolAir HVAC" },
 ];
 
 function computeDiff(oldText: string, newText: string): { type: "same" | "added" | "removed"; text: string }[] {
@@ -78,11 +94,16 @@ function computeDiff(oldText: string, newText: string): { type: "same" | "added"
 }
 
 function substitutePreview(content: string) {
-  return content
+  let result = content;
+  for (const sf of SMART_FIELDS) {
+    result = result.replace(new RegExp(sf.token.replace(/[{}]/g, "\\$&"), "g"), sf.preview);
+  }
+  result = result
     .replace(/\[NAME\]/g, "John")
     .replace(/\[REP\]/g, "Sarah")
     .replace(/\[COMPANY\]/g, "CoolAir HVAC")
-    .replace(/\[INTEREST\]/g, "AC repair");
+    .replace(/\[INTEREST\]/g, "AC Repair");
+  return result;
 }
 
 export default function ScriptManagement({ tenantId }: { tenantId?: number | null }) {
@@ -104,7 +125,19 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
   const [editStage, setEditStage] = useState("");
   const [editDisposition, setEditDisposition] = useState("");
 
+  const [funnels, setFunnels] = useState<FunnelType[]>([]);
+  const [funnelFilter, setFunnelFilter] = useState<string>("");
+  const [serviceFilter, setServiceFilter] = useState<string>("");
+
   const tq = tenantId ? `?tenantId=${tenantId}` : "";
+
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${API_BASE}/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setFunnels(data); })
+      .catch(() => {});
+  }, [tenantId]);
 
   const fetchScripts = useCallback(async (isInitial = false) => {
     if (isInitial) setLoading(true);
@@ -115,13 +148,28 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
         const data = await res.json();
         if (Array.isArray(data)) setScripts(data);
       }
-    } catch { /* ignore */ }
+    } catch {}
     finally { setLoading(false); }
   }, [tq]);
 
   useEffect(() => { fetchScripts(true); }, [fetchScripts]);
 
-  const filteredScripts = scripts.filter(s => s.type === activeType);
+  const filteredScripts = scripts.filter(s => {
+    if (s.type !== activeType) return false;
+    if (funnelFilter) {
+      const matchesFunnel = s.name.toLowerCase().includes(funnelFilter.toLowerCase()) ||
+        s.sourceFilter?.toLowerCase().includes(funnelFilter.toLowerCase()) ||
+        s.content.toLowerCase().includes(funnelFilter.toLowerCase());
+      if (!matchesFunnel) return false;
+    }
+    if (serviceFilter) {
+      const matchesService = s.name.toLowerCase().includes(serviceFilter.toLowerCase()) ||
+        s.content.toLowerCase().includes(serviceFilter.toLowerCase()) ||
+        s.dispositionFilter?.toLowerCase().includes(serviceFilter.toLowerCase());
+      if (!matchesService) return false;
+    }
+    return true;
+  });
 
   const showMsg = (type: "success" | "error", msg: string) => {
     setFeedback({ type, msg });
@@ -233,7 +281,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
       const data = await res.json();
       setVersions(data);
       setShowVersions(true);
-    } catch { /* ignore */ }
+    } catch {}
   };
 
   const handleRevert = async (script: Script, versionId: number) => {
@@ -251,6 +299,10 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
     } catch {
       showMsg("error", "Revert failed");
     }
+  };
+
+  const insertSmartField = (token: string) => {
+    setEditContent(prev => prev + token);
   };
 
   if (loading) {
@@ -273,7 +325,7 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {(Object.entries(TYPE_CONFIG) as [string, typeof TYPE_CONFIG.call][]).map(([type, cfg]) => (
           <button
             key={type}
@@ -289,6 +341,28 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
             {cfg.label}
           </button>
         ))}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <Filter className="w-3.5 h-3.5 text-white/20" />
+        {funnels.length > 0 && (
+          <select
+            value={funnelFilter}
+            onChange={e => setFunnelFilter(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            <option value="">All Funnels</option>
+            {funnels.map(f => <option key={f.id} value={f.slug}>{f.name}</option>)}
+          </select>
+        )}
+        <select
+          value={serviceFilter}
+          onChange={e => setServiceFilter(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+        >
+          <option value="">All Service Types</option>
+          {SERVICE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -430,13 +504,28 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
               </div>
 
               <div>
-                <label className="text-[10px] text-white/30 uppercase tracking-wider">Content</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Content</label>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[9px] text-white/20 mr-1">Insert:</span>
+                    {SMART_FIELDS.map(sf => (
+                      <button
+                        key={sf.token}
+                        onClick={() => insertSmartField(sf.token)}
+                        className="px-1.5 py-0.5 rounded text-[9px] bg-blue-500/10 text-blue-400/70 hover:bg-blue-500/20 transition-colors"
+                        title={sf.label}
+                      >
+                        {sf.token}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <textarea
                   value={editContent}
                   onChange={e => setEditContent(e.target.value)}
                   rows={6}
-                  className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono resize-none"
-                  placeholder="Script content with [NAME], [REP], [COMPANY], [INTEREST] placeholders..."
+                  className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono resize-none"
+                  placeholder={`Script content with smart fields like {{lead_name}}, {{csr_name}}, {{service_type}}...`}
                 />
               </div>
 

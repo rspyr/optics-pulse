@@ -3,45 +3,57 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
 import {
-  Users, Phone, MessageSquare, TrendingUp, TrendingDown,
+  Users, Phone, MessageSquare, TrendingUp,
   Loader2, Award, Clock, Zap, AlertTriangle, Lightbulb,
   CheckCircle2, PhoneCall, Mail, Settings as SettingsIcon,
   FileText, Activity, Brain, BarChart3, DollarSign, Target,
-  ArrowUpRight, ArrowDownRight, Minus, RefreshCw,
+  ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
+  Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
+  Mic, GripVertical,
 } from "lucide-react";
 import ScriptManagement from "@/components/script-management";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
-type Tab = "team" | "scripts" | "activity" | "coaching" | "settings";
+type Tab = "dashboard" | "team" | "scripts" | "activity" | "coaching" | "routing" | "settings";
 
-interface CoordinatorData {
+interface FunnelType {
   id: number;
   name: string;
-  role: string;
-  email: string;
-  today: {
-    callsMade: number;
-    bookings: number;
-    bookingRate: number;
-    commission: number;
-    speedToLead: number;
-  };
-  week: {
-    avgBookingRate: number;
-    totalCalls: number;
-    totalBookings: number;
-    daysActive: number;
-  };
+  slug: string;
+  description: string | null;
+  isActive: boolean;
+  googleSheetId?: string | null;
+  googleSheetTab?: string | null;
 }
 
-interface TeamTotals {
-  callsMade: number;
-  bookings: number;
+interface StatsData {
+  totalLeads: number;
+  appointments: number;
   bookingRate: number;
-  commission: number;
-  activeCoordinators: number;
-  totalCoordinators: number;
+  bySource: { source: string; total: number; appointments: number; bookingRate: number }[];
+  byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number }[];
+  byCsr: { csrId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
+}
+
+interface CsrData {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  isPaused: boolean;
+  pauseStart: string | null;
+  pauseEnd: string | null;
+}
+
+interface RoutingConfig {
+  id: number;
+  tenantId: number;
+  funnelTypeId: number | null;
+  cascadeOrder: number[];
+  passIntervalHours: number;
+  allowPassBack: boolean;
+  isActive: boolean;
 }
 
 interface ActivityItem {
@@ -68,29 +80,85 @@ interface CoachingInsight {
   value?: number;
 }
 
-function useTeamData(tenantId: number | null) {
-  const [data, setData] = useState<{ coordinators: CoordinatorData[]; teamTotals: TeamTotals | null }>({
-    coordinators: [], teamTotals: null,
-  });
+interface TenantOption { id: number; name: string; }
+
+function useFunnelTypes(tenantId: number | null) {
+  const [funnels, setFunnels] = useState<FunnelType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchTeam = useCallback(async () => {
+  const fetchFunnels = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
     try {
-      const url = tenantId
-        ? `${API_BASE}/sales-manager/team?tenantId=${tenantId}`
-        : `${API_BASE}/sales-manager/team`;
-      const res = await fetch(url, { credentials: "include" });
-      if (res.ok) setData(await res.json());
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/funnel-types`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setFunnels(data);
+      }
     } catch {} finally { setLoading(false); }
   }, [tenantId]);
 
-  useEffect(() => {
-    fetchTeam();
-    const interval = setInterval(fetchTeam, 15000);
-    return () => clearInterval(interval);
-  }, [fetchTeam]);
+  useEffect(() => { fetchFunnels(); }, [fetchFunnels]);
 
-  return { ...data, loading, refetch: fetchTeam };
+  return { funnels, loading, refetch: fetchFunnels };
+}
+
+function useStats(tenantId: number | null, startDate: string, endDate: string, funnelId: number | null) {
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchStats = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
+    try {
+      const params = new URLSearchParams({ tenantId: String(tenantId), startDate, endDate });
+      if (funnelId) params.set("funnelId", String(funnelId));
+      const res = await fetch(`${API_BASE}/leads-hub/stats?${params}`, { credentials: "include" });
+      if (res.ok) setStats(await res.json());
+    } catch {} finally { setLoading(false); }
+  }, [tenantId, startDate, endDate, funnelId]);
+
+  useEffect(() => { setLoading(true); fetchStats(); }, [fetchStats]);
+
+  return { stats, loading, refetch: fetchStats };
+}
+
+function useCsrs(tenantId: number | null) {
+  const [csrs, setCsrs] = useState<CsrData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchCsrs = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/csrs?tenantId=${tenantId}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setCsrs(data.csrs || []);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { fetchCsrs(); }, [fetchCsrs]);
+
+  return { csrs, loading, refetch: fetchCsrs };
+}
+
+function useRoutingConfigs(tenantId: number | null) {
+  const [configs, setConfigs] = useState<RoutingConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchConfigs = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/routing-config?tenantId=${tenantId}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setConfigs(data.configs || []);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { fetchConfigs(); }, [fetchConfigs]);
+
+  return { configs, loading, refetch: fetchConfigs };
 }
 
 function useActivityFeed(tenantId: number | null) {
@@ -127,8 +195,7 @@ function useCoachingInsights(tenantId: number | null) {
   useEffect(() => {
     if (!tenantId) { setLoading(false); setInsights([]); return; }
     setFetching(true);
-    const url = `${API_BASE}/sales-manager/coaching-insights?tenantId=${tenantId}`;
-    fetch(url, { credentials: "include" })
+    fetch(`${API_BASE}/sales-manager/coaching-insights?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => { setInsights(d.insights || []); })
       .catch(() => {})
@@ -137,83 +204,6 @@ function useCoachingInsights(tenantId: number | null) {
 
   return { insights, loading, fetching };
 }
-
-interface ScriptChange {
-  id: number;
-  category: string;
-  title: string;
-  description: string;
-  date: string;
-}
-
-function useRecentScriptChanges(tenantId: number | null) {
-  const [changes, setChanges] = useState<ScriptChange[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
-
-  useEffect(() => {
-    if (!tenantId) { setLoading(false); setChanges([]); return; }
-    setFetching(true);
-    fetch(`${API_BASE}/sales-manager/recent-script-changes?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => { setChanges(d.changes || []); })
-      .catch(() => {})
-      .finally(() => { setLoading(false); setFetching(false); });
-  }, [tenantId]);
-
-  return { changes, loading, fetching };
-}
-
-interface CommunicationConfig {
-  callPlatform: string;
-  textPlatform: string;
-}
-
-function useCommunicationConfig(tenantId: number | null) {
-  const [config, setConfig] = useState<CommunicationConfig | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const fetchConfig = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
-    try {
-      const res = await fetch(`${API_BASE}/tenants/${tenantId}`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        const cc = data.communicationConfig || {};
-        setConfig({
-          callPlatform: cc.callPlatform || "native",
-          textPlatform: cc.textPlatform || "native",
-        });
-      }
-    } catch {} finally { setLoading(false); }
-  }, [tenantId]);
-
-  useEffect(() => { fetchConfig(); }, [fetchConfig]);
-
-  const saveConfig = async (updates: Partial<CommunicationConfig>) => {
-    if (!tenantId) return;
-    try {
-      const res = await fetch(`${API_BASE}/tenants/${tenantId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ communicationConfig: updates }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const cc = data.communicationConfig || {};
-        setConfig({
-          callPlatform: cc.callPlatform || "native",
-          textPlatform: cc.textPlatform || "native",
-        });
-      }
-    } catch {}
-  };
-
-  return { config, loading, saveConfig, refetch: fetchConfig };
-}
-
-interface TenantOption { id: number; name: string; }
 
 function MetricCard({ label, value, icon: Icon, delta, format = "number", className }: {
   label: string;
@@ -250,29 +240,25 @@ function MetricCard({ label, value, icon: Icon, delta, format = "number", classN
   );
 }
 
-function formatSpeed(seconds: number) {
-  if (seconds === 0) return "—";
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+function getDateRange(preset: string): [string, string] {
+  const now = new Date();
+  const end = now.toISOString();
+  const start = new Date();
+  switch (preset) {
+    case "today": start.setHours(0, 0, 0, 0); break;
+    case "7d": start.setDate(start.getDate() - 7); break;
+    case "30d": start.setDate(start.getDate() - 30); break;
+    case "90d": start.setDate(start.getDate() - 90); break;
+    default: start.setHours(0, 0, 0, 0);
+  }
+  return [start.toISOString(), end];
 }
 
-function TeamOverviewTab({ coordinators, teamTotals, loading }: {
-  coordinators: CoordinatorData[];
-  teamTotals: TeamTotals | null;
-  loading: boolean;
-}) {
-  const [sortBy, setSortBy] = useState<"bookings" | "calls" | "rate" | "commission">("bookings");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-
-  const sorted = [...coordinators].sort((a, b) => {
-    switch (sortBy) {
-      case "calls": return b.today.callsMade - a.today.callsMade;
-      case "rate": return b.today.bookingRate - a.today.bookingRate;
-      case "commission": return b.today.commission - a.today.commission;
-      default: return b.today.bookings - a.today.bookings;
-    }
-  });
+function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+  const [datePreset, setDatePreset] = useState("today");
+  const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
+  const [startDate, endDate] = getDateRange(datePreset);
+  const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter);
 
   if (loading) {
     return (
@@ -282,59 +268,215 @@ function TeamOverviewTab({ coordinators, teamTotals, loading }: {
     );
   }
 
-  const avgSpeed = coordinators.length > 0
-    ? Math.round(coordinators.reduce((s, c) => s + c.today.speedToLead, 0) / Math.max(coordinators.filter(c => c.today.speedToLead > 0).length, 1))
-    : 0;
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1">
+          {(["today", "7d", "30d", "90d"] as const).map(p => (
+            <button
+              key={p}
+              onClick={() => setDatePreset(p)}
+              className={cn(
+                "px-3 py-1 rounded text-xs font-mono uppercase",
+                datePreset === p
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <select
+          value={funnelFilter ?? ""}
+          onChange={e => setFunnelFilter(e.target.value ? Number(e.target.value) : null)}
+          className="bg-white/5 border border-white/10 rounded-md px-3 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+        >
+          <option value="">All Funnels</option>
+          {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <MetricCard label="Total Leads" value={stats?.totalLeads || 0} icon={Users} />
+        <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
+        <MetricCard label="Booking Rate" value={stats?.bookingRate || 0} icon={TrendingUp} format="percent" />
+        <MetricCard label="Total Calls" value={stats?.byCsr.reduce((s, c) => s + c.calls, 0) || 0} icon={Phone} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PremiumCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            <span className="text-sm font-display text-white">By Source</span>
+          </div>
+          {(stats?.bySource || []).length === 0 ? (
+            <p className="text-xs text-white/30 text-center py-4">No source data</p>
+          ) : (
+            <div className="space-y-2">
+              {stats!.bySource.map(s => (
+                <div key={s.source} className="flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5">
+                  <span className="text-xs text-white/70">{s.source}</span>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-white">{s.total}</p>
+                      <p className="text-[9px] text-white/20 uppercase">leads</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-emerald-400">{s.appointments}</p>
+                      <p className="text-[9px] text-white/20 uppercase">appts</p>
+                    </div>
+                    <div className="text-right min-w-[40px]">
+                      <p className={cn(
+                        "text-xs font-mono",
+                        s.bookingRate >= 30 ? "text-emerald-400" : s.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
+                      )}>{s.bookingRate}%</p>
+                      <p className="text-[9px] text-white/20 uppercase">rate</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </PremiumCard>
+
+        <PremiumCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Shuffle className="w-4 h-4 text-primary" />
+            <span className="text-sm font-display text-white">By Funnel</span>
+          </div>
+          {(stats?.byFunnel || []).length === 0 ? (
+            <p className="text-xs text-white/30 text-center py-4">No funnel data</p>
+          ) : (
+            <div className="space-y-2">
+              {stats!.byFunnel.map(f => {
+                const funnelName = funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`;
+                return (
+                  <div key={f.funnelId} className="flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5">
+                    <span className="text-xs text-white/70">{funnelName}</span>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <p className="text-xs font-mono text-white">{f.total}</p>
+                        <p className="text-[9px] text-white/20 uppercase">leads</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-mono text-emerald-400">{f.appointments}</p>
+                        <p className="text-[9px] text-white/20 uppercase">appts</p>
+                      </div>
+                      <div className="text-right min-w-[40px]">
+                        <p className={cn(
+                          "text-xs font-mono",
+                          f.bookingRate >= 30 ? "text-emerald-400" : f.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
+                        )}>{f.bookingRate}%</p>
+                        <p className="text-[9px] text-white/20 uppercase">rate</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </PremiumCard>
+      </div>
+    </div>
+  );
+}
+
+function TeamTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+  const [datePreset, setDatePreset] = useState("today");
+  const [startDate, endDate] = getDateRange(datePreset);
+  const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null);
+  const { csrs, loading: csrsLoading } = useCsrs(tenantId);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [sortBy, setSortBy] = useState<"appts" | "calls" | "rate">("appts");
+
+  const loading = statsLoading || csrsLoading;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  const csrStats = (stats?.byCsr || []).map(s => {
+    const csr = csrs.find(c => c.id === s.csrId);
+    return { ...s, name: csr?.name || `CSR #${s.csrId}`, email: csr?.email || "", isPaused: csr?.isPaused || false };
+  });
+
+  const sorted = [...csrStats].sort((a, b) => {
+    switch (sortBy) {
+      case "calls": return b.calls - a.calls;
+      case "rate": return b.bookingRate - a.bookingRate;
+      default: return b.appointments - a.appointments;
+    }
+  });
+
+  const teamFunnelBreakdown = (stats?.byFunnel || []).map(f => ({
+    funnelId: f.funnelId,
+    funnelName: funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`,
+    total: f.total,
+    appointments: f.appointments,
+    bookingRate: f.bookingRate,
+  }));
 
   return (
     <div className="space-y-6">
-      {teamTotals && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <MetricCard label="Team Calls Today" value={teamTotals.callsMade} icon={Phone} />
-          <MetricCard label="Team Bookings" value={teamTotals.bookings} icon={Target} />
-          <MetricCard label="Team Booking Rate" value={teamTotals.bookingRate} icon={TrendingUp} format="percent" />
-          <MetricCard label="Team Commission" value={teamTotals.commission} icon={DollarSign} format="currency" />
-          <MetricCard label="Avg Speed-to-Lead" value={avgSpeed} icon={Zap} format="time" />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1">
+          {(["today", "7d", "30d", "90d"] as const).map(p => (
+            <button
+              key={p}
+              onClick={() => setDatePreset(p)}
+              className={cn(
+                "px-3 py-1 rounded text-xs font-mono uppercase",
+                datePreset === p
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              {p}
+            </button>
+          ))}
         </div>
-      )}
+        <div className="flex items-center gap-1 ml-auto">
+          {(["appts", "calls", "rate"] as const).map(key => (
+            <button
+              key={key}
+              onClick={() => setSortBy(key)}
+              className={cn(
+                "px-2 py-0.5 rounded text-[10px] font-mono uppercase",
+                sortBy === key
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              {key}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <PremiumCard className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-primary" />
-            <span className="text-sm font-display text-white">
-              Coordinators ({teamTotals?.activeCoordinators || 0} active / {teamTotals?.totalCoordinators || 0} total)
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            {(["bookings", "calls", "rate", "commission"] as const).map(key => (
-              <button
-                key={key}
-                onClick={() => setSortBy(key)}
-                className={cn(
-                  "px-2 py-0.5 rounded text-[10px] font-mono uppercase",
-                  sortBy === key
-                    ? "bg-primary/20 text-primary border border-primary/30"
-                    : "text-white/30 hover:text-white/50"
-                )}
-              >
-                {key}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-2 mb-4">
+          <Users className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">
+            CSR Performance ({sorted.length} reps)
+          </span>
         </div>
 
         {sorted.length === 0 ? (
           <div className="text-center py-12">
             <Users className="w-8 h-8 text-white/10 mx-auto mb-2" />
-            <p className="text-xs text-white/30">No coordinators found</p>
+            <p className="text-xs text-white/30">No CSR activity data in this period</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {sorted.map((coord, idx) => (
-              <div key={coord.id}>
+            {sorted.map((csr, idx) => (
+              <div key={csr.csrId}>
                 <button
-                  onClick={() => setExpandedId(expandedId === coord.id ? null : coord.id)}
+                  onClick={() => setExpandedId(expandedId === csr.csrId ? null : csr.csrId)}
                   className="w-full flex items-center gap-4 p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors text-left"
                 >
                   <div className="w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
@@ -349,71 +491,76 @@ function TeamOverviewTab({ coordinators, teamTotals, loading }: {
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{coord.name}</p>
-                    <p className="text-[10px] text-white/30">
-                      {coord.role === "client_admin" ? "Manager" : coord.role === "client_user" ? "Coordinator" : coord.role}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-white truncate">{csr.name}</p>
+                      {csr.isPaused && (
+                        <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">paused</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-white/30">{csr.email}</p>
                   </div>
 
-                  <div className="grid grid-cols-5 gap-3 text-center flex-shrink-0">
+                  <div className="grid grid-cols-6 gap-3 text-center flex-shrink-0">
                     <div>
-                      <p className="text-xs font-mono text-white">{coord.today.callsMade}</p>
+                      <p className="text-xs font-mono text-white">{csr.calls}</p>
                       <p className="text-[9px] text-white/20 uppercase">Calls</p>
                     </div>
                     <div>
-                      <p className="text-xs font-mono text-emerald-400">{coord.today.bookings}</p>
-                      <p className="text-[9px] text-white/20 uppercase">Booked</p>
+                      <p className="text-xs font-mono text-purple-400">{csr.vms}</p>
+                      <p className="text-[9px] text-white/20 uppercase">VMs</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-mono text-blue-400">{csr.texts}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Texts</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-mono text-emerald-400">{csr.appointments}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Appts</p>
                     </div>
                     <div>
                       <p className={cn(
                         "text-xs font-mono",
-                        coord.today.bookingRate >= 30 ? "text-emerald-400" : coord.today.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
+                        csr.bookingRate >= 30 ? "text-emerald-400" : csr.bookingRate >= 15 ? "text-amber-400" : "text-red-400"
                       )}>
-                        {coord.today.bookingRate}%
+                        {csr.bookingRate}%
                       </p>
                       <p className="text-[9px] text-white/20 uppercase">Rate</p>
                     </div>
                     <div>
-                      <p className="text-xs font-mono text-white">${coord.today.commission}</p>
-                      <p className="text-[9px] text-white/20 uppercase">Earned</p>
-                    </div>
-                    <div>
-                      <p className={cn(
-                        "text-xs font-mono",
-                        coord.today.speedToLead > 0 && coord.today.speedToLead <= 300 ? "text-emerald-400"
-                          : coord.today.speedToLead <= 900 ? "text-amber-400" : "text-white/40"
-                      )}>
-                        {formatSpeed(coord.today.speedToLead)}
-                      </p>
-                      <p className="text-[9px] text-white/20 uppercase">Speed</p>
+                      <p className="text-xs font-mono text-white">{csr.total}</p>
+                      <p className="text-[9px] text-white/20 uppercase">Leads</p>
                     </div>
                   </div>
+
+                  {expandedId === csr.csrId ? (
+                    <ChevronUp className="w-4 h-4 text-white/20 flex-shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-white/20 flex-shrink-0" />
+                  )}
                 </button>
 
-                {expandedId === coord.id && (
+                {expandedId === csr.csrId && (
                   <div className="ml-11 mt-1 p-3 rounded-lg bg-white/[0.01] border border-white/5">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div>
-                        <p className="text-[9px] text-white/20 uppercase mb-0.5">Email</p>
-                        <p className="text-xs text-white/60 truncate">{coord.email}</p>
+                    <p className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Team Funnel Breakdown</p>
+                    {teamFunnelBreakdown.length === 0 ? (
+                      <p className="text-xs text-white/20">No funnel data available</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {teamFunnelBreakdown.map(f => (
+                          <div key={f.funnelId} className="flex items-center justify-between text-xs">
+                            <span className="text-white/50">{f.funnelName}</span>
+                            <div className="flex items-center gap-4">
+                              <span className="font-mono text-white/40">{f.total} leads</span>
+                              <span className="font-mono text-emerald-400/70">{f.appointments} appts</span>
+                              <span className={cn(
+                                "font-mono",
+                                f.bookingRate >= 30 ? "text-emerald-400/70" : f.bookingRate >= 15 ? "text-amber-400/70" : "text-red-400/70"
+                              )}>{f.bookingRate}%</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div>
-                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Avg Rate</p>
-                        <p className="text-xs font-mono text-white/60">{coord.week.avgBookingRate}%</p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Calls</p>
-                        <p className="text-xs font-mono text-white/60">{coord.week.totalCalls}</p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] text-white/20 uppercase mb-0.5">7-Day Bookings</p>
-                        <p className="text-xs font-mono text-white/60">{coord.week.totalBookings}</p>
-                      </div>
-                    </div>
-                    <div className="mt-2 pt-2 border-t border-white/5">
-                      <p className="text-[9px] text-white/20 uppercase mb-0.5">Days Active (last 7)</p>
-                      <p className="text-xs font-mono text-white/60">{coord.week.daysActive} / 7</p>
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -421,6 +568,291 @@ function TeamOverviewTab({ coordinators, teamTotals, loading }: {
           </div>
         )}
       </PremiumCard>
+    </div>
+  );
+}
+
+function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+  const { configs, loading: configsLoading, refetch: refetchConfigs } = useRoutingConfigs(tenantId);
+  const { csrs, loading: csrsLoading, refetch: refetchCsrs } = useCsrs(tenantId);
+  const [selectedFunnelId, setSelectedFunnelId] = useState<number | null>(null);
+  const [cascadeOrder, setCascadeOrder] = useState<number[]>([]);
+  const [passInterval, setPassInterval] = useState(24);
+  const [allowPassBack, setAllowPassBack] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
+
+  const loading = configsLoading || csrsLoading;
+
+  useEffect(() => {
+    const config = configs.find(c =>
+      selectedFunnelId ? c.funnelTypeId === selectedFunnelId : c.funnelTypeId === null
+    );
+    if (config) {
+      setCascadeOrder(config.cascadeOrder || []);
+      setPassInterval(config.passIntervalHours || 24);
+      setAllowPassBack(config.allowPassBack || false);
+    } else {
+      setCascadeOrder([]);
+      setPassInterval(24);
+      setAllowPassBack(false);
+    }
+  }, [selectedFunnelId, configs]);
+
+  const handleSaveRouting = async () => {
+    if (!tenantId) return;
+    setSaving(true);
+    setSaved(false);
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/routing-config?tenantId=${tenantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          funnelTypeId: selectedFunnelId || null,
+          cascadeOrder,
+          passIntervalHours: passInterval,
+          allowPassBack,
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        refetchConfigs();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Save failed" }));
+        alert(err.error || "Failed to save routing config");
+      }
+    } catch {
+      alert("Connection error saving routing config");
+    } finally { setSaving(false); }
+  };
+
+  const toggleCsrPause = async (userId: number, isPaused: boolean, pauseEnd?: string) => {
+    if (!tenantId) return;
+    setScheduleSaving(userId);
+    try {
+      await fetch(`${API_BASE}/leads-hub/csr-schedule/${userId}?tenantId=${tenantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          isPaused,
+          pauseStart: isPaused ? new Date().toISOString() : null,
+          pauseEnd: pauseEnd || null,
+        }),
+      });
+      refetchCsrs();
+    } catch {} finally { setScheduleSaving(null); }
+  };
+
+  const addToCascade = (csrId: number) => {
+    if (!cascadeOrder.includes(csrId)) {
+      setCascadeOrder([...cascadeOrder, csrId]);
+    }
+  };
+
+  const removeFromCascade = (csrId: number) => {
+    setCascadeOrder(cascadeOrder.filter(id => id !== csrId));
+  };
+
+  const moveCascade = (idx: number, dir: -1 | 1) => {
+    const newOrder = [...cascadeOrder];
+    const target = idx + dir;
+    if (target < 0 || target >= newOrder.length) return;
+    [newOrder[idx], newOrder[target]] = [newOrder[target], newOrder[idx]];
+    setCascadeOrder(newOrder);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <select
+          value={selectedFunnelId ?? ""}
+          onChange={e => setSelectedFunnelId(e.target.value ? Number(e.target.value) : null)}
+          className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+        >
+          <option value="">Default (All Funnels)</option>
+          {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PremiumCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Shuffle className="w-4 h-4 text-primary" />
+            <span className="text-sm font-display text-white">Round-Robin Cascade Order</span>
+          </div>
+
+          {cascadeOrder.length === 0 ? (
+            <p className="text-xs text-white/30 mb-3">No CSRs in rotation. Add CSRs below.</p>
+          ) : (
+            <div className="space-y-1 mb-3">
+              {cascadeOrder.map((csrId, idx) => {
+                const csr = csrs.find(c => c.id === csrId);
+                return (
+                  <div key={csrId} className="flex items-center gap-2 p-2 rounded bg-white/[0.02] border border-white/5">
+                    <GripVertical className="w-3 h-3 text-white/15 flex-shrink-0" />
+                    <span className="text-[10px] font-mono text-white/30 w-5">{idx + 1}.</span>
+                    <span className="text-xs text-white flex-1 truncate">{csr?.name || `User #${csrId}`}</span>
+                    {csr?.isPaused && (
+                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.5 rounded">paused</span>
+                    )}
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => moveCascade(idx, -1)}
+                        disabled={idx === 0}
+                        className="p-0.5 rounded text-white/20 hover:text-white/50 disabled:opacity-20"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => moveCascade(idx, 1)}
+                        disabled={idx === cascadeOrder.length - 1}
+                        className="p-0.5 rounded text-white/20 hover:text-white/50 disabled:opacity-20"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => removeFromCascade(csrId)}
+                        className="p-0.5 rounded text-white/20 hover:text-red-400 ml-1"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {csrs.filter(c => !cascadeOrder.includes(c.id)).length > 0 && (
+            <div className="border-t border-white/5 pt-3 mt-3 space-y-1">
+              <p className="text-[10px] text-white/20 uppercase tracking-wider mb-1">Available CSRs</p>
+              {csrs.filter(c => !cascadeOrder.includes(c.id)).map(csr => (
+                <button
+                  key={csr.id}
+                  onClick={() => addToCascade(csr.id)}
+                  className="w-full flex items-center gap-2 p-2 rounded bg-white/[0.01] border border-white/5 hover:bg-white/[0.04] text-left"
+                >
+                  <span className="text-xs text-white/50 flex-1 truncate">{csr.name}</span>
+                  <span className="text-[9px] text-primary">+ Add</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="border-t border-white/5 pt-4 mt-4 space-y-3">
+            <div>
+              <label className="text-[10px] text-white/30 uppercase tracking-wider">Pass Interval (hours)</label>
+              <input
+                type="number"
+                min={1}
+                max={168}
+                value={passInterval}
+                onChange={e => setPassInterval(Math.max(1, Number(e.target.value)))}
+                className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+              <p className="text-[10px] text-white/20 mt-0.5">Auto-pass lead to next CSR after this many hours of inactivity</p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-white/60">Allow Pass-Back</p>
+                <p className="text-[10px] text-white/20">Leads can cycle back to previously assigned CSRs</p>
+              </div>
+              <button
+                onClick={() => setAllowPassBack(!allowPassBack)}
+                className={cn(
+                  "w-10 h-5 rounded-full transition-colors relative",
+                  allowPassBack ? "bg-primary" : "bg-white/10"
+                )}
+              >
+                <div className={cn(
+                  "w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all",
+                  allowPassBack ? "left-5.5" : "left-0.5"
+                )} style={{ left: allowPassBack ? "22px" : "2px" }} />
+              </button>
+            </div>
+          </div>
+
+          <button
+            onClick={handleSaveRouting}
+            disabled={saving}
+            className="mt-4 flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50 w-full justify-center"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            {saved ? "Saved!" : "Save Routing Config"}
+          </button>
+        </PremiumCard>
+
+        <PremiumCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Calendar className="w-4 h-4 text-primary" />
+            <span className="text-sm font-display text-white">CSR Schedule & Status</span>
+          </div>
+
+          {csrs.length === 0 ? (
+            <div className="text-center py-12">
+              <Users className="w-8 h-8 text-white/10 mx-auto mb-2" />
+              <p className="text-xs text-white/30">No CSRs found</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {csrs.map(csr => (
+                <div key={csr.id} className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white font-medium truncate">{csr.name}</p>
+                      <p className="text-[10px] text-white/30 truncate">{csr.email}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "text-[9px] px-1.5 py-0.5 rounded font-mono uppercase",
+                        csr.isPaused ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"
+                      )}>
+                        {csr.isPaused ? "paused" : "active"}
+                      </span>
+                      <button
+                        onClick={() => toggleCsrPause(csr.id, !csr.isPaused)}
+                        disabled={scheduleSaving === csr.id}
+                        className={cn(
+                          "p-1.5 rounded transition-colors",
+                          csr.isPaused
+                            ? "text-emerald-400 hover:bg-emerald-500/10"
+                            : "text-amber-400 hover:bg-amber-500/10"
+                        )}
+                      >
+                        {scheduleSaving === csr.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : csr.isPaused ? (
+                          <Play className="w-3.5 h-3.5" />
+                        ) : (
+                          <Pause className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                  {csr.isPaused && csr.pauseEnd && (
+                    <p className="text-[10px] text-amber-400/60 mt-1">
+                      Paused until {new Date(csr.pauseEnd).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </PremiumCard>
+      </div>
     </div>
   );
 }
@@ -494,7 +926,6 @@ function ActivityFeedTab({ activities, loading, refetch }: {
                 <div className={cn("w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0", outcomeColor(a.outcome))}>
                   {methodIcon(a.method)}
                 </div>
-
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-white">{a.coordinatorName}</span>
@@ -513,7 +944,6 @@ function ActivityFeedTab({ activities, loading, refetch }: {
                     )}
                   </div>
                 </div>
-
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className="text-[10px] text-white/20 font-mono">{a.method}</span>
                   <span className="text-[10px] text-white/15">{timeAgo(a.attemptedAt)}</span>
@@ -591,32 +1021,6 @@ function CoachingInsightsTab({ insights, loading, fetching }: {
   );
 }
 
-function ScriptChangesPanel({ changes, loading, fetching }: { changes: ScriptChange[]; loading: boolean; fetching?: boolean }) {
-  if (loading) return <Loader2 className="w-4 h-4 text-primary animate-spin" />;
-  if (changes.length === 0) return null;
-
-  return (
-    <PremiumCard className={cn("p-4 space-y-3 transition-opacity duration-200", fetching && "opacity-70")}>
-      <div className="flex items-center gap-2">
-        <Clock className="w-4 h-4 text-primary" />
-        <span className="text-xs font-display text-white">Recent Script Changes</span>
-        <span className="text-[10px] text-white/20 font-mono">({changes.length})</span>
-      </div>
-      <div className="space-y-2">
-        {changes.map(c => (
-          <div key={c.id} className="flex items-start gap-2 text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
-            <span className="text-[9px] font-mono text-white/20 flex-shrink-0 mt-0.5">{new Date(c.date).toLocaleDateString()}</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-white/70 font-medium">{c.title}</p>
-              <p className="text-white/40 text-[10px] mt-0.5">{c.description}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </PremiumCard>
-  );
-}
-
 interface SpiffConfig {
   default: number;
   byLeadType: Record<string, number>;
@@ -629,10 +1033,9 @@ function useSpiffConfig(tenantId: number | null) {
 
   useEffect(() => {
     if (!tenantId) { setLoading(false); return; }
-    const base = API_BASE.replace(/\/api$/, "");
     Promise.all([
-      fetch(`${base}/api/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
-      fetch(`${base}/api/sales-manager/lead-types?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/sales-manager/lead-types?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
     ]).then(([configData, typesData]) => {
       if (configData?.spiffConfig) setConfig(configData.spiffConfig);
       if (typesData?.leadTypes) setLeadTypes(typesData.leadTypes);
@@ -640,8 +1043,7 @@ function useSpiffConfig(tenantId: number | null) {
   }, [tenantId]);
 
   const saveConfig = async (newConfig: SpiffConfig) => {
-    const base = API_BASE.replace(/\/api$/, "");
-    await fetch(`${base}/api/sales-manager/spiff-config?tenantId=${tenantId}`, {
+    await fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -677,20 +1079,6 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
 
   const availableTypes = leadTypes.filter(lt => !(lt in overrides));
 
-  const addOverride = () => {
-    if (!newLeadType) return;
-    setOverrides(prev => ({ ...prev, [newLeadType]: defaultAmount }));
-    setNewLeadType("");
-  };
-
-  const removeOverride = (lt: string) => {
-    setOverrides(prev => {
-      const next = { ...prev };
-      delete next[lt];
-      return next;
-    });
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -725,7 +1113,7 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
 
         <div>
           <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Lead Type Overrides</label>
-          <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific lead types. Types not listed here use the default amount.</p>
+          <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific lead types.</p>
 
           {Object.keys(overrides).length > 0 && (
             <div className="space-y-2 mb-3">
@@ -744,9 +1132,8 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
                     />
                   </div>
                   <button
-                    onClick={() => removeOverride(lt)}
+                    onClick={() => setOverrides(prev => { const next = { ...prev }; delete next[lt]; return next; })}
                     className="text-white/30 hover:text-red-400 text-xs px-1"
-                    title="Remove override"
                   >
                     ✕
                   </button>
@@ -768,7 +1155,7 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
                 ))}
               </select>
               <button
-                onClick={addOverride}
+                onClick={() => { if (newLeadType) { setOverrides(prev => ({ ...prev, [newLeadType]: defaultAmount })); setNewLeadType(""); } }}
                 disabled={!newLeadType}
                 className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white hover:bg-white/10 disabled:opacity-30"
               >
@@ -791,97 +1178,202 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
   );
 }
 
-function SettingsTab({ tenantId }: { tenantId: number | null }) {
-  const { config, loading, saveConfig } = useCommunicationConfig(tenantId);
-  const [callPlatform, setCallPlatform] = useState("native");
-  const [textPlatform, setTextPlatform] = useState("native");
+function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
+  const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
+  const [sheetId, setSheetId] = useState("");
+  const [sheetTab, setSheetTab] = useState("");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [savedId, setSavedId] = useState<number | null>(null);
+  const [ingesting, setIngesting] = useState<number | null>(null);
+  const [ingestResult, setIngestResult] = useState<{ funnelId: number; msg: string; type: "success" | "error" } | null>(null);
 
-  useEffect(() => {
-    if (config) {
-      setCallPlatform(config.callPlatform || "native");
-      setTextPlatform(config.textPlatform || "native");
-    }
-  }, [config]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaved(false);
-    await saveConfig({ callPlatform, textPlatform });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const startEdit = (funnel: FunnelType) => {
+    setEditingFunnelId(funnel.id);
+    setSheetId(funnel.googleSheetId || "");
+    setSheetTab(funnel.googleSheetTab || "");
   };
 
-  if (loading) {
+  const handleSave = async (funnelId: number) => {
+    if (!tenantId) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/funnel-types/${funnelId}/sheet-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ googleSheetId: sheetId || null, googleSheetTab: sheetTab || null }),
+      });
+      if (res.ok) {
+        setSavedId(funnelId);
+        setTimeout(() => setSavedId(null), 2000);
+        setEditingFunnelId(null);
+        onRefetch();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Save failed" }));
+        alert(err.error || "Failed to save sheet config. You may not have permission.");
+      }
+    } catch {
+      alert("Connection error saving sheet config");
+    } finally { setSaving(false); }
+  };
+
+  const handleIngest = async (funnelId: number) => {
+    if (!tenantId) return;
+    setIngesting(funnelId);
+    setIngestResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/ingest/${tenantId}/${funnelId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setIngestResult({ funnelId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped`, type: "success" });
+      } else {
+        setIngestResult({ funnelId, msg: data.error || "Ingest failed", type: "error" });
+      }
+    } catch {
+      setIngestResult({ funnelId, msg: "Connection error", type: "error" });
+    } finally { setIngesting(null); }
+  };
+
+  if (funnels.length === 0) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-6 h-6 text-primary animate-spin" />
-      </div>
+      <PremiumCard className="p-4">
+        <p className="text-xs text-white/30">No funnels configured for this tenant. Add funnel types first.</p>
+      </PremiumCard>
     );
   }
 
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Table2 className="w-4 h-4 text-primary" />
+        <span className="text-sm font-display text-white">Google Sheet Config (per Funnel)</span>
+      </div>
+
+      <div className="space-y-2">
+        {funnels.map(funnel => (
+          <PremiumCard key={funnel.id} className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white font-medium">{funnel.name}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  {funnel.googleSheetId ? (
+                    <>
+                      <Link2 className="w-3 h-3 text-emerald-400" />
+                      <span className="text-[10px] text-emerald-400/70 font-mono truncate max-w-[200px]">{funnel.googleSheetId}</span>
+                      {funnel.googleSheetTab && (
+                        <span className="text-[10px] text-white/30">tab: {funnel.googleSheetTab}</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-white/20">No sheet configured</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {funnel.googleSheetId && (
+                  <button
+                    onClick={() => handleIngest(funnel.id)}
+                    disabled={ingesting === funnel.id}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
+                  >
+                    {ingesting === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Import
+                  </button>
+                )}
+                <button
+                  onClick={() => editingFunnelId === funnel.id ? setEditingFunnelId(null) : startEdit(funnel)}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5"
+                >
+                  {savedId === funnel.id ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <SettingsIcon className="w-3 h-3" />}
+                  {savedId === funnel.id ? "Saved" : "Configure"}
+                </button>
+              </div>
+            </div>
+
+            {ingestResult?.funnelId === funnel.id && (
+              <div className={cn(
+                "mt-2 px-3 py-1.5 rounded text-[10px]",
+                ingestResult.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+              )}>
+                {ingestResult.msg}
+              </div>
+            )}
+
+            {editingFunnelId === funnel.id && (
+              <div className="mt-3 pt-3 border-t border-white/5 space-y-3">
+                <div>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet ID</label>
+                  <input
+                    value={sheetId}
+                    onChange={e => setSheetId(e.target.value)}
+                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Tab Name</label>
+                  <input
+                    value={sheetTab}
+                    onChange={e => setSheetTab(e.target.value)}
+                    placeholder="e.g. Sheet1"
+                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleSave(funnel.id)}
+                    disabled={saving}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary text-white text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingFunnelId(null)}
+                    className="px-3 py-1.5 rounded text-xs text-white/40 hover:text-white/60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </PremiumCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} />
 
       <div className="border-t border-white/5 pt-6">
-        <div className="flex items-center gap-2">
-          <SettingsIcon className="w-4 h-4 text-primary" />
-          <span className="text-sm font-display text-white">Communication Platform Settings</span>
-        </div>
+        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />
       </div>
 
-      <PremiumCard className="p-6 space-y-4">
-        <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Call Platform</label>
-          <select
-            value={callPlatform}
-            onChange={e => setCallPlatform(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="native">Native (Browser)</option>
-            <option value="podium">Podium</option>
-            <option value="callrail">CallRail</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Text Platform</label>
-          <select
-            value={textPlatform}
-            onChange={e => setTextPlatform(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="native">Native (Browser)</option>
-            <option value="podium">Podium</option>
-          </select>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
-        >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-          {saved ? "Saved!" : "Save Settings"}
-        </button>
-      </PremiumCard>
-
-      <PremiumCard className="p-4">
-        <p className="text-xs text-white/30">
-          Configure your communication platform integration. This controls how outbound calls and texts
-          are routed through your preferred provider (Podium, CallRail, or native browser dialing).
-        </p>
-      </PremiumCard>
+      <div className="border-t border-white/5 pt-6">
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <SettingsIcon className="w-4 h-4 text-primary" />
+            <span className="text-sm font-display text-white">Communication Platform</span>
+          </div>
+          <p className="text-xs text-white/40">
+            All calls and texts use the native browser-based platform.
+          </p>
+        </PremiumCard>
+      </div>
     </div>
   );
 }
 
 export default function SalesManager() {
   const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
-  const [tab, setTab] = useState<Tab>("team");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
 
@@ -892,7 +1384,7 @@ export default function SalesManager() {
 
   useEffect(() => {
     if (!isAgency) return;
-    fetch(`${API_BASE.replace(/\/api$/, "")}/api/tenants`, { credentials: "include" })
+    fetch(`${API_BASE}/tenants`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -906,16 +1398,17 @@ export default function SalesManager() {
   const effectiveTenantId = isAgency ? selectedTenantId : (user?.tenantId ?? null);
   const isClientUser = !isAgency && user?.role === "client_user";
 
-  const { coordinators, teamTotals, loading: teamLoading, refetch: refetchTeam } = useTeamData(effectiveTenantId);
+  const { funnels, refetch: refetchFunnels } = useFunnelTypes(effectiveTenantId);
   const { activities, loading: activityLoading, refetch: refetchActivity } = useActivityFeed(effectiveTenantId);
   const { insights, loading: insightsLoading, fetching: insightsFetching } = useCoachingInsights(effectiveTenantId);
-  const { changes: scriptChanges, loading: scriptChangesLoading, fetching: scriptChangesFetching } = useRecentScriptChanges(effectiveTenantId);
 
   const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; count?: number }[] = [
-    { key: "team", label: "Team Overview", icon: Users, count: teamTotals?.activeCoordinators },
+    { key: "dashboard", label: "Dashboard", icon: BarChart3 },
+    { key: "team", label: "Team", icon: Users },
     { key: "scripts", label: "Scripts", icon: FileText },
-    { key: "activity", label: "Activity Feed", icon: Activity, count: activities.length > 0 ? activities.length : undefined },
-    { key: "coaching", label: "Coaching Insights", icon: Brain, count: insights.filter(i => i.type === "warning").length || undefined },
+    { key: "routing", label: "Routing", icon: Shuffle },
+    { key: "activity", label: "Activity", icon: Activity, count: activities.length > 0 ? activities.length : undefined },
+    { key: "coaching", label: "Coaching", icon: Brain, count: insights.filter(i => i.type === "warning").length || undefined },
     { key: "settings", label: "Settings", icon: SettingsIcon },
   ];
 
@@ -933,7 +1426,7 @@ export default function SalesManager() {
       <div className="flex items-center justify-between">
         <div>
           <GradientHeading className="text-3xl mb-1">Sales Manager Hub</GradientHeading>
-          <p className="text-sm text-white/40">Oversee team performance, manage scripts, and get coaching insights</p>
+          <p className="text-sm text-white/40">Dashboard, team performance, routing configuration, and scripts</p>
         </div>
       </div>
 
@@ -954,13 +1447,13 @@ export default function SalesManager() {
         </PremiumCard>
       )}
 
-      <div className="flex items-center gap-1 border-b border-white/5 pb-0">
+      <div className="flex items-center gap-1 border-b border-white/5 pb-0 overflow-x-auto">
         {tabs.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all border-b-2 -mb-[1px]",
+              "flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all border-b-2 -mb-[1px] whitespace-nowrap",
               tab === t.key
                 ? "text-white border-primary"
                 : "text-white/30 border-transparent hover:text-white/50 hover:border-white/10"
@@ -981,18 +1474,17 @@ export default function SalesManager() {
       </div>
 
       <div>
+        {tab === "dashboard" && (
+          <DashboardTab tenantId={effectiveTenantId} funnels={funnels} />
+        )}
         {tab === "team" && (
-          <TeamOverviewTab
-            coordinators={coordinators}
-            teamTotals={teamTotals}
-            loading={teamLoading}
-          />
+          <TeamTab tenantId={effectiveTenantId} funnels={funnels} />
         )}
         {tab === "scripts" && (
-          <div className="space-y-4">
-            <ScriptChangesPanel changes={scriptChanges} loading={scriptChangesLoading} fetching={scriptChangesFetching} />
-            <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
-          </div>
+          <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
+        )}
+        {tab === "routing" && (
+          <RoutingTab tenantId={effectiveTenantId} funnels={funnels} />
         )}
         {tab === "activity" && (
           <ActivityFeedTab
@@ -1009,7 +1501,7 @@ export default function SalesManager() {
           />
         )}
         {tab === "settings" && (
-          <SettingsTab tenantId={effectiveTenantId} />
+          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />
         )}
       </div>
     </div>
