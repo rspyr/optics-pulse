@@ -339,19 +339,23 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
   }
 
   try {
-    const customMapping = assoc.columnMapping as Record<string, string> | null;
-    const { headers, rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab, customMapping);
+    const { headers: rawHeaders, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+
+    const sampleRows = rawRows.slice(0, 5).map(row => {
+      const obj: Record<string, string> = {};
+      rawHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
+      return obj;
+    });
 
     let headersChanged = false;
     if (assoc.mappingHeaders) {
-      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      headersChanged = !arraysEqual(currentHeaders, assoc.mappingHeaders as string[]);
+      headersChanged = !arraysEqual(rawHeaders, assoc.mappingHeaders as string[]);
     }
 
     res.json({
-      headers,
-      sampleRows: rows.slice(0, 5),
-      totalRows: rows.length,
+      headers: rawHeaders,
+      sampleRows,
+      totalRows: rawRows.length,
       hasMapping: !!assoc.columnMapping,
       headersChanged,
     });

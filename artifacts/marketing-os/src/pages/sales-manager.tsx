@@ -1667,9 +1667,11 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
       if (res.ok) {
         setIngestResult({ funnelId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped`, type: "success" });
       } else if (res.status === 409 && data.headersChanged) {
-        setIngestResult({ funnelId, msg: "Sheet headers have changed — please re-analyze and approve the column mapping before importing.", type: "error" });
+        setIngestResult({ funnelId, msg: "Sheet headers have changed — re-analyzing column mapping...", type: "error" });
+        if (isAgency) triggerAnalysis(funnelId);
       } else if (data.mappingRequired) {
-        setIngestResult({ funnelId, msg: "Column mapping must be analyzed and approved before importing. Click 'Analyze with AI' below.", type: "error" });
+        setIngestResult({ funnelId, msg: "Column mapping must be analyzed and approved before importing.", type: "error" });
+        if (isAgency) triggerAnalysis(funnelId);
       } else {
         setIngestResult({ funnelId, msg: data.error || "Ingest failed", type: "error" });
       }
