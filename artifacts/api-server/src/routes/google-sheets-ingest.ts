@@ -191,18 +191,20 @@ router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole(
   const hasMapping = !!assoc.columnMapping && !!assoc.mappingHeaders;
   let headersChanged = false;
 
+  let verificationError = false;
   if (hasMapping && assoc.googleSheetId && assoc.googleSheetTab) {
     try {
       const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
       headersChanged = !arraysEqual(currentHeaders, assoc.mappingHeaders as string[]);
     } catch {
-      headersChanged = false;
+      verificationError = true;
     }
   }
 
   res.json({
     hasMapping,
     headersChanged,
+    verificationError,
     columnMapping: assoc.columnMapping,
     mappingHeaders: assoc.mappingHeaders,
   });

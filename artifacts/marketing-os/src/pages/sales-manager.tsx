@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -1406,15 +1406,9 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
       .catch(() => {});
   }, [tenantId, funnelId, funnel.googleSheetId]);
 
-  useEffect(() => {
-    const el = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
-    if (!el) return;
-    const listener = () => { handleAnalyze(); };
-    el.addEventListener("trigger-analyze", listener);
-    return () => { el.removeEventListener("trigger-analyze", listener); };
-  });
+  const handleAnalyzeRef = useRef<() => void>(() => {});
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = useCallback(async () => {
     setAnalyzing(true);
     setError(null);
     setSuccess(false);
@@ -1432,7 +1426,17 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     } catch {
       setError("Connection error during analysis");
     } finally { setAnalyzing(false); }
-  };
+  }, [tenantId, funnelId]);
+
+  handleAnalyzeRef.current = handleAnalyze;
+
+  useEffect(() => {
+    const el = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
+    if (!el) return;
+    const listener = () => { handleAnalyzeRef.current(); };
+    el.addEventListener("trigger-analyze", listener);
+    return () => { el.removeEventListener("trigger-analyze", listener); };
+  }, [funnelId]);
 
   const handleSave = async () => {
     if (!analysis) return;
