@@ -84,16 +84,26 @@ Respond with ONLY valid JSON. Example:
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { responseMimeType: "application/json", maxOutputTokens: 2048 },
+      config: { responseMimeType: "application/json", maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
     });
 
     const rawText = response.text?.trim() || "{}";
-    let parsed: Record<string, { field: string; confidence: number }>;
+    let parsed: Record<string, { field: string; confidence: number }> = {};
     try {
       parsed = JSON.parse(rawText);
     } catch {
-      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      try {
+        const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[1].trim());
+        } else {
+          const braceMatch = rawText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
+          if (braceMatch) parsed = JSON.parse(braceMatch[0]);
+        }
+      } catch (innerErr) {
+        console.error("[GoogleSheets Mapping] Failed to parse LLM JSON. Raw:", rawText.substring(0, 500));
+        parsed = {};
+      }
     }
 
     const validFieldSet = new Set(INTERNAL_FIELDS.map(f => f.field));
