@@ -445,4 +445,74 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
   }
 });
 
+const LEAD_DB_FIELDS = new Set([
+  "firstName", "lastName", "fullName", "phone", "email",
+  "source", "serviceType", "status", "dateTime", "__skip__",
+]);
+
+router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId);
+  const funnelTypeId = Number(req.query.funnelTypeId);
+  if (!tenantId || !funnelTypeId) { res.status(400).json({ error: "tenantId and funnelTypeId required" }); return; }
+
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(
+      eq(tenantFunnelTypesTable.tenantId, tenantId),
+      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
+    ));
+
+  if (!assoc?.googleSheetId || !assoc?.columnMapping || !assoc?.mappingHeaders) {
+    res.status(400).json({ error: "No sheet mapping configured for this funnel" }); return;
+  }
+
+  try {
+    const { headers, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab || "Sheet1");
+    const mapping = assoc.columnMapping as Record<string, string>;
+
+    const existingLeads = await db.select({
+      id: leadsTable.id,
+      phone: leadsTable.phone,
+    }).from(leadsTable)
+      .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.funnelId, funnelTypeId)));
+
+    const leadByPhone = new Map<string, number>();
+    for (const l of existingLeads) {
+      if (l.phone) leadByPhone.set(l.phone.replace(/[^0-9]/g, ""), l.id);
+    }
+
+    let updated = 0;
+    for (const row of rawRows) {
+      const notesParts: string[] = [];
+      let rowPhone = "";
+      for (let j = 0; j < headers.length; j++) {
+        const headerKey = headers[j];
+        const normalized = mapping[headerKey] || headerKey;
+        const val = (row[j] || "").trim();
+        if (normalized === "phone" && val) {
+          rowPhone = val.replace(/[^0-9]/g, "");
+        }
+        if (!val || normalized === "__skip__") continue;
+        if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
+          notesParts.push(`${headerKey}: ${val}`);
+        }
+      }
+
+      if (notesParts.length === 0 || !rowPhone) continue;
+
+      const leadId = leadByPhone.get(rowPhone);
+      if (!leadId) continue;
+
+      await db.update(leadsTable)
+        .set({ notes: notesParts.join("\n") })
+        .where(eq(leadsTable.id, leadId));
+      updated++;
+    }
+
+    res.json({ updated, total: existingLeads.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Backfill failed";
+    res.status(500).json({ error: message });
+  }
+});
+
 export default router;

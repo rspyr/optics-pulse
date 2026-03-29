@@ -152,6 +152,11 @@ interface MappedRow {
   [key: string]: string;
 }
 
+const LEAD_DB_FIELDS = new Set([
+  "firstName", "lastName", "fullName", "phone", "email",
+  "source", "serviceType", "status", "dateTime", "__skip__", "notes",
+]);
+
 function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<string, string>): MappedRow[] {
   const rows: MappedRow[] = [];
 
@@ -163,7 +168,7 @@ function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<stri
       const normalized = mapping[headerKey] || headerKey;
       if (normalized && normalized !== "__skip__") {
         const val = (row[j] || "").trim();
-        if (normalized === "notes") {
+        if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
           if (val) notesParts.push(`${headerKey}: ${val}`);
         } else {
           obj[normalized] = val;

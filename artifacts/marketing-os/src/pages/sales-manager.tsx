@@ -1733,6 +1733,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [ingesting, setIngesting] = useState<number | null>(null);
+  const [backfilling, setBackfilling] = useState<number | null>(null);
   const [ingestResult, setIngestResult] = useState<{ funnelId: number; msg: string; type: "success" | "error" } | null>(null);
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [previewData, setPreviewData] = useState<{ funnelId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
@@ -1875,6 +1876,29 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                     >
                       {ingesting === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                       Import
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setBackfilling(funnel.id);
+                        try {
+                          const r = await fetch(`${API_BASE}/google-sheets/backfill-notes?tenantId=${tenantId}&funnelTypeId=${funnel.id}`, {
+                            method: "POST", credentials: "include",
+                          });
+                          const data = await r.json();
+                          if (r.ok) {
+                            setIngestResult({ funnelId: funnel.id, msg: `Updated notes for ${data.updated} lead(s)`, type: "success" });
+                          } else {
+                            setIngestResult({ funnelId: funnel.id, msg: data.error || "Backfill failed", type: "error" });
+                          }
+                        } catch {
+                          setIngestResult({ funnelId: funnel.id, msg: "Connection error", type: "error" });
+                        } finally { setBackfilling(null); }
+                      }}
+                      disabled={backfilling === funnel.id}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-purple-400 hover:bg-purple-500/10 disabled:opacity-50"
+                    >
+                      {backfilling === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                      Resync Notes
                     </button>
                   </>
                 )}

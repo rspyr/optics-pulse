@@ -328,11 +328,12 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
 
 function timeSince(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return `${mins}m ${Math.floor(secs % 60)}s ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
 }
@@ -439,7 +440,18 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className="text-[10px] text-white/30 font-mono">{timeSince(lead.updatedAt)}</span>
+          <span className={cn(
+            "text-xs font-mono font-semibold px-1.5 py-0.5 rounded",
+            (() => {
+              const mins = Math.floor((Date.now() - new Date(lead.createdAt).getTime()) / 60000);
+              if (mins < 10) return "bg-emerald-500/20 text-emerald-400";
+              if (mins < 60) return "bg-amber-500/20 text-amber-400";
+              return "text-white/40";
+            })()
+          )}>
+            <Clock className="w-3 h-3 inline-block mr-0.5 -mt-0.5" />
+            {timeSince(lead.createdAt)}
+          </span>
           {lead.assignedTo && (
             <span className="text-[9px] text-white/25 truncate max-w-[80px]">{lead.assignedTo}</span>
           )}
