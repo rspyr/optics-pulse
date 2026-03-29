@@ -183,6 +183,7 @@ interface LeadData {
   callbackAt?: string | null;
   deadReason?: string | null;
   disposition?: string | null;
+  notes?: string | null;
   createdAt: string;
   updatedAt: string;
   tenantId?: number;
@@ -514,8 +515,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/New_York" }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; timezone?: string;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/New_York", funnelMap = {} }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; timezone?: string; funnelMap?: Record<number, string>;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
@@ -639,6 +640,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
             <div className="flex items-center gap-3 mb-2">
               <h2 className="font-display text-xl text-white">{lead.firstName} {lead.lastName}</h2>
               <DayBadge hubStatus={lead.hubStatus} />
+              <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -1064,6 +1066,16 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
         )}
       </AnimatePresence>
 
+      {lead.notes && (
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <FileText className="w-3.5 h-3.5 text-white/40" />
+            <span className="text-xs font-medium text-white/50 uppercase tracking-wider">Notes</span>
+          </div>
+          <p className="text-sm text-white/70 whitespace-pre-wrap leading-relaxed">{lead.notes}</p>
+        </PremiumCard>
+      )}
+
       <PremiumCard className="p-4">
         <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} />
       </PremiumCard>
@@ -1386,6 +1398,7 @@ export default function Leads() {
               onBack={() => setSelectedLead(null)}
               onUpdate={() => { refetch(); refetchStats(); }}
               timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
+              funnelMap={funnelMap}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">
