@@ -11,6 +11,7 @@ import {
   Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
   Mic, GripVertical, Eye, Wand2, ShieldCheck, AlertCircle,
 } from "lucide-react";
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import ScriptManagement from "@/components/script-management";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -54,7 +55,7 @@ interface RoutingConfig {
   tenantId: number;
   funnelTypeId: number | null;
   cascadeOrder: number[];
-  passIntervalHours: number;
+  passIntervalMinutes: number;
   allowPassBack: boolean;
   isActive: boolean;
 }
@@ -683,7 +684,8 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
   const { csrs, loading: csrsLoading, refetch: refetchCsrs } = useCsrs(tenantId);
   const [selectedFunnelId, setSelectedFunnelId] = useState<number | null>(null);
   const [cascadeOrder, setCascadeOrder] = useState<number[]>([]);
-  const [passInterval, setPassInterval] = useState(24);
+  const [passInterval, setPassInterval] = useState(1440);
+  const [passUnit, setPassUnit] = useState<"minutes" | "hours">("hours");
   const [allowPassBack, setAllowPassBack] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -700,11 +702,14 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
     );
     if (config) {
       setCascadeOrder(config.cascadeOrder || []);
-      setPassInterval(config.passIntervalHours || 24);
+      const mins = config.passIntervalMinutes || 1440;
+      setPassInterval(mins);
+      setPassUnit(mins % 60 === 0 && mins >= 60 ? "hours" : "minutes");
       setAllowPassBack(config.allowPassBack || false);
     } else {
       setCascadeOrder([]);
-      setPassInterval(24);
+      setPassInterval(1440);
+      setPassUnit("hours");
       setAllowPassBack(false);
     }
   }, [selectedFunnelId, configs]);
@@ -721,7 +726,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
         body: JSON.stringify({
           funnelTypeId: selectedFunnelId || null,
           cascadeOrder,
-          passIntervalHours: passInterval,
+          passIntervalMinutes: passInterval,
           allowPassBack,
         }),
       });
@@ -766,11 +771,11 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
     setCascadeOrder(cascadeOrder.filter(id => id !== csrId));
   };
 
-  const moveCascade = (idx: number, dir: -1 | 1) => {
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
     const newOrder = [...cascadeOrder];
-    const target = idx + dir;
-    if (target < 0 || target >= newOrder.length) return;
-    [newOrder[idx], newOrder[target]] = [newOrder[target], newOrder[idx]];
+    const [moved] = newOrder.splice(result.source.index, 1);
+    newOrder.splice(result.destination.index, 0, moved);
     setCascadeOrder(newOrder);
   };
 
@@ -805,43 +810,51 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
           {cascadeOrder.length === 0 ? (
             <p className="text-xs text-white/30 mb-3">No CSRs in rotation. Add CSRs below.</p>
           ) : (
-            <div className="space-y-1 mb-3">
-              {cascadeOrder.map((csrId, idx) => {
-                const csr = csrs.find(c => c.id === csrId);
-                return (
-                  <div key={csrId} className="flex items-center gap-2 p-2 rounded bg-white/[0.02] border border-white/5">
-                    <GripVertical className="w-3 h-3 text-white/15 flex-shrink-0" />
-                    <span className="text-[10px] font-mono text-white/30 w-5">{idx + 1}.</span>
-                    <span className="text-xs text-white flex-1 truncate">{csr?.name || `User #${csrId}`}</span>
-                    {csr?.isPaused && (
-                      <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.5 rounded">paused</span>
-                    )}
-                    <div className="flex items-center gap-0.5">
-                      <button
-                        onClick={() => moveCascade(idx, -1)}
-                        disabled={idx === 0}
-                        className="p-0.5 rounded text-white/20 hover:text-white/50 disabled:opacity-20"
-                      >
-                        <ChevronUp className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => moveCascade(idx, 1)}
-                        disabled={idx === cascadeOrder.length - 1}
-                        className="p-0.5 rounded text-white/20 hover:text-white/50 disabled:opacity-20"
-                      >
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => removeFromCascade(csrId)}
-                        className="p-0.5 rounded text-white/20 hover:text-red-400 ml-1"
-                      >
-                        ×
-                      </button>
-                    </div>
+            <DragDropContext onDragEnd={onDragEnd}>
+              <Droppable droppableId="cascade-order">
+                {(provided) => (
+                  <div
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className="space-y-1 mb-3"
+                  >
+                    {cascadeOrder.map((csrId, idx) => {
+                      const csr = csrs.find(c => c.id === csrId);
+                      return (
+                        <Draggable key={csrId} draggableId={String(csrId)} index={idx}>
+                          {(dragProvided, snapshot) => (
+                            <div
+                              ref={dragProvided.innerRef}
+                              {...dragProvided.draggableProps}
+                              className={cn(
+                                "flex items-center gap-2 p-2 rounded bg-white/[0.02] border border-white/5",
+                                snapshot.isDragging && "bg-white/[0.06] border-primary/30 shadow-lg"
+                              )}
+                            >
+                              <div {...dragProvided.dragHandleProps} className="cursor-grab active:cursor-grabbing">
+                                <GripVertical className="w-3 h-3 text-white/30 hover:text-white/50 flex-shrink-0" />
+                              </div>
+                              <span className="text-[10px] font-mono text-white/30 w-5">{idx + 1}.</span>
+                              <span className="text-xs text-white flex-1 truncate">{csr?.name || `User #${csrId}`}</span>
+                              {csr?.isPaused && (
+                                <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.5 rounded">paused</span>
+                              )}
+                              <button
+                                onClick={() => removeFromCascade(csrId)}
+                                className="p-0.5 rounded text-white/20 hover:text-red-400"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        </Draggable>
+                      );
+                    })}
+                    {provided.placeholder}
                   </div>
-                );
-              })}
-            </div>
+                )}
+              </Droppable>
+            </DragDropContext>
           )}
 
           {csrs.filter(c => !cascadeOrder.includes(c.id)).length > 0 && (
@@ -862,16 +875,37 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
 
           <div className="border-t border-white/5 pt-4 mt-4 space-y-3">
             <div>
-              <label className="text-[10px] text-white/30 uppercase tracking-wider">Pass Interval (hours)</label>
-              <input
-                type="number"
-                min={1}
-                max={168}
-                value={passInterval}
-                onChange={e => setPassInterval(Math.max(1, Number(e.target.value)))}
-                className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-              />
-              <p className="text-[10px] text-white/20 mt-0.5">Auto-pass lead to next CSR after this many hours of inactivity</p>
+              <label className="text-[10px] text-white/30 uppercase tracking-wider">Pass Interval</label>
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={passUnit === "hours" ? 168 : 10080}
+                  value={passUnit === "hours" ? Math.round(passInterval / 60) : passInterval}
+                  onChange={e => {
+                    const val = Math.max(1, Number(e.target.value));
+                    setPassInterval(passUnit === "hours" ? val * 60 : val);
+                  }}
+                  className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                />
+                <select
+                  value={passUnit}
+                  onChange={e => {
+                    const newUnit = e.target.value as "minutes" | "hours";
+                    if (newUnit === "hours" && passUnit === "minutes") {
+                      setPassInterval(Math.max(60, Math.round(passInterval / 60) * 60));
+                    } else if (newUnit === "minutes" && passUnit === "hours") {
+                      setPassInterval(passInterval);
+                    }
+                    setPassUnit(newUnit);
+                  }}
+                  className="bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                >
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                </select>
+              </div>
+              <p className="text-[10px] text-white/20 mt-0.5">Auto-pass lead to next CSR after this period of inactivity</p>
             </div>
 
             <div className="flex items-center justify-between">

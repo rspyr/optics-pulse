@@ -79,7 +79,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         isNull(leadsTable.callbackAt),
         sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
       ))
-      .orderBy(asc(leadsTable.createdAt)).limit(100) : [];
+      .orderBy(desc(leadsTable.createdAt)).limit(100) : [];
 
     const todayLeads = (tab === "all" || tab === "today") ? await db.select().from(leadsTable)
       .where(and(
@@ -88,7 +88,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
         gte(leadsTable.updatedAt, todayStartUtc),
       ))
-      .orderBy(asc(leadsTable.updatedAt)).limit(100) : [];
+      .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
 
     const callbacks = (tab === "all" || tab === "callbacks") ? await db.select().from(leadsTable)
       .where(and(
@@ -97,7 +97,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         isNotNull(leadsTable.callbackAt),
         lte(leadsTable.callbackAt, now),
       ))
-      .orderBy(asc(leadsTable.callbackAt)).limit(100) : [];
+      .orderBy(desc(leadsTable.callbackAt)).limit(100) : [];
 
     const reengagement = (tab === "all" || tab === "reengagement") ? await db.select().from(leadsTable)
       .where(and(
@@ -106,7 +106,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         isNotNull(leadsTable.revisitDate),
         lte(leadsTable.revisitDate, todayDateStr),
       ))
-      .orderBy(asc(leadsTable.revisitDate)).limit(100) : [];
+      .orderBy(desc(leadsTable.revisitDate)).limit(100) : [];
 
     const oldLeads = (tab === "all" || tab === "old") ? await db.select().from(leadsTable)
       .where(and(
@@ -429,7 +429,7 @@ router.put("/leads-hub/routing-config", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
-  const { funnelTypeId, cascadeOrder, passIntervalHours, allowPassBack } = req.body;
+  const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack } = req.body;
 
   const existing = await db.select().from(routingConfigTable)
     .where(and(
@@ -440,7 +440,7 @@ router.put("/leads-hub/routing-config", async (req, res) => {
   if (existing.length > 0) {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (cascadeOrder !== undefined) updates.cascadeOrder = cascadeOrder;
-    if (passIntervalHours !== undefined) updates.passIntervalHours = passIntervalHours;
+    if (passIntervalMinutes !== undefined) updates.passIntervalMinutes = passIntervalMinutes;
     if (allowPassBack !== undefined) updates.allowPassBack = allowPassBack;
 
     const [updated] = await db.update(routingConfigTable)
@@ -453,7 +453,7 @@ router.put("/leads-hub/routing-config", async (req, res) => {
       tenantId,
       funnelTypeId: funnelTypeId || null,
       cascadeOrder: cascadeOrder || [],
-      passIntervalHours: passIntervalHours || 24,
+      passIntervalMinutes: passIntervalMinutes || 1440,
       allowPassBack: allowPassBack || false,
     }).returning();
     res.json(created);
@@ -547,8 +547,8 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     return;
   }
 
-  const passHours = config.passIntervalHours ?? 24;
-  const passWindow = new Date(now.getTime() - passHours * 60 * 60 * 1000);
+  const passMinutes = config.passIntervalMinutes ?? 1440;
+  const passWindow = new Date(now.getTime() - passMinutes * 60 * 1000);
 
   const recentAssignments = await db.select({
     assignedCsrId: leadsTable.assignedCsrId,
@@ -743,8 +743,8 @@ export async function evaluateAutoPass(): Promise<number> {
     .where(eq(routingConfigTable.isActive, true));
 
   for (const config of configs) {
-    const passHours = config.passIntervalHours ?? 24;
-    const cutoff = new Date(Date.now() - passHours * 60 * 60 * 1000);
+    const passMinutes = config.passIntervalMinutes ?? 1440;
+    const cutoff = new Date(Date.now() - passMinutes * 60 * 1000);
 
     const staleLeads = await db.select({
       id: leadsTable.id,
@@ -796,6 +796,7 @@ export async function evaluateAutoPass(): Promise<number> {
         .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date() })
         .where(eq(leadsTable.id, lead.id));
 
+      const passLabel = passMinutes >= 60 ? `${Math.round(passMinutes / 60)}h` : `${passMinutes}m`;
       await db.insert(callAttemptsTable).values({
         leadId: lead.id,
         userId: nextCsrId,
@@ -803,7 +804,7 @@ export async function evaluateAutoPass(): Promise<number> {
         outcome: "auto_passed",
         platform: "native",
         actionType: "call",
-        notes: `Auto-passed after ${passHours}h inactivity`,
+        notes: `Auto-passed after ${passLabel} inactivity`,
       });
 
       passed++;

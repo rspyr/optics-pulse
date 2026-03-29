@@ -8,7 +8,7 @@ export const routingConfigTable = pgTable("routing_config", {
   tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
   funnelTypeId: integer("funnel_type_id").references(() => funnelTypesTable.id),
   cascadeOrder: jsonb("cascade_order").$type<number[]>().notNull().default([]),
-  passIntervalHours: integer("pass_interval_hours").notNull().default(24),
+  passIntervalMinutes: integer("pass_interval_minutes").notNull().default(1440),
   allowPassBack: boolean("allow_pass_back").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),

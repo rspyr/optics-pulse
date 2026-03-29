@@ -336,7 +336,7 @@ function useFunnelTypes(tenantId?: number | null) {
 function FunnelBadge({ funnelId, funnelMap }: { funnelId?: number | null; funnelMap: Record<number, string> }) {
   if (!funnelId || !funnelMap[funnelId]) return null;
   return (
-    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400 border border-violet-500/20 truncate max-w-[120px]">
+    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400 border border-violet-500/20 whitespace-nowrap">
       {funnelMap[funnelId]}
     </span>
   );
