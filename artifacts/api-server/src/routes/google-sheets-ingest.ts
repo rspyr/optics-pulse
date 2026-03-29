@@ -22,6 +22,7 @@ const INTERNAL_FIELDS = [
   { field: "city", label: "City", description: "City" },
   { field: "state", label: "State", description: "State/province" },
   { field: "zip", label: "Zip Code", description: "Zip/postal code" },
+  { field: "dateTime", label: "Date/Time", description: "Date/time timestamp (ISO 8601, e.g. 2026-02-11T20:57:57) — used as the lead's created date" },
   { field: "__skip__", label: "Skip (Do Not Import)", description: "Ignore this column" },
 ];
 
@@ -329,6 +330,12 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
 
       if (normalizedPhone) existingPhones.add(normalizedPhone);
 
+      let parsedCreatedAt: Date | undefined;
+      if (row.dateTime) {
+        const d = new Date(row.dateTime);
+        if (!isNaN(d.getTime())) parsedCreatedAt = d;
+      }
+
       const [lead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: row.firstName || "Unknown",
@@ -342,6 +349,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         dayInSequence: 1,
         status: "new",
         contactPreferences: [],
+        ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
       }).returning();
 
       newLeads.push(lead);

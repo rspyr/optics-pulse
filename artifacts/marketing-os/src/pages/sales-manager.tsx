@@ -1452,6 +1452,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
       if (res.ok) {
         setSuccess(true);
         setHeadersChanged(false);
+        setExpanded(false);
         setTimeout(() => setSuccess(false), 3000);
         onMappingSaved();
       } else {
@@ -1503,7 +1504,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
           )}
         </div>
         <div className="flex items-center gap-2">
-          {hasExistingMapping && (
+          {(hasExistingMapping || Object.keys(mapping).length > 0) && (
             <button
               onClick={() => setExpanded(!expanded)}
               className="text-[10px] text-white/30 hover:text-white/50"
@@ -1538,7 +1539,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
         </div>
       )}
 
-      {(expanded || analysis) && Object.keys(mapping).length > 0 && (
+      {expanded && Object.keys(mapping).length > 0 && (
         <div className="mt-3 space-y-2">
           <div className="grid gap-1.5">
             {Object.entries(mapping).map(([header, field]) => {
