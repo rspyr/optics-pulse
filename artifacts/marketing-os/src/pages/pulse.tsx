@@ -146,6 +146,7 @@ interface LeadData {
   createdAt: string;
   updatedAt: string;
   tenantId?: number;
+  funnelId?: number | null;
 }
 
 interface HistoryEntry {
@@ -313,6 +314,34 @@ function ContactFlags({ preferences }: { preferences?: string[] | null }) {
   );
 }
 
+function useFunnelTypes(tenantId?: number | null) {
+  const [funnelMap, setFunnelMap] = useState<Record<number, string>>({});
+  useEffect(() => {
+    if (!tenantId) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/funnel-types?tenantId=${tenantId}`, { credentials: "include" });
+        if (res.ok) {
+          const types = await res.json();
+          const map: Record<number, string> = {};
+          for (const t of types) map[t.id] = t.name;
+          setFunnelMap(map);
+        }
+      } catch {}
+    })();
+  }, [tenantId]);
+  return funnelMap;
+}
+
+function FunnelBadge({ funnelId, funnelMap }: { funnelId?: number | null; funnelMap: Record<number, string> }) {
+  if (!funnelId || !funnelMap[funnelId]) return null;
+  return (
+    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400 border border-violet-500/20 truncate max-w-[120px]">
+      {funnelMap[funnelId]}
+    </span>
+  );
+}
+
 function DayBadge({ hubStatus }: { hubStatus: string }) {
   return (
     <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border", DAY_BADGE_COLORS[hubStatus] || "bg-white/5 text-white/40 border-white/10")}>
@@ -330,7 +359,7 @@ function SourceTag({ source }: { source: string }) {
   return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", color)}>{source}</span>;
 }
 
-function LeadCard({ lead, onClick }: { lead: LeadData; onClick: () => void }) {
+function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string> }) {
   return (
     <motion.div
       layout
@@ -347,6 +376,7 @@ function LeadCard({ lead, onClick }: { lead: LeadData; onClick: () => void }) {
               {lead.firstName} {lead.lastName}
             </h3>
             <DayBadge hubStatus={lead.hubStatus} />
+            <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             <SourceTag source={lead.source} />
@@ -1105,6 +1135,7 @@ export default function Leads() {
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency);
   const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
+  const funnelMap = useFunnelTypes(effectiveTenantId);
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
   const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
@@ -1321,7 +1352,7 @@ export default function Leads() {
             <div className="space-y-2">
               <AnimatePresence mode="popLayout">
                 {tabLeads.map(lead => (
-                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} />
+                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} />
                 ))}
               </AnimatePresence>
             </div>
