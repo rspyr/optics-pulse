@@ -680,7 +680,7 @@ function TeamTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantI
   );
 }
 
-function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantId: number | null; funnels: FunnelType[]; timezone?: string }) {
   const { configs, loading: configsLoading, refetch: refetchConfigs } = useRoutingConfigs(tenantId);
   const { csrs, loading: csrsLoading, refetch: refetchCsrs } = useCsrs(tenantId);
   const [selectedFunnelId, setSelectedFunnelId] = useState<number | null>(null);
@@ -694,6 +694,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
   const [scheduleEditId, setScheduleEditId] = useState<number | null>(null);
   const [schedPauseStart, setSchedPauseStart] = useState("");
   const [schedPauseEnd, setSchedPauseEnd] = useState("");
+  const [schedError, setSchedError] = useState("");
 
   const loading = configsLoading || csrsLoading;
 
@@ -977,6 +978,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                             setScheduleEditId(csr.id);
                             setSchedPauseStart(csr.pauseStart ? new Date(csr.pauseStart).toISOString().slice(0, 16) : "");
                             setSchedPauseEnd(csr.pauseEnd ? new Date(csr.pauseEnd).toISOString().slice(0, 16) : "");
+                            setSchedError("");
                           }
                         }}
                         className="p-1.5 rounded text-white/30 hover:text-white/60 hover:bg-white/5"
@@ -1017,8 +1019,18 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                           <input
                             type="datetime-local"
                             value={schedPauseStart}
-                            onChange={e => setSchedPauseStart(e.target.value)}
-                            className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                            onChange={e => {
+                              setSchedPauseStart(e.target.value);
+                              if (schedPauseEnd && e.target.value && new Date(e.target.value) >= new Date(schedPauseEnd)) {
+                                setSchedError("Start must be before end");
+                              } else {
+                                setSchedError("");
+                              }
+                            }}
+                            className={cn(
+                              "w-full mt-1 bg-white/5 border rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50",
+                              schedError ? "border-red-500/50" : "border-white/10"
+                            )}
                           />
                         </div>
                         <div>
@@ -1026,14 +1038,33 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                           <input
                             type="datetime-local"
                             value={schedPauseEnd}
-                            onChange={e => setSchedPauseEnd(e.target.value)}
-                            className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                            onChange={e => {
+                              setSchedPauseEnd(e.target.value);
+                              if (schedPauseStart && e.target.value && new Date(schedPauseStart) >= new Date(e.target.value)) {
+                                setSchedError("Start must be before end");
+                              } else {
+                                setSchedError("");
+                              }
+                            }}
+                            className={cn(
+                              "w-full mt-1 bg-white/5 border rounded-md px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50",
+                              schedError ? "border-red-500/50" : "border-white/10"
+                            )}
                           />
                         </div>
                       </div>
+                      {schedError && (
+                        <p className="text-[10px] text-red-400 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" /> {schedError}
+                        </p>
+                      )}
                       <div className="flex items-center gap-2">
                         <button
                           onClick={async () => {
+                            if (schedPauseStart && schedPauseEnd && new Date(schedPauseStart) >= new Date(schedPauseEnd)) {
+                              setSchedError("Start must be before end");
+                              return;
+                            }
                             await toggleCsrPause(
                               csr.id,
                               true,
@@ -1042,7 +1073,7 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                             );
                             setScheduleEditId(null);
                           }}
-                          disabled={scheduleSaving === csr.id}
+                          disabled={scheduleSaving === csr.id || !!schedError}
                           className="flex items-center gap-1 px-3 py-1.5 rounded bg-amber-500/20 text-amber-400 text-xs font-medium hover:bg-amber-500/30 disabled:opacity-50"
                         >
                           {scheduleSaving === csr.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
@@ -2096,7 +2127,7 @@ export default function SalesManager() {
           <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
         )}
         {tab === "routing" && (
-          <RoutingTab tenantId={effectiveTenantId} funnels={funnels} />
+          <RoutingTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} />
         )}
         {tab === "activity" && (
           <ActivityFeedTab
