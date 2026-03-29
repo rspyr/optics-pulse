@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -822,31 +823,34 @@ function RoutingTab({ tenantId, funnels }: { tenantId: number | null; funnels: F
                       const csr = csrs.find(c => c.id === csrId);
                       return (
                         <Draggable key={csrId} draggableId={String(csrId)} index={idx}>
-                          {(dragProvided, snapshot) => (
-                            <div
-                              ref={dragProvided.innerRef}
-                              {...dragProvided.draggableProps}
-                              className={cn(
-                                "flex items-center gap-2 p-2 rounded bg-white/[0.02] border border-white/5",
-                                snapshot.isDragging && "bg-white/[0.06] border-primary/30 shadow-lg"
-                              )}
-                            >
-                              <div {...dragProvided.dragHandleProps} className="cursor-grab active:cursor-grabbing">
-                                <GripVertical className="w-3 h-3 text-white/30 hover:text-white/50 flex-shrink-0" />
-                              </div>
-                              <span className="text-[10px] font-mono text-white/30 w-5">{idx + 1}.</span>
-                              <span className="text-xs text-white flex-1 truncate">{csr?.name || `User #${csrId}`}</span>
-                              {csr?.isPaused && (
-                                <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.5 rounded">paused</span>
-                              )}
-                              <button
-                                onClick={() => removeFromCascade(csrId)}
-                                className="p-0.5 rounded text-white/20 hover:text-red-400"
+                          {(dragProvided, snapshot) => {
+                            const row = (
+                              <div
+                                ref={dragProvided.innerRef}
+                                {...dragProvided.draggableProps}
+                                {...dragProvided.dragHandleProps}
+                                className={cn(
+                                  "flex items-center gap-2 p-2 rounded bg-white/[0.02] border border-white/5 cursor-grab active:cursor-grabbing",
+                                  snapshot.isDragging && "bg-white/[0.06] border-primary/30 shadow-lg"
+                                )}
                               >
-                                ×
-                              </button>
-                            </div>
-                          )}
+                                <GripVertical className="w-3 h-3 text-white/30 hover:text-white/50 flex-shrink-0" />
+                                <span className="text-[10px] font-mono text-white/30 w-5">{idx + 1}.</span>
+                                <span className="text-xs text-white flex-1 truncate">{csr?.name || `User #${csrId}`}</span>
+                                {csr?.isPaused && (
+                                  <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 py-0.5 rounded">paused</span>
+                                )}
+                                <button
+                                  onClick={() => removeFromCascade(csrId)}
+                                  className="p-0.5 rounded text-white/20 hover:text-red-400"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                            if (snapshot.isDragging) return createPortal(row, document.body);
+                            return row;
+                          }}
                         </Draggable>
                       );
                     })}

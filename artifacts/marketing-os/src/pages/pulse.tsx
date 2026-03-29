@@ -16,6 +16,46 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
+function formatPhone(raw: string): string {
+  const digits = raw.replace(/[^0-9]/g, "");
+  if (digits.length === 11 && digits[0] === "1") {
+    return `${digits[0]}-${digits.slice(1, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return raw;
+}
+
+function CopyBtn({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={e => {
+        e.stopPropagation();
+        e.preventDefault();
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="p-0.5 rounded hover:bg-white/10 transition-colors"
+      title="Copy"
+    >
+      <AnimatePresence mode="wait">
+        {copied ? (
+          <motion.span key="check" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+            <Check className="w-3 h-3 text-emerald-400" />
+          </motion.span>
+        ) : (
+          <motion.span key="copy" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }} transition={{ duration: 0.15 }}>
+            <Copy className="w-3 h-3 text-white/30 hover:text-white/60" />
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </button>
+  );
+}
+
 type QueueTab = "new" | "today" | "callbacks" | "reengagement" | "old" | "archive";
 
 const QUEUE_TABS: { key: QueueTab; label: string; color: string }[] = [
@@ -383,7 +423,12 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
             {lead.serviceType && (
               <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
             )}
-            {lead.phone && <span className="text-[11px] text-white/40 font-mono">{lead.phone}</span>}
+            {lead.phone && (
+              <span className="inline-flex items-center gap-0.5">
+                <span className="text-[11px] text-white/40 font-mono">{formatPhone(lead.phone)}</span>
+                <CopyBtn text={lead.phone.replace(/[^0-9+]/g, "")} />
+              </span>
+            )}
           </div>
           <ContactFlags preferences={lead.contactPreferences} />
           {lead.disposition && (
@@ -602,12 +647,19 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
               )}
               {lead.phone && (
-                blocksCall
-                  ? <span className="text-sm text-white/40 font-mono">{lead.phone}</span>
-                  : <a href={`tel:${lead.phone}`} className="text-sm text-blue-400 hover:text-blue-300 font-mono">{lead.phone}</a>
+                <span className="inline-flex items-center gap-0.5">
+                  {blocksCall
+                    ? <span className="text-sm text-white/40 font-mono">{formatPhone(lead.phone)}</span>
+                    : <a href={`tel:${lead.phone}`} className="text-sm text-blue-400 hover:text-blue-300 font-mono">{formatPhone(lead.phone)}</a>
+                  }
+                  <CopyBtn text={lead.phone.replace(/[^0-9+]/g, "")} />
+                </span>
               )}
               {lead.email && (
-                <a href={`mailto:${lead.email}`} className="text-sm text-purple-400 hover:text-purple-300">{lead.email}</a>
+                <span className="inline-flex items-center gap-0.5">
+                  <a href={`mailto:${lead.email}`} className="text-sm text-purple-400 hover:text-purple-300">{lead.email}</a>
+                  <CopyBtn text={lead.email} />
+                </span>
               )}
             </div>
             <ContactFlags preferences={lead.contactPreferences} />
@@ -1120,7 +1172,12 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                   <span className="text-[10px] text-white/20 font-mono">{formatInTz(lead.createdAt, timezone, { month: "short", day: "numeric" })}</span>
                 </div>
               </div>
-              {lead.phone && <p className="text-[11px] text-white/30 font-mono mt-1">{lead.phone}</p>}
+              {lead.phone && (
+                <p className="text-[11px] text-white/30 font-mono mt-1 inline-flex items-center gap-0.5">
+                  {formatPhone(lead.phone)}
+                  <CopyBtn text={lead.phone.replace(/[^0-9+]/g, "")} />
+                </p>
+              )}
               {lead.deadReason && <p className="text-[10px] text-red-400/60 mt-1">Reason: {lead.deadReason.replace(/_/g, " ")}</p>}
             </div>
           ))}
@@ -1231,7 +1288,7 @@ export default function Leads() {
                 <p className="text-white font-display text-base">{notificationLead.firstName} {notificationLead.lastName}</p>
                 <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
                   <SourceTag source={notificationLead.source} />
-                  {notificationLead.phone && <span className="font-mono text-[11px] text-white/40">{notificationLead.phone}</span>}
+                  {notificationLead.phone && <span className="font-mono text-[11px] text-white/40">{formatPhone(notificationLead.phone)}</span>}
                 </div>
                 <motion.div className="absolute bottom-0 left-0 h-0.5 bg-red-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 15, ease: "linear" }} />
               </div>
