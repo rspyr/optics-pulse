@@ -1605,6 +1605,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
                         <option value="city">City</option>
                         <option value="state">State</option>
                         <option value="zip">Zip Code</option>
+                        <option value="dateTime">Date/Time</option>
                         <option value="__skip__">Skip (Do Not Import)</option>
                       </>
                     )}
