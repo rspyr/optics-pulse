@@ -175,7 +175,7 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
     return;
   }
 
-  const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__");
+  const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__" && f !== "notes");
   const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i);
   if (duplicates.length > 0) {
     res.status(400).json({ error: `Duplicate field assignment: "${[...new Set(duplicates)].join(", ")}" is mapped to multiple columns` });
@@ -364,6 +364,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         email: row.email || null,
         source: row.source || funnel?.name || "Google Sheet",
         serviceType: row.serviceType || null,
+        notes: row.notes || null,
         funnelId: funnelTypeId,
         hubStatus: "day_1",
         dayInSequence: 1,

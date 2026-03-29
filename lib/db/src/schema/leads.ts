@@ -39,6 +39,7 @@ export const leadsTable = pgTable("leads", {
   callbackAt: timestamp("callback_at"),
   revisitDate: date("revisit_date"),
   deadReason: text("dead_reason"),
+  notes: text("notes"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

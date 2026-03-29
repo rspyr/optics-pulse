@@ -111,6 +111,7 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
       email: row.email || null,
       source: row.source || funnel?.name || "Google Sheet",
       serviceType: row.serviceType || null,
+      notes: row.notes || null,
       funnelId: assoc.funnelTypeId,
       hubStatus: "day_1",
       dayInSequence: 1,
@@ -156,12 +157,22 @@ function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<stri
 
   for (const row of rawRows) {
     const obj: Record<string, string> = {};
+    const notesParts: string[] = [];
     for (let j = 0; j < headers.length; j++) {
       const headerKey = headers[j];
       const normalized = mapping[headerKey] || headerKey;
       if (normalized && normalized !== "__skip__") {
-        obj[normalized] = (row[j] || "").trim();
+        const val = (row[j] || "").trim();
+        if (normalized === "notes") {
+          if (val) notesParts.push(`${headerKey}: ${val}`);
+        } else {
+          obj[normalized] = val;
+        }
       }
+    }
+
+    if (notesParts.length > 0) {
+      obj.notes = notesParts.join("\n");
     }
 
     if (obj.fullName && !obj.firstName) {

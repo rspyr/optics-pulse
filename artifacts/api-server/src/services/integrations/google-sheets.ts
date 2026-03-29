@@ -133,6 +133,7 @@ export async function readSheetRows(
 
   for (const row of rawRows) {
     const obj: Record<string, string> = {};
+    const notesParts: string[] = [];
 
     for (let j = 0; j < rawHeaders.length; j++) {
       const headerKey = rawHeaders[j];
@@ -143,8 +144,17 @@ export async function readSheetRows(
         normalized = headerMap[headerKey.toLowerCase()] || headerKey.toLowerCase();
       }
       if (normalized && normalized !== "__skip__") {
-        obj[normalized] = (row[j] || "").trim();
+        const val = (row[j] || "").trim();
+        if (normalized === "notes") {
+          if (val) notesParts.push(`${headerKey}: ${val}`);
+        } else {
+          obj[normalized] = val;
+        }
       }
+    }
+
+    if (notesParts.length > 0) {
+      obj.notes = notesParts.join("\n");
     }
 
     if (obj.fullName && !obj.firstName) {
