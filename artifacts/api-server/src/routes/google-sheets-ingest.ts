@@ -145,7 +145,7 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
 
   if (mapping === null && headers === null) {
     const clearResult = await db.update(tenantFunnelTypesTable)
-      .set({ columnMapping: null, mappingHeaders: null })
+      .set({ columnMapping: null, mappingHeaders: null, syncRowWatermark: null })
       .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
     if (!clearResult.rowCount || clearResult.rowCount === 0) {
       res.status(404).json({ error: "Funnel type not associated with tenant" });
@@ -182,8 +182,27 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
     return;
   }
 
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  if (!assoc) {
+    res.status(404).json({ error: "Funnel type not associated with tenant" });
+    return;
+  }
+
+  let watermark: number | null = null;
+  if (assoc.googleSheetId && assoc.googleSheetTab) {
+    try {
+      const { rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+      watermark = rawRows.length;
+    } catch (err) {
+      console.error("[GoogleSheets Mapping] Failed to read sheet for watermark:", err);
+      watermark = 0;
+    }
+  }
+
   const result = await db.update(tenantFunnelTypesTable)
-    .set({ columnMapping: mapping, mappingHeaders: headers })
+    .set({ columnMapping: mapping, mappingHeaders: headers, syncRowWatermark: watermark })
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
 
   if (!result.rowCount || result.rowCount === 0) {

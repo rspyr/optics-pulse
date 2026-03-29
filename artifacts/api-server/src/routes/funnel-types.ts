@@ -146,7 +146,7 @@ router.put("/tenants/:id/funnel-types/:funnelTypeId/sheet-config", requireRole("
     .set({
       googleSheetId: newSheetId,
       googleSheetTab: newSheetTab,
-      ...(sheetChanged ? { columnMapping: null, mappingHeaders: null } : {}),
+      ...(sheetChanged ? { columnMapping: null, mappingHeaders: null, syncRowWatermark: null } : {}),
     })
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
 

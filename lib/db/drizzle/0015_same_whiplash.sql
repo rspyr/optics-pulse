@@ -1,0 +1,1 @@
+ALTER TABLE "tenant_funnel_types" ADD COLUMN "sync_row_watermark" integer;

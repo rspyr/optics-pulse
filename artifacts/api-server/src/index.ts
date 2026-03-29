@@ -11,6 +11,7 @@ import { startNightlyAggregation } from "./services/coordinator-stats";
 import { autoSeedIfEmpty } from "./services/auto-seed";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
+import { startSheetSyncScheduler } from "./services/sheet-sync";
 
 const rawPort = process.env["PORT"];
 
@@ -40,6 +41,7 @@ httpServer.listen(port, async () => {
   startClientAlertScheduler();
   startNightlyAggregation();
   startStDataPurgeScheduler();
+  startSheetSyncScheduler();
   setInterval(async () => {
     try {
       const count = await evaluateAutoPass();
