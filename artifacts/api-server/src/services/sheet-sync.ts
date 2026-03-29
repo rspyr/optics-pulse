@@ -1,6 +1,6 @@
 import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, isNotNull } from "drizzle-orm";
-import { readRawSheetData, readSheetRows } from "./integrations/google-sheets";
+import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead } from "../socket";
 
 function headersMatch(current: string[], saved: string[]): boolean {
@@ -9,28 +9,47 @@ function headersMatch(current: string[], saved: string[]): boolean {
   return saved.every(h => currentSet.has(h));
 }
 
+let syncing = false;
+
 async function syncAllSheets(): Promise<void> {
-  const associations = await db.select().from(tenantFunnelTypesTable)
-    .where(and(
-      isNotNull(tenantFunnelTypesTable.googleSheetId),
-      isNotNull(tenantFunnelTypesTable.googleSheetTab),
-      isNotNull(tenantFunnelTypesTable.columnMapping),
-      isNotNull(tenantFunnelTypesTable.mappingHeaders),
-      isNotNull(tenantFunnelTypesTable.syncRowWatermark),
-    ));
+  if (syncing) return;
+  syncing = true;
+  try {
+    const associations = await db.select().from(tenantFunnelTypesTable)
+      .where(and(
+        isNotNull(tenantFunnelTypesTable.googleSheetId),
+        isNotNull(tenantFunnelTypesTable.googleSheetTab),
+        isNotNull(tenantFunnelTypesTable.columnMapping),
+        isNotNull(tenantFunnelTypesTable.mappingHeaders),
+        isNotNull(tenantFunnelTypesTable.syncRowWatermark),
+      ));
 
-  if (associations.length === 0) return;
+    if (associations.length === 0) return;
 
-  for (const assoc of associations) {
-    try {
-      await syncSingleSheet(assoc);
-    } catch (err) {
-      console.error(`[SheetSync] Error syncing tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId}:`, err);
+    let totalImported = 0;
+    let driftSkipped = 0;
+    let errorCount = 0;
+
+    for (const assoc of associations) {
+      try {
+        const count = await syncSingleSheet(assoc);
+        if (count === -1) driftSkipped++;
+        else totalImported += count;
+      } catch (err) {
+        errorCount++;
+        console.error(`[SheetSync] Error syncing tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId}:`, err);
+      }
     }
+
+    if (totalImported > 0 || driftSkipped > 0 || errorCount > 0) {
+      console.log(`[SheetSync] Cycle complete: ${associations.length} sheet(s) checked, ${totalImported} lead(s) imported, ${driftSkipped} drift-skipped, ${errorCount} error(s)`);
+    }
+  } finally {
+    syncing = false;
   }
 }
 
-async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect): Promise<void> {
+async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect): Promise<number> {
   const sheetId = assoc.googleSheetId!;
   const tab = assoc.googleSheetTab!;
   const mapping = assoc.columnMapping as Record<string, string>;
@@ -41,10 +60,10 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
 
   if (!headersMatch(currentHeaders, savedHeaders)) {
     console.warn(`[SheetSync] Headers changed for tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId} — skipping`);
-    return;
+    return -1;
   }
 
-  if (rawRows.length <= watermark) return;
+  if (rawRows.length <= watermark) return 0;
 
   const newRawRows = rawRows.slice(watermark);
 
@@ -56,7 +75,7 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
         eq(tenantFunnelTypesTable.tenantId, assoc.tenantId),
         eq(tenantFunnelTypesTable.funnelTypeId, assoc.funnelTypeId),
       ));
-    return;
+    return 0;
   }
 
   const existingLeads = await db.select({ phone: leadsTable.phone })
@@ -118,6 +137,8 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
   if (imported > 0) {
     console.log(`[SheetSync] Synced ${imported} new lead(s) for tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId}`);
   }
+
+  return imported;
 }
 
 interface MappedRow {

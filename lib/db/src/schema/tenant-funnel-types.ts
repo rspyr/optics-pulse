@@ -1,4 +1,4 @@
-import { pgTable, integer, text, timestamp, primaryKey, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, integer, text, timestamp, primaryKey, jsonb } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { funnelTypesTable } from "./funnel-types";
 
