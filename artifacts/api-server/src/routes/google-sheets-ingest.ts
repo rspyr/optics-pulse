@@ -197,7 +197,8 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
       watermark = rawRows.length;
     } catch (err) {
       console.error("[GoogleSheets Mapping] Failed to read sheet for watermark:", err);
-      watermark = 0;
+      res.status(503).json({ error: "Unable to read sheet to initialize auto-sync. Please try again." });
+      return;
     }
   }
 
