@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
-import { eq, and, count, sql, avg, inArray } from "drizzle-orm";
+import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
+import { eq, and, count, sql, avg, inArray, gte } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
@@ -222,17 +222,20 @@ export async function getHudStats(tenantId: number | null) {
     : and(eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(soldTodayConditions);
 
-  const contactedTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`);
-  const [contactedToday] = await db.select({ count: count() }).from(leadsTable).where(contactedTodayConditions);
+  const callAttemptsConds = tenantId
+    ? and(
+        gte(callAttemptsTable.attemptedAt, today),
+        sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`,
+      )
+    : gte(callAttemptsTable.attemptedAt, today);
+  const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(callAttemptsConds);
 
   const contactedExclPreBookedConds = tenantId
     ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
     : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(contactedExclPreBookedConds);
 
-  const totalCalls = contactedToday.count;
+  const totalCalls = callAttemptsToday.count;
   const bookings = bookedToday.count + soldToday.count;
   const bookingRate = contactedExclPreBooked.count > 0 ? Math.round((bookings / contactedExclPreBooked.count) * 100) : 0;
   const newLeadsToday = allLeadsToday.count;

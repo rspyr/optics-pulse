@@ -279,10 +279,9 @@ function useDateRange(preset: string): [string, string] {
   return range;
 }
 
-function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked }: { tenantId: number | null; funnels: FunnelType[]; includePreBooked: boolean; setIncludePreBooked: (v: boolean) => void }) {
   const [datePreset, setDatePreset] = useState("today");
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
-  const [includePreBooked, setIncludePreBooked] = useState(false);
   const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter, includePreBooked);
   const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
@@ -483,10 +482,9 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
   );
 }
 
-function TeamTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantId: number | null; funnels: FunnelType[]; timezone?: string }) {
+function TeamTab({ tenantId, funnels, timezone = "America/New_York", includePreBooked, setIncludePreBooked }: { tenantId: number | null; funnels: FunnelType[]; timezone?: string; includePreBooked: boolean; setIncludePreBooked: (v: boolean) => void }) {
   const [datePreset, setDatePreset] = useState("today");
   const [startDate, endDate] = useDateRange(datePreset);
-  const [includePreBooked, setIncludePreBooked] = useState(false);
   const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
   const { csrs, loading: csrsLoading } = useCsrs(tenantId);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -2056,6 +2054,7 @@ function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number
 export default function SalesManager() {
   const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [includePreBooked, setIncludePreBooked] = useState(false);
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
 
@@ -2158,10 +2157,10 @@ export default function SalesManager() {
 
       <div>
         {tab === "dashboard" && (
-          <DashboardTab tenantId={effectiveTenantId} funnels={funnels} />
+          <DashboardTab tenantId={effectiveTenantId} funnels={funnels} includePreBooked={includePreBooked} setIncludePreBooked={setIncludePreBooked} />
         )}
         {tab === "team" && (
-          <TeamTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} />
+          <TeamTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} includePreBooked={includePreBooked} setIncludePreBooked={setIncludePreBooked} />
         )}
         {tab === "scripts" && (
           <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
