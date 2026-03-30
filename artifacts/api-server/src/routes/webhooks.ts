@@ -27,7 +27,7 @@ function verifySignature(payload: string, signature: string | undefined): boolea
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-async function resolveFunnelType(tenantId: number, funnelSlug: string | null | undefined): Promise<string | null> {
+async function resolveFunnelType(tenantId: number, funnelSlug: string | null | undefined): Promise<{ name: string; id: number } | null> {
   if (!funnelSlug) return null;
   const [ft] = await db.select().from(funnelTypesTable)
     .where(eq(funnelTypesTable.slug, funnelSlug));
@@ -35,7 +35,7 @@ async function resolveFunnelType(tenantId: number, funnelSlug: string | null | u
   const [assoc] = await db.select().from(tenantFunnelTypesTable)
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, ft.id)));
   if (!assoc) return null;
-  return ft.name;
+  return { name: ft.name, id: ft.id };
 }
 
 router.post("/webhooks/ingest", async (req, res) => {
@@ -90,7 +90,9 @@ router.post("/webhooks/ingest", async (req, res) => {
       const rawBody = req.body as Record<string, unknown>;
       const rawData = (rawBody.data || {}) as Record<string, unknown>;
       const funnelSlug = data.funnel || (rawData._mos_funnel as string) || null;
-      const resolvedLeadType = await resolveFunnelType(tenantId, funnelSlug) || source;
+      const resolved = await resolveFunnelType(tenantId, funnelSlug);
+      const resolvedLeadType = resolved?.name || source;
+      const resolvedFunnelId = resolved?.id || null;
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",
@@ -101,6 +103,7 @@ router.post("/webhooks/ingest", async (req, res) => {
         matchedGclid: data.gclid || null,
         interestType: null,
         leadType: resolvedLeadType,
+        funnelId: resolvedFunnelId,
         hubStatus: "day_1",
         dayInSequence: 1,
         status: "new",
@@ -108,7 +111,10 @@ router.post("/webhooks/ingest", async (req, res) => {
 
       if (newLead) {
         try {
-          await assignLeadRoundRobin(tenantId, newLead.id, null);
+          const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
+          if (!result.assignedCsrId) {
+            console.warn(`[Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);
+          }
         } catch (err) {
           console.warn("[Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
         }

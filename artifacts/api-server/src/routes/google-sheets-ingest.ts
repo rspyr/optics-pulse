@@ -380,7 +380,10 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
 
       if (lead) {
         try {
-          await assignLeadRoundRobin(tenantId, lead.id, funnelTypeId || null);
+          const result = await assignLeadRoundRobin(tenantId, lead.id, funnelTypeId || null);
+          if (!result.assignedCsrId) {
+            console.warn(`[SheetsIngest] Lead ${lead.id} not assigned: ${result.reason}`);
+          }
         } catch (err) {
           console.warn("[SheetsIngest] Auto-assign failed for lead", lead.id, err);
         }

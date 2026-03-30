@@ -1,5 +1,5 @@
 import { db, usersTable, tenantsTable, campaignsTable, campaignDailyStatsTable, leadsTable, jobsTable, attributionEventsTable, changeLogsTable, funnelTypesTable } from "@workspace/db";
-import { sql, eq, and, inArray } from "drizzle-orm";
+import { sql, eq, and, inArray, gt } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import fs from "fs";
@@ -338,18 +338,6 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
   }
   await db.insert(campaignDailyStatsTable).values(dailyStats);
 
-  const csrsByTenant: Record<number, { id: number; name: string }[]> = {};
-  for (const tid of tenantIds) {
-    const csrs = await db.select({ id: usersTable.id, name: usersTable.name })
-      .from(usersTable)
-      .where(and(
-        eq(usersTable.tenantId, tid),
-        eq(usersTable.isActive, true),
-        inArray(usersTable.role, ["client_user", "client_admin"]),
-      ));
-    csrsByTenant[tid] = csrs;
-  }
-
   const leads = [];
   for (let i = 0; i < 60; i++) {
     const tenantId = tenantIds[i % tenantIds.length];
@@ -359,9 +347,6 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
     const status = randomFrom(LEAD_STATUSES);
     const gclid = source === "Google Ads" ? fakeGclid() : null;
     const createdAt = randomDate(30);
-
-    const availableCsrs = csrsByTenant[tenantId] || [];
-    const assignedCsr = availableCsrs.length > 0 ? availableCsrs[i % availableCsrs.length] : null;
 
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
@@ -375,8 +360,6 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
       status,
       isNewCustomer: Math.random() > 0.3,
       matchedGclid: gclid,
-      assignedCsrId: assignedCsr?.id ?? null,
-      assignedTo: assignedCsr?.name ?? null,
       createdAt,
       updatedAt: createdAt,
     }).returning();
@@ -441,37 +424,32 @@ async function backfillUnassignedLeads() {
   const { assignLeadRoundRobin } = await import("./round-robin");
   const BATCH_SIZE = 500;
   let totalAssigned = 0;
+  let totalSkipped = 0;
+  let lastSeenId = 0;
 
   while (true) {
     const batch = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, funnelId: leadsTable.funnelId })
       .from(leadsTable)
-      .where(isNull(leadsTable.assignedCsrId))
+      .where(and(isNull(leadsTable.assignedCsrId), gt(leadsTable.id, lastSeenId)))
+      .orderBy(leadsTable.id)
       .limit(BATCH_SIZE);
 
     if (batch.length === 0) break;
 
     for (const lead of batch) {
+      lastSeenId = lead.id;
       try {
         const result = await assignLeadRoundRobin(lead.tenantId, lead.id, lead.funnelId || null);
         if (result.assignedCsrId) {
           totalAssigned++;
         } else {
-          const csrs = await db.select({ id: usersTable.id, name: usersTable.name })
-            .from(usersTable)
-            .where(and(
-              eq(usersTable.tenantId, lead.tenantId),
-              eq(usersTable.isActive, true),
-              inArray(usersTable.role, ["client_user", "client_admin"]),
-            ));
-          if (csrs.length > 0) {
-            const csr = csrs[totalAssigned % csrs.length];
-            await db.update(leadsTable)
-              .set({ assignedCsrId: csr.id, assignedTo: csr.name })
-              .where(eq(leadsTable.id, lead.id));
-            totalAssigned++;
+          totalSkipped++;
+          if (totalSkipped <= 5) {
+            console.warn(`[AutoSeed Backfill] Lead ${lead.id} (tenant ${lead.tenantId}) not assigned: ${result.reason}`);
           }
         }
       } catch {
+        totalSkipped++;
         continue;
       }
     }
@@ -481,5 +459,8 @@ async function backfillUnassignedLeads() {
 
   if (totalAssigned > 0) {
     console.log(`[AutoSeed] Backfilled ${totalAssigned} unassigned leads across CSRs`);
+  }
+  if (totalSkipped > 0) {
+    console.warn(`[AutoSeed] ${totalSkipped} lead(s) could not be assigned (no routing config or no active CSRs)`);
   }
 }

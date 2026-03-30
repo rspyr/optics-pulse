@@ -407,6 +407,8 @@ router.post("/leads-hub/create", async (req, res) => {
         emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
         res.status(201).json(refreshed ?? lead);
         return;
+      } else {
+        console.warn(`[LeadsHub Create] Lead ${lead.id} not assigned: ${result.reason}`);
       }
     } catch (err) {
       console.warn("[LeadsHub Create] Auto-assign round-robin failed for lead", lead.id, err);

@@ -11,7 +11,7 @@ const DEMO_SOURCES = ["Google Ads", "Meta Leads", "CallRail", "Organic Search"];
 const DEMO_INTEREST_TYPES = ["Heat Pump", "AC Repair", "Full System", "Furnace", "Ductless Mini-Split", "Maintenance"];
 const DEMO_LEAD_TYPES_FALLBACK = ["Fit Funnel", "Quiz", "Pop-up", "Direct"];
 
-let cachedFunnelTypes: Record<number, string[]> = {};
+let cachedFunnelTypes: Record<number, { name: string; id: number }[]> = {};
 
 function randomFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -129,14 +129,15 @@ async function loadFunnelTypesCache(): Promise<void> {
     const rows = await db.select({
       tenantId: tenantFunnelTypesTable.tenantId,
       name: funnelTypesTable.name,
+      id: funnelTypesTable.id,
     })
       .from(tenantFunnelTypesTable)
       .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
       .where(eq(funnelTypesTable.isActive, true));
-    const grouped: Record<number, string[]> = {};
+    const grouped: Record<number, { name: string; id: number }[]> = {};
     for (const r of rows) {
       if (!grouped[r.tenantId]) grouped[r.tenantId] = [];
-      grouped[r.tenantId].push(r.name);
+      grouped[r.tenantId].push({ name: r.name, id: r.id });
     }
     cachedFunnelTypes = grouped;
   } catch { /* ignore */ }
@@ -152,9 +153,11 @@ async function createDemoLead(): Promise<void> {
     const tenantId = randomFrom(demoTenants).id;
 
     const tenantFunnels = cachedFunnelTypes[tenantId];
-    const leadType = tenantFunnels && tenantFunnels.length > 0
+    const selectedFunnel = tenantFunnels && tenantFunnels.length > 0
       ? randomFrom(tenantFunnels)
-      : randomFrom(DEMO_LEAD_TYPES_FALLBACK);
+      : null;
+    const leadType = selectedFunnel?.name || randomFrom(DEMO_LEAD_TYPES_FALLBACK);
+    const funnelId = selectedFunnel?.id || null;
 
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
@@ -164,6 +167,7 @@ async function createDemoLead(): Promise<void> {
       email: fakeEmail(firstName, lastName),
       source,
       leadType,
+      funnelId,
       interestType: randomFrom(DEMO_INTEREST_TYPES),
       status: "new",
       isNewCustomer: Math.random() > 0.3,
@@ -173,7 +177,10 @@ async function createDemoLead(): Promise<void> {
 
     if (lead) {
       try {
-        await assignLeadRoundRobin(tenantId, lead.id, null);
+        const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId);
+        if (!result.assignedCsrId) {
+          console.warn(`[Demo] Lead ${lead.id} not assigned: ${result.reason}`);
+        }
       } catch (err) {
         console.warn("[Demo] Auto-assign failed for demo lead", lead.id, err);
       }

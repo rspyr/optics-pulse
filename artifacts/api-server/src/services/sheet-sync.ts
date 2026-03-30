@@ -127,7 +127,10 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
 
     if (lead) {
       try {
-        await assignLeadRoundRobin(assoc.tenantId, lead.id, assoc.funnelTypeId || null);
+        const result = await assignLeadRoundRobin(assoc.tenantId, lead.id, assoc.funnelTypeId || null);
+        if (!result.assignedCsrId) {
+          console.warn(`[SheetSync] Lead ${lead.id} not assigned: ${result.reason}`);
+        }
       } catch (err) {
         console.warn("[SheetSync] Auto-assign failed for lead", lead.id, err);
       }
