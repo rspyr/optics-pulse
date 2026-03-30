@@ -204,7 +204,7 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
   }
 
   const result = await db.update(tenantFunnelTypesTable)
-    .set({ columnMapping: mapping, mappingHeaders: headers, syncRowWatermark: watermark })
+    .set({ columnMapping: mapping, mappingHeaders: headers, syncRowWatermark: watermark, syncPaused: true })
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
 
   if (!result.rowCount || result.rowCount === 0) {
@@ -517,6 +517,26 @@ router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_
     const message = err instanceof Error ? err.message : "Backfill failed";
     res.status(500).json({ error: message });
   }
+});
+
+router.post("/google-sheets/toggle-sync-pause/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const tenantId = parseInt(String(req.params.tenantId));
+  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+
+  const [assoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  if (!assoc) {
+    res.status(404).json({ error: "Association not found" });
+    return;
+  }
+
+  const newPaused = !assoc.syncPaused;
+  await db.update(tenantFunnelTypesTable)
+    .set({ syncPaused: newPaused })
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+
+  res.json({ syncPaused: newPaused });
 });
 
 export default router;

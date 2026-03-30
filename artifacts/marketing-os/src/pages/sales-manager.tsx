@@ -29,6 +29,7 @@ interface FunnelType {
   googleSheetTab?: string | null;
   columnMapping?: Record<string, string> | null;
   mappingHeaders?: string[] | null;
+  syncPaused?: boolean;
 }
 
 interface StatsData {
@@ -1847,6 +1848,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   const [ingestResult, setIngestResult] = useState<{ funnelId: number; msg: string; type: "success" | "error" } | null>(null);
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [previewData, setPreviewData] = useState<{ funnelId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
+  const [togglingPause, setTogglingPause] = useState<number | null>(null);
 
   const startEdit = (funnel: FunnelType) => {
     setEditingFunnelId(funnel.id);
@@ -1924,6 +1926,25 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
     } catch {
       setIngestResult({ funnelId, msg: "Connection error during preview", type: "error" });
     } finally { setPreviewing(null); }
+  };
+
+  const handleTogglePause = async (funnel: FunnelType) => {
+    if (!tenantId) return;
+    setTogglingPause(funnel.id);
+    try {
+      const res = await fetch(`${API_BASE}/google-sheets/toggle-sync-pause/${tenantId}/${funnel.id}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        onRefetch();
+      } else {
+        const data = await res.json().catch(() => ({ error: "Toggle failed" }));
+        alert(data.error || "Failed to toggle sync pause");
+      }
+    } catch {
+      alert("Connection error");
+    } finally { setTogglingPause(null); }
   };
 
   const triggerAnalysis = (funnelId: number) => {
@@ -2009,6 +2030,26 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                     >
                       {backfilling === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
                       Resync Notes
+                    </button>
+                    <button
+                      onClick={() => handleTogglePause(funnel)}
+                      disabled={togglingPause === funnel.id}
+                      className={cn(
+                        "flex items-center gap-1 px-2 py-1 rounded text-[10px] disabled:opacity-50",
+                        funnel.syncPaused !== false
+                          ? "text-yellow-400 hover:bg-yellow-500/10"
+                          : "text-emerald-400 hover:bg-emerald-500/10"
+                      )}
+                      title={funnel.syncPaused !== false ? "Auto-sync is paused — click to resume" : "Auto-sync is active — click to pause"}
+                    >
+                      {togglingPause === funnel.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : funnel.syncPaused !== false ? (
+                        <Play className="w-3 h-3" />
+                      ) : (
+                        <Pause className="w-3 h-3" />
+                      )}
+                      {funnel.syncPaused !== false ? "Paused" : "Syncing"}
                     </button>
                   </>
                 )}

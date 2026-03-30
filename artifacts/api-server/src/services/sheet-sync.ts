@@ -1,5 +1,5 @@
 import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, isNotNull, ne } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead } from "../socket";
 
@@ -22,6 +22,7 @@ async function syncAllSheets(): Promise<void> {
         isNotNull(tenantFunnelTypesTable.columnMapping),
         isNotNull(tenantFunnelTypesTable.mappingHeaders),
         isNotNull(tenantFunnelTypesTable.syncRowWatermark),
+        ne(tenantFunnelTypesTable.syncPaused, true),
       ));
 
     if (associations.length === 0) return;

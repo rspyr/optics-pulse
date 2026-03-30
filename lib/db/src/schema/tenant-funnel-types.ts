@@ -1,4 +1,4 @@
-import { pgTable, integer, text, timestamp, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, integer, text, timestamp, primaryKey, jsonb, boolean } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { funnelTypesTable } from "./funnel-types";
 
@@ -10,6 +10,7 @@ export const tenantFunnelTypesTable = pgTable("tenant_funnel_types", {
   columnMapping: jsonb("column_mapping").$type<Record<string, string>>(),
   mappingHeaders: jsonb("mapping_headers").$type<string[]>(),
   syncRowWatermark: integer("sync_row_watermark"),
+  syncPaused: boolean("sync_paused").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.funnelTypeId] }),

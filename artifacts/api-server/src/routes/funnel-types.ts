@@ -170,6 +170,7 @@ router.get("/tenants/:id/funnel-types", async (req, res) => {
     googleSheetTab: tenantFunnelTypesTable.googleSheetTab,
     columnMapping: tenantFunnelTypesTable.columnMapping,
     mappingHeaders: tenantFunnelTypesTable.mappingHeaders,
+    syncPaused: tenantFunnelTypesTable.syncPaused,
   })
     .from(tenantFunnelTypesTable)
     .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
@@ -179,13 +180,14 @@ router.get("/tenants/:id/funnel-types", async (req, res) => {
     .where(inArray(funnelTypesTable.id, ids))
     .orderBy(funnelTypesTable.name);
 
-  const sheetConfigMap: Record<number, { googleSheetId: string | null; googleSheetTab: string | null; columnMapping: Record<string, string> | null; mappingHeaders: string[] | null }> = {};
+  const sheetConfigMap: Record<number, { googleSheetId: string | null; googleSheetTab: string | null; columnMapping: Record<string, string> | null; mappingHeaders: string[] | null; syncPaused: boolean }> = {};
   for (const a of associations) {
     sheetConfigMap[a.funnelTypeId] = {
       googleSheetId: a.googleSheetId,
       googleSheetTab: a.googleSheetTab,
       columnMapping: a.columnMapping || null,
       mappingHeaders: a.mappingHeaders || null,
+      syncPaused: a.syncPaused,
     };
   }
 
@@ -195,6 +197,7 @@ router.get("/tenants/:id/funnel-types", async (req, res) => {
     googleSheetTab: sheetConfigMap[t.id]?.googleSheetTab || null,
     columnMapping: sheetConfigMap[t.id]?.columnMapping || null,
     mappingHeaders: sheetConfigMap[t.id]?.mappingHeaders || null,
+    syncPaused: sheetConfigMap[t.id]?.syncPaused ?? true,
   }));
   res.json(enriched);
 });
