@@ -401,6 +401,29 @@ function SourceTag({ source }: { source: string }) {
   return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", color)}>{source}</span>;
 }
 
+function CommissionTicker({ amount, onDone }: { amount: number; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 2500);
+    return () => clearTimeout(t);
+  }, [onDone]);
+
+  return (
+    <motion.div
+      initial={{ scale: 0.3, opacity: 0, y: 40 }}
+      animate={{ scale: 1, opacity: 1, y: 0 }}
+      exit={{ scale: 0.5, opacity: 0, y: -30 }}
+      transition={{ type: "spring", damping: 12, stiffness: 200 }}
+      className="fixed top-20 right-8 z-[100] pointer-events-none"
+    >
+      <div className="bg-gradient-to-br from-emerald-500/90 to-green-600/90 backdrop-blur-md rounded-2xl px-8 py-5 shadow-2xl shadow-emerald-500/30 border border-emerald-400/40">
+        <div className="text-3xl font-black text-white tracking-tight text-center">
+          +${amount} 💰 BING!
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string> }) {
   return (
     <motion.div
@@ -527,8 +550,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/New_York", funnelMap = {} }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; timezone?: string; funnelMap?: Record<number, string>;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {} }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
@@ -562,6 +585,17 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
   const logAction = async (body: Record<string, unknown>) => {
     setActionLoading(true);
     try {
+      let commissionBefore: number | null = null;
+      if (body.appointmentSet && onSpiffEarned) {
+        try {
+          const statsRes = await fetch(`${API_BASE}/leads/hud/stats?tenantId=${tenantId}`, { credentials: "include" });
+          if (statsRes.ok) {
+            const s = await statsRes.json();
+            commissionBefore = s.commission ?? null;
+          }
+        } catch {}
+      }
+
       const res = await fetch(`${API_BASE}/leads-hub/action?tenantId=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -575,6 +609,17 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, timezone = "America/
         setSelectedCallResult(null);
         setCallbackDate("");
         onUpdate();
+
+        if (body.appointmentSet && onSpiffEarned && commissionBefore !== null) {
+          try {
+            const statsRes = await fetch(`${API_BASE}/leads/hud/stats?tenantId=${tenantId}`, { credentials: "include" });
+            if (statsRes.ok) {
+              const s = await statsRes.json();
+              const delta = (s.commission ?? 0) - commissionBefore;
+              if (delta > 0) onSpiffEarned(delta);
+            }
+          } catch {}
+        }
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "Failed");
@@ -1221,6 +1266,13 @@ export default function Leads() {
   const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
   const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [spiffEvent, setSpiffEvent] = useState<{ id: number; amount: number } | null>(null);
+  const spiffIdRef = useRef(0);
+
+  const handleSpiffEarned = useCallback((amount: number) => {
+    spiffIdRef.current += 1;
+    setSpiffEvent({ id: spiffIdRef.current, amount });
+  }, []);
 
   useEffect(() => {
     if (latestLead) {
@@ -1280,6 +1332,15 @@ export default function Leads() {
 
   return (
     <div className="relative min-h-screen">
+      <AnimatePresence>
+        {spiffEvent && (
+          <CommissionTicker
+            key={`spiff-${spiffEvent.id}`}
+            amount={spiffEvent.amount}
+            onDone={() => setSpiffEvent(null)}
+          />
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {notificationLead && (
           <motion.div
@@ -1409,6 +1470,7 @@ export default function Leads() {
               tenantId={effectiveTenantId}
               onBack={() => setSelectedLead(null)}
               onUpdate={() => { refetch(); refetchStats(); }}
+              onSpiffEarned={handleSpiffEarned}
               timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
               funnelMap={funnelMap}
             />
