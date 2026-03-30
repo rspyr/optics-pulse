@@ -782,13 +782,13 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         )}
       </PremiumCard>
 
-      {lead.hubStatus === "appt_booked" && (actionStep === null || actionStep === "appt_booked_flow") && (
+      {lead.hubStatus === "appt_booked" && actionStep === "appt_booked_flow" && (
         <PremiumCard className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Calendar className="w-5 h-5 text-purple-400" />
             <span className="text-sm font-medium text-purple-400">PRE-BOOKED APPOINTMENT</span>
           </div>
-          <p className="text-sm text-white/60 mb-4">This lead arrived with a pre-booked appointment. Confirm the appointment status:</p>
+          <p className="text-sm text-white/60 mb-4">Confirm the appointment status after reaching the lead:</p>
           <div className="space-y-2">
             <button
               onClick={() => logAction({ actionType: "call", apptBookedOutcome: "confirmed" })}

@@ -103,6 +103,8 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
       if (!isNaN(d.getTime())) parsedCreatedAt = d;
     }
 
+    const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+
     const [lead] = await db.insert(leadsTable).values({
       tenantId: assoc.tenantId,
       firstName: row.firstName || "Unknown",
@@ -113,9 +115,10 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
       serviceType: row.serviceType || null,
       notes: row.notes || null,
       funnelId: assoc.funnelTypeId,
-      hubStatus: "day_1",
+      hubStatus: isPreBooked ? "appt_booked" : "day_1",
       dayInSequence: 1,
-      status: "new",
+      status: isPreBooked ? "contacted" : "new",
+      preBooked: isPreBooked,
       contactPreferences: [],
       ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
     }).returning();
