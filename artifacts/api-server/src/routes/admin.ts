@@ -116,11 +116,6 @@ router.delete("/admin/users/:userId", ...agencyOnly, async (req, res) => {
       return;
     }
 
-    await pool.query(
-      `DELETE FROM session WHERE sess::text LIKE $1`,
-      [`%"userId":${userId}%`]
-    );
-
     try {
       await db.delete(usersTable).where(eq(usersTable.id, userId));
     } catch (dbError: unknown) {
@@ -131,6 +126,11 @@ router.delete("/admin/users/:userId", ...agencyOnly, async (req, res) => {
       }
       throw dbError;
     }
+
+    await pool.query(
+      `DELETE FROM session WHERE (sess::jsonb->>'userId')::int = $1`,
+      [userId]
+    );
 
     res.json({ success: true });
   } catch (error: unknown) {
