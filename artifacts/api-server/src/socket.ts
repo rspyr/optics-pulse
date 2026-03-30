@@ -223,13 +223,18 @@ export async function getHudStats(tenantId: number | null) {
   const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(soldTodayConditions);
 
   const contactedTodayConditions = tenantId
+    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`);
+  const [contactedToday] = await db.select({ count: count() }).from(leadsTable).where(contactedTodayConditions);
+
+  const contactedExclPreBookedConds = tenantId
     ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
     : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
-  const [contactedToday] = await db.select({ count: count() }).from(leadsTable).where(contactedTodayConditions);
+  const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(contactedExclPreBookedConds);
 
   const totalCalls = contactedToday.count;
   const bookings = bookedToday.count + soldToday.count;
-  const bookingRate = totalCalls > 0 ? Math.round((bookings / totalCalls) * 100) : 0;
+  const bookingRate = contactedExclPreBooked.count > 0 ? Math.round((bookings / contactedExclPreBooked.count) * 100) : 0;
   const newLeadsToday = allLeadsToday.count;
 
   let commission = bookings * 20;

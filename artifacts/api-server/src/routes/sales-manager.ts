@@ -118,11 +118,13 @@ router.get("/sales-manager/team", async (req, res) => {
   const allLeadIds = [...new Set(todayLeadIds.map(r => r.leadId))];
   let leadStatusMap: Record<number, string> = {};
   let leadTypeMap: Record<number, string | null> = {};
+  let preBookedMap: Record<number, boolean> = {};
   if (allLeadIds.length > 0) {
-    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, leadType: leadsTable.leadType })
+    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, leadType: leadsTable.leadType, preBooked: leadsTable.preBooked })
       .from(leadsTable).where(inArray(leadsTable.id, allLeadIds));
     leadStatusMap = Object.fromEntries(leads.map(l => [l.id, l.status]));
     leadTypeMap = Object.fromEntries(leads.map(l => [l.id, l.leadType]));
+    preBookedMap = Object.fromEntries(leads.map(l => [l.id, l.preBooked ?? false]));
   }
 
   const spiffConfig = await getTenantSpiffConfig(tenantId);
@@ -163,10 +165,11 @@ router.get("/sales-manager/team", async (req, res) => {
   const coordinators = users.map(user => {
     const calls = callCountMap[user.id] || 0;
     const userLeadIds = leadIdsByUser[user.id] || [];
-    const userLeads = userLeadIds.map(id => ({ status: leadStatusMap[id] || "", leadType: leadTypeMap[id] || null }));
-    const bookings = userLeads.filter(l => ["booked", "sold"].includes(l.status)).length;
+    const userLeads = userLeadIds.map(id => ({ status: leadStatusMap[id] || "", leadType: leadTypeMap[id] || null, preBooked: preBookedMap[id] || false }));
+    const nonPreBookedLeads = userLeads.filter(l => !l.preBooked);
+    const bookings = nonPreBookedLeads.filter(l => ["booked", "sold"].includes(l.status)).length;
     const bookingRate = calls > 0 ? Math.round((bookings / calls) * 100) : 0;
-    const commission = computeSpiffCommission(userLeads, spiffConfig);
+    const commission = computeSpiffCommission(nonPreBookedLeads, spiffConfig);
 
     const ws = weekStatsByUser[user.id] || [];
     const weekAvgRate = ws.length > 0

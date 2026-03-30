@@ -486,7 +486,8 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
 function TeamTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantId: number | null; funnels: FunnelType[]; timezone?: string }) {
   const [datePreset, setDatePreset] = useState("today");
   const [startDate, endDate] = useDateRange(datePreset);
-  const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null);
+  const [includePreBooked, setIncludePreBooked] = useState(false);
+  const { stats, loading: statsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
   const { csrs, loading: csrsLoading } = useCsrs(tenantId);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<"appts" | "calls" | "rate">("appts");
@@ -535,6 +536,10 @@ function TeamTab({ tenantId, funnels, timezone = "America/New_York" }: { tenantI
             </button>
           ))}
         </div>
+        <label className="flex items-center gap-1.5 text-[10px] text-white/40 cursor-pointer select-none">
+          <input type="checkbox" checked={includePreBooked} onChange={e => setIncludePreBooked(e.target.checked)} className="accent-primary w-3 h-3" />
+          Include Pre-Booked
+        </label>
         <div className="flex items-center gap-1 ml-auto">
           {(["appts", "calls", "rate"] as const).map(key => (
             <button

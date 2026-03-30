@@ -826,7 +826,6 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         </PremiumCard>
       )}
 
-      {lead.hubStatus !== "appt_booked" && (
       <div className="flex items-center gap-2">
         <button
           onClick={handleCall}
@@ -866,9 +865,8 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           {blocksCall ? <Ban className="w-4 h-4" /> : <Mic className="w-4 h-4" />} VM DROP
         </button>
       </div>
-      )}
 
-      {blocksCall && lead.hubStatus !== "appt_booked" && (
+      {blocksCall && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-red-400">This lead has a "Text Only" or "Do Not Call" flag. Calling is blocked.</p>
