@@ -127,6 +127,20 @@
       "when": 1774900000000,
       "tag": "0017_appt_booked_status",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1774904000000,
+      "tag": "0018_sticky_after_cascade",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1774905600000,
+      "tag": "0019_sync_paused_column",
+      "breakpoints": true
     }
   ]
 }
