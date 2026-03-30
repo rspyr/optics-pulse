@@ -9,6 +9,7 @@ const API = import.meta.env.VITE_API_URL || "";
 export default function Settings() {
   const { user } = useAuth();
   const tenantId = user?.tenantId;
+  const isClientUser = user?.role === "client_user";
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -35,7 +36,7 @@ export default function Settings() {
   });
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId || isClientUser) return;
     fetch(`${API}/api/tenants/${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
@@ -73,7 +74,7 @@ export default function Settings() {
       .catch(() => {
         setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${tenantId}"></script>`);
       });
-  }, [tenantId]);
+  }, [tenantId, isClientUser]);
 
   function trackField(field: string) {
     setDirtyFields(prev => new Set(prev).add(field));
@@ -150,7 +151,7 @@ export default function Settings() {
         <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR ACCOUNT CONFIGURATION</p>
       </header>
 
-      <PremiumCard>
+      {!isClientUser && <PremiumCard>
         <h3 className="text-xl font-display text-white mb-6">API Integrations</h3>
         <div className="space-y-5">
           <div className="space-y-2">
@@ -265,9 +266,9 @@ export default function Settings() {
             {saved ? "Saved!" : "Save Configuration"}
           </button>
         </div>
-      </PremiumCard>
+      </PremiumCard>}
 
-      <PremiumCard>
+      {!isClientUser && <PremiumCard>
         <h3 className="text-xl font-display text-white mb-2">Communication Platform</h3>
         <p className="text-sm text-muted-foreground mb-6">
           Choose how Pulse routes calls and texts. Configure API credentials above, then select your preferred platforms here.
@@ -357,9 +358,9 @@ export default function Settings() {
           {commSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : commSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
           {commSaved ? "Saved!" : "Save Platform Settings"}
         </button>
-      </PremiumCard>
+      </PremiumCard>}
 
-      <PremiumCard>
+      {!isClientUser && <PremiumCard>
         <h3 className="text-xl font-display text-white mb-2">Capture Script</h3>
         <p className="text-sm text-muted-foreground mb-6">Install this script in the &lt;head&gt; of your website to enable GCLID capture, cookie storage, and heartbeat monitoring.</p>
 
@@ -373,7 +374,27 @@ export default function Settings() {
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
-      </PremiumCard>
+      </PremiumCard>}
+
+      {isClientUser && (
+        <PremiumCard>
+          <h3 className="text-xl font-display text-white mb-4">Account Information</h3>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-2 border-b border-white/10">
+              <span className="text-sm text-gray-400">Name</span>
+              <span className="text-sm text-white">{user?.name || "—"}</span>
+            </div>
+            <div className="flex items-center justify-between py-2 border-b border-white/10">
+              <span className="text-sm text-gray-400">Email</span>
+              <span className="text-sm text-white">{user?.email || "—"}</span>
+            </div>
+            <div className="flex items-center justify-between py-2">
+              <span className="text-sm text-gray-400">Organization</span>
+              <span className="text-sm text-white">{user?.tenantName || "—"}</span>
+            </div>
+          </div>
+        </PremiumCard>
+      )}
     </div>
   );
 }

@@ -55,16 +55,14 @@ const CLIENT_NAV_ADMIN_BASE = [
 ];
 
 const CLIENT_NAV_BASE = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
-  { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Client Settings", icon: Settings },
 ];
 
 function getClientNav(isAdmin: boolean, leaderboardVisible: boolean) {
   const base = isAdmin ? [...CLIENT_NAV_ADMIN_BASE] : [...CLIENT_NAV_BASE];
-  if (leaderboardVisible) {
+  if (isAdmin && leaderboardVisible) {
     const settingsIdx = base.findIndex(item => item.href === "/settings");
     base.splice(settingsIdx >= 0 ? settingsIdx : base.length, 0, { href: "/leaderboards", label: "Leaderboards", icon: Trophy });
   }

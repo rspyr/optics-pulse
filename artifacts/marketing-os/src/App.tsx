@@ -42,6 +42,12 @@ function AgencyGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role === "client_user") return <Redirect to="/pulse" />;
+  return <>{children}</>;
+}
+
 function AuthenticatedRoutes() {
   const { user, loading, isAgency } = useAuth();
   const [location] = useLocation();
@@ -71,6 +77,11 @@ function AuthenticatedRoutes() {
     return <Redirect to="/" />;
   }
 
+  const clientUserAllowedPaths = ["/pulse", "/training", "/settings"];
+  if (user?.role === "client_user" && !clientUserAllowedPaths.includes(location)) {
+    return <Redirect to="/pulse" />;
+  }
+
   if (isAgency && location === "/settings") {
     return <Redirect to="/admin/tenants" />;
   }
@@ -93,7 +104,7 @@ function AuthenticatedRoutes() {
         <Route path="/admin/change-logs">{() => <AgencyGuard><AdminChangeLogs /></AgencyGuard>}</Route>
         <Route path="/admin/funnels">{() => <AgencyGuard><AdminFunnels /></AgencyGuard>}</Route>
         <Route path="/admin/scripts">{() => <AgencyGuard><AdminScripts /></AgencyGuard>}</Route>
-        <Route path="/sales-manager" component={SalesManager} />
+        <Route path="/sales-manager">{() => <AdminGuard><SalesManager /></AdminGuard>}</Route>
         <Route path="/training" component={TrainingResources} />
         <Route component={NotFound} />
       </Switch>
