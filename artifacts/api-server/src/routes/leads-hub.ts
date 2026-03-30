@@ -852,7 +852,9 @@ export async function evaluateAutoPass(): Promise<number> {
         .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, config.tenantId)));
       if (!nextUser) continue;
 
-      const newPassCount = (lead.cascadePassCount ?? 0) + 1;
+      const newPassCount = (config.allowPassBack && config.stickyAfterCascade)
+        ? (lead.cascadePassCount ?? 0) + 1
+        : (lead.cascadePassCount ?? 0);
       await db.update(leadsTable)
         .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date(), cascadePassCount: newPassCount })
         .where(eq(leadsTable.id, lead.id));
