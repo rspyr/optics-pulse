@@ -1,9 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, tenantsTable } from "@workspace/db";
 import { eq, and, gte, lte, count, sum, sql, inArray, SQL, desc } from "drizzle-orm";
-import { requireRole } from "../middleware/auth";
+import { requireRole, denyClientUser } from "../middleware/auth";
 
 const router: IRouter = Router();
+
+router.use("/dashboard", denyClientUser);
 
 async function computeMetrics(tenantId: number | null, startDate?: string, endDate?: string) {
   const leadConditions: SQL[] = [];

@@ -22,6 +22,14 @@ export function requireRole(...roles: string[]) {
   };
 }
 
+export function denyClientUser(req: Request, res: Response, next: NextFunction) {
+  if (req.session.userRole === "client_user") {
+    res.status(403).json({ error: "Insufficient permissions" });
+    return;
+  }
+  next();
+}
+
 export function enforceTenantScope(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     res.status(401).json({ error: "Authentication required" });

@@ -3,9 +3,11 @@ import { db, attributionEventsTable, reconciliationRunsTable } from "@workspace/
 import { eq, and, count, desc, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
-import { requireRole } from "../middleware/auth";
+import { requireRole, denyClientUser } from "../middleware/auth";
 
 const router: IRouter = Router();
+
+router.use("/attribution", denyClientUser);
 
 router.get("/attribution/events", async (req, res) => {
   const query = ListAttributionEventsQueryParams.parse(req.query);
