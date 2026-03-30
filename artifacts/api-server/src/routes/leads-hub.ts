@@ -190,7 +190,8 @@ router.post("/leads-hub/action", async (req, res) => {
   const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  const outcome = callResult || textResult || vmResult || actionType;
+  const apptBookedOutcome = req.body.apptBookedOutcome as string | undefined;
+  const outcome = apptBookedOutcome ? `appt_${apptBookedOutcome}` : (callResult || textResult || vmResult || actionType);
 
   await db.insert(callAttemptsTable).values({
     leadId,
@@ -203,7 +204,7 @@ router.post("/leads-hub/action", async (req, res) => {
     vmResult: vmResult || null,
     textResult: textResult || null,
     deadReason: deadReason || null,
-    notes: notes || null,
+    notes: apptBookedOutcome === "canceled" ? (req.body.cancelReason || "appointment_canceled") : (notes || null),
   });
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -226,8 +227,8 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.disposition = "booked";
   }
 
-  if (req.body.apptBookedOutcome) {
-    const outcome = req.body.apptBookedOutcome;
+  if (apptBookedOutcome) {
+    const outcome = apptBookedOutcome;
     if (outcome === "confirmed") {
       updates.hubStatus = "appt_set";
       updates.status = "booked";

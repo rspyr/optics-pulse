@@ -26,11 +26,12 @@ export function parseSpiffConfig(raw: unknown): SpiffConfig {
 }
 
 export function computeSpiffCommission(
-  leads: { status: string; leadType: string | null }[],
+  leads: { status: string; leadType: string | null; preBooked?: boolean }[],
   spiffConfig: SpiffConfig,
 ): number {
   let total = 0;
   for (const lead of leads) {
+    if (lead.preBooked) continue;
     if (lead.status !== "booked" && lead.status !== "sold") continue;
     const lt = lead.leadType || "";
     const amount = lt && spiffConfig.byLeadType[lt] !== undefined
