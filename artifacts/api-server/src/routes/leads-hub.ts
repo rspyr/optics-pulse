@@ -21,7 +21,7 @@ function hubStatusToLegacy(hubStatus: HubStatus): string {
     case "day_5_old":
     case "call_back": return "contacted";
     case "appt_set": return "booked";
-    case "appt_booked": return "contacted";
+    case "appt_booked": return "new";
     case "dead": return "lost";
     default: return "new";
   }

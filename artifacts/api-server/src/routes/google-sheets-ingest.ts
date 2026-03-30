@@ -371,7 +371,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         funnelId: funnelTypeId,
         hubStatus: isPreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
-        status: isPreBooked ? "contacted" : "new",
+        status: "new",
         preBooked: isPreBooked,
         contactPreferences: [],
         ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
