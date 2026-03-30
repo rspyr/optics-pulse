@@ -227,7 +227,7 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.disposition = "booked";
   }
 
-  if (apptBookedOutcome) {
+  if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
     const outcome = apptBookedOutcome;
     if (outcome === "confirmed") {
       updates.hubStatus = "appt_set";
