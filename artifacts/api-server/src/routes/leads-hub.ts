@@ -828,14 +828,14 @@ export async function evaluateAutoPass(): Promise<number> {
       let nextCsrId: number;
 
       if (config.allowPassBack) {
-        if (config.stickyAfterCascade && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
-          if (config.stickyCsrId && config.stickyCsrId !== lead.assignedCsrId) {
-            nextCsrId = config.stickyCsrId;
-          } else if (config.stickyCsrId && config.stickyCsrId === lead.assignedCsrId) {
+        if (config.stickyAfterCascade && config.stickyCsrId && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
+          if (config.stickyCsrId === lead.assignedCsrId) {
+            await db.update(leadsTable)
+              .set({ updatedAt: new Date() })
+              .where(eq(leadsTable.id, lead.id));
             continue;
-          } else {
-            nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
           }
+          nextCsrId = config.stickyCsrId;
         } else {
           nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
         }
