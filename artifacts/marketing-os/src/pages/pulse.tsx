@@ -328,16 +328,45 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
   return { latestLead, clearLatestLead: useCallback(() => setLatestLead(null), []), leadUpdatedSignal, soundEnabled, setSoundEnabled };
 }
 
-function timeSince(dateStr: string): string {
+function formatTimeSince(dateStr: string): { text: string; mins: number } {
   const diff = Date.now() - new Date(dateStr).getTime();
+  if (diff < 0) return { text: "just now", mins: 0 };
   const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ${Math.floor(secs % 60)}s ago`;
+  if (secs < 60) return { text: `${secs}s ago`, mins: 0 };
+  if (mins < 60) return { text: `${mins}m ${Math.floor(secs % 60)}s ago`, mins };
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
+  if (hrs < 24) return { text: `${hrs}h ${mins % 60}m ago`, mins };
   const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+  return { text: `${days}d ago`, mins };
+}
+
+function useTimeSince(dateStr: string): { text: string; mins: number } {
+  const [result, setResult] = useState(() => formatTimeSince(dateStr));
+
+  useEffect(() => {
+    setResult(formatTimeSince(dateStr));
+    const id = setInterval(() => setResult(formatTimeSince(dateStr)), 1000);
+    return () => clearInterval(id);
+  }, [dateStr]);
+
+  return result;
+}
+
+function TimeSinceBadge({ dateStr }: { dateStr: string }) {
+  const { text, mins } = useTimeSince(dateStr);
+  const colorClass = mins < 10
+    ? "bg-emerald-500/20 text-emerald-400"
+    : mins < 60
+      ? "bg-amber-500/20 text-amber-400"
+      : "text-white/40";
+
+  return (
+    <span className={cn("text-xs font-mono font-semibold px-1.5 py-0.5 rounded", colorClass)}>
+      <Clock className="w-3 h-3 inline-block mr-0.5 -mt-0.5" />
+      {text}
+    </span>
+  );
 }
 
 function ContactFlags({ preferences }: { preferences?: string[] | null }) {
@@ -465,18 +494,7 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className={cn(
-            "text-xs font-mono font-semibold px-1.5 py-0.5 rounded",
-            (() => {
-              const mins = Math.floor((Date.now() - new Date(lead.createdAt).getTime()) / 60000);
-              if (mins < 10) return "bg-emerald-500/20 text-emerald-400";
-              if (mins < 60) return "bg-amber-500/20 text-amber-400";
-              return "text-white/40";
-            })()
-          )}>
-            <Clock className="w-3 h-3 inline-block mr-0.5 -mt-0.5" />
-            {timeSince(lead.createdAt)}
-          </span>
+          <TimeSinceBadge dateStr={lead.createdAt} />
           {lead.assignedTo && (
             <span className="text-[9px] text-white/25 truncate max-w-[80px]">{lead.assignedTo}</span>
           )}
