@@ -1,12 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-context";
+
+const REMEMBER_KEY = "mos_remember_credentials";
 
 export default function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(REMEMBER_KEY);
+      if (stored) {
+        const { email: savedEmail, password: savedPassword } = JSON.parse(stored);
+        if (savedEmail) setEmail(savedEmail);
+        if (savedPassword) setPassword(savedPassword);
+        setRememberMe(true);
+      }
+    } catch {}
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -14,6 +29,11 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
+      if (rememberMe) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email, password }));
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -71,6 +91,21 @@ export default function Login() {
                 required
               />
             </div>
+
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => {
+                  setRememberMe(e.target.checked);
+                  if (!e.target.checked) {
+                    localStorage.removeItem(REMEMBER_KEY);
+                  }
+                }}
+                className="w-4 h-4 rounded border-white/20 bg-background/50 text-primary focus:ring-primary/50 focus:ring-offset-0 accent-primary"
+              />
+              <span className="text-sm text-muted-foreground">Remember me</span>
+            </label>
 
             <button
               type="submit"

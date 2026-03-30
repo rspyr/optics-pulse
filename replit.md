@@ -18,7 +18,7 @@ The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack R
 **Technical Implementations:**
 - **API:** An Express 5 server handles all API requests.
 - **Database:** PostgreSQL is used as the primary database, managed with Drizzle ORM. Production seeding is handled by `autoSeedIfEmpty()`, loading tenant data from `src/seed-data.json`. One-time migrations run on server startup via `one-time-migrations.ts`.
-- **Authentication:** Session-based authentication uses `express-session` with a PostgreSQL store and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) is implemented.
+- **Authentication:** Session-based authentication uses `express-session` with a PostgreSQL store (30-day session duration) and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) is implemented. Login page includes a "Remember Me" checkbox that persists credentials to localStorage. All users can change their own password via Settings. Admin users can hard-delete users (with FK constraint protection) or toggle them inactive.
 - **Real-time Features:** Socket.IO is integrated for real-time lead notifications and other interactive elements, ensuring tenant isolation.
 - **API Codegen:** OpenAPI specifications with Orval generate TypeScript API clients (`api-client-react`) and Zod schemas (`api-zod`).
 - **Monorepo Structure:** The project is organized into `artifacts` (applications) and `lib` (shared code).

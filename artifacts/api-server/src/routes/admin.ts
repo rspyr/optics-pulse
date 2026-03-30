@@ -3,6 +3,7 @@ import { db, usersTable, tenantsTable, leadsTable, jobsTable, campaignsTable, ca
 import { eq, and, sql, gte, lte, count, sum, avg, inArray } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { pool } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -97,6 +98,43 @@ router.patch("/admin/users/:userId", ...agencyOnly, async (req, res) => {
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to update user";
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.delete("/admin/users/:userId", ...agencyOnly, async (req, res) => {
+  try {
+    const userId = parseInt(String(req.params.userId));
+    if (userId === req.session.userId) {
+      res.status(400).json({ error: "Cannot delete your own account" });
+      return;
+    }
+
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    await pool.query(
+      `DELETE FROM session WHERE sess::text LIKE $1`,
+      [`%"userId":${userId}%`]
+    );
+
+    try {
+      await db.delete(usersTable).where(eq(usersTable.id, userId));
+    } catch (dbError: unknown) {
+      const msg = dbError instanceof Error ? dbError.message : "";
+      if (msg.includes("foreign key") || msg.includes("violates")) {
+        res.status(409).json({ error: "Cannot delete this user because they have associated records. Deactivate the user instead." });
+        return;
+      }
+      throw dbError;
+    }
+
+    res.json({ success: true });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to delete user";
     res.status(500).json({ error: msg });
   }
 });

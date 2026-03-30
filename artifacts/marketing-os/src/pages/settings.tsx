@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const API = import.meta.env.VITE_API_URL || "";
+const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
 export default function Settings() {
   const { user } = useAuth();
@@ -142,6 +143,45 @@ export default function Settings() {
     } catch {}
   }
 
+  const [pwForm, setPwForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMessage, setPwMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  async function handleChangePassword() {
+    setPwMessage(null);
+    if (!pwForm.currentPassword || !pwForm.newPassword) {
+      setPwMessage({ type: "error", text: "All fields are required" });
+      return;
+    }
+    if (pwForm.newPassword.length < 6) {
+      setPwMessage({ type: "error", text: "New password must be at least 6 characters" });
+      return;
+    }
+    if (pwForm.newPassword !== pwForm.confirmPassword) {
+      setPwMessage({ type: "error", text: "New passwords do not match" });
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword }),
+      });
+      if (res.ok) {
+        setPwMessage({ type: "success", text: "Password changed successfully" });
+        setPwForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      } else {
+        const data = await res.json();
+        setPwMessage({ type: "error", text: data.error || "Failed to change password" });
+      }
+    } catch {
+      setPwMessage({ type: "error", text: "Failed to change password" });
+    }
+    setPwSaving(false);
+  }
+
   const inputClass = "w-full bg-background border border-white/10 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all";
 
   return (
@@ -150,6 +190,63 @@ export default function Settings() {
         <GradientHeading className="text-3xl md:text-4xl mb-2">Client Settings</GradientHeading>
         <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR ACCOUNT CONFIGURATION</p>
       </header>
+
+      <PremiumCard>
+        <div className="flex items-center gap-2 mb-6">
+          <Lock className="w-5 h-5 text-primary" />
+          <h3 className="text-xl font-display text-white">Change Password</h3>
+        </div>
+        {pwMessage && (
+          <div className={cn(
+            "px-4 py-3 rounded-lg text-sm mb-4 border",
+            pwMessage.type === "success"
+              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+              : "bg-red-500/10 border-red-500/20 text-red-400"
+          )}>
+            {pwMessage.text}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Current Password</label>
+            <input
+              type="password"
+              value={pwForm.currentPassword}
+              onChange={e => setPwForm(f => ({ ...f, currentPassword: e.target.value }))}
+              className={inputClass}
+              placeholder="Enter current password"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">New Password</label>
+            <input
+              type="password"
+              value={pwForm.newPassword}
+              onChange={e => setPwForm(f => ({ ...f, newPassword: e.target.value }))}
+              className={inputClass}
+              placeholder="Enter new password"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-300">Confirm New Password</label>
+            <input
+              type="password"
+              value={pwForm.confirmPassword}
+              onChange={e => setPwForm(f => ({ ...f, confirmPassword: e.target.value }))}
+              className={inputClass}
+              placeholder="Confirm new password"
+            />
+          </div>
+        </div>
+        <button
+          onClick={handleChangePassword}
+          disabled={pwSaving}
+          className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-4 flex items-center gap-2 disabled:opacity-50"
+        >
+          {pwSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+          {pwSaving ? "Changing..." : "Change Password"}
+        </button>
+      </PremiumCard>
 
       {!isClientUser && <PremiumCard>
         <h3 className="text-xl font-display text-white mb-6">API Integrations</h3>

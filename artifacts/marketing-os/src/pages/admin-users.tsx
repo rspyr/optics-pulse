@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useListTenants } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, UserCog } from "lucide-react";
+import { Plus, Edit2, X, Check, UserCog, Trash2 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -31,6 +31,8 @@ export default function AdminUsers() {
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "client_user" as string, tenantId: "" as string });
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
+  const [deleteError, setDeleteError] = useState("");
 
   const fetchUsers = async () => {
     const res = await fetch(`${API_BASE}/api/admin/users`, { credentials: "include" });
@@ -87,13 +89,29 @@ export default function AdminUsers() {
     fetchUsers();
   };
 
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError("");
+    const res = await fetch(`${API_BASE}/api/admin/users/${deleteTarget.id}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (res.ok) {
+      setDeleteTarget(null);
+      fetchUsers();
+    } else {
+      const data = await res.json();
+      setDeleteError(data.error || "Failed to delete user");
+    }
+  };
+
   const startEdit = (user: AdminUser) => {
     setEditId(user.id);
     setForm({ name: user.name, email: user.email, password: "", role: user.role, tenantId: user.tenantId?.toString() || "" });
   };
 
   const getTenantName = (tenantId: number | null) => {
-    if (!tenantId || !tenants) return "—";
+    if (!tenantId || !tenants) return "\u2014";
     const t = tenants.find(t => t.id === tenantId);
     return t?.name || `#${tenantId}`;
   };
@@ -195,8 +213,9 @@ export default function AdminUsers() {
                           <Badge variant={user.isActive ? "success" : "danger"}>{user.isActive ? "Active" : "Inactive"}</Badge>
                         </button>
                       </td>
-                      <td className="p-4 text-right">
+                      <td className="p-4 text-right space-x-2">
                         <button onClick={() => startEdit(user)} className="text-muted-foreground hover:text-white"><Edit2 className="w-4 h-4 inline" /></button>
+                        <button onClick={() => { setDeleteTarget(user); setDeleteError(""); }} className="text-muted-foreground hover:text-red-400"><Trash2 className="w-4 h-4 inline" /></button>
                       </td>
                     </>
                   )}
@@ -206,6 +225,30 @@ export default function AdminUsers() {
           </table>
         )}
       </PremiumCard>
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-white/10 rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h3 className="font-display text-lg text-white mb-2">Delete User</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Are you sure you want to permanently delete <span className="text-white font-medium">{deleteTarget.name}</span> ({deleteTarget.email})? This action cannot be undone.
+            </p>
+            {deleteError && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm mb-4">
+                {deleteError}
+              </div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setDeleteTarget(null)} className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm">
+                Cancel
+              </button>
+              <button onClick={handleDelete} className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
