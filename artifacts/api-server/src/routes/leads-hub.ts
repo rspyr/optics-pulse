@@ -346,7 +346,7 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
   });
 
   const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: targetCsrId, assignedTo: targetUser.name, updatedAt: new Date() })
+    .set({ assignedCsrId: targetCsrId, assignedTo: targetUser.name, updatedAt: new Date(), cascadePassCount: 0 })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
@@ -453,7 +453,22 @@ router.put("/leads-hub/routing-config", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
-  const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack } = req.body;
+  const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack, stickyAfterCascade, stickyCsrId } = req.body;
+
+  if (stickyAfterCascade && !stickyCsrId) {
+    res.status(400).json({ error: "A CSR must be selected when Sticky After Cascade is enabled" });
+    return;
+  }
+
+  if (stickyCsrId) {
+    const [csrExists] = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(and(eq(usersTable.id, stickyCsrId), eq(usersTable.tenantId, tenantId)));
+    if (!csrExists) {
+      res.status(400).json({ error: "Selected sticky CSR does not belong to this tenant" });
+      return;
+    }
+  }
 
   const existing = await db.select().from(routingConfigTable)
     .where(and(
@@ -466,6 +481,8 @@ router.put("/leads-hub/routing-config", async (req, res) => {
     if (cascadeOrder !== undefined) updates.cascadeOrder = cascadeOrder;
     if (passIntervalMinutes !== undefined) updates.passIntervalMinutes = passIntervalMinutes;
     if (allowPassBack !== undefined) updates.allowPassBack = allowPassBack;
+    if (stickyAfterCascade !== undefined) updates.stickyAfterCascade = stickyAfterCascade;
+    if (stickyCsrId !== undefined) updates.stickyCsrId = stickyCsrId;
 
     const [updated] = await db.update(routingConfigTable)
       .set(updates)
@@ -479,6 +496,8 @@ router.put("/leads-hub/routing-config", async (req, res) => {
       cascadeOrder: cascadeOrder || [],
       passIntervalMinutes: passIntervalMinutes || 1440,
       allowPassBack: allowPassBack || false,
+      stickyAfterCascade: stickyAfterCascade || false,
+      stickyCsrId: stickyCsrId || null,
     }).returning();
     res.json(created);
   }
@@ -626,7 +645,7 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
   }
 
   const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: selectedCsrId, assignedTo: user.name, updatedAt: new Date() })
+    .set({ assignedCsrId: selectedCsrId, assignedTo: user.name, updatedAt: new Date(), cascadePassCount: 0 })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
@@ -780,6 +799,7 @@ export async function evaluateAutoPass(): Promise<number> {
       id: leadsTable.id,
       assignedCsrId: leadsTable.assignedCsrId,
       tenantId: leadsTable.tenantId,
+      cascadePassCount: leadsTable.cascadePassCount,
     }).from(leadsTable)
       .where(and(
         eq(leadsTable.tenantId, config.tenantId),
@@ -808,7 +828,17 @@ export async function evaluateAutoPass(): Promise<number> {
       let nextCsrId: number;
 
       if (config.allowPassBack) {
-        nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+        if (config.stickyAfterCascade && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
+          if (config.stickyCsrId && config.stickyCsrId !== lead.assignedCsrId) {
+            nextCsrId = config.stickyCsrId;
+          } else if (config.stickyCsrId && config.stickyCsrId === lead.assignedCsrId) {
+            continue;
+          } else {
+            nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+          }
+        } else {
+          nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+        }
       } else {
         if (currentIdx < activeOrder.length - 1) {
           nextCsrId = activeOrder[currentIdx + 1];
@@ -822,8 +852,9 @@ export async function evaluateAutoPass(): Promise<number> {
         .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, config.tenantId)));
       if (!nextUser) continue;
 
+      const newPassCount = (lead.cascadePassCount ?? 0) + 1;
       await db.update(leadsTable)
-        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date() })
+        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date(), cascadePassCount: newPassCount })
         .where(eq(leadsTable.id, lead.id));
 
       const passLabel = passMinutes >= 60 ? `${Math.round(passMinutes / 60)}h` : `${passMinutes}m`;

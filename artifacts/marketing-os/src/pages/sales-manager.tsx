@@ -58,6 +58,8 @@ interface RoutingConfig {
   cascadeOrder: number[];
   passIntervalMinutes: number;
   allowPassBack: boolean;
+  stickyAfterCascade: boolean;
+  stickyCsrId: number | null;
   isActive: boolean;
 }
 
@@ -702,6 +704,8 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   const [passInterval, setPassInterval] = useState(1440);
   const [passUnit, setPassUnit] = useState<"minutes" | "hours">("hours");
   const [allowPassBack, setAllowPassBack] = useState(false);
+  const [stickyAfterCascade, setStickyAfterCascade] = useState(false);
+  const [stickyCsrId, setStickyCsrId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
@@ -722,11 +726,15 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       setPassInterval(mins);
       setPassUnit(mins % 60 === 0 && mins >= 60 ? "hours" : "minutes");
       setAllowPassBack(config.allowPassBack || false);
+      setStickyAfterCascade(config.stickyAfterCascade || false);
+      setStickyCsrId(config.stickyCsrId || null);
     } else {
       setCascadeOrder([]);
       setPassInterval(1440);
       setPassUnit("hours");
       setAllowPassBack(false);
+      setStickyAfterCascade(false);
+      setStickyCsrId(null);
     }
   }, [selectedFunnelId, configs]);
 
@@ -744,6 +752,8 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
           cascadeOrder,
           passIntervalMinutes: passInterval,
           allowPassBack,
+          stickyAfterCascade,
+          stickyCsrId,
         }),
       });
       if (res.ok) {
@@ -933,7 +943,11 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                 <p className="text-[10px] text-white/20">Leads can cycle back to previously assigned CSRs</p>
               </div>
               <button
-                onClick={() => setAllowPassBack(!allowPassBack)}
+                onClick={() => {
+                  const next = !allowPassBack;
+                  setAllowPassBack(next);
+                  if (!next) { setStickyAfterCascade(false); setStickyCsrId(null); }
+                }}
                 className={cn(
                   "w-10 h-5 rounded-full transition-colors relative",
                   allowPassBack ? "bg-primary" : "bg-white/10"
@@ -945,6 +959,49 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                 )} style={{ left: allowPassBack ? "22px" : "2px" }} />
               </button>
             </div>
+
+            {allowPassBack && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-white/60">Sticky After Cascade</p>
+                    <p className="text-[10px] text-white/20">Assign lead to a specific CSR after one full cycle completes</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const next = !stickyAfterCascade;
+                      setStickyAfterCascade(next);
+                      if (!next) setStickyCsrId(null);
+                    }}
+                    className={cn(
+                      "w-10 h-5 rounded-full transition-colors relative",
+                      stickyAfterCascade ? "bg-primary" : "bg-white/10"
+                    )}
+                  >
+                    <div className={cn(
+                      "w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all",
+                      stickyAfterCascade ? "left-5.5" : "left-0.5"
+                    )} style={{ left: stickyAfterCascade ? "22px" : "2px" }} />
+                  </button>
+                </div>
+                {stickyAfterCascade && (
+                  <div>
+                    <label className="text-[10px] text-white/30 uppercase tracking-wider">Assign To</label>
+                    <select
+                      value={stickyCsrId ?? ""}
+                      onChange={e => setStickyCsrId(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    >
+                      <option value="">Select a CSR...</option>
+                      {csrs.map(csr => (
+                        <option key={csr.id} value={csr.id}>{csr.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-white/20 mt-0.5">Lead will be assigned to this CSR after cycling through all cascade positions</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <button

@@ -40,6 +40,7 @@ export const leadsTable = pgTable("leads", {
   revisitDate: date("revisit_date"),
   deadReason: text("dead_reason"),
   preBooked: boolean("pre_booked").notNull().default(false),
+  cascadePassCount: integer("cascade_pass_count").notNull().default(0),
   notes: text("notes"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
