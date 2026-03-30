@@ -455,17 +455,26 @@ router.put("/leads-hub/routing-config", async (req, res) => {
 
   const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack, stickyAfterCascade, stickyCsrId } = req.body;
 
+  if (stickyAfterCascade && !allowPassBack) {
+    res.status(400).json({ error: "Allow Pass-Back must be enabled to use Sticky After Cascade" });
+    return;
+  }
+
   if (stickyAfterCascade && !stickyCsrId) {
     res.status(400).json({ error: "A CSR must be selected when Sticky After Cascade is enabled" });
     return;
   }
 
   if (stickyCsrId) {
-    const [csrExists] = await db.select({ id: usersTable.id })
+    const [csrExists] = await db.select({ id: usersTable.id, isActive: usersTable.isActive })
       .from(usersTable)
       .where(and(eq(usersTable.id, stickyCsrId), eq(usersTable.tenantId, tenantId)));
     if (!csrExists) {
       res.status(400).json({ error: "Selected sticky CSR does not belong to this tenant" });
+      return;
+    }
+    if (!csrExists.isActive) {
+      res.status(400).json({ error: "Selected sticky CSR is inactive" });
       return;
     }
   }
