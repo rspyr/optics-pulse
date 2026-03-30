@@ -21,7 +21,7 @@ function hubStatusToLegacy(hubStatus: HubStatus): string {
     case "day_5_old":
     case "call_back": return "contacted";
     case "appt_set": return "booked";
-    case "appt_booked": return "booked";
+    case "appt_booked": return "contacted";
     case "dead": return "lost";
     default: return "new";
   }
@@ -253,10 +253,10 @@ router.post("/leads-hub/action", async (req, res) => {
     actionType === "call" && (callResult === "no_answer" || callResult === "left_voicemail" || callResult === "vm_full" || callResult === "vm_not_setup")
   ) || actionType === "voicemail_drop";
 
-  if (shouldIncrementDay && !deadReason && !req.body.appointmentSet && !callbackAt) {
+  if (shouldIncrementDay && !deadReason && !req.body.appointmentSet && !callbackAt && lead.hubStatus !== "appt_booked") {
     const newDay = Math.min(lead.dayInSequence + 1, 5);
     updates.dayInSequence = newDay;
-    if (newDay >= 5 && lead.hubStatus !== "appt_set" && lead.hubStatus !== "appt_booked" && lead.hubStatus !== "dead") {
+    if (newDay >= 5 && lead.hubStatus !== "appt_set" && lead.hubStatus !== "dead") {
       updates.hubStatus = "day_5_old";
     } else if (newDay <= 4) {
       updates.hubStatus = `day_${newDay}`;

@@ -640,15 +640,27 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       return;
     }
     if (lead.phone) window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
-    setActionStep("call_done");
+    if (lead.hubStatus === "appt_booked") {
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("call_done");
+    }
   };
 
   const handleText = () => {
-    setActionStep("text_done");
+    if (lead.hubStatus === "appt_booked") {
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("text_done");
+    }
   };
 
   const handleVmDrop = () => {
-    setActionStep("vm_done");
+    if (lead.hubStatus === "appt_booked") {
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("vm_done");
+    }
   };
 
   const confirmVmDrop = () => {
@@ -770,7 +782,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         )}
       </PremiumCard>
 
-      {lead.hubStatus === "appt_booked" && actionStep === null && (
+      {lead.hubStatus === "appt_booked" && (actionStep === null || actionStep === "appt_booked_flow") && (
         <PremiumCard className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Calendar className="w-5 h-5 text-purple-400" />
