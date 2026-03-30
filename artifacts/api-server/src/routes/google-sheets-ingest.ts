@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
@@ -523,20 +523,17 @@ router.post("/google-sheets/toggle-sync-pause/:tenantId/:funnelTypeId", requireR
   const tenantId = parseInt(String(req.params.tenantId));
   const funnelTypeId = parseInt(String(req.params.funnelTypeId));
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+  const [updated] = await db.update(tenantFunnelTypesTable)
+    .set({ syncPaused: sql`NOT ${tenantFunnelTypesTable.syncPaused}` })
+    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)))
+    .returning({ syncPaused: tenantFunnelTypesTable.syncPaused });
 
-  if (!assoc) {
+  if (!updated) {
     res.status(404).json({ error: "Association not found" });
     return;
   }
 
-  const newPaused = !assoc.syncPaused;
-  await db.update(tenantFunnelTypesTable)
-    .set({ syncPaused: newPaused })
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
-
-  res.json({ syncPaused: newPaused });
+  res.json({ syncPaused: updated.syncPaused });
 });
 
 export default router;
