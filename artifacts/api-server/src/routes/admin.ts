@@ -105,6 +105,10 @@ router.patch("/admin/users/:userId", ...agencyOnly, async (req, res) => {
 router.delete("/admin/users/:userId", ...agencyOnly, async (req, res) => {
   try {
     const userId = parseInt(String(req.params.userId));
+    if (!Number.isInteger(userId) || userId <= 0) {
+      res.status(400).json({ error: "Invalid user ID" });
+      return;
+    }
     if (userId === req.session.userId) {
       res.status(400).json({ error: "Cannot delete your own account" });
       return;
