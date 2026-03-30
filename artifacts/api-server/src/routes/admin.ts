@@ -261,6 +261,11 @@ async function computeTenantMetrics(tenantId: number, startDate?: string, endDat
 
 router.get("/admin/leaderboard", requireAuth, async (req, res) => {
   try {
+    if (req.session.userRole === "client_user") {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+
     const metric = (req.query.metric as string) || "closeRate";
     const validMetrics = ["closeRate", "revenue", "cpl", "bookingRate"];
     if (!validMetrics.includes(metric)) {
