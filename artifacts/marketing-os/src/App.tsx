@@ -69,7 +69,7 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/automation"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/automation", "/attribution"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <Redirect to="/" />;
   }

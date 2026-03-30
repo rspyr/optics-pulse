@@ -50,7 +50,6 @@ const CLIENT_NAV_ADMIN_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
-  { href: "/attribution", label: "Attribution", icon: LinkIcon },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Client Settings", icon: Settings },
 ];
