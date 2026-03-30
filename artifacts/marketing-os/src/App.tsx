@@ -82,9 +82,6 @@ function AuthenticatedRoutes() {
     return <Redirect to="/pulse" />;
   }
 
-  if (isAgency && location === "/settings") {
-    return <Redirect to="/admin/tenants" />;
-  }
 
   return (
     <AppLayout>
