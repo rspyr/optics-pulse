@@ -1471,6 +1471,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
   const [saving, setSaving] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [savedMapping, setSavedMapping] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [headersChanged, setHeadersChanged] = useState(false);
@@ -1484,6 +1485,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
         if (data.headersChanged) setHeadersChanged(true);
         if (data.hasMapping && data.columnMapping) {
           setMapping(data.columnMapping);
+          setSavedMapping(data.columnMapping);
         }
       })
       .catch(() => {});
@@ -1547,6 +1549,31 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     } finally { setSaving(false); }
   };
 
+  const handleUpdateMapping = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const headers = Object.keys(mapping);
+      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mapping, headers }),
+      });
+      if (res.ok) {
+        setSavedMapping(mapping);
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+        onMappingSaved();
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to update mapping");
+      }
+    } catch {
+      setError("Connection error updating mapping");
+    } finally { setSaving(false); }
+  };
+
   const handleDiscard = async () => {
     setSaving(true);
     try {
@@ -1568,6 +1595,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
   if (!isAgency || !funnel.googleSheetId) return null;
 
   const hasExistingMapping = !!funnel.columnMapping;
+  const mappingModified = hasExistingMapping && !analysis && JSON.stringify(mapping) !== JSON.stringify(savedMapping);
 
   return (
     <div className="mt-3 pt-3 border-t border-white/5" data-mapping-funnel={funnelId}>
@@ -1724,7 +1752,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
           )}
 
           {hasExistingMapping && !analysis && expanded && (
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
               <button
                 onClick={handleDiscard}
                 disabled={saving}
@@ -1732,6 +1760,16 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
               >
                 Remove Approved Mapping
               </button>
+              {mappingModified && (
+                <button
+                  onClick={handleUpdateMapping}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-medium hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                  Update Mapping
+                </button>
+              )}
             </div>
           )}
         </div>
