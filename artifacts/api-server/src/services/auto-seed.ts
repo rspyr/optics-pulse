@@ -422,6 +422,11 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
 async function backfillUnassignedLeads() {
   const { isNull } = await import("drizzle-orm");
   const { assignLeadRoundRobin } = await import("./round-robin");
+
+  const demoTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isDemo, true));
+  const demoTenantIds = new Set(demoTenants.map(t => t.id));
+  if (demoTenantIds.size === 0) return;
+
   const BATCH_SIZE = 500;
   let totalAssigned = 0;
   let totalSkipped = 0;
@@ -430,7 +435,11 @@ async function backfillUnassignedLeads() {
   while (true) {
     const batch = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, funnelId: leadsTable.funnelId })
       .from(leadsTable)
-      .where(and(isNull(leadsTable.assignedCsrId), gt(leadsTable.id, lastSeenId)))
+      .where(and(
+        isNull(leadsTable.assignedCsrId),
+        gt(leadsTable.id, lastSeenId),
+        inArray(leadsTable.tenantId, [...demoTenantIds]),
+      ))
       .orderBy(leadsTable.id)
       .limit(BATCH_SIZE);
 

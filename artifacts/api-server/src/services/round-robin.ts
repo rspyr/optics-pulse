@@ -27,42 +27,7 @@ export async function assignLeadRoundRobin(
   }
 
   if (!config || !config.cascadeOrder || (config.cascadeOrder as number[]).length === 0) {
-    const { inArray } = await import("drizzle-orm");
-    const clientCsrs = await db.select({ id: usersTable.id, name: usersTable.name })
-      .from(usersTable)
-      .where(and(
-        eq(usersTable.tenantId, tenantId),
-        eq(usersTable.isActive, true),
-        inArray(usersTable.role, ["client_user", "client_admin"]),
-      ))
-      .orderBy(usersTable.id);
-    if (clientCsrs.length === 0) {
-      return { assignedCsrId: null, csrName: null, reason: "No routing config and no active CSRs" };
-    }
-
-    const recentCount = await db.select({
-      assignedCsrId: leadsTable.assignedCsrId,
-      count: count(),
-    }).from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, tenantId), isNotNull(leadsTable.assignedCsrId)))
-      .groupBy(leadsTable.assignedCsrId);
-    const countMap: Record<number, number> = {};
-    for (const r of recentCount) {
-      if (r.assignedCsrId) countMap[r.assignedCsrId] = r.count;
-    }
-    let bestCsr = clientCsrs[0];
-    let bestCount = countMap[clientCsrs[0].id] || 0;
-    for (const csr of clientCsrs) {
-      const c = countMap[csr.id] || 0;
-      if (c < bestCount) { bestCount = c; bestCsr = csr; }
-    }
-
-    await db.update(leadsTable)
-      .set({ assignedCsrId: bestCsr.id, assignedTo: bestCsr.name, updatedAt: new Date() })
-      .where(eq(leadsTable.id, leadId));
-
-    console.warn(`[RoundRobin] No routing config for tenant ${tenantId}; fallback assigned lead ${leadId} to ${bestCsr.name}`);
-    return { assignedCsrId: bestCsr.id, csrName: bestCsr.name, reason: "Fallback (no routing config)" };
+    return { assignedCsrId: null, csrName: null, reason: "No routing config" };
   }
 
   const now = new Date();
