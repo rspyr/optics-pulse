@@ -350,6 +350,12 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         continue;
       }
 
+      const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
+      if (nameFields.includes("test")) {
+        skipped++;
+        continue;
+      }
+
       if (normalizedPhone) existingPhones.add(normalizedPhone);
 
       let parsedCreatedAt: Date | undefined;

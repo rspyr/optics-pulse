@@ -97,6 +97,8 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
     const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
     if (normalizedPhone && existingPhones.has(normalizedPhone)) continue;
     if (!row.firstName && !row.lastName) continue;
+    const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
+    if (nameFields.includes("test")) continue;
     if (normalizedPhone) existingPhones.add(normalizedPhone);
 
     let parsedCreatedAt: Date | undefined;

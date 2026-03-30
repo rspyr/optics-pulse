@@ -86,7 +86,10 @@ router.post("/webhooks/ingest", async (req, res) => {
       externalId,
     }).returning();
 
-    if (data.firstName || data.lastName || data.phone || data.email) {
+    const webhookNameFields = [data.firstName, data.lastName].filter(Boolean).join(" ").toLowerCase();
+    const isTestLead = webhookNameFields.includes("test");
+
+    if (!isTestLead && (data.firstName || data.lastName || data.phone || data.email)) {
       const rawBody = req.body as Record<string, unknown>;
       const rawData = (rawBody.data || {}) as Record<string, unknown>;
       const funnelSlug = data.funnel || (rawData._mos_funnel as string) || null;
