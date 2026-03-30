@@ -55,7 +55,7 @@ const CLIENT_NAV_ADMIN_BASE = [
 ];
 
 const CLIENT_NAV_BASE = [
-  { href: "/pulse", label: "Pulse", icon: PulseIcon },
+  { href: "/pulse", label: "Leads Hub", icon: Zap },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Client Settings", icon: Settings },
 ];
@@ -91,8 +91,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
         <div className="p-6 flex items-center gap-3">
-          <img src="/optics-logo.png" alt="Optics" className="w-8 h-8" />
-          <span className="font-display text-xl tracking-widest text-white mt-1">OPTICS</span>
+          {user?.role === "client_user" ? (
+            <>
+              <img src="/pulse-logo.png" alt="Pulse" className="w-8 h-8" />
+              <span className="font-display text-xl tracking-widest text-white mt-1">PULSE</span>
+            </>
+          ) : (
+            <>
+              <img src="/optics-logo.png" alt="Optics" className="w-8 h-8" />
+              <span className="font-display text-xl tracking-widest text-white mt-1">OPTICS</span>
+            </>
+          )}
         </div>
 
         {user && (
