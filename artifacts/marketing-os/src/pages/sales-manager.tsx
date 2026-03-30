@@ -1689,6 +1689,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
                         <option value="state">State</option>
                         <option value="zip">Zip Code</option>
                         <option value="dateTime">Date/Time</option>
+                        <option value="appointmentBooked">Appointment Booked</option>
                         <option value="__skip__">Skip (Do Not Import)</option>
                       </>
                     )}
