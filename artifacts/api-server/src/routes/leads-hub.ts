@@ -9,7 +9,7 @@ import { emitLeadUpdated, emitNewLead } from "../socket";
 
 const router: IRouter = Router();
 
-const VALID_HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "call_back", "dead"] as const;
+const VALID_HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "appt_booked", "call_back", "dead"] as const;
 type HubStatus = typeof VALID_HUB_STATUSES[number];
 
 function hubStatusToLegacy(hubStatus: HubStatus): string {
@@ -21,6 +21,7 @@ function hubStatusToLegacy(hubStatus: HubStatus): string {
     case "day_5_old":
     case "call_back": return "contacted";
     case "appt_set": return "booked";
+    case "appt_booked": return "booked";
     case "dead": return "lost";
     default: return "new";
   }
@@ -68,16 +69,24 @@ router.get("/leads-hub/queue", async (req, res) => {
   const baseConds = [eq(leadsTable.tenantId, tenantId)];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
 
-  const activeStatuses = ["day_1", "day_2", "day_3", "day_4"];
+  const activeStatuses = ["day_1", "day_2", "day_3", "day_4", "appt_booked"];
   const terminalStatuses = ["appt_set", "dead"];
 
   try {
     const newLeads = (tab === "all" || tab === "new") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
-        eq(leadsTable.hubStatus, "day_1"),
-        isNull(leadsTable.callbackAt),
-        sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+        or(
+          and(
+            eq(leadsTable.hubStatus, "day_1"),
+            isNull(leadsTable.callbackAt),
+            sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+          ),
+          and(
+            eq(leadsTable.hubStatus, "appt_booked"),
+            sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+          ),
+        ),
       ))
       .orderBy(desc(leadsTable.createdAt)).limit(100) : [];
 
@@ -217,6 +226,20 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.disposition = "booked";
   }
 
+  if (req.body.apptBookedOutcome) {
+    const outcome = req.body.apptBookedOutcome;
+    if (outcome === "confirmed") {
+      updates.hubStatus = "appt_set";
+      updates.status = "booked";
+      updates.disposition = "booked";
+    } else if (outcome === "rescheduled") {
+      updates.hubStatus = "appt_booked";
+    } else if (outcome === "canceled") {
+      updates.hubStatus = "dead";
+      updates.deadReason = req.body.cancelReason || "appointment_canceled";
+    }
+  }
+
   if (callbackAt && !deadReason && !req.body.appointmentSet) {
     updates.hubStatus = "call_back";
     updates.callbackAt = new Date(callbackAt);
@@ -233,7 +256,7 @@ router.post("/leads-hub/action", async (req, res) => {
   if (shouldIncrementDay && !deadReason && !req.body.appointmentSet && !callbackAt) {
     const newDay = Math.min(lead.dayInSequence + 1, 5);
     updates.dayInSequence = newDay;
-    if (newDay >= 5 && lead.hubStatus !== "appt_set" && lead.hubStatus !== "dead") {
+    if (newDay >= 5 && lead.hubStatus !== "appt_set" && lead.hubStatus !== "appt_booked" && lead.hubStatus !== "dead") {
       updates.hubStatus = "day_5_old";
     } else if (newDay <= 4) {
       updates.hubStatus = `day_${newDay}`;
@@ -616,6 +639,7 @@ router.get("/leads-hub/stats", async (req, res) => {
   const startDate = req.query.startDate ? new Date(req.query.startDate as string) : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
   const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
   const funnelId = req.query.funnelId ? Number(req.query.funnelId) : null;
+  const includePreBooked = req.query.includePreBooked === "true";
 
   const baseConds = [
     eq(leadsTable.tenantId, tenantId),
@@ -631,10 +655,12 @@ router.get("/leads-hub/stats", async (req, res) => {
     funnelId: leadsTable.funnelId,
     assignedCsrId: leadsTable.assignedCsrId,
     serviceType: leadsTable.serviceType,
+    preBooked: leadsTable.preBooked,
   }).from(leadsTable).where(and(...baseConds));
 
-  const totalLeads = leads.length;
-  const appointments = leads.filter(l => l.hubStatus === "appt_set").length;
+  const filteredLeads = includePreBooked ? leads : leads.filter(l => !l.preBooked);
+  const totalLeads = filteredLeads.length;
+  const appointments = filteredLeads.filter(l => l.hubStatus === "appt_set" || l.hubStatus === "appt_booked").length;
   const bookingRate = totalLeads > 0 ? Math.round((appointments / totalLeads) * 100) : 0;
 
   const bySource: Record<string, { total: number; appointments: number }> = {};
@@ -643,39 +669,42 @@ router.get("/leads-hub/stats", async (req, res) => {
   const byCsrByFunnel: Record<string, { csrId: number; funnelId: number; total: number; appointments: number }> = {};
   const leadFunnelMap: Record<number, number> = {};
 
-  for (const l of leads) {
+  const isAppt = (status: string) => status === "appt_set" || status === "appt_booked";
+
+  for (const l of filteredLeads) {
     if (!bySource[l.source]) bySource[l.source] = { total: 0, appointments: 0 };
     bySource[l.source].total++;
-    if (l.hubStatus === "appt_set") bySource[l.source].appointments++;
+    if (isAppt(l.hubStatus)) bySource[l.source].appointments++;
 
     if (l.funnelId) {
       if (!byFunnel[l.funnelId]) byFunnel[l.funnelId] = { total: 0, appointments: 0 };
       byFunnel[l.funnelId].total++;
-      if (l.hubStatus === "appt_set") byFunnel[l.funnelId].appointments++;
+      if (isAppt(l.hubStatus)) byFunnel[l.funnelId].appointments++;
       leadFunnelMap[l.id] = l.funnelId;
     }
 
     if (l.assignedCsrId) {
       if (!byCsr[l.assignedCsrId]) byCsr[l.assignedCsrId] = { total: 0, appointments: 0 };
       byCsr[l.assignedCsrId].total++;
-      if (l.hubStatus === "appt_set") byCsr[l.assignedCsrId].appointments++;
+      if (isAppt(l.hubStatus)) byCsr[l.assignedCsrId].appointments++;
 
       if (l.funnelId) {
         const key = `${l.assignedCsrId}_${l.funnelId}`;
         if (!byCsrByFunnel[key]) byCsrByFunnel[key] = { csrId: l.assignedCsrId, funnelId: l.funnelId, total: 0, appointments: 0 };
         byCsrByFunnel[key].total++;
-        if (l.hubStatus === "appt_set") byCsrByFunnel[key].appointments++;
+        if (isAppt(l.hubStatus)) byCsrByFunnel[key].appointments++;
       }
     }
   }
 
+  const filteredLeadIds = filteredLeads.map(l => l.id);
   const callConds = [
-    inArray(callAttemptsTable.leadId, leads.map(l => l.id).length > 0 ? leads.map(l => l.id) : [0]),
+    inArray(callAttemptsTable.leadId, filteredLeadIds.length > 0 ? filteredLeadIds : [0]),
     gte(callAttemptsTable.attemptedAt, startDate),
     lte(callAttemptsTable.attemptedAt, endDate),
   ];
 
-  const callStats = leads.length > 0 ? await db.select({
+  const callStats = filteredLeadIds.length > 0 ? await db.select({
     userId: callAttemptsTable.userId,
     actionType: callAttemptsTable.actionType,
     count: count(),
@@ -691,7 +720,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (s.actionType === "voicemail_drop") csrCallStats[s.userId].vms = s.count;
   }
 
-  const callsByFunnelRaw = leads.length > 0 ? await db.select({
+  const callsByFunnelRaw = filteredLeadIds.length > 0 ? await db.select({
     leadId: callAttemptsTable.leadId,
     actionType: callAttemptsTable.actionType,
     count: count(),

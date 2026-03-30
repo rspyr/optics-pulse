@@ -18,6 +18,7 @@ const INTERNAL_FIELDS = [
   { field: "serviceType", label: "Service Type", description: "Type of HVAC service needed (e.g., Heat Pump, A/C, Furnace)" },
   { field: "status", label: "Status", description: "Lead status (e.g., new, contacted, booked)" },
   { field: "notes", label: "Notes", description: "Additional notes or comments about the lead" },
+  { field: "appointmentBooked", label: "Appointment Booked", description: "Whether lead has a pre-booked appointment (yes/no)" },
   { field: "address", label: "Address", description: "Street address" },
   { field: "city", label: "City", description: "City" },
   { field: "state", label: "State", description: "State/province" },
@@ -356,6 +357,8 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         if (!isNaN(d.getTime())) parsedCreatedAt = d;
       }
 
+      const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+
       const [lead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: row.firstName || "Unknown",
@@ -366,9 +369,10 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         serviceType: row.serviceType || null,
         notes: row.notes || null,
         funnelId: funnelTypeId,
-        hubStatus: "day_1",
+        hubStatus: isPreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
-        status: "new",
+        status: isPreBooked ? "booked" : "new",
+        preBooked: isPreBooked,
         contactPreferences: [],
         ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
       }).returning();
@@ -447,7 +451,7 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "__skip__",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__",
 ]);
 
 router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {

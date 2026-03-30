@@ -116,7 +116,7 @@ function useFunnelTypes(tenantId: number | null) {
   return { funnels, loading, refetch: fetchFunnels };
 }
 
-function useStats(tenantId: number | null, startDate: string, endDate: string, funnelId: number | null) {
+function useStats(tenantId: number | null, startDate: string, endDate: string, funnelId: number | null, includePreBooked: boolean = false) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -125,10 +125,11 @@ function useStats(tenantId: number | null, startDate: string, endDate: string, f
     try {
       const params = new URLSearchParams({ tenantId: String(tenantId), startDate, endDate });
       if (funnelId) params.set("funnelId", String(funnelId));
+      if (includePreBooked) params.set("includePreBooked", "true");
       const res = await fetch(`${API_BASE}/leads-hub/stats?${params}`, { credentials: "include" });
       if (res.ok) setStats(await res.json());
     } catch {} finally { setLoading(false); }
-  }, [tenantId, startDate, endDate, funnelId]);
+  }, [tenantId, startDate, endDate, funnelId, includePreBooked]);
 
   useEffect(() => { setLoading(true); fetchStats(); }, [fetchStats]);
 
@@ -281,9 +282,10 @@ function useDateRange(preset: string): [string, string] {
 function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
   const [datePreset, setDatePreset] = useState("today");
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
+  const [includePreBooked, setIncludePreBooked] = useState(false);
   const [startDate, endDate] = useDateRange(datePreset);
-  const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter);
-  const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null);
+  const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter, includePreBooked);
+  const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
 
   const overallBookingRate = allStats?.bookingRate ?? 0;
   const selectedFunnelRate = funnelFilter
@@ -325,6 +327,15 @@ function DashboardTab({ tenantId, funnels }: { tenantId: number | null; funnels:
           <option value="">All Funnels</option>
           {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
+        <label className="flex items-center gap-1.5 text-xs text-white/40 cursor-pointer select-none ml-2">
+          <input
+            type="checkbox"
+            checked={includePreBooked}
+            onChange={e => setIncludePreBooked(e.target.checked)}
+            className="rounded border-white/20 bg-white/5 text-primary focus:ring-primary/30 w-3.5 h-3.5"
+          />
+          Include Pre-Booked
+        </label>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

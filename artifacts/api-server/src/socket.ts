@@ -213,18 +213,18 @@ export async function getHudStats(tenantId: number | null) {
   const [allLeadsToday] = await db.select({ count: count() }).from(leadsTable).where(todayConditions);
 
   const bookedTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "booked"), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(eq(leadsTable.status, "booked"), sql`${leadsTable.updatedAt} >= ${today}`);
+    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [bookedToday] = await db.select({ count: count() }).from(leadsTable).where(bookedTodayConditions);
 
   const soldTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "sold"), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(eq(leadsTable.status, "sold"), sql`${leadsTable.updatedAt} >= ${today}`);
+    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(soldTodayConditions);
 
   const contactedTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`);
+    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [contactedToday] = await db.select({ count: count() }).from(leadsTable).where(contactedTodayConditions);
 
   const totalCalls = contactedToday.count;
@@ -238,16 +238,16 @@ export async function getHudStats(tenantId: number | null) {
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
     const bookedLeadsConds = tenantId
-      ? and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.status, ["booked", "sold"]), sql`${leadsTable.updatedAt} >= ${today}`)
-      : and(inArray(leadsTable.status, ["booked", "sold"]), sql`${leadsTable.updatedAt} >= ${today}`);
+      ? and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
+      : and(inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
     const bookedLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType })
       .from(leadsTable).where(bookedLeadsConds);
     commission = computeSpiffCommission(bookedLeads, spiffConfig);
   }
 
   const speedConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(sql`${leadsTable.status} != 'new'`, sql`${leadsTable.updatedAt} >= ${today}`);
+    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
+    : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
   const [speedResult] = await db
     .select({
       avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,

@@ -5,11 +5,12 @@ import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manage
 async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; leadType: string | null }[] };
 
-  const bookedSoldLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType })
+  const bookedSoldLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType, preBooked: leadsTable.preBooked })
     .from(leadsTable)
     .where(and(
       inArray(leadsTable.id, leadIds),
       inArray(leadsTable.status, ["booked", "sold"]),
+      eq(leadsTable.preBooked, false),
       gte(leadsTable.updatedAt, dayStart),
       lte(leadsTable.updatedAt, dayEnd),
     ));
@@ -23,6 +24,7 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     .where(and(
       inArray(leadsTable.id, leadIds),
       ne(leadsTable.status, "new"),
+      eq(leadsTable.preBooked, false),
       gte(leadsTable.updatedAt, dayStart),
       lte(leadsTable.updatedAt, dayEnd),
     ));

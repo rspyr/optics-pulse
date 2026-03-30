@@ -74,13 +74,14 @@ const DAY_BADGE_COLORS: Record<string, string> = {
   day_4: "bg-orange-500/20 text-orange-400 border-orange-500/30",
   day_5_old: "bg-red-500/20 text-red-400 border-red-500/30",
   appt_set: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+  appt_booked: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   call_back: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   dead: "bg-red-500/20 text-red-300 border-red-500/30",
 };
 
 const DAY_BADGE_LABELS: Record<string, string> = {
   day_1: "D1", day_2: "D2", day_3: "D3", day_4: "D4",
-  day_5_old: "OLD", appt_set: "APPT", call_back: "CB", dead: "DEAD",
+  day_5_old: "OLD", appt_set: "APPT", appt_booked: "APPT BOOKED", call_back: "CB", dead: "DEAD",
 };
 
 const CONTACT_FLAG_CONFIG: Record<string, { label: string; color: string; icon: typeof Phone; blocksCall?: boolean; blocksText?: boolean }> = {
@@ -184,6 +185,7 @@ interface LeadData {
   deadReason?: string | null;
   disposition?: string | null;
   notes?: string | null;
+  preBooked?: boolean;
   createdAt: string;
   updatedAt: string;
   tenantId?: number;
@@ -553,7 +555,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
 function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {} }: {
   lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>;
 }) {
-  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done">(null);
+  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
   const [actionLoading, setActionLoading] = useState(false);
@@ -566,6 +568,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [showVmScripts, setShowVmScripts] = useState(false);
   const [callbackDate, setCallbackDate] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
 
   const contactPrefs = (lead.contactPreferences || []) as string[];
   const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
@@ -767,6 +770,63 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         )}
       </PremiumCard>
 
+      {lead.hubStatus === "appt_booked" && actionStep === null && (
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar className="w-5 h-5 text-purple-400" />
+            <span className="text-sm font-medium text-purple-400">PRE-BOOKED APPOINTMENT</span>
+          </div>
+          <p className="text-sm text-white/60 mb-4">This lead arrived with a pre-booked appointment. Confirm the appointment status:</p>
+          <div className="space-y-2">
+            <button
+              onClick={() => logAction({ actionType: "call", apptBookedOutcome: "confirmed" })}
+              disabled={actionLoading}
+              className="w-full px-4 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 text-sm font-medium hover:bg-emerald-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
+            >
+              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              Confirmed
+            </button>
+            <button
+              onClick={() => logAction({ actionType: "call", apptBookedOutcome: "rescheduled" })}
+              disabled={actionLoading}
+              className="w-full px-4 py-2.5 rounded-lg bg-amber-500/15 border border-amber-500/25 text-amber-400 text-sm font-medium hover:bg-amber-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
+            >
+              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
+              Rescheduled
+            </button>
+            <button
+              onClick={() => { setCancelReason(""); setActionStep("appt_cancel_reason"); }}
+              disabled={actionLoading}
+              className="w-full px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-medium hover:bg-red-500/20 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
+            >
+              <XCircle className="w-4 h-4" />
+              Canceled
+            </button>
+          </div>
+        </PremiumCard>
+      )}
+
+      {actionStep === "appt_cancel_reason" && (
+        <PremiumCard className="p-4">
+          <p className="text-sm text-white/60 mb-3">Why was the appointment canceled?</p>
+          <textarea
+            value={cancelReason}
+            onChange={e => setCancelReason(e.target.value)}
+            placeholder="Enter reason for cancellation..."
+            className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white mb-3 min-h-[80px] resize-none placeholder-white/20"
+          />
+          <button
+            onClick={() => logAction({ actionType: "call", apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
+            disabled={actionLoading}
+            className="w-full px-3 py-2 rounded-lg bg-red-500/20 text-red-400 text-sm font-medium hover:bg-red-500/30 disabled:opacity-50 transition-colors"
+          >
+            {actionLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Confirm Cancellation"}
+          </button>
+          <button onClick={() => setActionStep(null)} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
+        </PremiumCard>
+      )}
+
+      {lead.hubStatus !== "appt_booked" && (
       <div className="flex items-center gap-2">
         <button
           onClick={handleCall}
@@ -806,8 +866,9 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           {blocksCall ? <Ban className="w-4 h-4" /> : <Mic className="w-4 h-4" />} VM DROP
         </button>
       </div>
+      )}
 
-      {blocksCall && (
+      {blocksCall && lead.hubStatus !== "appt_booked" && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-red-400">This lead has a "Text Only" or "Do Not Call" flag. Calling is blocked.</p>

@@ -10,7 +10,7 @@ export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "booked
 
 export const hubStatusEnum = pgEnum("hub_status_enum", [
   "day_1", "day_2", "day_3", "day_4", "day_5_old",
-  "appt_set", "call_back", "dead",
+  "appt_set", "appt_booked", "call_back", "dead",
 ]);
 
 export const leadsTable = pgTable("leads", {
@@ -39,6 +39,7 @@ export const leadsTable = pgTable("leads", {
   callbackAt: timestamp("callback_at"),
   revisitDate: date("revisit_date"),
   deadReason: text("dead_reason"),
+  preBooked: boolean("pre_booked").notNull().default(false),
   notes: text("notes"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -49,7 +50,7 @@ export const insertLeadSchema = createInsertSchema(leadsTable).omit({ id: true, 
 export type InsertLead = z.infer<typeof insertLeadSchema>;
 export type Lead = typeof leadsTable.$inferSelect;
 
-export const HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "call_back", "dead"] as const;
+export const HUB_STATUSES = ["day_1", "day_2", "day_3", "day_4", "day_5_old", "appt_set", "appt_booked", "call_back", "dead"] as const;
 export type HubStatus = typeof HUB_STATUSES[number];
 
 export const CONTACT_PREFERENCES = ["text_only", "spanish_speaking", "do_not_call"] as const;
