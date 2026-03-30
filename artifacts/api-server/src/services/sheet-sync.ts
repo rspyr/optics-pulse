@@ -157,7 +157,7 @@ interface MappedRow {
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "__skip__", "notes",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "notes",
 ]);
 
 function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<string, string>): MappedRow[] {

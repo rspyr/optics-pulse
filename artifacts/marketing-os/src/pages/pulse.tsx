@@ -558,6 +558,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
+  const [apptBookedChannel, setApptBookedChannel] = useState<"call" | "text" | "voicemail_drop">("call");
   const [actionLoading, setActionLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -641,6 +642,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
     }
     if (lead.phone) window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
     if (lead.hubStatus === "appt_booked") {
+      setApptBookedChannel("call");
       setActionStep("appt_booked_flow");
     } else {
       setActionStep("call_done");
@@ -649,6 +651,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
 
   const handleText = () => {
     if (lead.hubStatus === "appt_booked") {
+      setApptBookedChannel("text");
       setActionStep("appt_booked_flow");
     } else {
       setActionStep("text_done");
@@ -657,6 +660,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
 
   const handleVmDrop = () => {
     if (lead.hubStatus === "appt_booked") {
+      setApptBookedChannel("voicemail_drop");
       setActionStep("appt_booked_flow");
     } else {
       setActionStep("vm_done");
@@ -791,7 +795,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           <p className="text-sm text-white/60 mb-4">Confirm the appointment status after reaching the lead:</p>
           <div className="space-y-2">
             <button
-              onClick={() => logAction({ actionType: "call", apptBookedOutcome: "confirmed" })}
+              onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "confirmed" })}
               disabled={actionLoading}
               className="w-full px-4 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 text-sm font-medium hover:bg-emerald-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
             >
@@ -799,7 +803,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               Confirmed
             </button>
             <button
-              onClick={() => logAction({ actionType: "call", apptBookedOutcome: "rescheduled" })}
+              onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "rescheduled" })}
               disabled={actionLoading}
               className="w-full px-4 py-2.5 rounded-lg bg-amber-500/15 border border-amber-500/25 text-amber-400 text-sm font-medium hover:bg-amber-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
             >
@@ -828,7 +832,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
             className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white mb-3 min-h-[80px] resize-none placeholder-white/20"
           />
           <button
-            onClick={() => logAction({ actionType: "call", apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
+            onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
             disabled={actionLoading}
             className="w-full px-3 py-2 rounded-lg bg-red-500/20 text-red-400 text-sm font-medium hover:bg-red-500/30 disabled:opacity-50 transition-colors"
           >
