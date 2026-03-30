@@ -417,7 +417,7 @@ function CommissionTicker({ amount, onDone }: { amount: number; onDone: () => vo
     >
       <div className="bg-gradient-to-br from-emerald-500/90 to-green-600/90 backdrop-blur-md rounded-2xl px-8 py-5 shadow-2xl shadow-emerald-500/30 border border-emerald-400/40">
         <div className="text-3xl font-black text-white tracking-tight text-center">
-          +${amount} 💰 BING!
+          +${amount} 💰
         </div>
       </div>
     </motion.div>
