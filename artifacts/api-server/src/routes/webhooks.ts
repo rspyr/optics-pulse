@@ -4,6 +4,7 @@ import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../socket";
+import { assignLeadRoundRobin } from "../services/round-robin";
 
 const router: IRouter = Router();
 
@@ -106,7 +107,13 @@ router.post("/webhooks/ingest", async (req, res) => {
       }).returning();
 
       if (newLead) {
-        emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+        try {
+          await assignLeadRoundRobin(tenantId, newLead.id, null);
+        } catch (err) {
+          console.warn("[Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
+        }
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
+        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
       }
     }
 

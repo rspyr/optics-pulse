@@ -6,6 +6,7 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
+import { assignLeadRoundRobin } from "../services/round-robin";
 
 const router: IRouter = Router();
 
@@ -398,6 +399,20 @@ router.post("/leads-hub/create", async (req, res) => {
     status: "new",
   }).returning();
 
+  if (!validatedCsrId) {
+    try {
+      const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId || null);
+      if (result.assignedCsrId) {
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
+        emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+        res.status(201).json(refreshed ?? lead);
+        return;
+      }
+    } catch (err) {
+      console.warn("[LeadsHub Create] Auto-assign round-robin failed for lead", lead.id, err);
+    }
+  }
+
   emitNewLead(tenantId, lead as unknown as Record<string, unknown>);
   res.status(201).json(lead);
 });
@@ -565,100 +580,13 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  const configs = await db.select().from(routingConfigTable)
-    .where(and(
-      eq(routingConfigTable.tenantId, tenantId),
-      eq(routingConfigTable.isActive, true),
-      funnelTypeId ? eq(routingConfigTable.funnelTypeId, funnelTypeId) : isNull(routingConfigTable.funnelTypeId),
-    ));
-
-  let config = configs[0];
-  if (!config && funnelTypeId) {
-    const fallback = await db.select().from(routingConfigTable)
-      .where(and(eq(routingConfigTable.tenantId, tenantId), eq(routingConfigTable.isActive, true), isNull(routingConfigTable.funnelTypeId)));
-    config = fallback[0];
+  const result = await assignLeadRoundRobin(tenantId, leadId, funnelTypeId || null);
+  if (result.assignedCsrId) {
+    const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    res.json({ assignedCsrId: result.assignedCsrId, csrName: result.csrName, lead: updated });
+  } else {
+    res.json(result);
   }
-
-  if (!config || !config.cascadeOrder || (config.cascadeOrder as number[]).length === 0) {
-    res.json({ assignedCsrId: null, reason: "No routing config" });
-    return;
-  }
-
-  const now = new Date();
-  const pausedSchedules = await db.select().from(csrScheduleTable)
-    .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.isPaused, true)));
-  const pausedUserIds = new Set(
-    pausedSchedules
-      .filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now)
-      .map(s => s.userId)
-  );
-
-  const order = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
-  if (order.length === 0) {
-    res.json({ assignedCsrId: null, reason: "All CSRs are paused" });
-    return;
-  }
-
-  const passMinutes = config.passIntervalMinutes ?? 1440;
-  const passWindow = new Date(now.getTime() - passMinutes * 60 * 1000);
-
-  const recentAssignments = await db.select({
-    assignedCsrId: leadsTable.assignedCsrId,
-    count: count(),
-  }).from(leadsTable)
-    .where(and(
-      eq(leadsTable.tenantId, tenantId),
-      isNotNull(leadsTable.assignedCsrId),
-      gte(leadsTable.createdAt, passWindow),
-    ))
-    .groupBy(leadsTable.assignedCsrId);
-
-  const assignmentCounts: Record<number, number> = {};
-  for (const r of recentAssignments) {
-    if (r.assignedCsrId) assignmentCounts[r.assignedCsrId] = r.count;
-  }
-
-  let selectedCsrId = order[0];
-  let minAssignments = assignmentCounts[order[0]] || 0;
-  for (const csrId of order) {
-    const c = assignmentCounts[csrId] || 0;
-    if (c < minAssignments) {
-      minAssignments = c;
-      selectedCsrId = csrId;
-    }
-  }
-
-  if (!config.allowPassBack) {
-    const [currentLead] = await db.select({ assignedCsrId: leadsTable.assignedCsrId })
-      .from(leadsTable).where(eq(leadsTable.id, leadId));
-    if (currentLead?.assignedCsrId === selectedCsrId) {
-      const alternates = order.filter(id => id !== selectedCsrId);
-      if (alternates.length > 0) {
-        let altMin = assignmentCounts[alternates[0]] || 0;
-        let altSelected = alternates[0];
-        for (const id of alternates) {
-          const c = assignmentCounts[id] || 0;
-          if (c < altMin) { altMin = c; altSelected = id; }
-        }
-        selectedCsrId = altSelected;
-      }
-    }
-  }
-
-  const [user] = await db.select({ name: usersTable.name, isActive: usersTable.isActive })
-    .from(usersTable)
-    .where(and(eq(usersTable.id, selectedCsrId), eq(usersTable.tenantId, tenantId)));
-  if (!user || !user.isActive) {
-    res.json({ assignedCsrId: null, reason: "Selected CSR not found or inactive in this tenant" });
-    return;
-  }
-
-  const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: selectedCsrId, assignedTo: user.name, updatedAt: new Date(), cascadePassCount: 0 })
-    .where(eq(leadsTable.id, leadId))
-    .returning();
-
-  res.json({ assignedCsrId: selectedCsrId, csrName: user.name, lead: updated });
 });
 
 router.get("/leads-hub/stats", async (req, res) => {

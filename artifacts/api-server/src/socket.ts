@@ -3,6 +3,7 @@ import type { Server as HTTPServer } from "http";
 import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
 import { eq, and, count, sql, avg, inArray, gte } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
+import { assignLeadRoundRobin } from "./services/round-robin";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
@@ -170,8 +171,16 @@ async function createDemoLead(): Promise<void> {
       updatedAt: new Date(),
     }).returning();
 
-    if (lead && io) {
-      io.to(`tenant-${tenantId}`).emit("new-lead", lead);
+    if (lead) {
+      try {
+        await assignLeadRoundRobin(tenantId, lead.id, null);
+      } catch (err) {
+        console.warn("[Demo] Auto-assign failed for demo lead", lead.id, err);
+      }
+      if (io) {
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
+        io.to(`tenant-${tenantId}`).emit("new-lead", refreshed ?? lead);
+      }
       console.log(`[Demo] New lead: ${firstName} ${lastName} (tenant ${tenantId})`);
     }
   } catch (err) {

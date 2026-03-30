@@ -1,5 +1,5 @@
 import { db, usersTable, tenantsTable, campaignsTable, campaignDailyStatsTable, leadsTable, jobsTable, attributionEventsTable, changeLogsTable, funnelTypesTable } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { sql, eq, and, inArray } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import fs from "fs";
@@ -78,7 +78,7 @@ export async function autoSeedIfEmpty() {
       await syncTenantConfigs(seedData);
     }
 
-    // Advantage is a real client — skip wiping its data
+    await backfillUnassignedLeads();
   } catch (err) {
     console.error("[AutoSeed] Seed failed:", err instanceof Error ? err.message : err);
   }
@@ -338,6 +338,18 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
   }
   await db.insert(campaignDailyStatsTable).values(dailyStats);
 
+  const csrsByTenant: Record<number, { id: number; name: string }[]> = {};
+  for (const tid of tenantIds) {
+    const csrs = await db.select({ id: usersTable.id, name: usersTable.name })
+      .from(usersTable)
+      .where(and(
+        eq(usersTable.tenantId, tid),
+        eq(usersTable.isActive, true),
+        inArray(usersTable.role, ["client_user", "client_admin"]),
+      ));
+    csrsByTenant[tid] = csrs;
+  }
+
   const leads = [];
   for (let i = 0; i < 60; i++) {
     const tenantId = tenantIds[i % tenantIds.length];
@@ -347,6 +359,9 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
     const status = randomFrom(LEAD_STATUSES);
     const gclid = source === "Google Ads" ? fakeGclid() : null;
     const createdAt = randomDate(30);
+
+    const availableCsrs = csrsByTenant[tenantId] || [];
+    const assignedCsr = availableCsrs.length > 0 ? availableCsrs[i % availableCsrs.length] : null;
 
     const [lead] = await db.insert(leadsTable).values({
       tenantId,
@@ -360,6 +375,8 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
       status,
       isNewCustomer: Math.random() > 0.3,
       matchedGclid: gclid,
+      assignedCsrId: assignedCsr?.id ?? null,
+      assignedTo: assignedCsr?.name ?? null,
       createdAt,
       updatedAt: createdAt,
     }).returning();
@@ -417,4 +434,52 @@ async function seedDemoActivity(tenantIds: number[], tenantMap: Map<string, numb
     { tenantId: nordicId, date: new Date(Date.now() - 8 * 86400000).toISOString().split("T")[0], title: "Seasonal Budget Adjustment", description: "Increased ad budget by 20%.", category: "budget" },
   ];
   await db.insert(changeLogsTable).values(changeLogEntries);
+}
+
+async function backfillUnassignedLeads() {
+  const { isNull } = await import("drizzle-orm");
+  const { assignLeadRoundRobin } = await import("./round-robin");
+  const BATCH_SIZE = 500;
+  let totalAssigned = 0;
+
+  while (true) {
+    const batch = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, funnelId: leadsTable.funnelId })
+      .from(leadsTable)
+      .where(isNull(leadsTable.assignedCsrId))
+      .limit(BATCH_SIZE);
+
+    if (batch.length === 0) break;
+
+    for (const lead of batch) {
+      try {
+        const result = await assignLeadRoundRobin(lead.tenantId, lead.id, lead.funnelId || null);
+        if (result.assignedCsrId) {
+          totalAssigned++;
+        } else {
+          const csrs = await db.select({ id: usersTable.id, name: usersTable.name })
+            .from(usersTable)
+            .where(and(
+              eq(usersTable.tenantId, lead.tenantId),
+              eq(usersTable.isActive, true),
+              inArray(usersTable.role, ["client_user", "client_admin"]),
+            ));
+          if (csrs.length > 0) {
+            const csr = csrs[totalAssigned % csrs.length];
+            await db.update(leadsTable)
+              .set({ assignedCsrId: csr.id, assignedTo: csr.name })
+              .where(eq(leadsTable.id, lead.id));
+            totalAssigned++;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (batch.length < BATCH_SIZE) break;
+  }
+
+  if (totalAssigned > 0) {
+    console.log(`[AutoSeed] Backfilled ${totalAssigned} unassigned leads across CSRs`);
+  }
 }

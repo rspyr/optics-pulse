@@ -5,6 +5,7 @@ import { readSheetRows, readRawSheetData } from "../services/integrations/google
 import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
 import { ai } from "@workspace/integrations-gemini-ai";
+import { assignLeadRoundRobin } from "../services/round-robin";
 
 const router: IRouter = Router();
 
@@ -377,12 +378,20 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
       }).returning();
 
+      if (lead) {
+        try {
+          await assignLeadRoundRobin(tenantId, lead.id, funnelTypeId || null);
+        } catch (err) {
+          console.warn("[SheetsIngest] Auto-assign failed for lead", lead.id, err);
+        }
+      }
       newLeads.push(lead);
       imported++;
     }
 
     for (const lead of newLeads) {
-      emitNewLead(tenantId, lead as unknown as Record<string, unknown>);
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
+      emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
     }
 
     res.json({

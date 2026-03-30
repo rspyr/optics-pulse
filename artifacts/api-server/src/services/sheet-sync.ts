@@ -2,6 +2,7 @@ import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@works
 import { eq, and, isNotNull, ne } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead } from "../socket";
+import { assignLeadRoundRobin } from "./round-robin";
 
 function headersMatch(current: string[], saved: string[]): boolean {
   if (current.length !== saved.length) return false;
@@ -124,6 +125,13 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
       ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
     }).returning();
 
+    if (lead) {
+      try {
+        await assignLeadRoundRobin(assoc.tenantId, lead.id, assoc.funnelTypeId || null);
+      } catch (err) {
+        console.warn("[SheetSync] Auto-assign failed for lead", lead.id, err);
+      }
+    }
     newLeads.push(lead);
     imported++;
   }
@@ -136,7 +144,8 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
     ));
 
   for (const lead of newLeads) {
-    emitNewLead(assoc.tenantId, lead as unknown as Record<string, unknown>);
+    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
+    emitNewLead(assoc.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
   }
 
   if (imported > 0) {
