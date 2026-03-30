@@ -209,8 +209,12 @@ export default function AdminUsers() {
                       <td className="p-4"><Badge variant={user.role.includes("admin") ? "default" : "neutral"}>{ROLE_LABELS[user.role] || user.role}</Badge></td>
                       <td className="p-4 text-sm text-muted-foreground">{getTenantName(user.tenantId)}</td>
                       <td className="p-4">
-                        <button onClick={() => toggleActive(user)}>
-                          <Badge variant={user.isActive ? "success" : "danger"}>{user.isActive ? "Active" : "Inactive"}</Badge>
+                        <button
+                          onClick={() => toggleActive(user)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${user.isActive ? "bg-emerald-600" : "bg-white/10"}`}
+                          title={user.isActive ? "Click to deactivate" : "Click to activate"}
+                        >
+                          <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${user.isActive ? "translate-x-6" : "translate-x-1"}`} />
                         </button>
                       </td>
                       <td className="p-4 text-right space-x-2">

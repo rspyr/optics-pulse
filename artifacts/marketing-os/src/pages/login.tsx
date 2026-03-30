@@ -116,14 +116,6 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-white/5">
-            <p className="text-muted-foreground text-xs text-center">
-              Demo accounts: admin@hvaclaunch.com / brandon@apexhvac.com
-            </p>
-            <p className="text-muted-foreground text-xs text-center mt-1">
-              Password: demo1234
-            </p>
-          </div>
         </div>
       </div>
     </div>
