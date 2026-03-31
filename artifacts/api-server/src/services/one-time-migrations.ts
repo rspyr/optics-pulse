@@ -417,6 +417,27 @@ const migrations: Migration[] = [
       console.log(`[Migration] Backfilled ${totalUpdated} lead source(s) across ${tenants.length} tenant(s)`);
     },
   },
+  {
+    id: "2026-03-31_add-booked-by-csr-id",
+    description: "Add booked_by_csr_id column to leads and backfill existing booked/sold leads",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS booked_by_csr_id INTEGER REFERENCES users(id)
+      `);
+      console.log("[Migration] Ensured booked_by_csr_id column exists on leads");
+
+      const backfilled = await db.execute(sql`
+        UPDATE leads
+        SET booked_by_csr_id = assigned_csr_id
+        WHERE status IN ('booked', 'sold')
+          AND booked_by_csr_id IS NULL
+          AND assigned_csr_id IS NOT NULL
+        RETURNING id
+      `);
+      console.log(`[Migration] Backfilled booked_by_csr_id on ${backfilled.rows.length} existing booked/sold lead(s)`);
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
