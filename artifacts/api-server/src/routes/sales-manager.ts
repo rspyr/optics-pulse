@@ -98,6 +98,7 @@ router.get("/sales-manager/team", async (req, res) => {
     .where(and(
       inArray(callAttemptsTable.userId, userIds),
       gte(callAttemptsTable.attemptedAt, today),
+      ne(callAttemptsTable.actionType, "transfer"),
     ))
     .groupBy(callAttemptsTable.userId);
 
@@ -109,6 +110,7 @@ router.get("/sales-manager/team", async (req, res) => {
     .where(and(
       inArray(callAttemptsTable.userId, userIds),
       gte(callAttemptsTable.attemptedAt, today),
+      ne(callAttemptsTable.actionType, "transfer"),
     ));
 
   const leadIdsByUser: Record<number, number[]> = {};
@@ -121,12 +123,14 @@ router.get("/sales-manager/team", async (req, res) => {
   let leadStatusMap: Record<number, string> = {};
   let leadFunnelIdMap: Record<number, number | null> = {};
   let preBookedMap: Record<number, boolean> = {};
+  let leadAssignedCsrMap: Record<number, number | null> = {};
   if (allLeadIds.length > 0) {
-    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
+    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked, assignedCsrId: leadsTable.assignedCsrId })
       .from(leadsTable).where(inArray(leadsTable.id, allLeadIds));
     leadStatusMap = Object.fromEntries(leads.map(l => [l.id, l.status]));
     leadFunnelIdMap = Object.fromEntries(leads.map(l => [l.id, l.funnelId]));
     preBookedMap = Object.fromEntries(leads.map(l => [l.id, l.preBooked ?? false]));
+    leadAssignedCsrMap = Object.fromEntries(leads.map(l => [l.id, l.assignedCsrId]));
   }
 
   const funnelIdSet = new Set(Object.values(leadFunnelIdMap).filter((id): id is number => id !== null));
@@ -175,10 +179,12 @@ router.get("/sales-manager/team", async (req, res) => {
   const coordinators = users.map(user => {
     const calls = callCountMap[user.id] || 0;
     const userLeadIds = leadIdsByUser[user.id] || [];
-    const userLeads = userLeadIds.map(id => {
-      const fId = leadFunnelIdMap[id];
-      return { status: leadStatusMap[id] || "", funnelName: fId ? (funnelNameMap[fId] || null) : null, preBooked: preBookedMap[id] || false };
-    });
+    const userLeads = userLeadIds
+      .filter(id => leadAssignedCsrMap[id] === user.id)
+      .map(id => {
+        const fId = leadFunnelIdMap[id];
+        return { status: leadStatusMap[id] || "", funnelName: fId ? (funnelNameMap[fId] || null) : null, preBooked: preBookedMap[id] || false };
+      });
     const nonPreBookedLeads = userLeads.filter(l => !l.preBooked);
     const bookings = nonPreBookedLeads.filter(l => ["booked", "sold"].includes(l.status)).length;
     const bookingRate = calls > 0 ? Math.round((bookings / calls) * 100) : 0;

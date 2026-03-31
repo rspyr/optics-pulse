@@ -2,32 +2,42 @@ import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTab
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 
-async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date) {
+async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, assignedCsrId?: number) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
+
+  const bookingConds = [
+    inArray(leadsTable.id, leadIds),
+    inArray(leadsTable.status, ["booked", "sold"]),
+    eq(leadsTable.preBooked, false),
+    gte(leadsTable.updatedAt, dayStart),
+    lte(leadsTable.updatedAt, dayEnd),
+  ];
+  if (assignedCsrId !== undefined) {
+    bookingConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
+  }
 
   const bookedSoldLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
     .from(leadsTable)
-    .where(and(
-      inArray(leadsTable.id, leadIds),
-      inArray(leadsTable.status, ["booked", "sold"]),
-      eq(leadsTable.preBooked, false),
-      gte(leadsTable.updatedAt, dayStart),
-      lte(leadsTable.updatedAt, dayEnd),
-    ));
+    .where(and(...bookingConds));
 
   const bookingsCount = bookedSoldLeads.length;
   const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;
 
+  const speedConds = [
+    inArray(leadsTable.id, leadIds),
+    ne(leadsTable.status, "new"),
+    eq(leadsTable.preBooked, false),
+    gte(leadsTable.updatedAt, dayStart),
+    lte(leadsTable.updatedAt, dayEnd),
+  ];
+  if (assignedCsrId !== undefined) {
+    speedConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
+  }
+
   const [speedResult] = await db.select({
     avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
   }).from(leadsTable)
-    .where(and(
-      inArray(leadsTable.id, leadIds),
-      ne(leadsTable.status, "new"),
-      eq(leadsTable.preBooked, false),
-      gte(leadsTable.updatedAt, dayStart),
-      lte(leadsTable.updatedAt, dayEnd),
-    ));
+    .where(and(...speedConds));
 
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
   let funnelNameLookup: Record<number, string> = {};
@@ -75,6 +85,7 @@ export async function aggregateDailyStats(dateStr: string) {
       eq(callAttemptsTable.userId, userId),
       gte(callAttemptsTable.attemptedAt, startOfDay),
       lte(callAttemptsTable.attemptedAt, endOfDay),
+      ne(callAttemptsTable.actionType, "transfer"),
     );
 
     const [callsResult] = await db.select({ count: count() })
@@ -87,7 +98,7 @@ export async function aggregateDailyStats(dateStr: string) {
       .where(userAttemptConds);
     const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-    const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, startOfDay, endOfDay);
+    const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, startOfDay, endOfDay, userId);
 
     const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
@@ -204,6 +215,7 @@ async function getUserTodayStats(userId: number, tenantId: number | null = null)
   const attemptConds = [
     eq(callAttemptsTable.userId, userId),
     gte(callAttemptsTable.attemptedAt, today),
+    ne(callAttemptsTable.actionType, "transfer"),
   ];
 
   const [callsResult] = await db.select({ count: count() })
@@ -214,7 +226,7 @@ async function getUserTodayStats(userId: number, tenantId: number | null = null)
     .from(callAttemptsTable).where(and(...attemptConds));
   const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
+  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday, userId);
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
   const spiffConfig = await loadSpiffConfig(tenantId);
@@ -242,6 +254,7 @@ async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
 
   const attemptConds = [
     gte(callAttemptsTable.attemptedAt, today),
+    ne(callAttemptsTable.actionType, "transfer"),
   ];
 
   const usersInTenant = await db.select({ id: usersTable.id })

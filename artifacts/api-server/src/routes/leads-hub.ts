@@ -356,7 +356,6 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
       assignedTo: targetUser.name,
       updatedAt: new Date(),
       cascadePassCount: 0,
-      dayInSequence: 1,
       visibleAfter: null,
     })
     .where(eq(leadsTable.id, leadId))
@@ -449,7 +448,6 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
         assignedTo: targetUser.name,
         updatedAt: new Date(),
         cascadePassCount: 0,
-        dayInSequence: 1,
         visibleAfter: null,
       })
       .where(and(
