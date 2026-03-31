@@ -607,6 +607,13 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [csrs, setCsrs] = useState<CsrOption[]>([]);
   const [selectedCsr, setSelectedCsr] = useState<number | null>(null);
   const [showScripts, setShowScripts] = useState(false);
+  const [commConfig, setCommConfig] = useState<{ callPlatform: string; textPlatform: string }>({ callPlatform: "native", textPlatform: "native" });
+  useEffect(() => {
+    fetch(`${API_BASE}/leads/comm-config`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setCommConfig({ callPlatform: d.callPlatform || "native", textPlatform: d.textPlatform || "native" }))
+      .catch(() => {});
+  }, [tenantId]);
   const [showCallScripts, setShowCallScripts] = useState(false);
   const [showVmScripts, setShowVmScripts] = useState(false);
   const [callbackDate, setCallbackDate] = useState("");
@@ -682,7 +689,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       showFeedback("error", "This lead has a contact restriction that prevents calls");
       return;
     }
-    if (lead.phone) window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
+    if (lead.phone && commConfig.callPlatform !== "none") window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
     if (lead.hubStatus === "appt_booked") {
       setApptBookedChannel("call");
       setActionStep("appt_booked_flow");
@@ -1156,7 +1163,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                 </div>
               )}
 
-              {lead.phone && (
+              {lead.phone && commConfig.textPlatform !== "none" && (
                 <a
                   href={`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(substituteSmartFields(SMART_FIELD_SCRIPTS.text[0].content))}`}
                   className="flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-lg bg-blue-500/15 text-blue-400 text-xs font-medium hover:bg-blue-500/25 mb-3 transition-colors"

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -23,6 +23,8 @@ export default function Settings() {
   const [commStatus, setCommStatus] = useState<{ callReady: boolean; textReady: boolean; callStatusMessage: string; textStatusMessage: string } | null>(null);
   const [commSaving, setCommSaving] = useState(false);
   const [commSaved, setCommSaved] = useState(false);
+  const [commInitial, setCommInitial] = useState({ callPlatform: "native", textPlatform: "native" });
+  const commDirty = commConfig.callPlatform !== commInitial.callPlatform || commConfig.textPlatform !== commInitial.textPlatform;
   const [form, setForm] = useState({
     serviceTitanId: "",
     googleAdsCustomerId: "",
@@ -57,10 +59,12 @@ export default function Settings() {
         }));
         setDirtyFields(new Set());
         const cc = data.communicationConfig || {};
-        setCommConfig({
+        const loadedComm = {
           callPlatform: cc.callPlatform || "native",
           textPlatform: cc.textPlatform || "native",
-        });
+        };
+        setCommConfig(loadedComm);
+        setCommInitial(loadedComm);
       })
       .catch(() => {});
 
@@ -124,6 +128,7 @@ export default function Settings() {
       });
       if (res.ok) {
         setCommSaved(true);
+        setCommInitial({ ...commConfig });
         setTimeout(() => setCommSaved(false), 2000);
         const statusRes = await fetch(`${API}/api/leads/comm-config`, { credentials: "include" });
         if (statusRes.ok) {
@@ -143,6 +148,8 @@ export default function Settings() {
     } catch {}
   }
 
+  const [apiIntegrationsOpen, setApiIntegrationsOpen] = useState(false);
+  const [commPlatformOpen, setCommPlatformOpen] = useState(false);
   const [pwForm, setPwForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMessage, setPwMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -249,8 +256,14 @@ export default function Settings() {
       </PremiumCard>
 
       {!isClientUser && <PremiumCard>
-        <h3 className="text-xl font-display text-white mb-6">API Integrations</h3>
-        <div className="space-y-5">
+        <button
+          onClick={() => setApiIntegrationsOpen(o => !o)}
+          className="w-full flex items-center justify-between"
+        >
+          <h3 className="text-xl font-display text-white">API Integrations</h3>
+          <ChevronDown className={cn("w-5 h-5 text-gray-400 transition-transform duration-200", apiIntegrationsOpen && "rotate-180")} />
+        </button>
+        {apiIntegrationsOpen ? <div className="space-y-5 mt-6">
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">ServiceTitan Tenant ID</label>
             <input
@@ -356,17 +369,24 @@ export default function Settings() {
           </div>
           <button
             onClick={handleSave}
-            disabled={saving}
-            className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-4 flex items-center gap-2 disabled:opacity-50"
+            disabled={saving || (dirtyFields.size === 0 && !saved)}
+            className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-4 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
             {saved ? "Saved!" : "Save Configuration"}
           </button>
-        </div>
+        </div> : null}
       </PremiumCard>}
 
       {!isClientUser && <PremiumCard>
-        <h3 className="text-xl font-display text-white mb-2">Communication Platform</h3>
+        <button
+          onClick={() => setCommPlatformOpen(o => !o)}
+          className="w-full flex items-center justify-between"
+        >
+          <h3 className="text-xl font-display text-white">Communication Platform</h3>
+          <ChevronDown className={cn("w-5 h-5 text-gray-400 transition-transform duration-200", commPlatformOpen && "rotate-180")} />
+        </button>
+        {commPlatformOpen ? <div className="mt-4">
         <p className="text-sm text-muted-foreground mb-6">
           Choose how Pulse routes calls and texts. Configure API credentials above, then select your preferred platforms here.
         </p>
@@ -379,6 +399,7 @@ export default function Settings() {
             </div>
             <div className="space-y-2">
               {[
+                { value: "none", label: "None", desc: "No communication trigger — action is logged only" },
                 { value: "native", label: "Native Phone Dialer", desc: "Opens system phone app" },
                 { value: "callrail", label: "CallRail", desc: "Click-to-call via CallRail API" },
                 { value: "podium", label: "Podium", desc: "Call routing via Podium API" },
@@ -416,6 +437,7 @@ export default function Settings() {
             </div>
             <div className="space-y-2">
               {[
+                { value: "none", label: "None", desc: "No communication trigger — action is logged only" },
                 { value: "native", label: "Native SMS App", desc: "Opens system messaging app" },
                 { value: "callrail", label: "CallRail", desc: "Send texts via CallRail API" },
                 { value: "podium", label: "Podium", desc: "Send texts via Podium API" },
@@ -449,12 +471,13 @@ export default function Settings() {
 
         <button
           onClick={handleCommSave}
-          disabled={commSaving}
-          className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-6 flex items-center gap-2 disabled:opacity-50"
+          disabled={commSaving || (!commDirty && !commSaved)}
+          className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all mt-6 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {commSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : commSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
           {commSaved ? "Saved!" : "Save Platform Settings"}
         </button>
+        </div> : null}
       </PremiumCard>}
 
       {!isClientUser && <PremiumCard>

@@ -179,8 +179,8 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     (updateData as Record<string, unknown>).alertConfig = req.body.alertConfig;
   }
   if (req.body.communicationConfig && typeof req.body.communicationConfig === "object") {
-    const validCallPlatforms = ["native", "callrail", "podium"];
-    const validTextPlatforms = ["native", "podium", "callrail"];
+    const validCallPlatforms = ["native", "callrail", "podium", "none"];
+    const validTextPlatforms = ["native", "podium", "callrail", "none"];
     const rawComm = req.body.communicationConfig as Record<string, unknown>;
     if (rawComm.callPlatform && !validCallPlatforms.includes(String(rawComm.callPlatform))) {
       res.status(400).json({ error: `Invalid callPlatform. Must be one of: ${validCallPlatforms.join(", ")}` });

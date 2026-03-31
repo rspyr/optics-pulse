@@ -1,9 +1,9 @@
-import { db, callAttemptsTable, leadsTable, usersTable } from "@workspace/db";
+import { db, callAttemptsTable, leadsTable, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 export interface CommunicationConfig {
-  callPlatform: "native";
-  textPlatform: "native";
+  callPlatform: "native" | "none";
+  textPlatform: "native" | "none";
 }
 
 export interface CallResult {
@@ -20,11 +20,15 @@ export interface TextResult {
   externalId?: string;
 }
 
-export async function getTenantCommConfig(_tenantId: number): Promise<CommunicationConfig> {
-  return {
-    callPlatform: "native",
-    textPlatform: "native",
-  };
+export async function getTenantCommConfig(tenantId: number): Promise<CommunicationConfig> {
+  const [tenant] = await db
+    .select({ communicationConfig: tenantsTable.communicationConfig })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, tenantId));
+  const cc = (tenant?.communicationConfig || {}) as Record<string, unknown>;
+  const callPlatform = cc.callPlatform === "none" ? "none" : "native";
+  const textPlatform = cc.textPlatform === "none" ? "none" : "native";
+  return { callPlatform, textPlatform };
 }
 
 export async function initiateCall(
@@ -84,7 +88,7 @@ export async function initiateText(
   return result;
 }
 
-export function getCommConfigStatus(_config: CommunicationConfig): {
+export function getCommConfigStatus(config: CommunicationConfig): {
   callPlatform: string;
   textPlatform: string;
   callReady: boolean;
@@ -92,12 +96,14 @@ export function getCommConfigStatus(_config: CommunicationConfig): {
   callStatusMessage: string;
   textStatusMessage: string;
 } {
+  const callNone = config.callPlatform === "none";
+  const textNone = config.textPlatform === "none";
   return {
-    callPlatform: "native",
-    textPlatform: "native",
-    callReady: true,
-    textReady: true,
-    callStatusMessage: "Using native phone dialer",
-    textStatusMessage: "Using native SMS app",
+    callPlatform: config.callPlatform,
+    textPlatform: config.textPlatform,
+    callReady: !callNone,
+    textReady: !textNone,
+    callStatusMessage: callNone ? "No communication platform configured" : "Using native phone dialer",
+    textStatusMessage: textNone ? "No communication platform configured" : "Using native SMS app",
   };
 }
