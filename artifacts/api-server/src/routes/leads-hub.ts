@@ -45,7 +45,10 @@ router.get("/leads-hub/queue", async (req, res) => {
   if (!tenantId) { res.json({ newLeads: [], today: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 }); return; }
 
   const tab = (req.query.tab as string) || "all";
-  const assignedCsrId = req.query.csrId ? Number(req.query.csrId) : null;
+  const sessionRole = (req.session as any)?.userRole as string | undefined;
+  const assignedCsrId = sessionRole === "client_user"
+    ? ((req.session as any)?.userId as number) ?? null
+    : req.query.csrId ? Number(req.query.csrId) : null;
 
   const [tenant] = await db.select({ timezone: tenantsTable.timezone }).from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   const tz = tenant?.timezone || "America/New_York";
@@ -157,7 +160,10 @@ router.get("/leads-hub/archive", async (req, res) => {
   const month = req.query.month as string | undefined;
   const source = req.query.source as string | undefined;
   const serviceType = req.query.serviceType as string | undefined;
-  const csrId = req.query.csrId ? Number(req.query.csrId) : null;
+  const archiveSessionRole = (req.session as any)?.userRole as string | undefined;
+  const csrId = archiveSessionRole === "client_user"
+    ? ((req.session as any)?.userId as number) ?? null
+    : req.query.csrId ? Number(req.query.csrId) : null;
   const status = req.query.status as string | undefined;
 
   const conds = [eq(leadsTable.tenantId, tenantId), inArray(leadsTable.hubStatus, ["appt_set", "dead"])];

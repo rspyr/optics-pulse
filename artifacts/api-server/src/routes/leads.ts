@@ -130,7 +130,9 @@ router.get("/leads/hud/stats", async (req, res) => {
     : req.session.tenantId ?? null;
 
   let csrId: number | null = null;
-  if (req.query.csrId) {
+  if (role === "client_user") {
+    csrId = (req.session as any)?.userId ?? null;
+  } else if (req.query.csrId) {
     const parsed = Number(req.query.csrId);
     if (isManager && !isNaN(parsed)) {
       csrId = parsed;

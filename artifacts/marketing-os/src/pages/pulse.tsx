@@ -1460,6 +1460,8 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
 }
 
 function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: number; timezone?: string }) {
+  const { user } = useAuth();
+  const isArchiveClientUser = user?.role === "client_user";
   const [filters, setFilters] = useState<Record<string, string>>({});
   const { data, loading } = useArchive(tenantId, filters);
   const [showFilters, setShowFilters] = useState(false);
@@ -1518,14 +1520,16 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
             className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70 placeholder-white/20"
             placeholder="Service type..."
           />
-          <select
-            value={filters.csrId || ""}
-            onChange={e => updateFilter("csrId", e.target.value)}
-            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70"
-          >
-            <option value="">All CSRs</option>
-            {csrs.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          {!isArchiveClientUser && (
+            <select
+              value={filters.csrId || ""}
+              onChange={e => updateFilter("csrId", e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70"
+            >
+              <option value="">All CSRs</option>
+              {csrs.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </select>
+          )}
           <select
             value={filters.status || ""}
             onChange={e => updateFilter("status", e.target.value)}
@@ -1579,6 +1583,7 @@ export default function Leads() {
   const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter();
   const { user } = useAuth();
   const isAdmin = user?.role === "client_admin" || user?.role === "super_admin" || user?.role === "agency_user";
+  const isClientUser = user?.role === "client_user";
   const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
   const [csrList, setCsrList] = useState<CsrOption[]>([]);
 
@@ -1590,7 +1595,13 @@ export default function Leads() {
       .catch(() => {});
   }, [isAdmin, effectiveTenantId]);
 
-  useEffect(() => { setSelectedCsrId(null); }, [effectiveTenantId]);
+  useEffect(() => {
+    if (isClientUser && user?.id) {
+      setSelectedCsrId(user.id);
+    } else {
+      setSelectedCsrId(null);
+    }
+  }, [effectiveTenantId, isClientUser, user?.id]);
 
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId);
@@ -1860,7 +1871,7 @@ export default function Leads() {
         </PremiumCard>
       )}
 
-      {isAdmin && csrList.length > 0 && (
+      {isAdmin && !isClientUser && csrList.length > 0 && (
         <PremiumCard className="p-4 mb-6">
           <div className="flex items-center gap-3">
             <Users className="w-4 h-4 text-white/40" />
