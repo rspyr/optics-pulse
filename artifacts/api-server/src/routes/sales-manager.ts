@@ -169,6 +169,7 @@ router.get("/sales-manager/team", async (req, res) => {
       .where(and(
         inArray(callAttemptsTable.userId, userIds),
         gte(callAttemptsTable.attemptedAt, today),
+        ne(callAttemptsTable.actionType, "transfer"),
       ))
       .groupBy(callAttemptsTable.userId);
     for (const r of speedRows) {
