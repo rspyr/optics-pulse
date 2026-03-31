@@ -138,7 +138,17 @@ router.get("/leads/hud/stats", async (req, res) => {
       csrId = parsed;
     }
   }
-  const stats = await getHudStats(tenantId, csrId);
+  let startDate: Date | null = null;
+  let endDate: Date | null = null;
+  if (req.query.startDate) {
+    const parsed = new Date(req.query.startDate as string);
+    if (!isNaN(parsed.getTime())) startDate = parsed;
+  }
+  if (req.query.endDate) {
+    const parsed = new Date(req.query.endDate as string);
+    if (!isNaN(parsed.getTime())) endDate = parsed;
+  }
+  const stats = await getHudStats(tenantId, csrId, startDate, endDate);
   res.json(stats);
 });
 

@@ -218,35 +218,36 @@ async function startDemoMode() {
   console.log("[Demo] Demo mode started — new leads every 30-60s");
 }
 
-export async function getHudStats(tenantId: number | null, csrId?: number | null) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+export async function getHudStats(tenantId: number | null, csrId?: number | null, startDate?: Date | null, endDate?: Date | null) {
+  const rangeStart = startDate ?? (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+  const rangeEnd = endDate ?? new Date();
 
-  const baseConds: any[] = [sql`${leadsTable.createdAt} >= ${today}`];
+  const baseConds: any[] = [sql`${leadsTable.createdAt} >= ${rangeStart}`, sql`${leadsTable.createdAt} <= ${rangeEnd}`];
   if (tenantId) baseConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) baseConds.push(eq(leadsTable.assignedCsrId, csrId));
 
   const [allLeadsToday] = await db.select({ count: count() }).from(leadsTable).where(and(...baseConds));
 
-  const bookedConds: any[] = [eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  const bookedConds: any[] = [eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
   if (tenantId) bookedConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) bookedConds.push(eq(leadsTable.assignedCsrId, csrId));
   const [bookedToday] = await db.select({ count: count() }).from(leadsTable).where(and(...bookedConds));
 
-  const soldConds: any[] = [eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  const soldConds: any[] = [eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
   if (tenantId) soldConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) soldConds.push(eq(leadsTable.assignedCsrId, csrId));
   const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(and(...soldConds));
 
   const callAttemptsConds: any[] = [
-    gte(callAttemptsTable.attemptedAt, today),
+    gte(callAttemptsTable.attemptedAt, rangeStart),
+    sql`${callAttemptsTable.attemptedAt} <= ${rangeEnd}`,
     sql`${callAttemptsTable.actionType} != 'transfer'`,
   ];
   if (tenantId) callAttemptsConds.push(sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`);
   if (csrId) callAttemptsConds.push(eq(callAttemptsTable.userId, csrId));
   const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(and(...callAttemptsConds));
 
-  const contactedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  const contactedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
   if (tenantId) contactedConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) contactedConds.push(eq(leadsTable.assignedCsrId, csrId));
   const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(and(...contactedConds));
@@ -261,7 +262,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
-    const spiffConds: any[] = [inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+    const spiffConds: any[] = [inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
     if (tenantId) spiffConds.push(eq(leadsTable.tenantId, tenantId));
     if (csrId) spiffConds.push(eq(leadsTable.assignedCsrId, csrId));
     const bookedLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId })
@@ -282,7 +283,8 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
 
   const speedConds: any[] = [
     ne(callAttemptsTable.actionType, "transfer"),
-    gte(callAttemptsTable.attemptedAt, today),
+    gte(callAttemptsTable.attemptedAt, rangeStart),
+    sql`${callAttemptsTable.attemptedAt} <= ${rangeEnd}`,
   ];
   if (tenantId) speedConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) speedConds.push(eq(callAttemptsTable.userId, csrId));

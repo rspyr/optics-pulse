@@ -255,25 +255,56 @@ interface HudStats {
   nextBonusAt: number;
 }
 
-function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: number | null) {
+type HudTimeframe = "today" | "7d" | "30d" | "90d";
+
+const HUD_TIMEFRAME_KEY = "hud-stats-timeframe";
+
+function getTimeframeLabel(tf: HudTimeframe): string {
+  switch (tf) {
+    case "today": return "today";
+    case "7d": return "past 7 days";
+    case "30d": return "past 30 days";
+    case "90d": return "past 90 days";
+  }
+}
+
+function getTimeframeDates(tf: HudTimeframe): { startDate: string; endDate: string } | null {
+  if (tf === "today") return null;
+  const now = new Date();
+  const end = now.toISOString();
+  const start = new Date();
+  if (tf === "7d") start.setDate(start.getDate() - 7);
+  else if (tf === "30d") start.setDate(start.getDate() - 30);
+  else if (tf === "90d") start.setDate(start.getDate() - 90);
+  start.setHours(0, 0, 0, 0);
+  return { startDate: start.toISOString(), endDate: end };
+}
+
+function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: number | null, timeframe?: HudTimeframe) {
   const [stats, setStats] = useState<HudStats>({
     callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
     newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
     bonusTier: "none", bonusThreshold: 30, nextBonusAt: 30,
   });
   const shouldFetch = !isAgency || tenantId !== null;
+  const tf = timeframe ?? "today";
   const fetchStats = useCallback(async () => {
     if (!shouldFetch) return;
     try {
       const params = new URLSearchParams();
       if (tenantId) params.set("tenantId", String(tenantId));
       if (csrId) params.set("csrId", String(csrId));
+      const dates = getTimeframeDates(tf);
+      if (dates) {
+        params.set("startDate", dates.startDate);
+        params.set("endDate", dates.endDate);
+      }
       const qs = params.toString();
       const url = `${API_BASE}/leads/hud/stats${qs ? `?${qs}` : ""}`;
       const res = await fetch(url, { credentials: "include" });
       if (res.ok) setStats(await res.json());
     } catch {}
-  }, [tenantId, shouldFetch, csrId]);
+  }, [tenantId, shouldFetch, csrId, tf]);
   useEffect(() => {
     if (!shouldFetch) return;
     fetchStats();
@@ -1603,8 +1634,19 @@ export default function Leads() {
     }
   }, [effectiveTenantId, isClientUser, user?.id]);
 
+  const [hudTimeframe, setHudTimeframe] = useState<HudTimeframe>(() => {
+    const saved = localStorage.getItem(HUD_TIMEFRAME_KEY);
+    if (saved === "7d" || saved === "30d" || saved === "90d") return saved;
+    return "today";
+  });
+  const handleTimeframeChange = useCallback((tf: HudTimeframe) => {
+    setHudTimeframe(tf);
+    localStorage.setItem(HUD_TIMEFRAME_KEY, tf);
+  }, []);
+  const tfLabel = getTimeframeLabel(hudTimeframe);
+
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
-  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId);
+  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
   const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
@@ -1994,13 +2036,25 @@ export default function Leads() {
             </div>
           </PremiumCard>
 
+          <div className="flex items-center gap-1 bg-white/5 rounded-lg p-0.5">
+            {(["today", "7d", "30d", "90d"] as HudTimeframe[]).map(tf => (
+              <button
+                key={tf}
+                onClick={() => handleTimeframeChange(tf)}
+                className={`flex-1 text-[11px] font-medium py-1 rounded-md transition-all ${hudTimeframe === tf ? "bg-white/10 text-white shadow-sm" : "text-white/40 hover:text-white/60"}`}
+              >
+                {tf === "today" ? "Today" : tf.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
           <PremiumCard className="p-4">
             <div className="flex items-center justify-between mb-3">
               <PhoneCall className="w-5 h-5 text-blue-400" />
               <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
             </div>
             <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
-            <p className="text-xs text-muted-foreground mt-1">calls made today</p>
+            <p className="text-xs text-muted-foreground mt-1">calls made {tfLabel}</p>
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -2012,7 +2066,7 @@ export default function Leads() {
             <div className="mt-2 w-full bg-white/5 rounded-full h-1.5">
               <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${Math.min(stats.bookingRate, 100)}%` }} />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate</p>
+            <p className="text-xs text-muted-foreground mt-1">{stats.bookingRate}% booking rate {tfLabel}</p>
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -2021,7 +2075,7 @@ export default function Leads() {
               <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
             </div>
             <p className="text-3xl font-display text-white">{formatSpeed(stats.avgSpeedToLead)}</p>
-            <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
+            <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead {tfLabel}</p>
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -2030,40 +2084,53 @@ export default function Leads() {
               <span className="text-xs text-emerald-400/60 uppercase tracking-wider">Earned</span>
             </div>
             <p className="text-3xl font-display text-emerald-400">${stats.commission}</p>
-            <p className="text-xs text-muted-foreground mt-1">{stats.bookingsToday} booking{stats.bookingsToday !== 1 ? "s" : ""} today</p>
+            <p className="text-xs text-muted-foreground mt-1">{stats.bookingsToday} booking{stats.bookingsToday !== 1 ? "s" : ""} {tfLabel}</p>
           </PremiumCard>
         </aside>
       </div>
 
-      <div className="lg:hidden grid grid-cols-2 gap-3 mt-6">
-        <PremiumCard className="p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <PhoneCall className="w-4 h-4 text-blue-400" />
-            <span className="text-xs text-blue-400/60 uppercase">Calls</span>
-          </div>
-          <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
-        </PremiumCard>
-        <PremiumCard className="p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs text-emerald-400/60 uppercase">Booked</span>
-          </div>
-          <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
-        </PremiumCard>
-        <PremiumCard className="p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Clock className="w-4 h-4 text-amber-400" />
-            <span className="text-xs text-amber-400/60 uppercase">Speed</span>
-          </div>
-          <p className="text-xl font-display text-white">{formatSpeed(stats.avgSpeedToLead)}</p>
-        </PremiumCard>
-        <PremiumCard className="p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <DollarSign className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
-          </div>
-          <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
-        </PremiumCard>
+      <div className="lg:hidden mt-6 space-y-3">
+        <div className="flex items-center gap-1 bg-white/5 rounded-lg p-0.5">
+          {(["today", "7d", "30d", "90d"] as HudTimeframe[]).map(tf => (
+            <button
+              key={tf}
+              onClick={() => handleTimeframeChange(tf)}
+              className={`flex-1 text-[11px] font-medium py-1 rounded-md transition-all ${hudTimeframe === tf ? "bg-white/10 text-white shadow-sm" : "text-white/40 hover:text-white/60"}`}
+            >
+              {tf === "today" ? "Today" : tf.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <PremiumCard className="p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <PhoneCall className="w-4 h-4 text-blue-400" />
+              <span className="text-xs text-blue-400/60 uppercase">Calls</span>
+            </div>
+            <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
+          </PremiumCard>
+          <PremiumCard className="p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase">Booked</span>
+            </div>
+            <p className="text-xl font-display text-white">{stats.bookingsToday} <span className="text-sm text-white/40">({stats.bookingRate}%)</span></p>
+          </PremiumCard>
+          <PremiumCard className="p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span className="text-xs text-amber-400/60 uppercase">Speed</span>
+            </div>
+            <p className="text-xl font-display text-white">{formatSpeed(stats.avgSpeedToLead)}</p>
+          </PremiumCard>
+          <PremiumCard className="p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <DollarSign className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs text-emerald-400/60 uppercase">Earned</span>
+            </div>
+            <p className="text-xl font-display text-emerald-400">${stats.commission}</p>
+          </PremiumCard>
+        </div>
       </div>
     </div>
   );
