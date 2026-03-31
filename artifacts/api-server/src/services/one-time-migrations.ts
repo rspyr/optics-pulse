@@ -54,6 +54,12 @@ const migrations: Migration[] = [
           FROM tenant_funnel_types tft
           JOIN funnel_types ft ON ft.id = tft.funnel_type_id
           WHERE tft.google_sheet_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM google_sheet_configs gsc
+              WHERE gsc.tenant_id = tft.tenant_id
+                AND gsc.google_sheet_id = tft.google_sheet_id
+                AND gsc.default_funnel_type_id = tft.funnel_type_id
+            )
           RETURNING id
         `);
         console.log(`[Migration] Migrated ${migrated.rows.length} sheet config(s) from tenant_funnel_types`);
