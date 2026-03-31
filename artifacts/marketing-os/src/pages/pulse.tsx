@@ -1436,6 +1436,15 @@ export default function Leads() {
     if (leadUpdatedSignal > 0) { refetch(); refetchStats(); }
   }, [leadUpdatedSignal, refetch, refetchStats]);
 
+  const selectedLeadIdRef = useRef<number | null>(null);
+  useEffect(() => { selectedLeadIdRef.current = selectedLead?.id ?? null; }, [selectedLead]);
+  useEffect(() => {
+    if (selectedLeadIdRef.current && queueData.leads.length > 0) {
+      const updated = queueData.leads.find((l: LeadData) => l.id === selectedLeadIdRef.current);
+      if (updated) setSelectedLead(updated);
+    }
+  }, [queueData]);
+
   useEffect(() => {
     return () => { if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current); };
   }, []);
