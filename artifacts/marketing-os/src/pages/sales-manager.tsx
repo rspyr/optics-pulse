@@ -1481,11 +1481,12 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
           <div className="relative w-40">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 text-sm">$</span>
             <input
-              type="number"
-              min={0}
-              step={1}
-              value={defaultAmount}
-              onChange={e => setDefaultAmount(Math.max(0, Number(e.target.value)))}
+              type="text"
+              inputMode="numeric"
+              value={defaultAmount === 0 ? "" : String(defaultAmount)}
+              onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ""); setDefaultAmount(v === "" ? 0 : Number(v)); }}
+              onBlur={() => { if (defaultAmount < 0) setDefaultAmount(0); }}
+              placeholder="0"
               className="w-full bg-white/5 border border-white/10 rounded-md pl-7 pr-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
             />
           </div>
@@ -1503,11 +1504,11 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
                   <div className="relative w-28">
                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 text-xs">$</span>
                     <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={amount}
-                      onChange={e => setOverrides(prev => ({ ...prev, [fn]: Math.max(0, Number(e.target.value)) }))}
+                      type="text"
+                      inputMode="numeric"
+                      value={amount === 0 ? "" : String(amount)}
+                      onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ""); setOverrides(prev => ({ ...prev, [fn]: v === "" ? 0 : Number(v) })); }}
+                      placeholder="0"
                       className="w-full bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
                     />
                   </div>
