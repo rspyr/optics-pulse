@@ -7,6 +7,7 @@ import { emitNewLead } from "../socket";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { normalizeSource } from "../services/source-normalizer";
 
 const router: IRouter = Router();
 
@@ -431,7 +432,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         lastName: row.lastName || "",
         phone: row.phone || null,
         email: row.email || null,
-        source: row.source || funnelName || "Google Sheet",
+        source: await normalizeSource(config.tenantId, row.source || funnelName || "Google Sheet"),
         serviceType: row.serviceType || null,
         notes: row.notes || null,
         address: row.address || null,

@@ -2518,6 +2518,8 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [editingAlias, setEditingAlias] = useState<{ id: number; value: string } | null>(null);
+  const [editingCanonical, setEditingCanonical] = useState<{ oldName: string; value: string } | null>(null);
 
   const fetchAliases = useCallback(async () => {
     if (!tenantId) return;
@@ -2602,6 +2604,50 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
       });
       await fetchAliases();
     } catch {
+    }
+  };
+
+  const handleEditAlias = async (id: number, newAlias: string) => {
+    if (!tenantId || !newAlias.trim()) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/lead-source-aliases/${id}?tenantId=${tenantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alias: newAlias.trim() }),
+      });
+      setEditingAlias(null);
+      await fetchAliases();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditCanonical = async (oldName: string, newName: string) => {
+    if (!tenantId || !newName.trim() || newName.trim() === oldName) {
+      setEditingCanonical(null);
+      return;
+    }
+    setSaving(true);
+    try {
+      const group = groups.find(g => g.canonicalName === oldName);
+      if (group) {
+        for (const a of group.aliases) {
+          await fetch(`${API_BASE}/lead-source-aliases/${a.id}?tenantId=${tenantId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ canonicalName: newName.trim() }),
+          });
+        }
+      }
+      setEditingCanonical(null);
+      await fetchAliases();
+    } catch {
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -2700,7 +2746,29 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
                     ) : (
                       <ChevronDown className="w-3.5 h-3.5 text-white/40" />
                     )}
-                    <span className="text-sm font-medium text-white">{group.canonicalName}</span>
+                    {editingCanonical?.oldName === group.canonicalName ? (
+                      <input
+                        type="text"
+                        value={editingCanonical.value}
+                        onChange={e => setEditingCanonical({ ...editingCanonical, value: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") handleEditCanonical(group.canonicalName, editingCanonical.value);
+                          if (e.key === "Escape") setEditingCanonical(null);
+                        }}
+                        onBlur={() => handleEditCanonical(group.canonicalName, editingCanonical.value)}
+                        onClick={e => e.stopPropagation()}
+                        className="bg-white/5 border border-primary/50 rounded px-2 py-0.5 text-sm font-medium text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-32"
+                        autoFocus
+                      />
+                    ) : (
+                      <span
+                        className="text-sm font-medium text-white cursor-text hover:text-primary/80"
+                        onDoubleClick={e => { e.stopPropagation(); setEditingCanonical({ oldName: group.canonicalName, value: group.canonicalName }); }}
+                        title="Double-click to edit"
+                      >
+                        {group.canonicalName}
+                      </span>
+                    )}
                     <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">
                       {group.aliases.length} alias{group.aliases.length !== 1 ? "es" : ""}
                     </span>
@@ -2718,18 +2786,36 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
                   <div className="border-t border-white/5 px-4 py-3 space-y-2">
                     <div className="flex flex-wrap gap-1.5">
                       {group.aliases.map(a => (
-                        <span
-                          key={a.id}
-                          className="inline-flex items-center gap-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/60"
-                        >
-                          {a.alias}
-                          <button
-                            onClick={() => handleDeleteAlias(a.id)}
-                            className="text-white/20 hover:text-red-400 ml-0.5"
+                        editingAlias?.id === a.id ? (
+                          <input
+                            key={a.id}
+                            type="text"
+                            value={editingAlias.value}
+                            onChange={e => setEditingAlias({ ...editingAlias, value: e.target.value })}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") handleEditAlias(a.id, editingAlias.value);
+                              if (e.key === "Escape") setEditingAlias(null);
+                            }}
+                            onBlur={() => handleEditAlias(a.id, editingAlias.value)}
+                            className="bg-white/5 border border-primary/50 rounded-md px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-24"
+                            autoFocus
+                          />
+                        ) : (
+                          <span
+                            key={a.id}
+                            className="inline-flex items-center gap-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/60 cursor-text hover:border-white/20"
+                            onDoubleClick={() => setEditingAlias({ id: a.id, value: a.alias })}
+                            title="Double-click to edit"
                           >
-                            ✕
-                          </button>
-                        </span>
+                            {a.alias}
+                            <button
+                              onClick={() => handleDeleteAlias(a.id)}
+                              className="text-white/20 hover:text-red-400 ml-0.5"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        )
                       ))}
                     </div>
 
