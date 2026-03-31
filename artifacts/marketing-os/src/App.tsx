@@ -1,4 +1,5 @@
-import { Switch, Route, Router as WouterRouter, useLocation, Redirect } from "wouter";
+import { useEffect } from "react";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -36,15 +37,36 @@ const queryClient = new QueryClient({
   },
 });
 
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-[0_0_25px_rgba(242,5,5,0.5)] mx-auto mb-4 animate-pulse">
+          <span className="font-display text-white text-2xl leading-none pt-1">M</span>
+        </div>
+        <p className="text-muted-foreground text-sm">Loading...</p>
+      </div>
+    </div>
+  );
+}
+
+function ImmediateRedirect({ to }: { to: string }) {
+  const [, navigate] = useLocation();
+  useEffect(() => {
+    navigate(to, { replace: true });
+  }, [to, navigate]);
+  return <LoadingScreen />;
+}
+
 function AgencyGuard({ children }: { children: React.ReactNode }) {
   const { isAgency } = useAuth();
-  if (!isAgency) return <Redirect to="/" />;
+  if (!isAgency) return <ImmediateRedirect to="/" />;
   return <>{children}</>;
 }
 
 function AdminGuard({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  if (user?.role === "client_user") return <Redirect to="/pulse" />;
+  if (user?.role === "client_user") return <ImmediateRedirect to="/pulse" />;
   return <>{children}</>;
 }
 
@@ -53,16 +75,7 @@ function AuthenticatedRoutes() {
   const [location] = useLocation();
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-[0_0_25px_rgba(242,5,5,0.5)] mx-auto mb-4 animate-pulse">
-            <span className="font-display text-white text-2xl leading-none pt-1">M</span>
-          </div>
-          <p className="text-muted-foreground text-sm">Loading...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!user) {
@@ -71,24 +84,23 @@ function AuthenticatedRoutes() {
 
   const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/automation", "/attribution"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
-    return <Redirect to="/" />;
+    return <ImmediateRedirect to="/" />;
   }
   if (!isAgency && location === "/leaderboards" && !user?.leaderboardConfig?.visible) {
-    return <Redirect to="/" />;
+    return <ImmediateRedirect to="/" />;
   }
 
   const clientUserAllowedPaths = ["/pulse", "/training", "/settings"];
   if (user?.role === "client_user" && !clientUserAllowedPaths.includes(location)) {
-    return <Redirect to="/pulse" />;
+    return <ImmediateRedirect to="/pulse" />;
   }
-
 
   return (
     <AppLayout>
       <Switch>
         <Route path="/">{() => isAgency ? <Dashboard key="dashboard" /> : <Clients key="clients" />}</Route>
         <Route path="/pulse" component={Leads} />
-        <Route path="/leads">{() => <Redirect to="/pulse" />}</Route>
+        <Route path="/leads">{() => <ImmediateRedirect to="/pulse" />}</Route>
         <Route path="/attribution" component={Attribution} />
         <Route path="/settings" component={Settings} />
         <Route path="/internal">{() => <AgencyGuard><Internal /></AgencyGuard>}</Route>

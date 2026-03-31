@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/components/auth-context";
 
 const REMEMBER_KEY = "mos_remember_credentials";
 
 export default function Login() {
   const { login } = useAuth();
+  const [, navigate] = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
@@ -37,11 +39,16 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      const userData = await login(email, password);
       if (rememberMe) {
         localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email, password }));
       } else {
         localStorage.removeItem(REMEMBER_KEY);
+      }
+      if (userData.role === "client_user") {
+        navigate("/pulse", { replace: true });
+      } else if (userData.role === "client_admin") {
+        navigate("/", { replace: true });
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");
