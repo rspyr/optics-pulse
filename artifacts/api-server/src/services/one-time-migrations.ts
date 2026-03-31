@@ -301,6 +301,36 @@ const migrations: Migration[] = [
       }
       console.log(`[Migration] Deleted ${totalDeleted} duplicate automation rule(s)`);
 
+      const conflicts = await db.execute(sql`
+        SELECT name, condition_type, COALESCE(tenant_id, -1) AS tid, COUNT(*) AS cnt
+        FROM automation_rules
+        GROUP BY name, condition_type, COALESCE(tenant_id, -1)
+        HAVING COUNT(*) > 1
+      `);
+      if (conflicts.rows.length > 0) {
+        for (const c of conflicts.rows as { name: string; condition_type: string; tid: number; cnt: number }[]) {
+          const tidFilter = Number(c.tid) === -1 ? sql`tenant_id IS NULL` : sql`tenant_id = ${Number(c.tid)}`;
+          const keepResult = await db.execute(sql`
+            SELECT MIN(id) AS keep_id FROM automation_rules
+            WHERE name = ${c.name} AND condition_type = ${c.condition_type} AND ${tidFilter}
+          `);
+          const keepId = Number((keepResult.rows[0] as { keep_id: number }).keep_id);
+          await db.execute(sql`
+            UPDATE automation_alerts SET rule_id = ${keepId}
+            WHERE rule_id IN (
+              SELECT id FROM automation_rules
+              WHERE name = ${c.name} AND condition_type = ${c.condition_type} AND ${tidFilter} AND id != ${keepId}
+            )
+          `);
+          const del = await db.execute(sql`
+            DELETE FROM automation_rules
+            WHERE name = ${c.name} AND condition_type = ${c.condition_type} AND ${tidFilter} AND id != ${keepId}
+            RETURNING id
+          `);
+          console.log(`[Migration] Resolved ${del.rows.length} index-key conflict(s) for rule "${c.name}" / ${c.condition_type}`);
+        }
+      }
+
       await db.execute(sql`
         CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_rule_identity
         ON automation_rules (name, condition_type, COALESCE(tenant_id, -1))
