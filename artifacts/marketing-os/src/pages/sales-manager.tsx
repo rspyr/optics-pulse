@@ -1546,6 +1546,8 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
   const [expanded, setExpanded] = useState(false);
   const [funnelColumn, setFunnelColumn] = useState<string | null>(config.funnelColumn || null);
   const [funnelValueMap, setFunnelValueMap] = useState<Record<string, number>>(config.funnelValueMap || {});
+  const [savedFunnelValueMap, setSavedFunnelValueMap] = useState<Record<string, number>>(config.funnelValueMap || {});
+  const [funnelRoutingExpanded, setFunnelRoutingExpanded] = useState(false);
   const [columnValues, setColumnValues] = useState<string[]>([]);
   const [loadingValues, setLoadingValues] = useState(false);
   const [savingFunnelMap, setSavingFunnelMap] = useState(false);
@@ -1560,7 +1562,10 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
           setSavedMapping(data.columnMapping);
         }
         if (data.funnelColumn) setFunnelColumn(data.funnelColumn);
-        if (data.funnelValueMap) setFunnelValueMap(data.funnelValueMap);
+        if (data.funnelValueMap) {
+          setFunnelValueMap(data.funnelValueMap);
+          setSavedFunnelValueMap(data.funnelValueMap);
+        }
       })
       .catch(() => {});
   }, [configId]);
@@ -1656,6 +1661,7 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
         body: JSON.stringify({ funnelColumn, funnelValueMap }),
       });
       if (res.ok) {
+        setSavedFunnelValueMap({ ...funnelValueMap });
         setSuccess(true);
         setTimeout(() => setSuccess(false), 3000);
         onMappingSaved();
@@ -1722,6 +1728,8 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
 
   const hasExistingMapping = !!config.columnMapping;
   const mappingModified = hasExistingMapping && !analysis && JSON.stringify(mapping) !== JSON.stringify(savedMapping);
+  const hasExistingFunnelRouting = Object.keys(savedFunnelValueMap).length > 0;
+  const funnelRoutingModified = JSON.stringify(funnelValueMap) !== JSON.stringify(savedFunnelValueMap);
 
   return (
     <div className="mt-3 pt-3 border-t border-white/5" data-mapping-config={configId}>
@@ -1904,55 +1912,81 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
 
       {funnelColumn && hasExistingMapping && (
         <div className="mt-3 pt-3 border-t border-white/5">
-          <div className="flex items-center gap-2 mb-2">
-            <Shuffle className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-[11px] font-medium text-white/70">Funnel Routing</span>
-            <span className="text-[9px] text-white/20 font-mono">column: {funnelColumn}</span>
-          </div>
-          <p className="text-[10px] text-white/25 mb-3">Map each value in the "{funnelColumn}" column to the funnel it should route to.</p>
-
-          {loadingValues ? (
-            <div className="flex items-center gap-2 py-2">
-              <Loader2 className="w-3 h-3 animate-spin text-white/30" />
-              <span className="text-[10px] text-white/30">Loading column values...</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shuffle className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-[11px] font-medium text-white/70">Funnel Routing</span>
+              <span className="text-[9px] text-white/20 font-mono">column: {funnelColumn}</span>
             </div>
-          ) : columnValues.length === 0 ? (
-            <p className="text-[10px] text-white/20 py-2">No values found in the funnel column</p>
-          ) : (
-            <div className="space-y-1.5">
-              {columnValues.map(val => (
-                <div key={val} className="flex items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
-                  <span className="text-[11px] text-white/70 font-mono flex-1 truncate">{val}</span>
-                  <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90 flex-shrink-0" />
-                  <select
-                    value={funnelValueMap[val] ?? ""}
-                    onChange={e => {
-                      const v = e.target.value;
-                      setFunnelValueMap(prev => {
-                        if (!v) { const next = { ...prev }; delete next[val]; return next; }
-                        return { ...prev, [val]: Number(v) };
-                      });
-                    }}
-                    className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
-                  >
-                    <option value="">-- Select Funnel --</option>
-                    {funnels.map(f => (
-                      <option key={f.id} value={f.id}>{f.name}</option>
-                    ))}
-                  </select>
+            <button
+              onClick={() => setFunnelRoutingExpanded(!funnelRoutingExpanded)}
+              className="text-[10px] text-white/30 hover:text-white/50"
+            >
+              {funnelRoutingExpanded ? "Hide" : "View"} Routing
+            </button>
+          </div>
+
+          {funnelRoutingExpanded && (
+            <div className="mt-3">
+              <p className="text-[10px] text-white/25 mb-3">Map each value in the &quot;{funnelColumn}&quot; column to the funnel it should route to.</p>
+
+              {loadingValues ? (
+                <div className="flex items-center gap-2 py-2">
+                  <Loader2 className="w-3 h-3 animate-spin text-white/30" />
+                  <span className="text-[10px] text-white/30">Loading column values...</span>
                 </div>
-              ))}
+              ) : columnValues.length === 0 ? (
+                <p className="text-[10px] text-white/20 py-2">No values found in the funnel column</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {columnValues.map(val => (
+                    <div key={val} className="flex items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
+                      <span className="text-[11px] text-white/70 font-mono flex-1 truncate">{val}</span>
+                      <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90 flex-shrink-0" />
+                      <select
+                        value={funnelValueMap[val] ?? ""}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setFunnelValueMap(prev => {
+                            if (!v) { const next = { ...prev }; delete next[val]; return next; }
+                            return { ...prev, [val]: Number(v) };
+                          });
+                        }}
+                        className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+                      >
+                        <option value="">-- Select Funnel --</option>
+                        {funnels.map(f => (
+                          <option key={f.id} value={f.id}>{f.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!hasExistingFunnelRouting && (
+                <button
+                  onClick={handleSaveFunnelMap}
+                  disabled={savingFunnelMap || columnValues.length === 0}
+                  className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-500 disabled:opacity-50"
+                >
+                  {savingFunnelMap ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                  Save Funnel Routing
+                </button>
+              )}
+
+              {hasExistingFunnelRouting && funnelRoutingModified && (
+                <button
+                  onClick={handleSaveFunnelMap}
+                  disabled={savingFunnelMap || columnValues.length === 0}
+                  className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-medium hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {savingFunnelMap ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                  Update Funnel Routing
+                </button>
+              )}
             </div>
           )}
-
-          <button
-            onClick={handleSaveFunnelMap}
-            disabled={savingFunnelMap || columnValues.length === 0}
-            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-500 disabled:opacity-50"
-          >
-            {savingFunnelMap ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-            Save Funnel Routing
-          </button>
         </div>
       )}
     </div>
