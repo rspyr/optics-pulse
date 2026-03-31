@@ -1,7 +1,7 @@
 import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
-import { getLoggedInSeconds, hasAnyLoginSessions } from "./login-time-calculator";
+import { computeLoginAwareSpeeds } from "./login-time-calculator";
 
 async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, bookerCsrId?: number) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
@@ -26,7 +26,7 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
 
   const firstTouchRows = await db.select({
     leadId: callAttemptsTable.leadId,
-    userId: callAttemptsTable.userId,
+    userId: sql<number>`(ARRAY_AGG(${callAttemptsTable.userId} ORDER BY ${callAttemptsTable.attemptedAt} ASC))[1]`.as("first_touch_user"),
     firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
     assignedAt: leadsTable.assignedAt,
     wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
@@ -39,29 +39,25 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
       gte(callAttemptsTable.attemptedAt, dayStart),
       lte(callAttemptsTable.attemptedAt, dayEnd),
     ))
-    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt);
+    .groupBy(callAttemptsTable.leadId, leadsTable.assignedAt);
 
   let avgSpeedValue = 0;
   if (firstTouchRows.length > 0) {
-    const speeds: number[] = [];
-    for (const row of firstTouchRows) {
-      const wallClock = Math.max(0, Number(row.wallClockSpeed));
-      if (wallClock <= 0) continue;
-
-      let speed = wallClock;
-      if (row.userId && row.assignedAt && row.firstTouchAt) {
-        try {
-          const hasSessions = await hasAnyLoginSessions(row.userId);
-          if (hasSessions) {
-            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
-          }
-        } catch {}
+    const windows = firstTouchRows
+      .filter(r => r.userId && r.assignedAt && r.firstTouchAt && Number(r.wallClockSpeed) > 0)
+      .map(r => ({
+        leadId: r.leadId,
+        userId: Number(r.userId),
+        assignedAt: new Date(r.assignedAt!),
+        firstTouchAt: new Date(r.firstTouchAt!),
+        wallClockSpeed: Math.max(0, Number(r.wallClockSpeed)),
+      }));
+    try {
+      const speedResults = await computeLoginAwareSpeeds(windows);
+      if (speedResults.length > 0) {
+        avgSpeedValue = speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length;
       }
-      speeds.push(speed);
-    }
-    if (speeds.length > 0) {
-      avgSpeedValue = speeds.reduce((sum, s) => sum + s, 0) / speeds.length;
-    }
+    } catch {}
   }
 
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];

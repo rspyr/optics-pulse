@@ -27,26 +27,85 @@ export async function getLoggedInSeconds(
   return Math.max(0, Math.round(Number(result?.totalSeconds ?? 0)));
 }
 
-export async function getLoggedInSecondsForLeads(
-  userId: number,
-  leads: { leadId: number; assignedAt: Date; firstTouchAt: Date }[],
-): Promise<Record<number, number>> {
-  if (leads.length === 0) return {};
-
-  const result: Record<number, number> = {};
-  for (const lead of leads) {
-    result[lead.leadId] = await getLoggedInSeconds(userId, lead.assignedAt, lead.firstTouchAt);
-  }
-  return result;
+export interface LeadSpeedWindow {
+  leadId: number;
+  userId: number;
+  assignedAt: Date;
+  firstTouchAt: Date;
+  wallClockSpeed: number;
 }
 
-export async function hasAnyLoginSessions(userId: number): Promise<boolean> {
-  const [result] = await db.select({
-    count: sql<number>`COUNT(*)`,
+export interface LeadSpeedResult {
+  leadId: number;
+  userId: number;
+  speed: number;
+}
+
+export async function computeLoginAwareSpeeds(
+  leads: LeadSpeedWindow[],
+): Promise<LeadSpeedResult[]> {
+  if (leads.length === 0) return [];
+
+  const userIds = [...new Set(leads.map(l => l.userId))];
+
+  const sessionCountRows = await db.select({
+    userId: userLoginSessionsTable.userId,
+    sessionCount: sql<number>`COUNT(*)`.as("session_count"),
   })
     .from(userLoginSessionsTable)
-    .where(eq(userLoginSessionsTable.userId, userId))
-    .limit(1);
+    .where(sql`${userLoginSessionsTable.userId} IN (${sql.join(userIds.map(id => sql`${id}`), sql`, `)})`)
+    .groupBy(userLoginSessionsTable.userId);
 
-  return Number(result?.count ?? 0) > 0;
+  const sessionCountByUser: Record<number, number> = {};
+  for (const row of sessionCountRows) {
+    sessionCountByUser[row.userId] = Number(row.sessionCount);
+  }
+
+  const results: LeadSpeedResult[] = [];
+
+  const leadsNeedingOverlap: LeadSpeedWindow[] = [];
+  for (const lead of leads) {
+    if ((sessionCountByUser[lead.userId] ?? 0) === 0) {
+      results.push({ leadId: lead.leadId, userId: lead.userId, speed: lead.wallClockSpeed });
+    } else {
+      leadsNeedingOverlap.push(lead);
+    }
+  }
+
+  const CHUNK_SIZE = 50;
+  for (let i = 0; i < leadsNeedingOverlap.length; i += CHUNK_SIZE) {
+    const chunk = leadsNeedingOverlap.slice(i, i + CHUNK_SIZE);
+    const windowChecks = chunk.map(lead =>
+      sql`(SELECT COALESCE(SUM(
+        EXTRACT(EPOCH FROM (
+          LEAST(COALESCE(s.logout_at, NOW()), ${lead.firstTouchAt}::timestamp)
+          - GREATEST(s.login_at, ${lead.assignedAt}::timestamp)
+        ))
+      ), 0)
+      FROM user_login_sessions s
+      WHERE s.user_id = ${lead.userId}
+        AND s.login_at <= ${lead.firstTouchAt}::timestamp
+        AND (s.logout_at IS NULL OR s.logout_at >= ${lead.assignedAt}::timestamp)
+      ) AS lead_${sql.raw(String(lead.leadId))}`
+    );
+
+    const overlapResult = await db.execute(
+      sql`SELECT ${sql.join(windowChecks, sql`, `)}`
+    );
+    const overlapRow = (overlapResult as any).rows?.[0] ?? (overlapResult as any)[0];
+
+    const overlapRecord = overlapRow as Record<string, unknown>;
+    for (const lead of chunk) {
+      const key = `lead_${lead.leadId}`;
+      const overlapSeconds = Math.max(0, Math.round(Number(overlapRecord[key] ?? 0)));
+      const hasWindowSessions = overlapSeconds > 0;
+      results.push({
+        leadId: lead.leadId,
+        userId: lead.userId,
+        speed: hasWindowSessions ? overlapSeconds : lead.wallClockSpeed,
+      });
+    }
+  }
+
+  return results;
 }

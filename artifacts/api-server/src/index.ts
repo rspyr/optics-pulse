@@ -1,6 +1,6 @@
 import { createServer } from "http";
 import app, { sessionMiddleware } from "./app";
-import { initSocketIO, closeStaleLoginSessions } from "./socket";
+import { initSocketIO, closeStaleLoginSessions, startLoginSessionExpiryJob } from "./socket";
 import { startReconciliationCron } from "./services/cron";
 import { startSyncScheduler } from "./services/sync-scheduler";
 import { evaluateAutoPass } from "./routes/leads-hub";
@@ -33,6 +33,7 @@ httpServer.listen(port, async () => {
   console.log(`Server listening on port ${port}`);
   await runOneTimeMigrations();
   await closeStaleLoginSessions();
+  startLoginSessionExpiryJob();
   startReconciliationCron(3, 0);
   startSyncScheduler();
   startTrainingAlertScheduler(6);

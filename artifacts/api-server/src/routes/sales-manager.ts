@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable, scriptsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, desc, ne, isNotNull } from "drizzle-orm";
 import { generateCoachingInsights } from "../services/coaching-insights";
-import { getLoggedInSeconds, hasAnyLoginSessions } from "../services/login-time-calculator";
+import { computeLoginAwareSpeeds } from "../services/login-time-calculator";
 
 export interface SpiffConfig {
   default: number;
@@ -162,7 +162,7 @@ router.get("/sales-manager/team", async (req, res) => {
   let speedToLeadByUser: Record<number, number> = {};
   if (allLeadIds.length > 0) {
     const firstTouchPerLeadRows = await db.select({
-      userId: callAttemptsTable.userId,
+      userId: sql<number>`(ARRAY_AGG(${callAttemptsTable.userId} ORDER BY ${callAttemptsTable.attemptedAt} ASC))[1]`.as("first_touch_user"),
       leadId: callAttemptsTable.leadId,
       firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
       assignedAt: leadsTable.assignedAt,
@@ -175,29 +175,31 @@ router.get("/sales-manager/team", async (req, res) => {
         gte(callAttemptsTable.attemptedAt, today),
         ne(callAttemptsTable.actionType, "transfer"),
       ))
-      .groupBy(callAttemptsTable.userId, callAttemptsTable.leadId, leadsTable.assignedAt);
+      .groupBy(callAttemptsTable.leadId, leadsTable.assignedAt);
 
-    const speedsByUser: Record<number, number[]> = {};
-    for (const row of firstTouchPerLeadRows) {
-      const wallClock = Math.max(0, Number(row.wallClockSpeed));
-      if (wallClock <= 0) continue;
-      let speed = wallClock;
-      if (row.userId && row.assignedAt && row.firstTouchAt) {
-        try {
-          const hasSessions = await hasAnyLoginSessions(row.userId);
-          if (hasSessions) {
-            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
-          }
-        } catch {}
+    const windows = firstTouchPerLeadRows
+      .filter(r => r.userId && r.assignedAt && r.firstTouchAt && Number(r.wallClockSpeed) > 0)
+      .map(r => ({
+        leadId: r.leadId,
+        userId: Number(r.userId),
+        assignedAt: new Date(r.assignedAt!),
+        firstTouchAt: new Date(r.firstTouchAt!),
+        wallClockSpeed: Math.max(0, Number(r.wallClockSpeed)),
+      }));
+
+    try {
+      const speedResults = await computeLoginAwareSpeeds(windows);
+      const speedsByUser: Record<number, number[]> = {};
+      for (const sr of speedResults) {
+        if (!speedsByUser[sr.userId]) speedsByUser[sr.userId] = [];
+        speedsByUser[sr.userId].push(sr.speed);
       }
-      if (!speedsByUser[row.userId]) speedsByUser[row.userId] = [];
-      speedsByUser[row.userId].push(speed);
-    }
-    for (const [uid, speeds] of Object.entries(speedsByUser)) {
-      if (speeds.length > 0) {
-        speedToLeadByUser[Number(uid)] = Math.round(speeds.reduce((s, v) => s + v, 0) / speeds.length);
+      for (const [uid, speeds] of Object.entries(speedsByUser)) {
+        if (speeds.length > 0) {
+          speedToLeadByUser[Number(uid)] = Math.round(speeds.reduce((s, v) => s + v, 0) / speeds.length);
+        }
       }
-    }
+    } catch {}
   }
 
   const coordinators = users.map(user => {

@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable, userLoginSessionsTable } from "@workspace/db";
-import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm";
+import { eq, and, count, sql, avg, inArray, gte, lte, ne, isNull } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
 
@@ -135,6 +135,29 @@ export async function closeStaleLoginSessions(): Promise<void> {
   } catch (err) {
     console.error("[LoginSessions] Failed to close stale sessions:", err);
   }
+}
+
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+export function startLoginSessionExpiryJob(): void {
+  setInterval(async () => {
+    try {
+      const cutoff = new Date(Date.now() - SESSION_MAX_AGE_MS);
+      const result = await db.update(userLoginSessionsTable)
+        .set({ logoutAt: new Date() })
+        .where(and(
+          isNull(userLoginSessionsTable.logoutAt),
+          lte(userLoginSessionsTable.loginAt, cutoff),
+        ))
+        .returning({ id: userLoginSessionsTable.id });
+      if (result.length > 0) {
+        console.log(`[LoginSessions] Closed ${result.length} expired session(s) older than 24h`);
+      }
+    } catch (err) {
+      console.error("[LoginSessions] Session expiry cleanup failed:", err);
+    }
+  }, 60 * 60 * 1000);
+  console.log("[LoginSessions] Session expiry job started (every 60min, closes sessions > 24h)");
 }
 
 export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
@@ -316,7 +339,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
 
   const firstTouchRows = await db.select({
     leadId: callAttemptsTable.leadId,
-    userId: callAttemptsTable.userId,
+    userId: sql<number>`(ARRAY_AGG(${callAttemptsTable.userId} ORDER BY ${callAttemptsTable.attemptedAt} ASC))[1]`.as("first_touch_user"),
     firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
     assignedAt: leadsTable.assignedAt,
     wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
@@ -324,29 +347,26 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     .from(callAttemptsTable)
     .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
     .where(and(...speedConds))
-    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt);
+    .groupBy(callAttemptsTable.leadId, leadsTable.assignedAt);
 
   let avgSpeedToLead = 0;
   if (firstTouchRows.length > 0) {
-    const { getLoggedInSeconds, hasAnyLoginSessions } = await import("./services/login-time-calculator");
-    const speeds: number[] = [];
-    for (const row of firstTouchRows) {
-      const wallClock = Math.max(0, Number(row.wallClockSpeed));
-      if (wallClock <= 0) continue;
-      let speed = wallClock;
-      if (row.userId && row.assignedAt && row.firstTouchAt) {
-        try {
-          const hasSessions = await hasAnyLoginSessions(row.userId);
-          if (hasSessions) {
-            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
-          }
-        } catch {}
+    const { computeLoginAwareSpeeds } = await import("./services/login-time-calculator");
+    const windows = firstTouchRows
+      .filter(r => r.userId && r.assignedAt && r.firstTouchAt && Number(r.wallClockSpeed) > 0)
+      .map(r => ({
+        leadId: r.leadId,
+        userId: Number(r.userId),
+        assignedAt: new Date(r.assignedAt!),
+        firstTouchAt: new Date(r.firstTouchAt!),
+        wallClockSpeed: Math.max(0, Number(r.wallClockSpeed)),
+      }));
+    try {
+      const speedResults = await computeLoginAwareSpeeds(windows);
+      if (speedResults.length > 0) {
+        avgSpeedToLead = Math.round(speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length);
       }
-      speeds.push(speed);
-    }
-    if (speeds.length > 0) {
-      avgSpeedToLead = Math.round(speeds.reduce((sum, s) => sum + s, 0) / speeds.length);
-    }
+    } catch {}
   }
 
   return {
