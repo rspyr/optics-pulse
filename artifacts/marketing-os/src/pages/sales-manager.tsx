@@ -503,6 +503,54 @@ function TeamTab({ tenantId, funnels, timezone = "America/New_York", includePreB
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<"appts" | "calls" | "rate">("appts");
 
+  const [batchSourceId, setBatchSourceId] = useState<number | null>(null);
+  const [batchTargetId, setBatchTargetId] = useState<number | null>(null);
+  const [batchPreviewCount, setBatchPreviewCount] = useState<number | null>(null);
+  const [batchPreviewLoading, setBatchPreviewLoading] = useState(false);
+  const [batchTransferring, setBatchTransferring] = useState(false);
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+  const [batchResult, setBatchResult] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!batchSourceId || !tenantId) { setBatchPreviewCount(null); return; }
+    let cancelled = false;
+    setBatchPreviewLoading(true);
+    fetch(`${API_BASE}/leads-hub/batch-transfer/preview?tenantId=${tenantId}&sourceCsrId=${batchSourceId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setBatchPreviewCount(data.count ?? 0); })
+      .catch(() => { if (!cancelled) setBatchPreviewCount(null); })
+      .finally(() => { if (!cancelled) setBatchPreviewLoading(false); });
+    return () => { cancelled = true; };
+  }, [batchSourceId, tenantId]);
+
+  const executeBatchTransfer = async () => {
+    if (!batchSourceId || !batchTargetId || !tenantId) return;
+    setBatchTransferring(true);
+    setBatchResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/batch-transfer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ sourceCsrId: batchSourceId, targetCsrId: batchTargetId, tenantId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBatchResult({ type: "success", message: data.message || `${data.transferred} leads transferred` });
+        setBatchSourceId(null);
+        setBatchTargetId(null);
+        setBatchPreviewCount(null);
+      } else {
+        setBatchResult({ type: "error", message: data.error || "Transfer failed" });
+      }
+    } catch {
+      setBatchResult({ type: "error", message: "Network error" });
+    } finally {
+      setBatchTransferring(false);
+      setBatchConfirmOpen(false);
+    }
+  };
+
   const loading = statsLoading || csrsLoading;
 
   if (loading) {
@@ -703,6 +751,133 @@ function TeamTab({ tenantId, funnels, timezone = "America/New_York", includePreB
           </div>
         )}
       </PremiumCard>
+
+      <PremiumCard className="p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Shuffle className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Batch Lead Transfer</span>
+        </div>
+        <p className="text-[11px] text-white/40 mb-4">Transfer all active leads from one CSR to another. Transferred leads will be removed from round robin sequences.</p>
+
+        {batchResult && (
+          <div className={cn(
+            "mb-4 p-3 rounded-lg border text-xs",
+            batchResult.type === "success"
+              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+              : "bg-red-500/10 border-red-500/20 text-red-400"
+          )}>
+            <div className="flex items-center gap-2">
+              {batchResult.type === "success" ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+              {batchResult.message}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5 block">Source CSR</label>
+            <select
+              value={batchSourceId ?? ""}
+              onChange={e => {
+                const val = e.target.value ? Number(e.target.value) : null;
+                setBatchSourceId(val);
+                setBatchResult(null);
+                if (val === batchTargetId) setBatchTargetId(null);
+              }}
+              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50"
+            >
+              <option value="" className="bg-[#1a1a2e]">Select source CSR...</option>
+              {csrs.map(c => (
+                <option key={c.id} value={c.id} className="bg-[#1a1a2e]">{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5 block">Target CSR</label>
+            <select
+              value={batchTargetId ?? ""}
+              onChange={e => {
+                setBatchTargetId(e.target.value ? Number(e.target.value) : null);
+                setBatchResult(null);
+              }}
+              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50"
+            >
+              <option value="" className="bg-[#1a1a2e]">Select target CSR...</option>
+              {csrs.filter(c => c.id !== batchSourceId).map(c => (
+                <option key={c.id} value={c.id} className="bg-[#1a1a2e]">{c.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {batchSourceId && (
+          <div className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5 mb-4">
+            <div className="flex items-center gap-2">
+              <Activity className="w-3.5 h-3.5 text-primary" />
+              <span className="text-xs text-white/60">Active leads to transfer:</span>
+            </div>
+            {batchPreviewLoading ? (
+              <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
+            ) : (
+              <span className="text-sm font-mono text-white">{batchPreviewCount ?? "—"}</span>
+            )}
+          </div>
+        )}
+
+        <button
+          disabled={!batchSourceId || !batchTargetId || batchPreviewCount === 0 || batchPreviewCount === null || batchTransferring}
+          onClick={() => setBatchConfirmOpen(true)}
+          className={cn(
+            "w-full py-2.5 rounded-lg text-xs font-medium transition-colors",
+            batchSourceId && batchTargetId && batchPreviewCount && batchPreviewCount > 0
+              ? "bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30"
+              : "bg-white/[0.03] text-white/20 border border-white/5 cursor-not-allowed"
+          )}
+        >
+          {batchTransferring ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Transferring...
+            </span>
+          ) : "Transfer All Leads"}
+        </button>
+      </PremiumCard>
+
+      {batchConfirmOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#1a1a2e] border border-white/10 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+            <div className="flex items-center gap-2 mb-4">
+              <AlertTriangle className="w-5 h-5 text-amber-400" />
+              <h3 className="text-sm font-display text-white">Confirm Batch Transfer</h3>
+            </div>
+            <p className="text-xs text-white/60 mb-2">
+              You are about to transfer <span className="text-white font-mono">{batchPreviewCount}</span> active lead{batchPreviewCount !== 1 ? "s" : ""} from <span className="text-white font-medium">{csrs.find(c => c.id === batchSourceId)?.name}</span> to <span className="text-white font-medium">{csrs.find(c => c.id === batchTargetId)?.name}</span>.
+            </p>
+            <p className="text-xs text-white/40 mb-6">
+              All lead data, touchpoint history, statuses, and notes will be preserved. Transferred leads will be removed from round robin sequences. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBatchConfirmOpen(false)}
+                className="flex-1 py-2 rounded-lg text-xs bg-white/[0.05] text-white/60 border border-white/10 hover:bg-white/[0.08] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeBatchTransfer}
+                disabled={batchTransferring}
+                className="flex-1 py-2 rounded-lg text-xs bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-colors"
+              >
+                {batchTransferring ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Transferring...
+                  </span>
+                ) : "Confirm Transfer"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

@@ -349,12 +349,121 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
   });
 
   const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: targetCsrId, assignedTo: targetUser.name, updatedAt: new Date(), cascadePassCount: 0 })
+    .set({
+      assignedCsrId: targetCsrId,
+      assignedTo: targetUser.name,
+      updatedAt: new Date(),
+      cascadePassCount: 0,
+      dayInSequence: 1,
+      visibleAfter: null,
+    })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated });
+});
+
+router.get("/leads-hub/batch-transfer/preview", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const role = req.session?.userRole;
+  if (!role || !["super_admin", "agency_user", "client_admin"].includes(role as string)) {
+    res.status(403).json({ error: "Insufficient permissions" }); return;
+  }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const sourceCsrId = parseInt(String(req.query.sourceCsrId));
+  if (!sourceCsrId) { res.status(400).json({ error: "sourceCsrId is required" }); return; }
+
+  const [result] = await db.select({ count: count() })
+    .from(leadsTable)
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      eq(leadsTable.assignedCsrId, sourceCsrId),
+      ne(leadsTable.hubStatus, "dead"),
+    ));
+
+  res.json({ count: result?.count || 0 });
+});
+
+router.post("/leads-hub/batch-transfer", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const role = req.session?.userRole;
+  if (!role || !["super_admin", "agency_user", "client_admin"].includes(role as string)) {
+    res.status(403).json({ error: "Insufficient permissions" }); return;
+  }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const { sourceCsrId, targetCsrId } = req.body;
+  if (!sourceCsrId || !targetCsrId) { res.status(400).json({ error: "sourceCsrId and targetCsrId are required" }); return; }
+  if (sourceCsrId === targetCsrId) { res.status(400).json({ error: "Source and target CSR cannot be the same" }); return; }
+
+  const [targetUser] = await db.select({ id: usersTable.id, name: usersTable.name })
+    .from(usersTable).where(and(eq(usersTable.id, targetCsrId), eq(usersTable.tenantId, tenantId)));
+  if (!targetUser) { res.status(404).json({ error: "Target CSR not found" }); return; }
+
+  const [sourceUser] = await db.select({ id: usersTable.id, name: usersTable.name })
+    .from(usersTable).where(and(eq(usersTable.id, sourceCsrId), eq(usersTable.tenantId, tenantId)));
+  if (!sourceUser) { res.status(404).json({ error: "Source CSR not found" }); return; }
+
+  const leadsToTransfer = await db.select().from(leadsTable)
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      eq(leadsTable.assignedCsrId, sourceCsrId),
+      ne(leadsTable.hubStatus, "dead"),
+    ));
+
+  if (leadsToTransfer.length === 0) {
+    res.json({ transferred: 0, message: "No active leads to transfer" });
+    return;
+  }
+
+  const leadIds = leadsToTransfer.map(l => l.id);
+
+  const auditEntries = leadIds.map(leadId => ({
+    leadId,
+    userId,
+    method: "transfer" as const,
+    outcome: "transferred" as const,
+    platform: "native" as const,
+    actionType: "call" as const,
+    notes: `Batch transferred from ${sourceUser.name} to ${targetUser.name}`,
+  }));
+
+  await db.transaction(async (tx) => {
+    await tx.insert(callAttemptsTable).values(auditEntries);
+
+    await tx.update(leadsTable)
+      .set({
+        assignedCsrId: targetCsrId,
+        assignedTo: targetUser.name,
+        updatedAt: new Date(),
+        cascadePassCount: 0,
+        dayInSequence: 1,
+        visibleAfter: null,
+      })
+      .where(and(
+        eq(leadsTable.tenantId, tenantId),
+        inArray(leadsTable.id, leadIds),
+      ));
+  });
+
+  const updatedLeads = await db.select().from(leadsTable)
+    .where(inArray(leadsTable.id, leadIds));
+
+  for (const lead of updatedLeads) {
+    emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
+  }
+
+  res.json({ transferred: updatedLeads.length, message: `${updatedLeads.length} leads transferred from ${sourceUser.name} to ${targetUser.name}` });
 });
 
 router.post("/leads-hub/create", async (req, res) => {
