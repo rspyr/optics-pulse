@@ -1680,7 +1680,11 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
         body: JSON.stringify({ mapping, headers }),
       });
       if (res.ok) {
+        const data = await res.json();
         setSavedMapping(mapping);
+        if (data.funnelColumn) {
+          setFunnelColumn(data.funnelColumn);
+        }
         setSuccess(true);
         setTimeout(() => setSuccess(false), 3000);
         onMappingSaved();
