@@ -12,7 +12,8 @@ import {
   Calendar, PhoneCall, Check,
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
-  Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users
+  Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
+  Pencil
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -483,7 +484,7 @@ function CommissionTicker({ amount, onDone }: { amount: number; onDone: () => vo
   );
 }
 
-function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string> }) {
+function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string>; timezone?: string }) {
   return (
     <motion.div
       layout
@@ -519,6 +520,12 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
                 {lead.appointmentDate}{lead.appointmentTime ? ` ${lead.appointmentTime}` : ""}
               </span>
             )}
+            {lead.callbackAt && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20">
+                <Phone className="w-2.5 h-2.5" />
+                CB: {formatDateTimeInTz(lead.callbackAt, timezone)}
+              </span>
+            )}
           </div>
           <ContactFlags preferences={lead.contactPreferences} />
           {lead.disposition && (
@@ -539,12 +546,15 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
   );
 }
 
-function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number; tenantId: number; timezone: string }) {
+function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, onEditAction }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; onEditAction?: (entry: HistoryEntry) => void }) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<{ notes: string; callResult: string; textResult: string; vmResult: string }>({ notes: "", callResult: "", textResult: "", vmResult: "" });
+  const [editSaving, setEditSaving] = useState(false);
 
-  useEffect(() => {
+  const fetchHistory = useCallback(() => {
     setLoading(true);
     fetch(`${API_BASE}/leads-hub/${leadId}/history?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
@@ -552,6 +562,40 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [leadId, tenantId]);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const startEdit = (entry: HistoryEntry) => {
+    setEditingId(entry.id);
+    setEditForm({
+      notes: entry.notes || "",
+      callResult: entry.callResult || "",
+      textResult: entry.textResult || "",
+      vmResult: entry.vmResult || "",
+    });
+  };
+
+  const saveEdit = async (entry: HistoryEntry) => {
+    setEditSaving(true);
+    try {
+      const body: Record<string, unknown> = { notes: editForm.notes };
+      const method = entry.actionType || entry.method;
+      if (method === "call") body.callResult = editForm.callResult || null;
+      if (method === "text") body.textResult = editForm.textResult || null;
+      if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
+
+      const res = await fetch(`${API_BASE}/leads-hub/action/${entry.id}?tenantId=${tenantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setEditingId(null);
+        fetchHistory();
+      }
+    } catch {} finally { setEditSaving(false); }
+  };
 
   if (loading) return <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>;
   if (history.length === 0) return <p className="text-xs text-white/20 py-3 text-center">No actions logged yet</p>;
@@ -571,6 +615,13 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
     return (result || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
   };
 
+  const getResultOptions = (entry: HistoryEntry) => {
+    const method = entry.actionType || entry.method;
+    if (method === "call") return CALL_RESULTS;
+    if (method === "text") return TEXT_RESULTS;
+    return [];
+  };
+
   return (
     <div className="space-y-0">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 mb-2 transition-colors">
@@ -584,14 +635,74 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
             <div className="absolute -left-[21px] top-1.5 w-3 h-3 rounded-full bg-card border border-white/10 flex items-center justify-center text-white/40">
               {getIcon(entry)}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-white/30 font-mono shrink-0">
-                {formatDateTimeInTz(entry.attemptedAt, timezone)}
-              </span>
-              <span className="text-[10px] text-white/50">{entry.csrName}</span>
-              <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
-            </div>
-            {entry.notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{entry.notes}</p>}
+            {editingId === entry.id ? (
+              <div className="space-y-2 py-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-white/30 font-mono shrink-0">
+                    {formatDateTimeInTz(entry.attemptedAt, timezone)}
+                  </span>
+                  <span className="text-[10px] text-amber-400 font-medium">Editing</span>
+                </div>
+                {getResultOptions(entry).length > 0 && (
+                  <select
+                    value={(entry.actionType || entry.method) === "call" ? editForm.callResult : editForm.textResult}
+                    onChange={e => {
+                      const method = entry.actionType || entry.method;
+                      if (method === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
+                      else setEditForm(f => ({ ...f, textResult: e.target.value }));
+                    }}
+                    className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+                  >
+                    <option value="">Select outcome...</option>
+                    {getResultOptions(entry).map(r => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="text"
+                  value={editForm.notes}
+                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="Notes..."
+                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white placeholder:text-white/20"
+                />
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => saveEdit(entry)}
+                    disabled={editSaving}
+                    className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+                  >
+                    {editSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
+                  </button>
+                  <button
+                    onClick={() => setEditingId(null)}
+                    className="px-2 py-0.5 rounded bg-white/5 text-white/40 text-[10px] hover:bg-white/10 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-white/30 font-mono shrink-0">
+                    {formatDateTimeInTz(entry.attemptedAt, timezone)}
+                  </span>
+                  <span className="text-[10px] text-white/50">{entry.csrName}</span>
+                  <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
+                  {canEdit && (
+                    <button
+                      onClick={e => { e.stopPropagation(); startEdit(entry); }}
+                      className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
+                      title="Edit action"
+                    >
+                      <Pencil className="w-2.5 h-2.5" />
+                    </button>
+                  )}
+                </div>
+                {entry.notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{entry.notes}</p>}
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -604,8 +715,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone }: { leadId: number;
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {} }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
@@ -1308,7 +1419,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       )}
 
       <PremiumCard className="p-4">
-        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} />
+        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} />
       </PremiumCard>
     </div>
   );
@@ -1457,6 +1568,9 @@ export default function Leads() {
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [spiffEvent, setSpiffEvent] = useState<{ id: number; amount: number } | null>(null);
   const spiffIdRef = useRef(0);
+  const [callbackNotification, setCallbackNotification] = useState<LeadData | null>(null);
+  const callbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifiedCallbackKeysRef = useRef<Set<string>>(new Set());
 
   const handleSpiffEarned = useCallback((amount: number) => {
     spiffIdRef.current += 1;
@@ -1470,7 +1584,7 @@ export default function Leads() {
       notificationTimerRef.current = setTimeout(() => {
         setNotificationLead(null);
         clearLatestLead();
-      }, 15000);
+      }, 60000);
       refetch();
       refetchStats();
     }
@@ -1479,6 +1593,37 @@ export default function Leads() {
   useEffect(() => {
     if (leadUpdatedSignal > 0) { refetch(); refetchStats(); }
   }, [leadUpdatedSignal, refetch, refetchStats]);
+
+  useEffect(() => {
+    if (callbackNotification) return;
+    const dueCallbacks = queueData.callbacks.filter(l => {
+      if (!l.callbackAt) return false;
+      const key = `${l.id}:${l.callbackAt}`;
+      if (notifiedCallbackKeysRef.current.has(key)) return false;
+      return new Date(l.callbackAt).getTime() <= Date.now();
+    });
+    if (dueCallbacks.length > 0) {
+      const lead = dueCallbacks[0];
+      notifiedCallbackKeysRef.current.add(`${lead.id}:${lead.callbackAt}`);
+      setCallbackNotification(lead);
+      if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
+      callbackTimerRef.current = setTimeout(() => {
+        setCallbackNotification(null);
+      }, 60000);
+    }
+  }, [queueData.callbacks, callbackNotification]);
+
+  const dismissCallbackNotification = useCallback(() => {
+    if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
+    setCallbackNotification(null);
+  }, []);
+
+  const handleCallbackNotificationClick = useCallback(() => {
+    if (!callbackNotification) return;
+    setActiveTab("callbacks");
+    setSelectedLead(callbackNotification);
+    dismissCallbackNotification();
+  }, [callbackNotification, dismissCallbackNotification]);
 
   const selectedLeadIdRef = useRef<number | null>(null);
   useEffect(() => { selectedLeadIdRef.current = selectedLead?.id ?? null; }, [selectedLead]);
@@ -1490,7 +1635,10 @@ export default function Leads() {
   }, [queueData]);
 
   useEffect(() => {
-    return () => { if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current); };
+    return () => {
+      if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+      if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
+    };
   }, []);
 
   const dismissNotification = useCallback(() => {
@@ -1573,7 +1721,52 @@ export default function Leads() {
                   <SourceTag source={notificationLead.source} />
                   {notificationLead.phone && <span className="font-mono text-[11px] text-white/40">{formatPhone(notificationLead.phone)}</span>}
                 </div>
-                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-red-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 15, ease: "linear" }} />
+                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-red-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 60, ease: "linear" }} />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {callbackNotification && (
+          <motion.div
+            key={`cb-notif-${callbackNotification.id}`}
+            initial={{ x: 400, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 400, opacity: 0 }}
+            transition={{ type: "spring", damping: 20, stiffness: 300 }}
+            className={cn("fixed right-6 z-50 w-80", notificationLead ? "top-[120px]" : "top-6")}
+          >
+            <div
+              onClick={handleCallbackNotificationClick}
+              className="relative overflow-hidden rounded-xl border border-amber-500/40 bg-gradient-to-br from-amber-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(245,158,11,0.25)] backdrop-blur-xl cursor-pointer hover:border-amber-500/60 transition-colors"
+            >
+              <div className="relative p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-5 w-5">
+                      <motion.span className="absolute inline-flex h-full w-full rounded-full bg-amber-500" animate={{ scale: [1, 1.8, 1], opacity: [0.75, 0, 0.75] }} transition={{ duration: 1.2, repeat: Infinity }} />
+                      <span className="relative inline-flex rounded-full h-5 w-5 bg-amber-500 items-center justify-center">
+                        <Phone className="w-3 h-3 text-white" />
+                      </span>
+                    </span>
+                    <span className="text-sm font-display font-bold text-amber-400">Callback Due!</span>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); dismissCallbackNotification(); }} className="text-white/40 hover:text-white/80 p-0.5 rounded hover:bg-white/10">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-white font-display text-base">{callbackNotification.firstName} {callbackNotification.lastName}</p>
+                <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
+                  {callbackNotification.callbackAt && (
+                    <span className="text-amber-400/70 text-[11px]">
+                      <Calendar className="w-3 h-3 inline mr-1" />
+                      {formatDateTimeInTz(callbackNotification.callbackAt, queueData.timezone || "America/New_York")}
+                    </span>
+                  )}
+                  {callbackNotification.phone && <span className="font-mono text-[11px] text-white/40">{formatPhone(callbackNotification.phone)}</span>}
+                </div>
+                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-amber-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 60, ease: "linear" }} />
               </div>
             </div>
           </motion.div>
@@ -1693,6 +1886,7 @@ export default function Leads() {
               onSpiffEarned={handleSpiffEarned}
               timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
               funnelMap={funnelMap}
+              canEditActions={true}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">
@@ -1716,7 +1910,7 @@ export default function Leads() {
             <div className="space-y-2">
               <AnimatePresence mode="popLayout">
                 {tabLeads.map(lead => (
-                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} />
+                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} timezone={queueData.timezone || "America/New_York"} />
                 ))}
               </AnimatePresence>
             </div>

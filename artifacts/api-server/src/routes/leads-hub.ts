@@ -281,6 +281,69 @@ router.post("/leads-hub/action", async (req, res) => {
   res.json({ lead: updated, action: { actionType, outcome } });
 });
 
+router.put("/leads-hub/action/:attemptId", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const role = req.session?.userRole as string | undefined;
+  const allowedRoles = ["super_admin", "agency_user", "client_admin", "client_user"];
+  if (!role || !allowedRoles.includes(role)) {
+    res.status(403).json({ error: "Insufficient permissions" }); return;
+  }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const attemptId = parseInt(String(req.params.attemptId));
+  if (!attemptId || isNaN(attemptId)) { res.status(400).json({ error: "Invalid attempt ID" }); return; }
+
+  const [attempt] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, attemptId));
+  if (!attempt) { res.status(404).json({ error: "Action not found" }); return; }
+
+  const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, attempt.leadId), eq(leadsTable.tenantId, tenantId)));
+  if (!lead) { res.status(403).json({ error: "Access denied" }); return; }
+
+  const isAdminRole = ["super_admin", "agency_user", "client_admin"].includes(role);
+  if (!isAdminRole && attempt.userId !== userId) {
+    res.status(403).json({ error: "You can only edit your own actions" }); return;
+  }
+
+  const { actionType, callResult, vmResult, textResult, deadReason, notes } = req.body;
+
+  const validCallResults = ["no_answer", "left_voicemail", "vm_full", "vm_not_setup", "bad_number", "spoke_with_customer", "hung_up", "blocked", "out_of_service_area"];
+  const validTextResults = ["yes", "not_able_to", "dead", "no_need"];
+  const validVmResults = ["yes", "no", "bad_number", "vm_full", "vm_not_setup", "spoke_with_customer"];
+  const validActionTypes = ["call", "text", "voicemail_drop"];
+
+  if (actionType !== undefined && !validActionTypes.includes(actionType)) {
+    res.status(400).json({ error: "Invalid action type" }); return;
+  }
+  if (callResult !== undefined && callResult && !validCallResults.includes(callResult)) {
+    res.status(400).json({ error: "Invalid call result" }); return;
+  }
+  if (textResult !== undefined && textResult && !validTextResults.includes(textResult)) {
+    res.status(400).json({ error: "Invalid text result" }); return;
+  }
+  if (vmResult !== undefined && vmResult && !validVmResults.includes(vmResult)) {
+    res.status(400).json({ error: "Invalid VM result" }); return;
+  }
+
+  const outcome = callResult || textResult || vmResult || actionType || attempt.outcome;
+
+  const updateFields: Record<string, unknown> = {};
+  if (actionType !== undefined) { updateFields.method = actionType; updateFields.actionType = actionType; }
+  if (callResult !== undefined) updateFields.callResult = callResult || null;
+  if (vmResult !== undefined) updateFields.vmResult = vmResult || null;
+  if (textResult !== undefined) updateFields.textResult = textResult || null;
+  if (deadReason !== undefined) updateFields.deadReason = deadReason || null;
+  if (notes !== undefined) updateFields.notes = notes || null;
+  if (outcome) updateFields.outcome = outcome;
+
+  const [updated] = await db.update(callAttemptsTable).set(updateFields).where(eq(callAttemptsTable.id, attemptId)).returning();
+
+  res.json({ attempt: updated });
+});
+
 router.get("/leads-hub/:leadId/history", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
