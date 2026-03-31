@@ -160,9 +160,10 @@ router.get("/sales-manager/team", async (req, res) => {
 
   let speedToLeadByUser: Record<number, number> = {};
   if (allLeadIds.length > 0) {
-    const speedRows = await db.select({
+    const firstTouchPerLead = db.select({
       userId: callAttemptsTable.userId,
-      avgSpeed: sql<number>`avg(extract(epoch from (${callAttemptsTable.attemptedAt} - ${leadsTable.createdAt})))`.as("avg_speed"),
+      leadId: callAttemptsTable.leadId,
+      first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
     })
       .from(callAttemptsTable)
       .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
@@ -171,7 +172,16 @@ router.get("/sales-manager/team", async (req, res) => {
         gte(callAttemptsTable.attemptedAt, today),
         ne(callAttemptsTable.actionType, "transfer"),
       ))
-      .groupBy(callAttemptsTable.userId);
+      .groupBy(callAttemptsTable.userId, callAttemptsTable.leadId)
+      .as("first_touch_per_lead");
+
+    const speedRows = await db.select({
+      userId: firstTouchPerLead.userId,
+      avgSpeed: sql<number>`AVG(first_touch_speed)`.as("avg_speed"),
+    })
+      .from(firstTouchPerLead)
+      .groupBy(firstTouchPerLead.userId);
+
     for (const r of speedRows) {
       speedToLeadByUser[r.userId] = Math.max(0, Math.round(Number(r.avgSpeed)));
     }

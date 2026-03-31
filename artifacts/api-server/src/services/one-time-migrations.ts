@@ -438,6 +438,26 @@ const migrations: Migration[] = [
       console.log(`[Migration] Backfilled booked_by_csr_id on ${backfilled.rows.length} existing booked/sold lead(s)`);
     },
   },
+  {
+    id: "2026-03-31_add-assigned-at",
+    description: "Add assigned_at column to leads for speed-to-lead tracking and backfill from created_at",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      `);
+      console.log("[Migration] Ensured assigned_at column exists on leads");
+
+      const backfilled = await db.execute(sql`
+        UPDATE leads
+        SET assigned_at = created_at
+        WHERE assigned_at = (SELECT MAX(assigned_at) FROM leads)
+          OR assigned_at > updated_at
+        RETURNING id
+      `);
+      console.log(`[Migration] Backfilled assigned_at from created_at on ${backfilled.rows.length} lead(s)`);
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

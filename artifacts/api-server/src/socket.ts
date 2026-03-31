@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
-import { eq, and, count, sql, avg, inArray, gte } from "drizzle-orm";
+import { eq, and, count, sql, avg, inArray, gte, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
 
@@ -280,16 +280,26 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     commission = computeSpiffCommission(bookedLeadsWithFunnel, spiffConfig);
   }
 
-  const speedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  const speedConds: any[] = [
+    ne(callAttemptsTable.actionType, "transfer"),
+    gte(callAttemptsTable.attemptedAt, today),
+  ];
   if (tenantId) speedConds.push(eq(leadsTable.tenantId, tenantId));
-  if (csrId) speedConds.push(eq(leadsTable.assignedCsrId, csrId));
-  const speedConditions = and(...speedConds);
-  const [speedResult] = await db
-    .select({
-      avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
-    })
-    .from(leadsTable)
-    .where(speedConditions);
+  if (csrId) speedConds.push(eq(callAttemptsTable.userId, csrId));
+
+  const firstTouches = db.select({
+    leadId: callAttemptsTable.leadId,
+    first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
+  })
+    .from(callAttemptsTable)
+    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+    .where(and(...speedConds))
+    .groupBy(callAttemptsTable.leadId)
+    .as("first_touches");
+
+  const [speedResult] = await db.select({
+    avgSpeed: sql<number>`COALESCE(AVG(first_touch_speed), 0)`,
+  }).from(firstTouches);
   const avgSpeedToLead = Math.round(Number(speedResult?.avgSpeed ?? 0));
 
   return {

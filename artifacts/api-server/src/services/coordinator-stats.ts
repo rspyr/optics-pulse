@@ -23,18 +23,24 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
   const bookingsCount = bookedSoldLeads.length;
   const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;
 
-  const speedConds = [
-    inArray(leadsTable.id, leadIds),
-    ne(leadsTable.status, "new"),
-    eq(leadsTable.preBooked, false),
-    gte(leadsTable.updatedAt, dayStart),
-    lte(leadsTable.updatedAt, dayEnd),
-  ];
-
   const [speedResult] = await db.select({
-    avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
-  }).from(leadsTable)
-    .where(and(...speedConds));
+    avgSpeed: sql<number>`COALESCE(AVG(first_touch_speed), 0)`,
+  }).from(
+    db.select({
+      leadId: callAttemptsTable.leadId,
+      first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
+    })
+      .from(callAttemptsTable)
+      .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+      .where(and(
+        inArray(callAttemptsTable.leadId, leadIds),
+        ne(callAttemptsTable.actionType, "transfer"),
+        gte(callAttemptsTable.attemptedAt, dayStart),
+        lte(callAttemptsTable.attemptedAt, dayEnd),
+      ))
+      .groupBy(callAttemptsTable.leadId)
+      .as("first_touches")
+  );
 
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
   let funnelNameLookup: Record<number, string> = {};

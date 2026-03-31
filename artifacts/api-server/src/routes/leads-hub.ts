@@ -356,6 +356,7 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
     .set({
       assignedCsrId: targetCsrId,
       assignedTo: targetUser.name,
+      assignedAt: new Date(),
       updatedAt: new Date(),
       cascadePassCount: 0,
       visibleAfter: null,
@@ -448,6 +449,7 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
       .set({
         assignedCsrId: targetCsrId,
         assignedTo: targetUser.name,
+        assignedAt: new Date(),
         updatedAt: new Date(),
         cascadePassCount: 0,
         visibleAfter: null,
@@ -936,7 +938,7 @@ export async function evaluateAutoPass(): Promise<number> {
         ? (lead.cascadePassCount ?? 0) + 1
         : (lead.cascadePassCount ?? 0);
       await db.update(leadsTable)
-        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, updatedAt: new Date(), cascadePassCount: newPassCount })
+        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, assignedAt: new Date(), updatedAt: new Date(), cascadePassCount: newPassCount })
         .where(eq(leadsTable.id, lead.id));
 
       const passLabel = passMinutes >= 60 ? `${Math.round(passMinutes / 60)}h` : `${passMinutes}m`;
