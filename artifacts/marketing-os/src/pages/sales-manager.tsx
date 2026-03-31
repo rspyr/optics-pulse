@@ -2034,6 +2034,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   const [previewData, setPreviewData] = useState<{ configId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
   const [togglingPause, setTogglingPause] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [sectionExpanded, setSectionExpanded] = useState(false);
 
   const handleRefetch = () => { refetchConfigs(); onRefetch(); };
 
@@ -2199,21 +2200,37 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="space-y-0">
+      <div
+        className="flex items-center justify-between cursor-pointer rounded-lg px-4 py-3 bg-white/[0.02] border border-white/10 hover:bg-white/[0.04] transition-colors"
+        onClick={() => setSectionExpanded(prev => !prev)}
+      >
         <div className="flex items-center gap-2">
+          {sectionExpanded ? (
+            <ChevronUp className="w-4 h-4 text-white/40" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-white/40" />
+          )}
           <Table2 className="w-4 h-4 text-primary" />
           <span className="text-sm font-display text-white">Google Sheet Configurations</span>
+          <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">
+            {configs.length} sheet{configs.length !== 1 ? "s" : ""}
+          </span>
         </div>
-        {isAgency && (
+      </div>
+
+      {sectionExpanded && (
+      <div className="space-y-4 pt-4">
+      {isAgency && (
+        <div className="flex justify-end">
           <button
             onClick={() => setCreating(!creating)}
             className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30"
           >
             {creating ? "Cancel" : "+ Add Sheet"}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {creating && (
         <PremiumCard className="p-4 space-y-3">
@@ -2497,6 +2514,8 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
           </PremiumCard>
         ))}
       </div>
+      </div>
+      )}
     </div>
   );
 }
@@ -2520,6 +2539,7 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [editingAlias, setEditingAlias] = useState<{ id: number; value: string } | null>(null);
   const [editingCanonical, setEditingCanonical] = useState<{ oldName: string; value: string } | null>(null);
+  const [sectionExpanded, setSectionExpanded] = useState(false);
 
   const fetchAliases = useCallback(async () => {
     if (!tenantId) return;
@@ -2694,13 +2714,28 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="space-y-0">
+      <div
+        className="flex items-center justify-between cursor-pointer rounded-lg px-4 py-3 bg-white/[0.02] border border-white/10 hover:bg-white/[0.04] transition-colors"
+        onClick={() => setSectionExpanded(prev => !prev)}
+      >
         <div className="flex items-center gap-2">
+          {sectionExpanded ? (
+            <ChevronUp className="w-4 h-4 text-white/40" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-white/40" />
+          )}
           <Shuffle className="w-4 h-4 text-primary" />
           <span className="text-sm font-display text-white">Lead Source Aliases</span>
+          <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">
+            {groups.length} source{groups.length !== 1 ? "s" : ""}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
+      </div>
+
+      {sectionExpanded && (
+      <div className="space-y-4 pt-4">
+      <div className="flex items-center justify-end gap-2">
           <button
             onClick={handleBackfill}
             disabled={backfilling || groups.length === 0}
@@ -2718,7 +2753,6 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
             Load Defaults
           </button>
         </div>
-      </div>
 
       {backfillResult && (
         <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
@@ -2901,6 +2935,8 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
           </div>
         </div>
       </PremiumCard>
+      </div>
+      )}
     </div>
   );
 }
