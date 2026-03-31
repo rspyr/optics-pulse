@@ -222,6 +222,16 @@ interface CsrOption {
   role: string;
 }
 
+function formatSpeed(totalSeconds: number): string {
+  if (totalSeconds <= 0) return "0s";
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.round(totalSeconds % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 interface HudStats {
   callsMadeToday: number;
   bookingsToday: number;
@@ -1769,7 +1779,7 @@ export default function Leads() {
               <Clock className="w-5 h-5 text-amber-400" />
               <span className="text-xs text-amber-400/60 uppercase tracking-wider">Speed</span>
             </div>
-            <p className="text-3xl font-display text-white">{stats.avgSpeedToLead}<span className="text-lg text-white/50">s</span></p>
+            <p className="text-3xl font-display text-white">{formatSpeed(stats.avgSpeedToLead)}</p>
             <p className="text-xs text-muted-foreground mt-1">avg speed-to-lead</p>
           </PremiumCard>
 
@@ -1804,7 +1814,7 @@ export default function Leads() {
             <Clock className="w-4 h-4 text-amber-400" />
             <span className="text-xs text-amber-400/60 uppercase">Speed</span>
           </div>
-          <p className="text-xl font-display text-white">{stats.avgSpeedToLead}s</p>
+          <p className="text-xl font-display text-white">{formatSpeed(stats.avgSpeedToLead)}</p>
         </PremiumCard>
         <PremiumCard className="p-3">
           <div className="flex items-center gap-2 mb-1">
