@@ -49,6 +49,7 @@ export const leadsTable = pgTable("leads", {
   appointmentDate: text("appointment_date"),
   appointmentTime: text("appointment_time"),
   addOns: text("add_ons"),
+  visibleAfter: timestamp("visible_after"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

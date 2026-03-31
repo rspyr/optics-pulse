@@ -67,7 +67,8 @@ router.get("/leads-hub/queue", async (req, res) => {
   const midnightOffset = wallAtMidnight - approxMidnightUtc.getTime();
   const todayStartUtc = new Date(midnightWallUtc - midnightOffset);
 
-  const baseConds = [eq(leadsTable.tenantId, tenantId)];
+  const visibilityFilter = or(isNull(leadsTable.visibleAfter), lte(leadsTable.visibleAfter, now));
+  const baseConds = [eq(leadsTable.tenantId, tenantId), visibilityFilter];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
 
   const activeStatuses = ["day_1", "day_2", "day_3", "day_4", "appt_booked"];

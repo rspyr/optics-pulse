@@ -138,6 +138,7 @@ async function rescanExistingRows(
       if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
         updates.hubStatus = "appt_booked";
       }
+      updates.visibleAfter = null;
     }
 
     if (Object.keys(updates).length === 0) continue;
@@ -243,6 +244,12 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     const effectivePreBooked = isPreBooked || hasApptDetails;
     const funnelName = allFunnels[resolvedFunnelId]?.name;
 
+    const mappedFields = Object.values(mapping);
+    const hasApptFieldsMapped = mappedFields.some(f => f === "appointmentDate" || f === "appointmentTime" || f === "addOns");
+    const visibleAfter = hasApptFieldsMapped && !effectivePreBooked
+      ? new Date(Date.now() + 10 * 60 * 1000)
+      : null;
+
     const [lead] = await db.insert(leadsTable).values({
       tenantId: config.tenantId,
       firstName: row.firstName || "Unknown",
@@ -259,6 +266,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       appointmentDate: row.appointmentDate || null,
       appointmentTime: row.appointmentTime || null,
       addOns: row.addOns || null,
+      visibleAfter,
       funnelId: resolvedFunnelId,
       hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
       dayInSequence: 1,

@@ -148,6 +148,13 @@
       "when": 1774992000000,
       "tag": "0020_appt_addons_address_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1775078400000,
+      "tag": "0021_lead_visibility_delay",
+      "breakpoints": true
     }
   ]
 }

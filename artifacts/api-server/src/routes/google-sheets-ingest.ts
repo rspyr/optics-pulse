@@ -418,6 +418,12 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       const effectivePreBooked = isPreBooked || hasApptDetails;
       const funnelName = allFunnels[resolvedFunnelId]?.name;
 
+      const customMappingValues = Object.values(customMapping);
+      const hasApptFieldsMapped = customMappingValues.some(f => f === "appointmentDate" || f === "appointmentTime" || f === "addOns");
+      const visibleAfter = hasApptFieldsMapped && !effectivePreBooked
+        ? new Date(Date.now() + 10 * 60 * 1000)
+        : null;
+
       const [lead] = await db.insert(leadsTable).values({
         tenantId: config.tenantId,
         firstName: row.firstName || "Unknown",
@@ -434,6 +440,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         appointmentDate: row.appointmentDate || null,
         appointmentTime: row.appointmentTime || null,
         addOns: row.addOns || null,
+        visibleAfter,
         funnelId: resolvedFunnelId,
         hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
