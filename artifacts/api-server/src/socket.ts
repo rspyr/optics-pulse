@@ -13,6 +13,8 @@ const DEMO_LEAD_TYPES_FALLBACK = ["Fit Funnel", "Quiz", "Pop-up", "Direct"];
 
 let cachedFunnelTypes: Record<number, { name: string; id: number }[]> = {};
 
+const activeSocketsBySessionKey: Record<string, number> = {};
+
 function randomFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -69,6 +71,7 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     console.log(`[Socket.IO] Client connected: ${socket.id} (user ${session.userId}, role ${role})`);
 
     if (role === "client_user" && sessionKey) {
+      activeSocketsBySessionKey[sessionKey] = (activeSocketsBySessionKey[sessionKey] ?? 0) + 1;
       db.select({ id: userLoginSessionsTable.id })
         .from(userLoginSessionsTable)
         .where(and(
@@ -121,14 +124,18 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     socket.on("disconnect", () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
       if (session?.userId && role === "client_user" && sessionKey) {
-        db.update(userLoginSessionsTable)
-          .set({ logoutAt: new Date() })
-          .where(and(
-            eq(userLoginSessionsTable.sessionKey, sessionKey),
-            isNull(userLoginSessionsTable.logoutAt),
-          ))
-          .then(() => {})
-          .catch((err) => console.error("[Socket.IO] Failed to close login session on disconnect:", err));
+        activeSocketsBySessionKey[sessionKey] = Math.max(0, (activeSocketsBySessionKey[sessionKey] ?? 1) - 1);
+        if (activeSocketsBySessionKey[sessionKey] === 0) {
+          delete activeSocketsBySessionKey[sessionKey];
+          db.update(userLoginSessionsTable)
+            .set({ logoutAt: new Date() })
+            .where(and(
+              eq(userLoginSessionsTable.sessionKey, sessionKey),
+              isNull(userLoginSessionsTable.logoutAt),
+            ))
+            .then(() => {})
+            .catch((err) => console.error("[Socket.IO] Failed to close login session on disconnect:", err));
+        }
       }
     });
   });
