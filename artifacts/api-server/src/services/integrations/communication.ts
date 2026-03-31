@@ -1,9 +1,11 @@
 import { db, callAttemptsTable, leadsTable, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
+export type CommPlatform = "native" | "callrail" | "podium" | "none";
+
 export interface CommunicationConfig {
-  callPlatform: "native" | "none";
-  textPlatform: "native" | "none";
+  callPlatform: CommPlatform;
+  textPlatform: CommPlatform;
 }
 
 export interface CallResult {
@@ -26,8 +28,9 @@ export async function getTenantCommConfig(tenantId: number): Promise<Communicati
     .from(tenantsTable)
     .where(eq(tenantsTable.id, tenantId));
   const cc = (tenant?.communicationConfig || {}) as Record<string, unknown>;
-  const callPlatform = cc.callPlatform === "none" ? "none" : "native";
-  const textPlatform = cc.textPlatform === "none" ? "none" : "native";
+  const validPlatforms: CommPlatform[] = ["native", "callrail", "podium", "none"];
+  const callPlatform: CommPlatform = validPlatforms.includes(cc.callPlatform as CommPlatform) ? (cc.callPlatform as CommPlatform) : "native";
+  const textPlatform: CommPlatform = validPlatforms.includes(cc.textPlatform as CommPlatform) ? (cc.textPlatform as CommPlatform) : "native";
   return { callPlatform, textPlatform };
 }
 
@@ -40,10 +43,28 @@ export async function initiateCall(
   if (!lead) throw new Error("Lead not found");
   if (!lead.phone) throw new Error("Lead has no phone number");
 
+  const config = await getTenantCommConfig(tenantId);
+
+  if (config.callPlatform === "none") {
+    await db.insert(callAttemptsTable).values({
+      leadId,
+      userId,
+      method: "call",
+      outcome: "skipped",
+      platform: "none",
+      actionType: "call",
+    });
+    return {
+      success: true,
+      platform: "none",
+      message: "No communication platform configured — action logged without initiating a call",
+    };
+  }
+
   const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
   const result: CallResult = {
     success: true,
-    platform: "native",
+    platform: config.callPlatform,
     message: `Use your phone to call ${customerPhone}`,
   };
 
@@ -52,7 +73,7 @@ export async function initiateCall(
     userId,
     method: "call",
     outcome: "initiated",
-    platform: "native",
+    platform: config.callPlatform,
     actionType: "call",
   });
 
@@ -69,10 +90,28 @@ export async function initiateText(
   if (!lead) throw new Error("Lead not found");
   if (!lead.phone) throw new Error("Lead has no phone number");
 
+  const config = await getTenantCommConfig(tenantId);
+
+  if (config.textPlatform === "none") {
+    await db.insert(callAttemptsTable).values({
+      leadId,
+      userId,
+      method: "text",
+      outcome: "skipped",
+      platform: "none",
+      actionType: "text",
+    });
+    return {
+      success: true,
+      platform: "none",
+      message: "No communication platform configured — action logged without sending a text",
+    };
+  }
+
   const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
   const result: TextResult = {
     success: true,
-    platform: "native",
+    platform: config.textPlatform,
     message: `Use your phone to text ${customerPhone}`,
   };
 
@@ -81,7 +120,7 @@ export async function initiateText(
     userId,
     method: "text",
     outcome: "sent",
-    platform: "native",
+    platform: config.textPlatform,
     actionType: "text",
   });
 

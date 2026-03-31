@@ -699,6 +699,9 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   };
 
   const handleText = () => {
+    if (commConfig.textPlatform !== "none" && lead.phone) {
+      window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
+    }
     if (lead.hubStatus === "appt_booked") {
       setApptBookedChannel("text");
       setActionStep("appt_booked_flow");
