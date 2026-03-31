@@ -728,7 +728,6 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   interface SavedState {
     cascadeOrder: number[];
     passInterval: number;
-    passUnit: "minutes" | "hours";
     allowPassBack: boolean;
     stickyAfterCascade: boolean;
     stickyCsrId: number | null;
@@ -740,7 +739,6 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   const currentState: SavedState = {
     cascadeOrder,
     passInterval,
-    passUnit,
     allowPassBack,
     stickyAfterCascade,
     stickyCsrId,
@@ -768,7 +766,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       setAllowPassBack(apb);
       setStickyAfterCascade(sac);
       setStickyCsrId(sci);
-      setLastSavedState({ cascadeOrder: co, passInterval: mins, passUnit: unit, allowPassBack: apb, stickyAfterCascade: sac, stickyCsrId: sci });
+      setLastSavedState({ cascadeOrder: co, passInterval: mins, allowPassBack: apb, stickyAfterCascade: sac, stickyCsrId: sci });
     } else {
       setCascadeOrder([]);
       setPassInterval(1440);
@@ -776,7 +774,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       setAllowPassBack(false);
       setStickyAfterCascade(false);
       setStickyCsrId(null);
-      setLastSavedState({ cascadeOrder: [], passInterval: 1440, passUnit: "hours", allowPassBack: false, stickyAfterCascade: false, stickyCsrId: null });
+      setLastSavedState({ cascadeOrder: [], passInterval: 1440, allowPassBack: false, stickyAfterCascade: false, stickyCsrId: null });
     }
   }, [selectedFunnelId, configs]);
 
@@ -798,7 +796,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
         }),
       });
       if (res.ok) {
-        setLastSavedState({ cascadeOrder, passInterval, passUnit, allowPassBack, stickyAfterCascade, stickyCsrId });
+        setLastSavedState({ cascadeOrder, passInterval, allowPassBack, stickyAfterCascade, stickyCsrId });
         setIsInherited(false);
         refetchConfigs();
       } else {

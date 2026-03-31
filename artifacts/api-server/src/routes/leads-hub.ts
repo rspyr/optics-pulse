@@ -758,10 +758,12 @@ export async function evaluateAutoPass(): Promise<number> {
     } else {
       const specificFunnels = funnelSpecificIds.get(config.tenantId);
       if (specificFunnels && specificFunnels.size > 0) {
+        const excludedFunnelIds = Array.from(specificFunnels);
         leadConditions.push(
-          or(isNull(leadsTable.funnelId), ...Array.from(specificFunnels).map(fid =>
-            ne(leadsTable.funnelId, fid)
-          ))!
+          or(
+            isNull(leadsTable.funnelId),
+            and(...excludedFunnelIds.map(fid => ne(leadsTable.funnelId, fid)))
+          )!
         );
       }
     }
