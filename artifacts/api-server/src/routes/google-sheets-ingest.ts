@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
