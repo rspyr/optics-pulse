@@ -1656,7 +1656,6 @@ export default function Leads() {
   const [spiffEvent, setSpiffEvent] = useState<{ id: number; amount: number } | null>(null);
   const spiffIdRef = useRef(0);
   const [callbackNotification, setCallbackNotification] = useState<LeadData | null>(null);
-  const callbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notifiedCallbackKeysRef = useRef<Set<string>>(new Set());
 
   const handleSpiffEarned = useCallback((amount: number) => {
@@ -1693,15 +1692,10 @@ export default function Leads() {
       const lead = dueCallbacks[0];
       notifiedCallbackKeysRef.current.add(`${effectiveTenantId}:${lead.id}:${lead.callbackAt}`);
       setCallbackNotification(lead);
-      if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
-      callbackTimerRef.current = setTimeout(() => {
-        setCallbackNotification(null);
-      }, 60000);
     }
   }, [queueData.callbacks, callbackNotification]);
 
   const dismissCallbackNotification = useCallback(() => {
-    if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
     setCallbackNotification(null);
   }, []);
 
@@ -1724,7 +1718,6 @@ export default function Leads() {
   useEffect(() => {
     return () => {
       if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
-      if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
     };
   }, []);
 
@@ -1853,7 +1846,6 @@ export default function Leads() {
                   )}
                   {callbackNotification.phone && <span className="font-mono text-[11px] text-white/40">{formatPhone(callbackNotification.phone)}</span>}
                 </div>
-                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-amber-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 60, ease: "linear" }} />
               </div>
             </div>
           </motion.div>
