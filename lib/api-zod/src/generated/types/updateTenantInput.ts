@@ -12,4 +12,5 @@ export interface UpdateTenantInput {
   timezone?: string;
   isActive?: boolean;
   isDemo?: boolean;
+  stSyncPaused?: boolean;
 }

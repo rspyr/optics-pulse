@@ -32,6 +32,7 @@ export interface UpdateTenantInput {
   timezone?: string;
   isActive?: boolean;
   isDemo?: boolean;
+  stSyncPaused?: boolean;
 }
 
 export type LeadStatus = (typeof LeadStatus)[keyof typeof LeadStatus];

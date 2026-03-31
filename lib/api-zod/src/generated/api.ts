@@ -72,6 +72,7 @@ export const UpdateTenantBody = zod.object({
   timezone: zod.string().optional(),
   isActive: zod.boolean().optional(),
   isDemo: zod.boolean().optional(),
+  stSyncPaused: zod.boolean().optional(),
 });
 
 export const UpdateTenantResponse = zod.object({

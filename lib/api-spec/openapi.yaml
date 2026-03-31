@@ -1208,6 +1208,8 @@ components:
           type: boolean
         isDemo:
           type: boolean
+        stSyncPaused:
+          type: boolean
 
     Lead:
       type: object
