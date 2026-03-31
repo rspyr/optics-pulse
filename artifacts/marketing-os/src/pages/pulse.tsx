@@ -123,6 +123,15 @@ const TEXT_RESULTS = [
   { value: "no_need", label: "No Need to Log" },
 ];
 
+const VM_RESULTS = [
+  { value: "yes", label: "VM Dropped" },
+  { value: "no", label: "No — Did Not Leave VM" },
+  { value: "bad_number", label: "Bad Number" },
+  { value: "vm_full", label: "VM Full" },
+  { value: "vm_not_setup", label: "VM Not Setup" },
+  { value: "spoke_with_customer", label: "Spoke with Customer" },
+];
+
 const SMART_FIELD_SCRIPTS = {
   text: [
     { name: "Initial Outreach", content: "Hi {{lead_name}}! This is {{csr_name}}. We received your inquiry about {{service_type}} from {{funnel}}. Would you like to schedule a free estimate? Reply YES!" },
@@ -551,7 +560,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<{ notes: string; callResult: string; textResult: string; vmResult: string }>({ notes: "", callResult: "", textResult: "", vmResult: "" });
+  const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "" });
   const [editSaving, setEditSaving] = useState(false);
 
   const fetchHistory = useCallback(() => {
@@ -568,6 +577,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
   const startEdit = (entry: HistoryEntry) => {
     setEditingId(entry.id);
     setEditForm({
+      actionType: entry.actionType || entry.method || "",
       notes: entry.notes || "",
       callResult: entry.callResult || "",
       textResult: entry.textResult || "",
@@ -578,8 +588,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
   const saveEdit = async (entry: HistoryEntry) => {
     setEditSaving(true);
     try {
-      const body: Record<string, unknown> = { notes: editForm.notes };
-      const method = entry.actionType || entry.method;
+      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType };
+      const method = editForm.actionType || entry.actionType || entry.method;
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
       if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
@@ -619,6 +629,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
     const method = entry.actionType || entry.method;
     if (method === "call") return CALL_RESULTS;
     if (method === "text") return TEXT_RESULTS;
+    if (method === "voicemail" || method === "voicemail_drop") return VM_RESULTS;
     return [];
   };
 
@@ -643,22 +654,37 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
                   </span>
                   <span className="text-[10px] text-amber-400 font-medium">Editing</span>
                 </div>
-                {getResultOptions(entry).length > 0 && (
-                  <select
-                    value={(entry.actionType || entry.method) === "call" ? editForm.callResult : editForm.textResult}
-                    onChange={e => {
-                      const method = entry.actionType || entry.method;
-                      if (method === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
-                      else setEditForm(f => ({ ...f, textResult: e.target.value }));
-                    }}
-                    className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-                  >
-                    <option value="">Select outcome...</option>
-                    {getResultOptions(entry).map(r => (
-                      <option key={r.value} value={r.value}>{r.label}</option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={editForm.actionType}
+                  onChange={e => setEditForm(f => ({ ...f, actionType: e.target.value, callResult: "", textResult: "", vmResult: "" }))}
+                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+                >
+                  <option value="call">Call</option>
+                  <option value="text">Text</option>
+                  <option value="voicemail_drop">VM Drop</option>
+                </select>
+                {(() => {
+                  const m = editForm.actionType;
+                  const opts = m === "call" ? CALL_RESULTS : m === "text" ? TEXT_RESULTS : (m === "voicemail" || m === "voicemail_drop") ? VM_RESULTS : [];
+                  const val = m === "call" ? editForm.callResult : m === "text" ? editForm.textResult : editForm.vmResult;
+                  if (opts.length === 0) return null;
+                  return (
+                    <select
+                      value={val}
+                      onChange={e => {
+                        if (m === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
+                        else if (m === "text") setEditForm(f => ({ ...f, textResult: e.target.value }));
+                        else setEditForm(f => ({ ...f, vmResult: e.target.value }));
+                      }}
+                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+                    >
+                      <option value="">Select outcome...</option>
+                      {opts.map(r => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))}
+                    </select>
+                  );
+                })()}
                 <input
                   type="text"
                   value={editForm.notes}
@@ -1886,7 +1912,7 @@ export default function Leads() {
               onSpiffEarned={handleSpiffEarned}
               timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
               funnelMap={funnelMap}
-              canEditActions={true}
+              canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">
