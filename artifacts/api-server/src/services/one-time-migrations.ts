@@ -1,6 +1,7 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable } from "@workspace/db";
 import { eq, and, sql, isNull, isNotNull, or, ne, inArray } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
+import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
 
 interface Migration {
   id: string;
@@ -198,12 +199,7 @@ const migrations: Migration[] = [
     id: "2026-03-31_backfill-appt-booked-from-date-time",
     description: "Set pre_booked=true and hub_status=appt_booked for leads that have appointment_date or appointment_time but were not flagged",
     run: async () => {
-      const JUNK_VALUES = [
-        "n/a", "na", "none", "tbd", "to be determined",
-        "unknown", "pending", "–", "—", "-", ".", "...",
-        "not set", "not scheduled", "no", "null", "undefined",
-      ];
-      const junkList = JUNK_VALUES.map(v => `'${v}'`).join(", ");
+      const junkList = APPOINTMENT_JUNK_VALUES.map(v => `'${v}'`).join(", ");
 
       const updated = await db.execute(sql`
         UPDATE leads
@@ -230,7 +226,9 @@ const migrations: Migration[] = [
         for (const lead of leads) {
           try {
             emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
-          } catch {}
+          } catch (err) {
+            console.warn(`[Migration] Failed to emit lead-updated for lead ${lead.id}:`, err);
+          }
         }
       }
     },
