@@ -8,45 +8,51 @@ export async function getLoggedInSecondsWithCoverage(
 ): Promise<{ seconds: number; hasCoverage: boolean }> {
   const windowSeconds = Math.max(0, (windowEnd.getTime() - windowStart.getTime()) / 1000);
 
-  const [result] = await db.execute(sql`
-    WITH clipped AS (
-      SELECT
-        GREATEST(login_at, ${windowStart}::timestamp) AS seg_start,
-        LEAST(COALESCE(logout_at, NOW()), ${windowEnd}::timestamp) AS seg_end
-      FROM user_login_sessions
-      WHERE user_id = ${userId}
-        AND login_at <= ${windowEnd}::timestamp
-        AND (logout_at IS NULL OR logout_at >= ${windowStart}::timestamp)
-    ),
-    ordered AS (
-      SELECT seg_start, seg_end,
-        MAX(seg_end) OVER (ORDER BY seg_start ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max_end
-      FROM clipped
-    ),
-    merged AS (
-      SELECT
-        CASE WHEN seg_start > COALESCE(prev_max_end, '-infinity'::timestamp)
-          THEN seg_start ELSE COALESCE(prev_max_end, seg_start) END AS merged_start,
-        seg_end
-      FROM ordered
-      WHERE seg_end > COALESCE(prev_max_end, '-infinity'::timestamp)
-    )
-    SELECT
-      COALESCE(SUM(EXTRACT(EPOCH FROM (seg_end - merged_start))), 0) AS total_seconds,
-      COUNT(*) AS session_count
-    FROM merged
-  `);
+  const overlappingSessions = await db.select({
+    segStart: sql<Date>`GREATEST(${userLoginSessionsTable.loginAt}, ${windowStart}::timestamp)`.as("seg_start"),
+    segEnd: sql<Date>`LEAST(COALESCE(${userLoginSessionsTable.logoutAt}, NOW()), ${windowEnd}::timestamp)`.as("seg_end"),
+  })
+    .from(userLoginSessionsTable)
+    .where(and(
+      eq(userLoginSessionsTable.userId, userId),
+      lte(userLoginSessionsTable.loginAt, windowEnd),
+      or(
+        isNull(userLoginSessionsTable.logoutAt),
+        gte(userLoginSessionsTable.logoutAt, windowStart),
+      ),
+    ))
+    .orderBy(sql`seg_start ASC`);
 
-  const row = (result as Record<string, unknown>);
-  const sessionCount = Number(row?.session_count ?? 0);
+  if (overlappingSessions.length === 0) {
+    return { seconds: 0, hasCoverage: false };
+  }
+
+  const segments = overlappingSessions.map(s => ({
+    start: new Date(s.segStart).getTime(),
+    end: new Date(s.segEnd).getTime(),
+  }));
+
+  let totalMs = 0;
+  let mergedEnd = -Infinity;
+
+  for (const seg of segments) {
+    if (seg.start >= mergedEnd) {
+      totalMs += seg.end - seg.start;
+      mergedEnd = seg.end;
+    } else if (seg.end > mergedEnd) {
+      totalMs += seg.end - mergedEnd;
+      mergedEnd = seg.end;
+    }
+  }
+
   const totalSeconds = Math.min(
-    Math.max(0, Math.round(Number(row?.total_seconds ?? 0))),
-    windowSeconds,
+    Math.max(0, Math.round(totalMs / 1000)),
+    Math.round(windowSeconds),
   );
 
   return {
     seconds: totalSeconds,
-    hasCoverage: sessionCount > 0,
+    hasCoverage: true,
   };
 }
 
