@@ -65,7 +65,7 @@ export default function Login() {
             <img src="/pulse-logo.png" alt="Pulse" className="w-5 h-5" />
             <span className="font-display text-base tracking-widest text-white">PULSE</span>
           </div>
-          <p className="text-muted-foreground text-sm font-sub tracking-wide">HVAC LAUNCH ATTRIBUTION PLATFORM</p>
+          <p className="text-muted-foreground text-sm font-sub tracking-wide">AN HVAC LAUNCH PLATFORM</p>
         </div>
 
         <div className="bg-card/50 backdrop-blur-xl border border-white/5 rounded-xl p-8 shadow-2xl">
