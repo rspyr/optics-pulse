@@ -48,16 +48,19 @@ export function useTenantFilter(tenantIdOverride?: number) {
           setTenants(mapped);
           setLocalTenantId(prev => {
             if (prev !== null) return prev;
-            if (mapped.length > 0) {
-              setGlobalTenantId(mapped[0].id);
-              return mapped[0].id;
-            }
+            if (mapped.length > 0) return mapped[0].id;
             return null;
           });
         }
       })
       .catch(() => {});
-  }, [isAgency, setGlobalTenantId]);
+  }, [isAgency]);
+
+  useEffect(() => {
+    if (isAgency && localTenantId !== null && localTenantId !== globalTenantId) {
+      setGlobalTenantId(localTenantId);
+    }
+  }, [isAgency, localTenantId, globalTenantId, setGlobalTenantId]);
 
   const effectiveTenantId = tenantIdOverride
     ?? (isAgency ? localTenantId : (user?.tenantId ?? null));
