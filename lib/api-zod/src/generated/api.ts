@@ -72,7 +72,6 @@ export const UpdateTenantBody = zod.object({
   timezone: zod.string().optional(),
   isActive: zod.boolean().optional(),
   isDemo: zod.boolean().optional(),
-  stSyncPaused: zod.boolean().optional(),
 });
 
 export const UpdateTenantResponse = zod.object({
@@ -514,6 +513,14 @@ export const IngestWebhookBody = zod.object({
     utmSource: zod.string().optional(),
     utmCampaign: zod.string().optional(),
     utmMedium: zod.string().optional(),
+    appointmentDate: zod
+      .string()
+      .optional()
+      .describe("Pre-booked appointment date"),
+    appointmentTime: zod
+      .string()
+      .optional()
+      .describe("Pre-booked appointment time"),
     externalId: zod.string().optional(),
   }),
 });

@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
+import { isValidAppointmentValue } from "../utils/appointment-validation";
 
 const router: IRouter = Router();
 
@@ -97,6 +98,10 @@ router.post("/webhooks/ingest", async (req, res) => {
       const resolved = await resolveFunnelType(tenantId, funnelSlug);
       const resolvedLeadType = resolved?.name || source;
       const resolvedFunnelId = resolved?.id || null;
+      const rawApptDate = (dataObj.appointmentDate as string) || null;
+      const rawApptTime = (dataObj.appointmentTime as string) || null;
+      const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
+
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",
@@ -108,7 +113,10 @@ router.post("/webhooks/ingest", async (req, res) => {
         interestType: null,
         leadType: resolvedLeadType,
         funnelId: resolvedFunnelId,
-        hubStatus: "day_1",
+        appointmentDate: rawApptDate,
+        appointmentTime: rawApptTime,
+        hubStatus: hasApptDetails ? "appt_booked" : "day_1",
+        preBooked: hasApptDetails,
         dayInSequence: 1,
         status: "new",
       }).returning();

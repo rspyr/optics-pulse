@@ -226,6 +226,11 @@ export type WebhookIngestPayloadData = {
   utmSource?: string;
   utmCampaign?: string;
   utmMedium?: string;
+  /** Pre-booked appointment date */
+  appointmentDate?: string;
+  /** Pre-booked appointment time */
+  appointmentTime?: string;
+  externalId?: string;
   [key: string]: unknown;
 };
 

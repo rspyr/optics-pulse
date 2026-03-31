@@ -6,6 +6,7 @@ import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
+import { isValidAppointmentValue } from "../utils/appointment-validation";
 
 const router: IRouter = Router();
 
@@ -414,7 +415,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       }
 
       const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
-      const hasApptDetails = !!(row.appointmentDate || row.appointmentTime);
+      const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
       const effectivePreBooked = isPreBooked || hasApptDetails;
       const funnelName = allFunnels[resolvedFunnelId]?.name;
 

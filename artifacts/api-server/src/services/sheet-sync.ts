@@ -3,6 +3,7 @@ import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead, emitLeadUpdated } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
+import { isValidAppointmentValue } from "../utils/appointment-validation";
 
 const UPDATABLE_FIELDS = [
   "appointmentDate", "appointmentTime", "appointmentBooked",
@@ -132,7 +133,7 @@ async function rescanExistingRows(
     if (newState && newState !== existingLead.state) updates.state = newState;
     if (newZip && newZip !== existingLead.zip) updates.zip = newZip;
 
-    const hasNewApptInfo = newApptBooked || !!(newApptDate || newApptTime);
+    const hasNewApptInfo = newApptBooked || isValidAppointmentValue(newApptDate) || isValidAppointmentValue(newApptTime);
     if (hasNewApptInfo && !existingLead.appointmentBooked) {
       updates.preBooked = true;
       if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
@@ -240,7 +241,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     }
 
     const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
-    const hasApptDetails = !!(row.appointmentDate || row.appointmentTime);
+    const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
     const effectivePreBooked = isPreBooked || hasApptDetails;
     const funnelName = allFunnels[resolvedFunnelId]?.name;
 

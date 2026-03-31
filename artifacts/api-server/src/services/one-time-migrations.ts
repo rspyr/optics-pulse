@@ -1,5 +1,6 @@
-import { db, tenantsTable, jobsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, sql, isNull, isNotNull, or } from "drizzle-orm";
+import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable } from "@workspace/db";
+import { eq, and, sql, isNull, isNotNull, or, ne, inArray } from "drizzle-orm";
+import { emitLeadUpdated } from "../socket";
 
 interface Migration {
   id: string;
@@ -191,6 +192,47 @@ const migrations: Migration[] = [
         WHERE action_type = 'call' AND method != 'call'
       `);
       console.log("[Migration] Backfilled action_type from existing call_attempts method values");
+    },
+  },
+  {
+    id: "2026-03-31_backfill-appt-booked-from-date-time",
+    description: "Set pre_booked=true and hub_status=appt_booked for leads that have appointment_date or appointment_time but were not flagged",
+    run: async () => {
+      const JUNK_VALUES = [
+        "n/a", "na", "none", "tbd", "to be determined",
+        "unknown", "pending", "–", "—", "-", ".", "...",
+        "not set", "not scheduled", "no", "null", "undefined",
+      ];
+      const junkList = JUNK_VALUES.map(v => `'${v}'`).join(", ");
+
+      const updated = await db.execute(sql`
+        UPDATE leads
+        SET pre_booked = true,
+            hub_status = 'appt_booked'::hub_status_enum,
+            updated_at = NOW()
+        WHERE pre_booked = false
+          AND hub_status NOT IN ('appt_set', 'dead')
+          AND (
+            (appointment_date IS NOT NULL AND TRIM(appointment_date) != '' AND LOWER(TRIM(appointment_date)) NOT IN (${sql.raw(junkList)}))
+            OR
+            (appointment_time IS NOT NULL AND TRIM(appointment_time) != '' AND LOWER(TRIM(appointment_time)) NOT IN (${sql.raw(junkList)}))
+          )
+        RETURNING id, tenant_id
+      `);
+
+      const updatedRows = updated.rows as { id: number; tenant_id: number }[];
+      console.log(`[Migration] Backfilled ${updatedRows.length} lead(s) with appointment data to appt_booked status`);
+
+      if (updatedRows.length > 0) {
+        const updatedIds = updatedRows.map(r => r.id);
+        const leads = await db.select().from(leadsTable)
+          .where(inArray(leadsTable.id, updatedIds));
+        for (const lead of leads) {
+          try {
+            emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
+          } catch {}
+        }
+      }
     },
   },
 ];

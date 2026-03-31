@@ -1469,6 +1469,14 @@ components:
               type: string
             utmMedium:
               type: string
+            appointmentDate:
+              type: string
+              description: Pre-booked appointment date
+            appointmentTime:
+              type: string
+              description: Pre-booked appointment time
+            externalId:
+              type: string
           additionalProperties: true
       required: [source, tenantId, data]
 
