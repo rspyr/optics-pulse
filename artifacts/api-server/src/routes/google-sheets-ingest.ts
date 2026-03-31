@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
@@ -17,6 +17,7 @@ const INTERNAL_FIELDS = [
   { field: "email", label: "Email", description: "Email address" },
   { field: "source", label: "Lead Source", description: "Where the lead came from (e.g., Google, Facebook, referral)" },
   { field: "serviceType", label: "Service Type", description: "Type of HVAC service needed (e.g., Heat Pump, A/C, Furnace)" },
+  { field: "__funnel__", label: "Funnel", description: "Routes leads to different funnels based on column values — use when a single sheet contains leads for multiple funnel types" },
   { field: "status", label: "Status", description: "Lead status (e.g., new, contacted, booked)" },
   { field: "notes", label: "Notes", description: "Additional notes or comments about the lead" },
   { field: "appointmentBooked", label: "Appointment Booked", description: "Whether lead has a pre-booked appointment (yes/no)" },
@@ -34,20 +35,34 @@ function headersMatch(current: string[], saved: string[]): boolean {
   return saved.every(h => currentSet.has(h));
 }
 
-router.post("/google-sheets/analyze-mapping/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+function resolveFunnelForRow(
+  row: Record<string, string>,
+  funnelColumn: string | null,
+  funnelValueMap: Record<string, number> | null,
+  defaultFunnelTypeId: number | null,
+): number | null {
+  if (funnelColumn && funnelValueMap) {
+    const value = (row[funnelColumn] || "").trim();
+    if (value && funnelValueMap[value] !== undefined) {
+      return funnelValueMap[value];
+    }
+  }
+  return defaultFunnelTypeId;
+}
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+router.post("/sheet-configs/:configId/analyze-mapping", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
 
-  if (!assoc?.googleSheetId || !assoc?.googleSheetTab) {
-    res.status(400).json({ error: "Google Sheet not configured for this funnel" });
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
+
+  if (!config) {
+    res.status(404).json({ error: "Sheet config not found" });
     return;
   }
 
   try {
-    const { headers, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+    const { headers, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
     if (headers.length === 0) {
       res.status(400).json({ error: "No headers found in sheet" });
       return;
@@ -59,6 +74,8 @@ router.post("/google-sheets/analyze-mapping/:tenantId/:funnelTypeId", requireRol
       return obj;
     });
 
+    const fieldsForPrompt = INTERNAL_FIELDS.filter(f => f.field !== "__funnel__");
+
     const prompt = `You are analyzing a Google Sheet from an HVAC marketing agency's client. The sheet contains lead data that needs to be mapped to internal fields.
 
 SHEET HEADERS: ${JSON.stringify(headers)}
@@ -67,7 +84,9 @@ SAMPLE DATA (first ${sampleData.length} rows):
 ${JSON.stringify(sampleData, null, 2)}
 
 INTERNAL FIELDS AVAILABLE:
-${INTERNAL_FIELDS.map(f => `- "${f.field}": ${f.label} — ${f.description}`).join("\n")}
+${fieldsForPrompt.map(f => `- "${f.field}": ${f.label} — ${f.description}`).join("\n")}
+
+IMPORTANT: There is also a special "__funnel__" field (label: "Funnel") which is used when a column contains values that differentiate which marketing funnel each lead belongs to. If you see a column that appears to categorize leads into different campaign types, funnel types, or lead categories (NOT service types like Heat Pump, A/C, etc.), map it to "__funnel__".
 
 TASK: For each sheet header, determine which internal field it maps to. Return a JSON object where:
 - Keys are the exact sheet header names (matching case)
@@ -77,6 +96,7 @@ Rules:
 - Map columns that clearly correspond to internal fields
 - Use "fullName" if a single column contains both first and last names
 - Use "__skip__" for columns that don't map to any internal field (e.g., timestamps, IDs, internal notes)
+- Use "__funnel__" only if the column categorizes leads into different marketing funnels/campaigns (not service types)
 - Confidence: 1.0 = exact/obvious match, 0.7-0.9 = likely match, 0.5-0.69 = uncertain, <0.5 = guess
 - If a column header is ambiguous, look at the sample data to determine the best mapping
 - Each internal field should only be mapped once (except __skip__)
@@ -140,17 +160,16 @@ Respond with ONLY valid JSON. Example:
   }
 });
 
-router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
   const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
 
   if (mapping === null && headers === null) {
-    const clearResult = await db.update(tenantFunnelTypesTable)
-      .set({ columnMapping: null, mappingHeaders: null, syncRowWatermark: null })
-      .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+    const clearResult = await db.update(googleSheetConfigsTable)
+      .set({ columnMapping: null, mappingHeaders: null, syncRowWatermark: null, funnelColumn: null, funnelValueMap: null, updatedAt: new Date() })
+      .where(eq(googleSheetConfigsTable.id, configId));
     if (!clearResult.rowCount || clearResult.rowCount === 0) {
-      res.status(404).json({ error: "Funnel type not associated with tenant" });
+      res.status(404).json({ error: "Sheet config not found" });
       return;
     }
     res.json({ success: true, cleared: true });
@@ -177,74 +196,87 @@ router.post("/google-sheets/save-mapping/:tenantId/:funnelTypeId", requireRole("
     return;
   }
 
-  const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__" && f !== "notes");
+  const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__" && f !== "notes" && f !== "__funnel__");
   const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i);
   if (duplicates.length > 0) {
     res.status(400).json({ error: `Duplicate field assignment: "${[...new Set(duplicates)].join(", ")}" is mapped to multiple columns` });
     return;
   }
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
 
-  if (!assoc) {
-    res.status(404).json({ error: "Funnel type not associated with tenant" });
+  if (!config) {
+    res.status(404).json({ error: "Sheet config not found" });
     return;
   }
 
   let watermark: number | null = null;
-  if (assoc.googleSheetId && assoc.googleSheetTab) {
-    try {
-      const { rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      watermark = rawRows.length;
-    } catch (err) {
-      console.error("[GoogleSheets Mapping] Failed to read sheet for watermark:", err);
-      res.status(503).json({ error: "Unable to read sheet to initialize auto-sync. Please try again." });
-      return;
-    }
-  }
-
-  const result = await db.update(tenantFunnelTypesTable)
-    .set({ columnMapping: mapping, mappingHeaders: headers, syncRowWatermark: watermark, syncPaused: true })
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
-
-  if (!result.rowCount || result.rowCount === 0) {
-    res.status(404).json({ error: "Funnel type not associated with tenant" });
+  try {
+    const { rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+    watermark = rawRows.length;
+  } catch (err) {
+    console.error("[GoogleSheets Mapping] Failed to read sheet for watermark:", err);
+    res.status(503).json({ error: "Unable to read sheet to initialize auto-sync. Please try again." });
     return;
   }
 
-  res.json({ success: true });
+  let funnelColumn: string | null = null;
+  for (const [header, field] of Object.entries(mapping)) {
+    if (field === "__funnel__") {
+      funnelColumn = header;
+      break;
+    }
+  }
+
+  const result = await db.update(googleSheetConfigsTable)
+    .set({
+      columnMapping: mapping,
+      mappingHeaders: headers,
+      syncRowWatermark: watermark,
+      syncPaused: true,
+      funnelColumn,
+      funnelValueMap: funnelColumn ? (config.funnelValueMap || null) : null,
+      updatedAt: new Date(),
+    })
+    .where(eq(googleSheetConfigsTable.id, configId));
+
+  if (!result.rowCount || result.rowCount === 0) {
+    res.status(404).json({ error: "Sheet config not found" });
+    return;
+  }
+
+  res.json({ success: true, funnelColumn });
 });
 
-router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+router.get("/sheet-configs/:configId/mapping-status", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
+
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
+
+  if (!config) {
+    res.status(404).json({ error: "Sheet config not found" });
+    return;
+  }
 
   const role = (req.session as unknown as Record<string, unknown>).userRole as string;
   if (role === "client_admin") {
     const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== tenantId) {
+    if (sessionTenantId !== config.tenantId) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
   }
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
-
-  if (!assoc) {
-    res.status(404).json({ error: "Association not found" });
-    return;
-  }
-
-  const hasMapping = !!assoc.columnMapping && !!assoc.mappingHeaders;
+  const hasMapping = !!config.columnMapping && !!config.mappingHeaders;
   let headersChanged = false;
-
   let verificationError = false;
-  if (hasMapping && assoc.googleSheetId && assoc.googleSheetTab) {
+
+  if (hasMapping) {
     try {
-      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      headersChanged = !headersMatch(currentHeaders, assoc.mappingHeaders as string[]);
+      const { headers: currentHeaders } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+      headersChanged = !headersMatch(currentHeaders, config.mappingHeaders as string[]);
     } catch {
       verificationError = true;
     }
@@ -254,72 +286,78 @@ router.get("/google-sheets/mapping-status/:tenantId/:funnelTypeId", requireRole(
     hasMapping,
     headersChanged,
     verificationError,
-    columnMapping: assoc.columnMapping,
-    mappingHeaders: assoc.mappingHeaders,
+    columnMapping: config.columnMapping,
+    mappingHeaders: config.mappingHeaders,
+    funnelColumn: config.funnelColumn,
+    funnelValueMap: config.funnelValueMap,
   });
 });
 
-router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
+
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
+
+  if (!config) {
+    res.status(404).json({ error: "Sheet config not found" });
+    return;
+  }
 
   const role = (req.session as unknown as Record<string, unknown>).userRole as string;
   if (role === "client_admin" || role === "client_user") {
     const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== tenantId) {
+    if (sessionTenantId !== config.tenantId) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
   }
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
-    ));
-
-  if (!assoc) {
-    res.status(404).json({ error: "Funnel type not associated with tenant" });
-    return;
-  }
-
-  if (!assoc.googleSheetId || !assoc.googleSheetTab) {
-    res.status(400).json({ error: "Google Sheet ID or tab name not configured for this funnel" });
-    return;
-  }
-
-  if (!assoc.columnMapping || !assoc.mappingHeaders) {
+  if (!config.columnMapping || !config.mappingHeaders) {
     res.status(400).json({
-      error: "Column mapping has not been approved yet. Please analyze and approve the column mapping in Settings before importing.",
+      error: "Column mapping has not been approved yet. Please analyze and approve the column mapping before importing.",
       mappingRequired: true,
     });
     return;
   }
 
-  if (assoc.columnMapping && assoc.mappingHeaders) {
-    try {
-      const { headers: currentHeaders } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
-      if (!headersMatch(currentHeaders, assoc.mappingHeaders as string[])) {
-        res.status(409).json({
-          error: "Sheet headers have changed since mapping was approved. Please re-analyze and approve the mapping.",
-          headersChanged: true,
-        });
-        return;
-      }
-    } catch (headerErr) {
-      console.error("[GoogleSheets Ingest] Failed to verify headers:", headerErr);
-      res.status(503).json({
-        error: "Unable to verify sheet headers against approved mapping. Please try again.",
+  try {
+    const { headers: currentHeaders } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+    if (!headersMatch(currentHeaders, config.mappingHeaders as string[])) {
+      res.status(409).json({
+        error: "Sheet headers have changed since mapping was approved. Please re-analyze and approve the mapping.",
+        headersChanged: true,
       });
       return;
     }
+  } catch (headerErr) {
+    console.error("[GoogleSheets Ingest] Failed to verify headers:", headerErr);
+    res.status(503).json({
+      error: "Unable to verify sheet headers against approved mapping. Please try again.",
+    });
+    return;
   }
 
-  const [funnel] = await db.select().from(funnelTypesTable).where(eq(funnelTypesTable.id, funnelTypeId));
+  const funnelColumn = config.funnelColumn;
+  const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
+  const defaultFunnelTypeId = config.defaultFunnelTypeId;
+
+  let allFunnels: Record<number, { name: string }> = {};
+  const funnelIds = new Set<number>();
+  if (defaultFunnelTypeId) funnelIds.add(defaultFunnelTypeId);
+  if (funnelValueMap) Object.values(funnelValueMap).forEach(id => funnelIds.add(id));
+
+  if (funnelIds.size > 0) {
+    const funnels = await db.select().from(funnelTypesTable)
+      .where(inArray(funnelTypesTable.id, [...funnelIds]));
+    for (const f of funnels) {
+      allFunnels[f.id] = { name: f.name };
+    }
+  }
 
   try {
-    const customMapping = assoc.columnMapping as Record<string, string> | null;
-    const { rows } = await readSheetRows(assoc.googleSheetId, assoc.googleSheetTab, customMapping);
+    const customMapping = config.columnMapping as Record<string, string>;
+    const { rows } = await readSheetRows(config.googleSheetId, config.googleSheetTab, customMapping);
 
     if (rows.length === 0) {
       res.json({ imported: 0, skipped: 0, message: "No rows found in sheet" });
@@ -329,13 +367,14 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
     const existingPhones = new Set<string>();
     const existingLeads = await db.select({ phone: leadsTable.phone })
       .from(leadsTable)
-      .where(eq(leadsTable.tenantId, tenantId));
+      .where(eq(leadsTable.tenantId, config.tenantId));
     for (const l of existingLeads) {
       if (l.phone) existingPhones.add(l.phone.replace(/[^0-9]/g, ""));
     }
 
     let imported = 0;
     let skipped = 0;
+    let noFunnelSkipped = 0;
     const newLeads: (typeof leadsTable.$inferSelect)[] = [];
 
     for (const row of rows) {
@@ -356,6 +395,13 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
         continue;
       }
 
+      const resolvedFunnelId = resolveFunnelForRow(row, funnelColumn, funnelValueMap, defaultFunnelTypeId);
+      if (!resolvedFunnelId) {
+        noFunnelSkipped++;
+        skipped++;
+        continue;
+      }
+
       if (normalizedPhone) existingPhones.add(normalizedPhone);
 
       let parsedCreatedAt: Date | undefined;
@@ -365,17 +411,18 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
       }
 
       const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+      const funnelName = allFunnels[resolvedFunnelId]?.name;
 
       const [lead] = await db.insert(leadsTable).values({
-        tenantId,
+        tenantId: config.tenantId,
         firstName: row.firstName || "Unknown",
         lastName: row.lastName || "",
         phone: row.phone || null,
         email: row.email || null,
-        source: row.source || funnel?.name || "Google Sheet",
+        source: row.source || funnelName || "Google Sheet",
         serviceType: row.serviceType || null,
         notes: row.notes || null,
-        funnelId: funnelTypeId,
+        funnelId: resolvedFunnelId,
         hubStatus: isPreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
         status: "new",
@@ -386,7 +433,7 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
 
       if (lead) {
         try {
-          const result = await assignLeadRoundRobin(tenantId, lead.id, funnelTypeId || null);
+          const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
           if (!result.assignedCsrId) {
             console.warn(`[SheetsIngest] Lead ${lead.id} not assigned: ${result.reason}`);
           }
@@ -400,14 +447,15 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
 
     for (const lead of newLeads) {
       const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-      emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+      emitNewLead(config.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
     }
 
     res.json({
       imported,
       skipped,
+      noFunnelSkipped,
       total: rows.length,
-      message: `Imported ${imported} leads, skipped ${skipped} duplicates`,
+      message: `Imported ${imported} leads, skipped ${skipped} duplicates${noFunnelSkipped > 0 ? ` (${noFunnelSkipped} had no matching funnel)` : ""}`,
     });
   } catch (err) {
     console.error("[GoogleSheets Ingest] Error:", err);
@@ -416,32 +464,28 @@ router.post("/google-sheets/ingest/:tenantId/:funnelTypeId", requireRole("super_
   }
 });
 
-router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+router.get("/sheet-configs/:configId/preview", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
+
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
+
+  if (!config) {
+    res.status(404).json({ error: "Sheet config not found" });
+    return;
+  }
 
   const role = (req.session as unknown as Record<string, unknown>).userRole as string;
   if (role === "client_admin" || role === "client_user") {
     const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== tenantId) {
+    if (sessionTenantId !== config.tenantId) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
   }
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
-    ));
-
-  if (!assoc?.googleSheetId || !assoc?.googleSheetTab) {
-    res.status(400).json({ error: "Google Sheet not configured for this funnel" });
-    return;
-  }
-
   try {
-    const { headers: rawHeaders, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab);
+    const { headers: rawHeaders, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
 
     const sampleRows = rawRows.slice(0, 5).map(row => {
       const obj: Record<string, string> = {};
@@ -450,15 +494,15 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
     });
 
     let headersChanged = false;
-    if (assoc.mappingHeaders) {
-      headersChanged = !headersMatch(rawHeaders, assoc.mappingHeaders as string[]);
+    if (config.mappingHeaders) {
+      headersChanged = !headersMatch(rawHeaders, config.mappingHeaders as string[]);
     }
 
     res.json({
       headers: rawHeaders,
       sampleRows,
       totalRows: rawRows.length,
-      hasMapping: !!assoc.columnMapping,
+      hasMapping: !!config.columnMapping,
       headersChanged,
     });
   } catch (err) {
@@ -469,33 +513,37 @@ router.get("/google-sheets/preview/:tenantId/:funnelTypeId", requireRole("super_
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "__funnel__",
 ]);
 
-router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
-  const tenantId = Number(req.query.tenantId);
-  const funnelTypeId = Number(req.query.funnelTypeId);
-  if (!tenantId || !funnelTypeId) { res.status(400).json({ error: "tenantId and funnelTypeId required" }); return; }
+router.post("/sheet-configs/:configId/backfill-notes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+  const configId = parseInt(String(req.params.configId));
 
-  const [assoc] = await db.select().from(tenantFunnelTypesTable)
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
-    ));
+  const [config] = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, configId));
 
-  if (!assoc?.googleSheetId || !assoc?.columnMapping || !assoc?.mappingHeaders) {
-    res.status(400).json({ error: "No sheet mapping configured for this funnel" }); return;
+  if (!config?.columnMapping || !config?.mappingHeaders) {
+    res.status(400).json({ error: "No sheet mapping configured" }); return;
+  }
+
+  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
+  if (role === "client_admin") {
+    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
+    if (sessionTenantId !== config.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
   }
 
   try {
-    const { headers, rawRows } = await readRawSheetData(assoc.googleSheetId, assoc.googleSheetTab || "Sheet1");
-    const mapping = assoc.columnMapping as Record<string, string>;
+    const { headers, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+    const mapping = config.columnMapping as Record<string, string>;
 
     const existingLeads = await db.select({
       id: leadsTable.id,
       phone: leadsTable.phone,
     }).from(leadsTable)
-      .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.funnelId, funnelTypeId)));
+      .where(eq(leadsTable.tenantId, config.tenantId));
 
     const leadByPhone = new Map<string, number>();
     for (const l of existingLeads) {
@@ -513,7 +561,7 @@ router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_
         if (normalized === "phone" && val) {
           rowPhone = val.replace(/[^0-9]/g, "");
         }
-        if (!val || normalized === "__skip__") continue;
+        if (!val || normalized === "__skip__" || normalized === "__funnel__") continue;
         if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
           notesParts.push(`${headerKey}: ${val}`);
         }
@@ -537,17 +585,16 @@ router.post("/google-sheets/backfill-notes", requireRole("super_admin", "agency_
   }
 });
 
-router.post("/google-sheets/toggle-sync-pause/:tenantId/:funnelTypeId", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const funnelTypeId = parseInt(String(req.params.funnelTypeId));
+router.post("/sheet-configs/:configId/toggle-sync-pause", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+  const configId = parseInt(String(req.params.configId));
 
-  const [updated] = await db.update(tenantFunnelTypesTable)
-    .set({ syncPaused: sql`NOT ${tenantFunnelTypesTable.syncPaused}` })
-    .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)))
-    .returning({ syncPaused: tenantFunnelTypesTable.syncPaused });
+  const [updated] = await db.update(googleSheetConfigsTable)
+    .set({ syncPaused: sql`NOT ${googleSheetConfigsTable.syncPaused}`, updatedAt: new Date() })
+    .where(eq(googleSheetConfigsTable.id, configId))
+    .returning({ syncPaused: googleSheetConfigsTable.syncPaused });
 
   if (!updated) {
-    res.status(404).json({ error: "Association not found" });
+    res.status(404).json({ error: "Sheet config not found" });
     return;
   }
 

@@ -9,6 +9,71 @@ interface Migration {
 
 const migrations: Migration[] = [
   {
+    id: "2026-03-31_create-google-sheet-configs",
+    description: "Create google_sheet_configs table and migrate existing sheet configs from tenant_funnel_types",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS google_sheet_configs (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          name TEXT NOT NULL,
+          google_sheet_id TEXT NOT NULL,
+          google_sheet_tab TEXT NOT NULL,
+          column_mapping JSONB,
+          mapping_headers JSONB,
+          sync_row_watermark INTEGER,
+          sync_paused BOOLEAN NOT NULL DEFAULT TRUE,
+          default_funnel_type_id INTEGER REFERENCES funnel_types(id),
+          funnel_column TEXT,
+          funnel_value_map JSONB,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      console.log("[Migration] Created google_sheet_configs table");
+
+      const colCheck = await db.execute(sql`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'tenant_funnel_types' AND column_name = 'google_sheet_id'
+      `);
+
+      if (colCheck.rows.length > 0) {
+        const migrated = await db.execute(sql`
+          INSERT INTO google_sheet_configs (tenant_id, name, google_sheet_id, google_sheet_tab, column_mapping, mapping_headers, sync_row_watermark, sync_paused, default_funnel_type_id, created_at)
+          SELECT
+            tft.tenant_id,
+            COALESCE(ft.name, 'Sheet Config') AS name,
+            tft.google_sheet_id,
+            COALESCE(tft.google_sheet_tab, 'Sheet1'),
+            tft.column_mapping,
+            tft.mapping_headers,
+            tft.sync_row_watermark,
+            tft.sync_paused,
+            tft.funnel_type_id AS default_funnel_type_id,
+            tft.created_at
+          FROM tenant_funnel_types tft
+          JOIN funnel_types ft ON ft.id = tft.funnel_type_id
+          WHERE tft.google_sheet_id IS NOT NULL
+          RETURNING id
+        `);
+        console.log(`[Migration] Migrated ${migrated.rows.length} sheet config(s) from tenant_funnel_types`);
+
+        await db.execute(sql`
+          ALTER TABLE tenant_funnel_types
+            DROP COLUMN IF EXISTS google_sheet_id,
+            DROP COLUMN IF EXISTS google_sheet_tab,
+            DROP COLUMN IF EXISTS column_mapping,
+            DROP COLUMN IF EXISTS mapping_headers,
+            DROP COLUMN IF EXISTS sync_row_watermark,
+            DROP COLUMN IF EXISTS sync_paused
+        `);
+        console.log("[Migration] Removed sheet columns from tenant_funnel_types");
+      } else {
+        console.log("[Migration] Sheet columns already removed from tenant_funnel_types — skipping data migration");
+      }
+    },
+  },
+  {
     id: "2026-03-25_wipe-servicetitan-data",
     description: "Wipe ST jobs/logs and pause ST sync for compliance (credentials preserved)",
     run: async () => {

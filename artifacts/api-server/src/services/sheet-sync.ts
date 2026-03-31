@@ -1,5 +1,5 @@
-import { db, leadsTable, tenantFunnelTypesTable, funnelTypesTable } from "@workspace/db";
-import { eq, and, isNotNull, ne } from "drizzle-orm";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable } from "@workspace/db";
+import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
@@ -10,58 +10,76 @@ function headersMatch(current: string[], saved: string[]): boolean {
   return saved.every(h => currentSet.has(h));
 }
 
+function resolveFunnelForRow(
+  row: Record<string, string>,
+  funnelColumn: string | null,
+  funnelValueMap: Record<string, number> | null,
+  defaultFunnelTypeId: number | null,
+): number | null {
+  if (funnelColumn && funnelValueMap) {
+    const value = (row[funnelColumn] || "").trim();
+    if (value && funnelValueMap[value] !== undefined) {
+      return funnelValueMap[value];
+    }
+  }
+  return defaultFunnelTypeId;
+}
+
 let syncing = false;
 
 async function syncAllSheets(): Promise<void> {
   if (syncing) return;
   syncing = true;
   try {
-    const associations = await db.select().from(tenantFunnelTypesTable)
+    const configs = await db.select().from(googleSheetConfigsTable)
       .where(and(
-        isNotNull(tenantFunnelTypesTable.googleSheetId),
-        isNotNull(tenantFunnelTypesTable.googleSheetTab),
-        isNotNull(tenantFunnelTypesTable.columnMapping),
-        isNotNull(tenantFunnelTypesTable.mappingHeaders),
-        isNotNull(tenantFunnelTypesTable.syncRowWatermark),
-        ne(tenantFunnelTypesTable.syncPaused, true),
+        isNotNull(googleSheetConfigsTable.googleSheetId),
+        isNotNull(googleSheetConfigsTable.googleSheetTab),
+        isNotNull(googleSheetConfigsTable.columnMapping),
+        isNotNull(googleSheetConfigsTable.mappingHeaders),
+        isNotNull(googleSheetConfigsTable.syncRowWatermark),
+        ne(googleSheetConfigsTable.syncPaused, true),
       ));
 
-    if (associations.length === 0) return;
+    if (configs.length === 0) return;
 
     let totalImported = 0;
     let driftSkipped = 0;
     let errorCount = 0;
 
-    for (const assoc of associations) {
+    for (const config of configs) {
       try {
-        const count = await syncSingleSheet(assoc);
+        const count = await syncSingleSheet(config);
         if (count === -1) driftSkipped++;
         else totalImported += count;
       } catch (err) {
         errorCount++;
-        console.error(`[SheetSync] Error syncing tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId}:`, err);
+        console.error(`[SheetSync] Error syncing sheet config ${config.id} (tenant ${config.tenantId}):`, err);
       }
     }
 
     if (totalImported > 0 || driftSkipped > 0 || errorCount > 0) {
-      console.log(`[SheetSync] Cycle complete: ${associations.length} sheet(s) checked, ${totalImported} lead(s) imported, ${driftSkipped} drift-skipped, ${errorCount} error(s)`);
+      console.log(`[SheetSync] Cycle complete: ${configs.length} sheet(s) checked, ${totalImported} lead(s) imported, ${driftSkipped} drift-skipped, ${errorCount} error(s)`);
     }
   } finally {
     syncing = false;
   }
 }
 
-async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect): Promise<number> {
-  const sheetId = assoc.googleSheetId!;
-  const tab = assoc.googleSheetTab!;
-  const mapping = assoc.columnMapping as Record<string, string>;
-  const savedHeaders = assoc.mappingHeaders as string[];
-  const watermark = assoc.syncRowWatermark!;
+async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSelect): Promise<number> {
+  const sheetId = config.googleSheetId;
+  const tab = config.googleSheetTab;
+  const mapping = config.columnMapping as Record<string, string>;
+  const savedHeaders = config.mappingHeaders as string[];
+  const watermark = config.syncRowWatermark!;
+  const funnelColumn = config.funnelColumn;
+  const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
+  const defaultFunnelTypeId = config.defaultFunnelTypeId;
 
   const { headers: currentHeaders, rawRows } = await readRawSheetData(sheetId, tab);
 
   if (!headersMatch(currentHeaders, savedHeaders)) {
-    console.warn(`[SheetSync] Headers changed for tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId} — skipping`);
+    console.warn(`[SheetSync] Headers changed for sheet config ${config.id} (tenant ${config.tenantId}) — skipping`);
     return -1;
   }
 
@@ -71,24 +89,32 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
 
   const rows = mapRawRows(currentHeaders, newRawRows, mapping);
   if (rows.length === 0) {
-    await db.update(tenantFunnelTypesTable)
+    await db.update(googleSheetConfigsTable)
       .set({ syncRowWatermark: rawRows.length })
-      .where(and(
-        eq(tenantFunnelTypesTable.tenantId, assoc.tenantId),
-        eq(tenantFunnelTypesTable.funnelTypeId, assoc.funnelTypeId),
-      ));
+      .where(eq(googleSheetConfigsTable.id, config.id));
     return 0;
   }
 
   const existingLeads = await db.select({ phone: leadsTable.phone })
     .from(leadsTable)
-    .where(eq(leadsTable.tenantId, assoc.tenantId));
+    .where(eq(leadsTable.tenantId, config.tenantId));
   const existingPhones = new Set<string>();
   for (const l of existingLeads) {
     if (l.phone) existingPhones.add(l.phone.replace(/[^0-9]/g, ""));
   }
 
-  const [funnel] = await db.select().from(funnelTypesTable).where(eq(funnelTypesTable.id, assoc.funnelTypeId));
+  const funnelIds = new Set<number>();
+  if (defaultFunnelTypeId) funnelIds.add(defaultFunnelTypeId);
+  if (funnelValueMap) Object.values(funnelValueMap).forEach(id => funnelIds.add(id));
+
+  let allFunnels: Record<number, { name: string }> = {};
+  if (funnelIds.size > 0) {
+    const funnels = await db.select().from(funnelTypesTable)
+      .where(inArray(funnelTypesTable.id, [...funnelIds]));
+    for (const f of funnels) {
+      allFunnels[f.id] = { name: f.name };
+    }
+  }
 
   let imported = 0;
   const newLeads: (typeof leadsTable.$inferSelect)[] = [];
@@ -99,6 +125,13 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
     if (!row.firstName && !row.lastName) continue;
     const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
     if (nameFields.includes("test")) continue;
+
+    const resolvedFunnelId = resolveFunnelForRow(row, funnelColumn, funnelValueMap, defaultFunnelTypeId);
+    if (!resolvedFunnelId) {
+      console.warn(`[SheetSync] Skipping row in sheet config ${config.id} — no matching funnel for value "${funnelColumn ? row[funnelColumn] : "N/A"}"`);
+      continue;
+    }
+
     if (normalizedPhone) existingPhones.add(normalizedPhone);
 
     let parsedCreatedAt: Date | undefined;
@@ -108,17 +141,18 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
     }
 
     const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+    const funnelName = allFunnels[resolvedFunnelId]?.name;
 
     const [lead] = await db.insert(leadsTable).values({
-      tenantId: assoc.tenantId,
+      tenantId: config.tenantId,
       firstName: row.firstName || "Unknown",
       lastName: row.lastName || "",
       phone: row.phone || null,
       email: row.email || null,
-      source: row.source || funnel?.name || "Google Sheet",
+      source: row.source || funnelName || "Google Sheet",
       serviceType: row.serviceType || null,
       notes: row.notes || null,
-      funnelId: assoc.funnelTypeId,
+      funnelId: resolvedFunnelId,
       hubStatus: isPreBooked ? "appt_booked" : "day_1",
       dayInSequence: 1,
       status: "new",
@@ -129,7 +163,7 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
 
     if (lead) {
       try {
-        const result = await assignLeadRoundRobin(assoc.tenantId, lead.id, assoc.funnelTypeId || null);
+        const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
         if (!result.assignedCsrId) {
           console.warn(`[SheetSync] Lead ${lead.id} not assigned: ${result.reason}`);
         }
@@ -141,20 +175,17 @@ async function syncSingleSheet(assoc: typeof tenantFunnelTypesTable.$inferSelect
     imported++;
   }
 
-  await db.update(tenantFunnelTypesTable)
+  await db.update(googleSheetConfigsTable)
     .set({ syncRowWatermark: rawRows.length })
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, assoc.tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, assoc.funnelTypeId),
-    ));
+    .where(eq(googleSheetConfigsTable.id, config.id));
 
   for (const lead of newLeads) {
     const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-    emitNewLead(assoc.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+    emitNewLead(config.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
   }
 
   if (imported > 0) {
-    console.log(`[SheetSync] Synced ${imported} new lead(s) for tenant ${assoc.tenantId} / funnel ${assoc.funnelTypeId}`);
+    console.log(`[SheetSync] Synced ${imported} new lead(s) for sheet config ${config.id} (tenant ${config.tenantId})`);
   }
 
   return imported;
@@ -172,7 +203,7 @@ interface MappedRow {
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "notes",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "notes", "__funnel__",
 ]);
 
 function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<string, string>): MappedRow[] {
@@ -186,7 +217,9 @@ function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<stri
       const normalized = mapping[headerKey] || headerKey;
       if (normalized && normalized !== "__skip__") {
         const val = (row[j] || "").trim();
-        if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
+        if (normalized === "__funnel__") {
+          obj[headerKey] = val;
+        } else if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
           if (val) notesParts.push(`${headerKey}: ${val}`);
         } else {
           obj[normalized] = val;

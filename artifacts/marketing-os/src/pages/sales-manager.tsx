@@ -25,11 +25,21 @@ interface FunnelType {
   slug: string;
   description: string | null;
   isActive: boolean;
-  googleSheetId?: string | null;
-  googleSheetTab?: string | null;
+}
+
+interface SheetConfig {
+  id: number;
+  tenantId: number;
+  name: string;
+  googleSheetId: string;
+  googleSheetTab: string;
   columnMapping?: Record<string, string> | null;
   mappingHeaders?: string[] | null;
-  syncPaused?: boolean;
+  syncPaused: boolean;
+  defaultFunnelTypeId: number | null;
+  funnelColumn: string | null;
+  funnelValueMap: Record<string, number> | null;
+  defaultFunnel?: { id: number; name: string; slug: string } | null;
 }
 
 interface StatsData {
@@ -1518,12 +1528,12 @@ interface AnalysisResult {
   totalRows: number;
 }
 
-function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSaved }: {
-  tenantId: number;
-  funnelId: number;
-  funnel: FunnelType;
+function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funnels }: {
+  configId: number;
+  config: SheetConfig;
   isAgency: boolean;
   onMappingSaved: () => void;
+  funnels: FunnelType[];
 }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1534,10 +1544,14 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
   const [success, setSuccess] = useState(false);
   const [headersChanged, setHeadersChanged] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [funnelColumn, setFunnelColumn] = useState<string | null>(config.funnelColumn || null);
+  const [funnelValueMap, setFunnelValueMap] = useState<Record<string, number>>(config.funnelValueMap || {});
+  const [columnValues, setColumnValues] = useState<string[]>([]);
+  const [loadingValues, setLoadingValues] = useState(false);
+  const [savingFunnelMap, setSavingFunnelMap] = useState(false);
 
   useEffect(() => {
-    if (!funnel.googleSheetId) return;
-    fetch(`${API_BASE}/google-sheets/mapping-status/${tenantId}/${funnelId}`, { credentials: "include" })
+    fetch(`${API_BASE}/sheet-configs/${configId}/mapping-status`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
         if (data.headersChanged) setHeadersChanged(true);
@@ -1545,9 +1559,11 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
           setMapping(data.columnMapping);
           setSavedMapping(data.columnMapping);
         }
+        if (data.funnelColumn) setFunnelColumn(data.funnelColumn);
+        if (data.funnelValueMap) setFunnelValueMap(data.funnelValueMap);
       })
       .catch(() => {});
-  }, [tenantId, funnelId, funnel.googleSheetId]);
+  }, [configId]);
 
   const handleAnalyzeRef = useRef<() => void>(() => {});
 
@@ -1556,7 +1572,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     setError(null);
     setSuccess(false);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/analyze-mapping/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/analyze-mapping`, {
         method: "POST",
         credentials: "include",
       });
@@ -1569,37 +1585,43 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     } catch {
       setError("Connection error during analysis");
     } finally { setAnalyzing(false); }
-  }, [tenantId, funnelId]);
+  }, [configId]);
 
   handleAnalyzeRef.current = handleAnalyze;
 
   useEffect(() => {
-    const el = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
+    const el = document.querySelector(`[data-mapping-config="${configId}"]`);
     if (!el) return;
     const listener = () => { handleAnalyzeRef.current(); };
     el.addEventListener("trigger-analyze", listener);
     return () => { el.removeEventListener("trigger-analyze", listener); };
-  }, [funnelId]);
+  }, [configId]);
 
   const handleSave = async () => {
     if (!analysis) return;
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/save-mapping`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ mapping, headers: analysis.headers }),
       });
+      const data = await res.json();
       if (res.ok) {
         setSuccess(true);
         setHeadersChanged(false);
-        setExpanded(false);
+        setSavedMapping(mapping);
+        if (data.funnelColumn) {
+          setFunnelColumn(data.funnelColumn);
+          loadColumnValues(data.funnelColumn);
+        } else {
+          setFunnelColumn(null);
+        }
         setTimeout(() => setSuccess(false), 3000);
         onMappingSaved();
       } else {
-        const data = await res.json();
         setError(data.error || "Failed to save mapping");
       }
     } catch {
@@ -1607,12 +1629,51 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
     } finally { setSaving(false); }
   };
 
+  const loadColumnValues = async (colName: string) => {
+    setLoadingValues(true);
+    try {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/column-values/${encodeURIComponent(colName)}`, { credentials: "include" });
+      const data = await res.json();
+      if (res.ok) setColumnValues(data.values || []);
+    } catch {} finally { setLoadingValues(false); }
+  };
+
+  useEffect(() => {
+    if (funnelColumn && config.columnMapping) {
+      loadColumnValues(funnelColumn);
+    }
+  }, []);
+
+  const handleSaveFunnelMap = async () => {
+    if (!funnelColumn) return;
+    setSavingFunnelMap(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/funnel-value-map`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ funnelColumn, funnelValueMap }),
+      });
+      if (res.ok) {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+        onMappingSaved();
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to save funnel mapping");
+      }
+    } catch {
+      setError("Connection error saving funnel mapping");
+    } finally { setSavingFunnelMap(false); }
+  };
+
   const handleUpdateMapping = async () => {
     setSaving(true);
     setError(null);
     try {
       const headers = Object.keys(mapping);
-      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/save-mapping`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -1635,7 +1696,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
   const handleDiscard = async () => {
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/save-mapping/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/save-mapping`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -1644,19 +1705,22 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
       if (res.ok) {
         setAnalysis(null);
         setMapping({});
+        setFunnelColumn(null);
+        setFunnelValueMap({});
+        setColumnValues([]);
         setExpanded(false);
         onMappingSaved();
       }
     } catch {} finally { setSaving(false); }
   };
 
-  if (!isAgency || !funnel.googleSheetId) return null;
+  if (!isAgency) return null;
 
-  const hasExistingMapping = !!funnel.columnMapping;
+  const hasExistingMapping = !!config.columnMapping;
   const mappingModified = hasExistingMapping && !analysis && JSON.stringify(mapping) !== JSON.stringify(savedMapping);
 
   return (
-    <div className="mt-3 pt-3 border-t border-white/5" data-mapping-funnel={funnelId}>
+    <div className="mt-3 pt-3 border-t border-white/5" data-mapping-config={configId}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Wand2 className="w-3.5 h-3.5 text-violet-400" />
@@ -1768,6 +1832,7 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
                         <option value="email">Email</option>
                         <option value="source">Lead Source</option>
                         <option value="serviceType">Service Type</option>
+                        <option value="__funnel__">Funnel</option>
                         <option value="status">Status</option>
                         <option value="notes">Notes</option>
                         <option value="address">Address</option>
@@ -1832,112 +1897,246 @@ function ColumnMappingReview({ tenantId, funnelId, funnel, isAgency, onMappingSa
           )}
         </div>
       )}
+
+      {funnelColumn && hasExistingMapping && (
+        <div className="mt-3 pt-3 border-t border-white/5">
+          <div className="flex items-center gap-2 mb-2">
+            <Shuffle className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-[11px] font-medium text-white/70">Funnel Routing</span>
+            <span className="text-[9px] text-white/20 font-mono">column: {funnelColumn}</span>
+          </div>
+          <p className="text-[10px] text-white/25 mb-3">Map each value in the "{funnelColumn}" column to the funnel it should route to.</p>
+
+          {loadingValues ? (
+            <div className="flex items-center gap-2 py-2">
+              <Loader2 className="w-3 h-3 animate-spin text-white/30" />
+              <span className="text-[10px] text-white/30">Loading column values...</span>
+            </div>
+          ) : columnValues.length === 0 ? (
+            <p className="text-[10px] text-white/20 py-2">No values found in the funnel column</p>
+          ) : (
+            <div className="space-y-1.5">
+              {columnValues.map(val => (
+                <div key={val} className="flex items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
+                  <span className="text-[11px] text-white/70 font-mono flex-1 truncate">{val}</span>
+                  <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90 flex-shrink-0" />
+                  <select
+                    value={funnelValueMap[val] ?? ""}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setFunnelValueMap(prev => {
+                        if (!v) { const next = { ...prev }; delete next[val]; return next; }
+                        return { ...prev, [val]: Number(v) };
+                      });
+                    }}
+                    className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+                  >
+                    <option value="">-- Select Funnel --</option>
+                    {funnels.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            onClick={handleSaveFunnelMap}
+            disabled={savingFunnelMap || columnValues.length === 0}
+            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-500 disabled:opacity-50"
+          >
+            {savingFunnelMap ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            Save Funnel Routing
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
+function useSheetConfigs(tenantId: number | null) {
+  const [configs, setConfigs] = useState<SheetConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchConfigs = useCallback(async () => {
+    if (!tenantId) { setLoading(false); return; }
+    try {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/sheet-configs`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setConfigs(data);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { fetchConfigs(); }, [fetchConfigs]);
+
+  return { configs, loading, refetch: fetchConfigs };
+}
+
 function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
   const { isAgency } = useAuth();
-  const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
-  const [sheetId, setSheetId] = useState("");
-  const [sheetTab, setSheetTab] = useState("");
+  const { configs, loading: configsLoading, refetch: refetchConfigs } = useSheetConfigs(tenantId);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newSheetId, setNewSheetId] = useState("");
+  const [newSheetTab, setNewSheetTab] = useState("Sheet1");
+  const [newDefaultFunnel, setNewDefaultFunnel] = useState<number | "">("");
+  const [editSheetId, setEditSheetId] = useState("");
+  const [editSheetTab, setEditSheetTab] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editDefaultFunnel, setEditDefaultFunnel] = useState<number | "">("");
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [ingesting, setIngesting] = useState<number | null>(null);
   const [backfilling, setBackfilling] = useState<number | null>(null);
-  const [ingestResult, setIngestResult] = useState<{ funnelId: number; msg: string; type: "success" | "error" } | null>(null);
+  const [ingestResult, setIngestResult] = useState<{ configId: number; msg: string; type: "success" | "error" } | null>(null);
   const [previewing, setPreviewing] = useState<number | null>(null);
-  const [previewData, setPreviewData] = useState<{ funnelId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{ configId: number; rows: Record<string, string>[]; columns: string[] } | null>(null);
   const [togglingPause, setTogglingPause] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
 
-  const startEdit = (funnel: FunnelType) => {
-    setEditingFunnelId(funnel.id);
-    setSheetId(funnel.googleSheetId || "");
-    setSheetTab(funnel.googleSheetTab || "");
+  const handleRefetch = () => { refetchConfigs(); onRefetch(); };
+
+  const startEdit = (cfg: SheetConfig) => {
+    setEditingId(cfg.id);
+    setEditSheetId(cfg.googleSheetId);
+    setEditSheetTab(cfg.googleSheetTab);
+    setEditName(cfg.name);
+    setEditDefaultFunnel(cfg.defaultFunnelTypeId || "");
   };
 
-  const handleSave = async (funnelId: number) => {
-    if (!tenantId) return;
+  const handleCreate = async () => {
+    if (!tenantId || !newName || !newSheetId) return;
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/tenants/${tenantId}/funnel-types/${funnelId}/sheet-config`, {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/sheet-configs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: newName,
+          googleSheetId: newSheetId,
+          googleSheetTab: newSheetTab || "Sheet1",
+          defaultFunnelTypeId: newDefaultFunnel || null,
+        }),
+      });
+      if (res.ok) {
+        setCreating(false);
+        setNewName("");
+        setNewSheetId("");
+        setNewSheetTab("Sheet1");
+        setNewDefaultFunnel("");
+        handleRefetch();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Create failed" }));
+        alert(err.error || "Failed to create sheet config");
+      }
+    } catch {
+      alert("Connection error creating sheet config");
+    } finally { setSaving(false); }
+  };
+
+  const handleSaveEdit = async (configId: number) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ googleSheetId: sheetId || null, googleSheetTab: sheetTab || null }),
+        body: JSON.stringify({
+          name: editName,
+          googleSheetId: editSheetId,
+          googleSheetTab: editSheetTab,
+          defaultFunnelTypeId: editDefaultFunnel || null,
+        }),
       });
       if (res.ok) {
-        setSavedId(funnelId);
+        setSavedId(configId);
         setTimeout(() => setSavedId(null), 2000);
-        setEditingFunnelId(null);
-        onRefetch();
+        setEditingId(null);
+        handleRefetch();
       } else {
         const err = await res.json().catch(() => ({ error: "Save failed" }));
-        alert(err.error || "Failed to save sheet config. You may not have permission.");
+        alert(err.error || "Failed to save sheet config");
       }
     } catch {
       alert("Connection error saving sheet config");
     } finally { setSaving(false); }
   };
 
-  const handleIngest = async (funnelId: number) => {
-    if (!tenantId) return;
-    setIngesting(funnelId);
+  const handleDelete = async (configId: number) => {
+    if (!confirm("Delete this sheet configuration? This cannot be undone.")) return;
+    setDeleting(configId);
+    try {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (res.ok) handleRefetch();
+      else alert("Failed to delete sheet config");
+    } catch {
+      alert("Connection error");
+    } finally { setDeleting(null); }
+  };
+
+  const handleIngest = async (configId: number) => {
+    setIngesting(configId);
     setIngestResult(null);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/ingest/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/ingest`, {
         method: "POST",
         credentials: "include",
       });
       const data = await res.json();
       if (res.ok) {
-        setIngestResult({ funnelId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped`, type: "success" });
+        setIngestResult({ configId, msg: `Imported ${data.imported} leads, ${data.skipped} skipped${data.noFunnelSkipped ? ` (${data.noFunnelSkipped} no funnel match)` : ""}`, type: "success" });
       } else if (res.status === 409 && data.headersChanged) {
-        setIngestResult({ funnelId, msg: "Sheet headers have changed — re-analyzing column mapping...", type: "error" });
-        if (isAgency) triggerAnalysis(funnelId);
+        setIngestResult({ configId, msg: "Sheet headers have changed — re-analyze column mapping.", type: "error" });
+        if (isAgency) triggerAnalysis(configId);
       } else if (data.mappingRequired) {
-        setIngestResult({ funnelId, msg: "Column mapping must be analyzed and approved before importing.", type: "error" });
-        if (isAgency) triggerAnalysis(funnelId);
+        setIngestResult({ configId, msg: "Column mapping must be analyzed and approved before importing.", type: "error" });
+        if (isAgency) triggerAnalysis(configId);
       } else {
-        setIngestResult({ funnelId, msg: data.error || "Ingest failed", type: "error" });
+        setIngestResult({ configId, msg: data.error || "Ingest failed", type: "error" });
       }
     } catch {
-      setIngestResult({ funnelId, msg: "Connection error", type: "error" });
+      setIngestResult({ configId, msg: "Connection error", type: "error" });
     } finally { setIngesting(null); }
   };
 
-  const handlePreview = async (funnelId: number) => {
-    if (!tenantId) return;
-    setPreviewing(funnelId);
+  const handlePreview = async (configId: number) => {
+    setPreviewing(configId);
     setPreviewData(null);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/preview/${tenantId}/${funnelId}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/preview`, {
         credentials: "include",
       });
       const data = await res.json();
       if (res.ok) {
-        setPreviewData({ funnelId, rows: data.sampleRows || [], columns: data.headers || [] });
+        setPreviewData({ configId, rows: data.sampleRows || [], columns: data.headers || [] });
         if (isAgency && (!data.hasMapping || data.headersChanged)) {
-          triggerAnalysis(funnelId);
+          triggerAnalysis(configId);
         }
       } else {
-        setIngestResult({ funnelId, msg: data.error || "Preview failed", type: "error" });
+        setIngestResult({ configId, msg: data.error || "Preview failed", type: "error" });
       }
     } catch {
-      setIngestResult({ funnelId, msg: "Connection error during preview", type: "error" });
+      setIngestResult({ configId, msg: "Connection error during preview", type: "error" });
     } finally { setPreviewing(null); }
   };
 
-  const handleTogglePause = async (funnel: FunnelType) => {
-    if (!tenantId) return;
-    setTogglingPause(funnel.id);
+  const handleTogglePause = async (configId: number) => {
+    setTogglingPause(configId);
     try {
-      const res = await fetch(`${API_BASE}/google-sheets/toggle-sync-pause/${tenantId}/${funnel.id}`, {
+      const res = await fetch(`${API_BASE}/sheet-configs/${configId}/toggle-sync-pause`, {
         method: "POST",
         credentials: "include",
       });
       if (res.ok) {
-        onRefetch();
+        handleRefetch();
       } else {
         const data = await res.json().catch(() => ({ error: "Toggle failed" }));
         alert(data.error || "Failed to toggle sync pause");
@@ -1947,123 +2146,205 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
     } finally { setTogglingPause(null); }
   };
 
-  const triggerAnalysis = (funnelId: number) => {
-    const mappingRef = document.querySelector(`[data-mapping-funnel="${funnelId}"]`);
+  const triggerAnalysis = (configId: number) => {
+    const mappingRef = document.querySelector(`[data-mapping-config="${configId}"]`);
     if (mappingRef) {
       mappingRef.dispatchEvent(new CustomEvent("trigger-analyze"));
     }
   };
 
-  if (funnels.length === 0) {
+  if (configsLoading) {
     return (
-      <PremiumCard className="p-4">
-        <p className="text-xs text-white/30">No funnels configured for this tenant. Add funnel types first.</p>
-      </PremiumCard>
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Table2 className="w-4 h-4 text-primary" />
-        <span className="text-sm font-display text-white">Google Sheet Config (per Funnel)</span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Table2 className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Google Sheet Configurations</span>
+        </div>
+        {isAgency && (
+          <button
+            onClick={() => setCreating(!creating)}
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30"
+          >
+            {creating ? "Cancel" : "+ Add Sheet"}
+          </button>
+        )}
       </div>
 
+      {creating && (
+        <PremiumCard className="p-4 space-y-3">
+          <div>
+            <label className="text-[10px] text-white/30 uppercase tracking-wider">Config Name</label>
+            <input
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              placeholder="e.g. Main Lead Sheet"
+              className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet URL or ID</label>
+              <input
+                value={newSheetId}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  const urlMatch = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+                  setNewSheetId(urlMatch ? urlMatch[1] : val);
+                }}
+                placeholder="Paste a Google Sheets URL or sheet ID"
+                className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-white/30 uppercase tracking-wider">Tab Name</label>
+              <input
+                value={newSheetTab}
+                onChange={e => setNewSheetTab(e.target.value)}
+                placeholder="e.g. Sheet1"
+                className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] text-white/30 uppercase tracking-wider">Default Funnel (fallback)</label>
+            <select
+              value={newDefaultFunnel}
+              onChange={e => setNewDefaultFunnel(e.target.value ? Number(e.target.value) : "")}
+              className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              <option value="">-- No default (require funnel routing) --</option>
+              {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </div>
+          <button
+            onClick={handleCreate}
+            disabled={saving || !newName || !newSheetId}
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary text-white text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            Create Sheet Config
+          </button>
+        </PremiumCard>
+      )}
+
+      {configs.length === 0 && !creating && (
+        <PremiumCard className="p-4">
+          <p className="text-xs text-white/30">No sheet configurations yet. Click "+ Add Sheet" to connect a Google Sheet.</p>
+        </PremiumCard>
+      )}
+
       <div className="space-y-2">
-        {funnels.map(funnel => (
-          <PremiumCard key={funnel.id} className="p-4">
+        {configs.map(cfg => (
+          <PremiumCard key={cfg.id} className="p-4">
             <div className="flex items-center justify-between">
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-white font-medium">{funnel.name}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  {funnel.googleSheetId ? (
-                    <>
-                      <Link2 className="w-3 h-3 text-emerald-400" />
-                      <span className="text-[10px] text-emerald-400/70 font-mono truncate max-w-[200px]">{funnel.googleSheetId}</span>
-                      {funnel.googleSheetTab && (
-                        <span className="text-[10px] text-white/30">tab: {funnel.googleSheetTab}</span>
-                      )}
-                    </>
-                  ) : (
-                    <span className="text-[10px] text-white/20">No sheet configured</span>
+                <p className="text-sm text-white font-medium">{cfg.name}</p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <Link2 className="w-3 h-3 text-emerald-400" />
+                  <span className="text-[10px] text-emerald-400/70 font-mono truncate max-w-[200px]">{cfg.googleSheetId}</span>
+                  <span className="text-[10px] text-white/30">tab: {cfg.googleSheetTab}</span>
+                  {cfg.defaultFunnel && (
+                    <span className="text-[10px] text-blue-400/70 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                      Default: {cfg.defaultFunnel.name}
+                    </span>
+                  )}
+                  {cfg.funnelColumn && (
+                    <span className="text-[10px] text-violet-400/70 bg-violet-500/10 px-1.5 py-0.5 rounded">
+                      Routes by: {cfg.funnelColumn}
+                    </span>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                {funnel.googleSheetId && (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onClick={() => handlePreview(cfg.id)}
+                  disabled={previewing === cfg.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                >
+                  {previewing === cfg.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                  Preview
+                </button>
+                <button
+                  onClick={() => handleIngest(cfg.id)}
+                  disabled={ingesting === cfg.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
+                >
+                  {ingesting === cfg.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  Import
+                </button>
+                <button
+                  onClick={async () => {
+                    setBackfilling(cfg.id);
+                    try {
+                      const r = await fetch(`${API_BASE}/sheet-configs/${cfg.id}/backfill-notes`, {
+                        method: "POST", credentials: "include",
+                      });
+                      const data = await r.json();
+                      if (r.ok) {
+                        setIngestResult({ configId: cfg.id, msg: `Updated notes for ${data.updated} lead(s)`, type: "success" });
+                      } else {
+                        setIngestResult({ configId: cfg.id, msg: data.error || "Backfill failed", type: "error" });
+                      }
+                    } catch {
+                      setIngestResult({ configId: cfg.id, msg: "Connection error", type: "error" });
+                    } finally { setBackfilling(null); }
+                  }}
+                  disabled={backfilling === cfg.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-purple-400 hover:bg-purple-500/10 disabled:opacity-50"
+                >
+                  {backfilling === cfg.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                  Notes
+                </button>
+                <button
+                  onClick={() => handleTogglePause(cfg.id)}
+                  disabled={togglingPause === cfg.id}
+                  className={cn(
+                    "flex items-center gap-1 px-2 py-1 rounded text-[10px] disabled:opacity-50",
+                    cfg.syncPaused
+                      ? "text-yellow-400 hover:bg-yellow-500/10"
+                      : "text-emerald-400 hover:bg-emerald-500/10"
+                  )}
+                  title={cfg.syncPaused ? "Auto-sync is paused — click to resume" : "Auto-sync is active — click to pause"}
+                >
+                  {togglingPause === cfg.id ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : cfg.syncPaused ? (
+                    <Play className="w-3 h-3" />
+                  ) : (
+                    <Pause className="w-3 h-3" />
+                  )}
+                  {cfg.syncPaused ? "Paused" : "Syncing"}
+                </button>
+                {isAgency && (
                   <>
                     <button
-                      onClick={() => handlePreview(funnel.id)}
-                      disabled={previewing === funnel.id}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                      onClick={() => editingId === cfg.id ? setEditingId(null) : startEdit(cfg)}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5"
                     >
-                      {previewing === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-                      Preview
+                      {savedId === cfg.id ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <SettingsIcon className="w-3 h-3" />}
+                      {savedId === cfg.id ? "Saved" : "Edit"}
                     </button>
                     <button
-                      onClick={() => handleIngest(funnel.id)}
-                      disabled={ingesting === funnel.id}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
+                      onClick={() => handleDelete(cfg.id)}
+                      disabled={deleting === cfg.id}
+                      className="px-2 py-1 rounded text-[10px] text-red-400/50 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                     >
-                      {ingesting === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                      Import
-                    </button>
-                    <button
-                      onClick={async () => {
-                        setBackfilling(funnel.id);
-                        try {
-                          const r = await fetch(`${API_BASE}/google-sheets/backfill-notes?tenantId=${tenantId}&funnelTypeId=${funnel.id}`, {
-                            method: "POST", credentials: "include",
-                          });
-                          const data = await r.json();
-                          if (r.ok) {
-                            setIngestResult({ funnelId: funnel.id, msg: `Updated notes for ${data.updated} lead(s)`, type: "success" });
-                          } else {
-                            setIngestResult({ funnelId: funnel.id, msg: data.error || "Backfill failed", type: "error" });
-                          }
-                        } catch {
-                          setIngestResult({ funnelId: funnel.id, msg: "Connection error", type: "error" });
-                        } finally { setBackfilling(null); }
-                      }}
-                      disabled={backfilling === funnel.id}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-purple-400 hover:bg-purple-500/10 disabled:opacity-50"
-                    >
-                      {backfilling === funnel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
-                      Resync Notes
-                    </button>
-                    <button
-                      onClick={() => handleTogglePause(funnel)}
-                      disabled={togglingPause === funnel.id}
-                      className={cn(
-                        "flex items-center gap-1 px-2 py-1 rounded text-[10px] disabled:opacity-50",
-                        funnel.syncPaused !== false
-                          ? "text-yellow-400 hover:bg-yellow-500/10"
-                          : "text-emerald-400 hover:bg-emerald-500/10"
-                      )}
-                      title={funnel.syncPaused !== false ? "Auto-sync is paused — click to resume" : "Auto-sync is active — click to pause"}
-                    >
-                      {togglingPause === funnel.id ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : funnel.syncPaused !== false ? (
-                        <Play className="w-3 h-3" />
-                      ) : (
-                        <Pause className="w-3 h-3" />
-                      )}
-                      {funnel.syncPaused !== false ? "Paused" : "Syncing"}
+                      {deleting === cfg.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Del"}
                     </button>
                   </>
                 )}
-                <button
-                  onClick={() => editingFunnelId === funnel.id ? setEditingFunnelId(null) : startEdit(funnel)}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/40 hover:text-white/60 hover:bg-white/5"
-                >
-                  {savedId === funnel.id ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <SettingsIcon className="w-3 h-3" />}
-                  {savedId === funnel.id ? "Saved" : "Configure"}
-                </button>
               </div>
             </div>
 
-            {ingestResult?.funnelId === funnel.id && (
+            {ingestResult?.configId === cfg.id && (
               <div className={cn(
                 "mt-2 px-3 py-1.5 rounded text-[10px]",
                 ingestResult.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
@@ -2072,7 +2353,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
               </div>
             )}
 
-            {previewData?.funnelId === funnel.id && (
+            {previewData?.configId === cfg.id && (
               <div className="mt-3 pt-3 border-t border-white/5">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-[10px] text-white/30 uppercase tracking-wider">Sheet Preview ({previewData.rows.length} rows)</p>
@@ -2105,33 +2386,54 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
               </div>
             )}
 
-            {editingFunnelId === funnel.id && (
+            {editingId === cfg.id && (
               <div className="mt-3 pt-3 border-t border-white/5 space-y-3">
                 <div>
-                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet URL or ID</label>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Config Name</label>
                   <input
-                    value={sheetId}
-                    onChange={e => {
-                      const val = e.target.value.trim();
-                      const urlMatch = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-                      setSheetId(urlMatch ? urlMatch[1] : val);
-                    }}
-                    placeholder="Paste a Google Sheets URL or sheet ID"
-                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Tab Name</label>
-                  <input
-                    value={sheetTab}
-                    onChange={e => setSheetTab(e.target.value)}
-                    placeholder="e.g. Sheet1"
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
                     className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-white/30 uppercase tracking-wider">Google Sheet URL or ID</label>
+                    <input
+                      value={editSheetId}
+                      onChange={e => {
+                        const val = e.target.value.trim();
+                        const urlMatch = val.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+                        setEditSheetId(urlMatch ? urlMatch[1] : val);
+                      }}
+                      placeholder="Paste a Google Sheets URL or sheet ID"
+                      className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-white/30 uppercase tracking-wider">Tab Name</label>
+                    <input
+                      value={editSheetTab}
+                      onChange={e => setEditSheetTab(e.target.value)}
+                      placeholder="e.g. Sheet1"
+                      className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-white/30 uppercase tracking-wider">Default Funnel (fallback)</label>
+                  <select
+                    value={editDefaultFunnel}
+                    onChange={e => setEditDefaultFunnel(e.target.value ? Number(e.target.value) : "")}
+                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    <option value="">-- No default (require funnel routing) --</option>
+                    {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleSave(funnel.id)}
+                    onClick={() => handleSaveEdit(cfg.id)}
                     disabled={saving}
                     className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary text-white text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
                   >
@@ -2139,7 +2441,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                     Save
                   </button>
                   <button
-                    onClick={() => setEditingFunnelId(null)}
+                    onClick={() => setEditingId(null)}
                     className="px-3 py-1.5 rounded text-xs text-white/40 hover:text-white/60"
                   >
                     Cancel
@@ -2148,15 +2450,13 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
               </div>
             )}
 
-            {tenantId && (
-              <ColumnMappingReview
-                tenantId={tenantId}
-                funnelId={funnel.id}
-                funnel={funnel}
-                isAgency={!!isAgency}
-                onMappingSaved={onRefetch}
-              />
-            )}
+            <ColumnMappingReview
+              configId={cfg.id}
+              config={cfg}
+              isAgency={!!isAgency}
+              onMappingSaved={handleRefetch}
+              funnels={funnels}
+            />
           </PremiumCard>
         ))}
       </div>

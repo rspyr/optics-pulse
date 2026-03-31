@@ -20,3 +20,4 @@ export * from "./reviews";
 export * from "./tracker-heartbeats";
 export * from "./scripts";
 export * from "./routing-config";
+export * from "./google-sheet-configs";
