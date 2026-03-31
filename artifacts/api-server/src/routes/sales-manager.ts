@@ -356,6 +356,95 @@ router.put("/sales-manager/spiff-config", async (req, res) => {
   res.json({ spiffConfig: config });
 });
 
+router.get("/sales-manager/spiffs-audit", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ leads: [], totalSpiff: 0 });
+    return;
+  }
+
+  const spiffConfig = await getTenantSpiffConfig(tenantId);
+
+  const conds: any[] = [
+    eq(leadsTable.tenantId, tenantId),
+    inArray(leadsTable.status, ["booked", "sold"]),
+    eq(leadsTable.preBooked, false),
+  ];
+
+  if (req.query.csrId) {
+    const parsed = Number(req.query.csrId);
+    if (isNaN(parsed)) { res.status(400).json({ error: "Invalid csrId" }); return; }
+    conds.push(eq(leadsTable.assignedCsrId, parsed));
+  }
+  if (req.query.funnelId) {
+    const parsed = Number(req.query.funnelId);
+    if (isNaN(parsed)) { res.status(400).json({ error: "Invalid funnelId" }); return; }
+    conds.push(eq(leadsTable.funnelId, parsed));
+  }
+  if (req.query.startDate) {
+    const d = new Date(req.query.startDate as string);
+    if (isNaN(d.getTime())) { res.status(400).json({ error: "Invalid startDate" }); return; }
+    conds.push(gte(leadsTable.updatedAt, d));
+  }
+  if (req.query.endDate) {
+    const end = new Date(req.query.endDate as string);
+    if (isNaN(end.getTime())) { res.status(400).json({ error: "Invalid endDate" }); return; }
+    end.setHours(23, 59, 59, 999);
+    conds.push(lte(leadsTable.updatedAt, end));
+  }
+
+  const rows = await db.select({
+    id: leadsTable.id,
+    firstName: leadsTable.firstName,
+    lastName: leadsTable.lastName,
+    status: leadsTable.status,
+    funnelId: leadsTable.funnelId,
+    assignedCsrId: leadsTable.assignedCsrId,
+    updatedAt: leadsTable.updatedAt,
+  })
+    .from(leadsTable)
+    .where(and(...conds))
+    .orderBy(desc(leadsTable.updatedAt));
+
+  const csrIds = [...new Set(rows.map(r => r.assignedCsrId).filter((id): id is number => id !== null))];
+  let csrNameMap: Record<number, string> = {};
+  if (csrIds.length > 0) {
+    const csrRows = await db.select({ id: usersTable.id, name: usersTable.name })
+      .from(usersTable).where(inArray(usersTable.id, csrIds));
+    csrNameMap = Object.fromEntries(csrRows.map(c => [c.id, c.name]));
+  }
+
+  const funnelIds = [...new Set(rows.map(r => r.funnelId).filter((id): id is number => id !== null))];
+  let funnelNameMap: Record<number, string> = {};
+  if (funnelIds.length > 0) {
+    const fRows = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+      .from(funnelTypesTable).where(inArray(funnelTypesTable.id, funnelIds));
+    funnelNameMap = Object.fromEntries(fRows.map(f => [f.id, f.name]));
+  }
+
+  let totalSpiff = 0;
+  const leads = rows.map(r => {
+    const funnelName = r.funnelId ? (funnelNameMap[r.funnelId] || null) : null;
+    const amount = funnelName && spiffConfig.byFunnel[funnelName] !== undefined
+      ? spiffConfig.byFunnel[funnelName]
+      : spiffConfig.default;
+    totalSpiff += amount;
+    return {
+      id: r.id,
+      leadName: [r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown",
+      csrName: r.assignedCsrId ? (csrNameMap[r.assignedCsrId] || "Unassigned") : "Unassigned",
+      csrId: r.assignedCsrId,
+      funnelName: funnelName || "Default",
+      funnelId: r.funnelId,
+      status: r.status,
+      spiffAmount: amount,
+      date: r.updatedAt,
+    };
+  });
+
+  res.json({ leads, totalSpiff });
+});
+
 router.get("/sales-manager/lead-types", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {

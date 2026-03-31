@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
+import { useAuth } from "@/components/auth-context";
 import { motion, AnimatePresence } from "framer-motion";
 import { io as socketIOClient } from "socket.io-client";
 import {
@@ -11,7 +12,7 @@ import {
   Calendar, PhoneCall, Check,
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
-  Filter, PhoneOff, Ban, Globe, AlertCircle, FileText
+  Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -234,7 +235,7 @@ interface HudStats {
   nextBonusAt: number;
 }
 
-function useHudStats(tenantId?: number | null, isAgency?: boolean) {
+function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: number | null) {
   const [stats, setStats] = useState<HudStats>({
     callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
     newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
@@ -244,11 +245,15 @@ function useHudStats(tenantId?: number | null, isAgency?: boolean) {
   const fetchStats = useCallback(async () => {
     if (!shouldFetch) return;
     try {
-      const url = tenantId ? `${API_BASE}/leads/hud/stats?tenantId=${tenantId}` : `${API_BASE}/leads/hud/stats`;
+      const params = new URLSearchParams();
+      if (tenantId) params.set("tenantId", String(tenantId));
+      if (csrId) params.set("csrId", String(csrId));
+      const qs = params.toString();
+      const url = `${API_BASE}/leads/hud/stats${qs ? `?${qs}` : ""}`;
       const res = await fetch(url, { credentials: "include" });
       if (res.ok) setStats(await res.json());
     } catch {}
-  }, [tenantId, shouldFetch]);
+  }, [tenantId, shouldFetch, csrId]);
   useEffect(() => {
     if (!shouldFetch) return;
     fetchStats();
@@ -258,7 +263,7 @@ function useHudStats(tenantId?: number | null, isAgency?: boolean) {
   return { stats, refetch: fetchStats };
 }
 
-function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean) {
+function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean, csrId?: number | null) {
   const [data, setData] = useState<{
     newLeads: LeadData[]; today: LeadData[]; callbacks: LeadData[];
     reengagement: LeadData[]; oldLeads: LeadData[]; total: number;
@@ -270,11 +275,15 @@ function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean) {
   const fetchQueue = useCallback(async () => {
     if (!shouldFetch) return;
     try {
-      const url = tenantId ? `${API_BASE}/leads-hub/queue?tenantId=${tenantId}` : `${API_BASE}/leads-hub/queue`;
+      const params = new URLSearchParams();
+      if (tenantId) params.set("tenantId", String(tenantId));
+      if (csrId) params.set("csrId", String(csrId));
+      const qs = params.toString();
+      const url = `${API_BASE}/leads-hub/queue${qs ? `?${qs}` : ""}`;
       const res = await fetch(url, { credentials: "include" });
       if (res.ok) setData(await res.json());
     } catch {} finally { setLoading(false); }
-  }, [tenantId, shouldFetch]);
+  }, [tenantId, shouldFetch, csrId]);
 
   useEffect(() => {
     if (!shouldFetch) return;
@@ -1403,8 +1412,23 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
 
 export default function Leads() {
   const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter();
-  const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency);
-  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "client_admin" || user?.role === "super_admin" || user?.role === "agency_user";
+  const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
+  const [csrList, setCsrList] = useState<CsrOption[]>([]);
+
+  useEffect(() => {
+    if (!isAdmin || !effectiveTenantId) { setCsrList([]); return; }
+    fetch(`${API_BASE}/leads-hub/csrs?tenantId=${effectiveTenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setCsrList(d.csrs || []))
+      .catch(() => {});
+  }, [isAdmin, effectiveTenantId]);
+
+  useEffect(() => { setSelectedCsrId(null); }, [effectiveTenantId]);
+
+  const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
+  const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId);
   const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
@@ -1585,6 +1609,28 @@ export default function Leads() {
             >
               {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
+          </div>
+        </PremiumCard>
+      )}
+
+      {isAdmin && csrList.length > 0 && (
+        <PremiumCard className="p-4 mb-6">
+          <div className="flex items-center gap-3">
+            <Users className="w-4 h-4 text-white/40" />
+            <label className="text-xs text-white/40 uppercase tracking-wider">CSR View</label>
+            <select
+              value={selectedCsrId ?? ""}
+              onChange={e => { const v = e.target.value; setSelectedCsrId(v ? parseInt(v) : null); }}
+              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              <option value="">All CSRs</option>
+              {csrList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {selectedCsrId && (
+              <span className="text-xs text-primary/70 italic">
+                Viewing as {csrList.find(c => c.id === selectedCsrId)?.name}
+              </span>
+            )}
           </div>
         </PremiumCard>
       )}

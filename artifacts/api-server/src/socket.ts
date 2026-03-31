@@ -218,38 +218,35 @@ async function startDemoMode() {
   console.log("[Demo] Demo mode started — new leads every 30-60s");
 }
 
-export async function getHudStats(tenantId: number | null) {
+export async function getHudStats(tenantId: number | null, csrId?: number | null) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const todayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.createdAt} >= ${today}`)
-    : sql`${leadsTable.createdAt} >= ${today}`;
+  const baseConds: any[] = [sql`${leadsTable.createdAt} >= ${today}`];
+  if (tenantId) baseConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) baseConds.push(eq(leadsTable.assignedCsrId, csrId));
 
-  const [allLeadsToday] = await db.select({ count: count() }).from(leadsTable).where(todayConditions);
+  const [allLeadsToday] = await db.select({ count: count() }).from(leadsTable).where(and(...baseConds));
 
-  const bookedTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
-  const [bookedToday] = await db.select({ count: count() }).from(leadsTable).where(bookedTodayConditions);
+  const bookedConds: any[] = [eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  if (tenantId) bookedConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) bookedConds.push(eq(leadsTable.assignedCsrId, csrId));
+  const [bookedToday] = await db.select({ count: count() }).from(leadsTable).where(and(...bookedConds));
 
-  const soldTodayConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
-  const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(soldTodayConditions);
+  const soldConds: any[] = [eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  if (tenantId) soldConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) soldConds.push(eq(leadsTable.assignedCsrId, csrId));
+  const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(and(...soldConds));
 
-  const callAttemptsConds = tenantId
-    ? and(
-        gte(callAttemptsTable.attemptedAt, today),
-        sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`,
-      )
-    : gte(callAttemptsTable.attemptedAt, today);
-  const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(callAttemptsConds);
+  const callAttemptsConds: any[] = [gte(callAttemptsTable.attemptedAt, today)];
+  if (tenantId) callAttemptsConds.push(sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`);
+  if (csrId) callAttemptsConds.push(eq(callAttemptsTable.userId, csrId));
+  const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(and(...callAttemptsConds));
 
-  const contactedExclPreBookedConds = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
-  const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(contactedExclPreBookedConds);
+  const contactedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  if (tenantId) contactedConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) contactedConds.push(eq(leadsTable.assignedCsrId, csrId));
+  const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(and(...contactedConds));
 
   const totalCalls = callAttemptsToday.count;
   const bookings = bookedToday.count + soldToday.count;
@@ -261,11 +258,11 @@ export async function getHudStats(tenantId: number | null) {
     const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
-    const bookedLeadsConds = tenantId
-      ? and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
-      : and(inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
+    const spiffConds: any[] = [inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+    if (tenantId) spiffConds.push(eq(leadsTable.tenantId, tenantId));
+    if (csrId) spiffConds.push(eq(leadsTable.assignedCsrId, csrId));
     const bookedLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId })
-      .from(leadsTable).where(bookedLeadsConds);
+      .from(leadsTable).where(and(...spiffConds));
     const funnelIds = [...new Set(bookedLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
     let funnelNameLookup: Record<number, string> = {};
     if (funnelIds.length > 0) {
@@ -280,9 +277,10 @@ export async function getHudStats(tenantId: number | null) {
     commission = computeSpiffCommission(bookedLeadsWithFunnel, spiffConfig);
   }
 
-  const speedConditions = tenantId
-    ? and(eq(leadsTable.tenantId, tenantId), sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
-    : and(sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
+  const speedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`];
+  if (tenantId) speedConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) speedConds.push(eq(leadsTable.assignedCsrId, csrId));
+  const speedConditions = and(...speedConds);
   const [speedResult] = await db
     .select({
       avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,

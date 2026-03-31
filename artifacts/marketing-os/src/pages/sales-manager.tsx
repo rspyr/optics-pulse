@@ -17,7 +17,7 @@ import ScriptManagement from "@/components/script-management";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
-type Tab = "dashboard" | "team" | "scripts" | "activity" | "coaching" | "routing" | "settings";
+type Tab = "dashboard" | "team" | "scripts" | "activity" | "coaching" | "routing" | "settings" | "spiffs";
 
 interface FunnelType {
   id: number;
@@ -3200,6 +3200,184 @@ function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number
   );
 }
 
+interface SpiffLead {
+  id: number;
+  leadName: string;
+  csrName: string;
+  csrId: number | null;
+  funnelName: string;
+  funnelId: number | null;
+  status: string;
+  spiffAmount: number;
+  date: string;
+}
+
+function SpiffsAuditTab({ tenantId, funnels, timezone }: { tenantId: number | null; funnels: FunnelType[]; timezone: string }) {
+  const [leads, setLeads] = useState<SpiffLead[]>([]);
+  const [totalSpiff, setTotalSpiff] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [csrs, setCsrs] = useState<{ id: number; name: string }[]>([]);
+  const [filterCsrId, setFilterCsrId] = useState<string>("");
+  const [filterFunnelId, setFilterFunnelId] = useState<string>("");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+
+  useEffect(() => {
+    if (!tenantId) return;
+    fetch(`${API_BASE}/sales-manager/team?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        if (d.coordinators) setCsrs(d.coordinators.map((c: { id: number; name: string }) => ({ id: c.id, name: c.name })));
+      })
+      .catch(() => {});
+  }, [tenantId]);
+
+  const fetchAudit = useCallback(async () => {
+    if (!tenantId) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("tenantId", String(tenantId));
+      if (filterCsrId) params.set("csrId", filterCsrId);
+      if (filterFunnelId) params.set("funnelId", filterFunnelId);
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
+      const res = await fetch(`${API_BASE}/sales-manager/spiffs-audit?${params.toString()}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setLeads(data.leads || []);
+        setTotalSpiff(data.totalSpiff || 0);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [tenantId, filterCsrId, filterFunnelId, startDate, endDate]);
+
+  useEffect(() => { fetchAudit(); }, [fetchAudit]);
+
+  return (
+    <div className="space-y-4">
+      <PremiumCard className="p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">CSR</label>
+            <select
+              value={filterCsrId}
+              onChange={e => setFilterCsrId(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+            >
+              <option value="">All CSRs</option>
+              {csrs.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">Funnel</label>
+            <select
+              value={filterFunnelId}
+              onChange={e => setFilterFunnelId(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+            >
+              <option value="">All Funnels</option>
+              {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">Start Date</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={e => setStartDate(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">End Date</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={e => setEndDate(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+          <button
+            onClick={() => { setFilterCsrId(""); setFilterFunnelId(""); setStartDate(""); setEndDate(""); }}
+            className="px-3 py-1.5 text-xs text-white/40 hover:text-white/70 border border-white/10 rounded transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      </PremiumCard>
+
+      <PremiumCard className="p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <DollarSign className="w-5 h-5 text-emerald-400" />
+            <span className="text-sm font-display text-white/60">Total Spiff Amount</span>
+          </div>
+          <span className="text-2xl font-display text-emerald-400">${totalSpiff.toLocaleString()}</span>
+        </div>
+        <div className="flex items-center gap-4 mt-2 text-xs text-white/40">
+          <span>{leads.length} qualifying lead{leads.length !== 1 ? "s" : ""}</span>
+          {filterCsrId && <span>Filtered by CSR</span>}
+          {filterFunnelId && <span>Filtered by Funnel</span>}
+          {(startDate || endDate) && <span>Date range applied</span>}
+        </div>
+      </PremiumCard>
+
+      <PremiumCard className="overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          </div>
+        ) : leads.length === 0 ? (
+          <div className="py-16 text-center">
+            <DollarSign className="w-10 h-10 text-white/10 mx-auto mb-3" />
+            <p className="text-sm text-white/40">No spiff-qualifying leads found for the current filters.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="text-left py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">Lead</th>
+                  <th className="text-left py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">CSR</th>
+                  <th className="text-left py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">Funnel</th>
+                  <th className="text-left py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">Status</th>
+                  <th className="text-right py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">Spiff</th>
+                  <th className="text-left py-3 px-4 text-[10px] text-white/40 uppercase tracking-wider font-medium">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map(lead => (
+                  <tr key={lead.id} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+                    <td className="py-2.5 px-4 text-white font-medium">{lead.leadName}</td>
+                    <td className="py-2.5 px-4 text-white/70">{lead.csrName}</td>
+                    <td className="py-2.5 px-4">
+                      <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px]">
+                        {lead.funnelName}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[10px] capitalize",
+                        lead.status === "sold" ? "bg-emerald-500/10 text-emerald-400" : "bg-blue-500/10 text-blue-400"
+                      )}>
+                        {lead.status}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4 text-right text-emerald-400 font-mono">${lead.spiffAmount}</td>
+                    <td className="py-2.5 px-4 text-white/50">
+                      {formatInTz(lead.date, timezone, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </PremiumCard>
+    </div>
+  );
+}
+
 export default function SalesManager() {
   const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -3240,6 +3418,7 @@ export default function SalesManager() {
     { key: "routing", label: "Routing", icon: Shuffle },
     { key: "activity", label: "Activity", icon: Activity, count: activities.length > 0 ? activities.length : undefined },
     { key: "coaching", label: "Coaching", icon: Brain, count: insights.filter(i => i.type === "warning").length || undefined },
+    { key: "spiffs", label: "Spiffs Audit", icon: DollarSign },
     { key: "settings", label: "Settings", icon: SettingsIcon },
   ];
 
@@ -3330,6 +3509,9 @@ export default function SalesManager() {
             loading={insightsLoading}
             fetching={insightsFetching}
           />
+        )}
+        {tab === "spiffs" && (
+          <SpiffsAuditTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} />
         )}
         {tab === "settings" && (
           <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />

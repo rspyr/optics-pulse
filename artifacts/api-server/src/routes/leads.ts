@@ -124,11 +124,19 @@ router.get("/leads/hud/queue", async (req, res) => {
 
 router.get("/leads/hud/stats", async (req, res) => {
   const role = req.session.userRole;
+  const isManager = role === "super_admin" || role === "agency_user" || role === "client_admin";
   const tenantId = (role === "super_admin" || role === "agency_user")
     ? (req.query.tenantId ? Number(req.query.tenantId) : null)
     : req.session.tenantId ?? null;
 
-  const stats = await getHudStats(tenantId);
+  let csrId: number | null = null;
+  if (req.query.csrId) {
+    const parsed = Number(req.query.csrId);
+    if (isManager && !isNaN(parsed)) {
+      csrId = parsed;
+    }
+  }
+  const stats = await getHudStats(tenantId, csrId);
   res.json(stats);
 });
 
