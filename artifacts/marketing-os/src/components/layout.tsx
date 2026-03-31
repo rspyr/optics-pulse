@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
+import { useBranding } from "@/hooks/use-branding";
 
 const PulseIcon = ({ className }: { className?: string }) => (
   <img src="/pulse-logo.png" alt="" className={className} style={{ objectFit: "contain" }} />
@@ -73,6 +74,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
   const { user, logout, isAgency, effectiveTenantId } = useAuth();
+  useBranding();
 
   const leaderboardVisible = user?.leaderboardConfig?.visible ?? false;
   const navItems = isAgency ? AGENCY_NAV : getClientNav(user?.role === "client_admin", leaderboardVisible);
