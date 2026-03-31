@@ -1,23 +1,24 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable, scriptsTable, tenantsTable } from "@workspace/db";
+import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable, scriptsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, desc, ne, isNotNull } from "drizzle-orm";
 import { generateCoachingInsights } from "../services/coaching-insights";
 
 export interface SpiffConfig {
   default: number;
-  byLeadType: Record<string, number>;
+  byFunnel: Record<string, number>;
 }
 
-const DEFAULT_SPIFF_CONFIG: SpiffConfig = { default: 20, byLeadType: {} };
+const DEFAULT_SPIFF_CONFIG: SpiffConfig = { default: 20, byFunnel: {} };
 
 export function parseSpiffConfig(raw: unknown): SpiffConfig {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_SPIFF_CONFIG };
   const obj = raw as Record<string, unknown>;
+  const byFunnelRaw = obj.byFunnel ?? obj.byLeadType;
   return {
     default: typeof obj.default === "number" && obj.default >= 0 ? obj.default : 20,
-    byLeadType: obj.byLeadType && typeof obj.byLeadType === "object"
+    byFunnel: byFunnelRaw && typeof byFunnelRaw === "object"
       ? Object.fromEntries(
-          Object.entries(obj.byLeadType as Record<string, unknown>)
+          Object.entries(byFunnelRaw as Record<string, unknown>)
             .filter(([, v]) => typeof v === "number" && v >= 0)
             .map(([k, v]) => [k, v as number])
         )
@@ -26,16 +27,16 @@ export function parseSpiffConfig(raw: unknown): SpiffConfig {
 }
 
 export function computeSpiffCommission(
-  leads: { status: string; leadType: string | null; preBooked?: boolean }[],
+  leads: { status: string; funnelName: string | null; preBooked?: boolean }[],
   spiffConfig: SpiffConfig,
 ): number {
   let total = 0;
   for (const lead of leads) {
     if (lead.preBooked) continue;
     if (lead.status !== "booked" && lead.status !== "sold") continue;
-    const lt = lead.leadType || "";
-    const amount = lt && spiffConfig.byLeadType[lt] !== undefined
-      ? spiffConfig.byLeadType[lt]
+    const fn = lead.funnelName || "";
+    const amount = fn && spiffConfig.byFunnel[fn] !== undefined
+      ? spiffConfig.byFunnel[fn]
       : spiffConfig.default;
     total += amount;
   }
@@ -118,14 +119,22 @@ router.get("/sales-manager/team", async (req, res) => {
 
   const allLeadIds = [...new Set(todayLeadIds.map(r => r.leadId))];
   let leadStatusMap: Record<number, string> = {};
-  let leadTypeMap: Record<number, string | null> = {};
+  let leadFunnelIdMap: Record<number, number | null> = {};
   let preBookedMap: Record<number, boolean> = {};
   if (allLeadIds.length > 0) {
-    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, leadType: leadsTable.leadType, preBooked: leadsTable.preBooked })
+    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
       .from(leadsTable).where(inArray(leadsTable.id, allLeadIds));
     leadStatusMap = Object.fromEntries(leads.map(l => [l.id, l.status]));
-    leadTypeMap = Object.fromEntries(leads.map(l => [l.id, l.leadType]));
+    leadFunnelIdMap = Object.fromEntries(leads.map(l => [l.id, l.funnelId]));
     preBookedMap = Object.fromEntries(leads.map(l => [l.id, l.preBooked ?? false]));
+  }
+
+  const funnelIdSet = new Set(Object.values(leadFunnelIdMap).filter((id): id is number => id !== null));
+  let funnelNameMap: Record<number, string> = {};
+  if (funnelIdSet.size > 0) {
+    const funnelRows = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+      .from(funnelTypesTable).where(inArray(funnelTypesTable.id, [...funnelIdSet]));
+    funnelNameMap = Object.fromEntries(funnelRows.map(f => [f.id, f.name]));
   }
 
   const spiffConfig = await getTenantSpiffConfig(tenantId);
@@ -166,7 +175,10 @@ router.get("/sales-manager/team", async (req, res) => {
   const coordinators = users.map(user => {
     const calls = callCountMap[user.id] || 0;
     const userLeadIds = leadIdsByUser[user.id] || [];
-    const userLeads = userLeadIds.map(id => ({ status: leadStatusMap[id] || "", leadType: leadTypeMap[id] || null, preBooked: preBookedMap[id] || false }));
+    const userLeads = userLeadIds.map(id => {
+      const fId = leadFunnelIdMap[id];
+      return { status: leadStatusMap[id] || "", funnelName: fId ? (funnelNameMap[fId] || null) : null, preBooked: preBookedMap[id] || false };
+    });
     const nonPreBookedLeads = userLeads.filter(l => !l.preBooked);
     const bookings = nonPreBookedLeads.filter(l => ["booked", "sold"].includes(l.status)).length;
     const bookingRate = calls > 0 ? Math.round((bookings / calls) * 100) : 0;

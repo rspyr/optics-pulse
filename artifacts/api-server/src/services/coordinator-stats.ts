@@ -1,11 +1,11 @@
-import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable } from "@workspace/db";
+import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 
 async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date) {
-  if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; leadType: string | null }[] };
+  if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
 
-  const bookedSoldLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType, preBooked: leadsTable.preBooked })
+  const bookedSoldLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
     .from(leadsTable)
     .where(and(
       inArray(leadsTable.id, leadIds),
@@ -29,11 +29,23 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
       lte(leadsTable.updatedAt, dayEnd),
     ));
 
+  const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
+  let funnelNameLookup: Record<number, string> = {};
+  if (funnelIds.length > 0) {
+    const fRows = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+      .from(funnelTypesTable).where(inArray(funnelTypesTable.id, funnelIds));
+    funnelNameLookup = Object.fromEntries(fRows.map(f => [f.id, f.name]));
+  }
+  const bookedLeadsWithFunnel = bookedSoldLeads.map(l => ({
+    status: l.status,
+    funnelName: l.funnelId ? (funnelNameLookup[l.funnelId] || null) : null,
+  }));
+
   return {
     bookingsCount,
     soldCount,
     avgSpeedToLead: Math.round(Number(speedResult?.avgSpeed ?? 0)),
-    bookedLeads: bookedSoldLeads,
+    bookedLeads: bookedLeadsWithFunnel,
   };
 }
 

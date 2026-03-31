@@ -1358,23 +1358,19 @@ function CoachingInsightsTab({ insights, loading, fetching }: {
 
 interface SpiffConfig {
   default: number;
-  byLeadType: Record<string, number>;
+  byFunnel: Record<string, number>;
 }
 
 function useSpiffConfig(tenantId: number | null) {
-  const [config, setConfig] = useState<SpiffConfig>({ default: 20, byLeadType: {} });
-  const [leadTypes, setLeadTypes] = useState<string[]>([]);
+  const [config, setConfig] = useState<SpiffConfig>({ default: 20, byFunnel: {} });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!tenantId) { setLoading(false); return; }
-    Promise.all([
-      fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
-      fetch(`${API_BASE}/sales-manager/lead-types?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
-    ]).then(([configData, typesData]) => {
-      if (configData?.spiffConfig) setConfig(configData.spiffConfig);
-      if (typesData?.leadTypes) setLeadTypes(typesData.leadTypes);
-    }).finally(() => setLoading(false));
+    fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (data?.spiffConfig) setConfig(data.spiffConfig); })
+      .finally(() => setLoading(false));
   }, [tenantId]);
 
   const saveConfig = async (newConfig: SpiffConfig) => {
@@ -1387,32 +1383,32 @@ function useSpiffConfig(tenantId: number | null) {
     setConfig(newConfig);
   };
 
-  return { config, leadTypes, loading, saveConfig };
+  return { config, loading, saveConfig };
 }
 
-function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
-  const { config, leadTypes, loading, saveConfig } = useSpiffConfig(tenantId);
+function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; funnels: FunnelType[] }) {
+  const { config, loading, saveConfig } = useSpiffConfig(tenantId);
   const [defaultAmount, setDefaultAmount] = useState(20);
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [newLeadType, setNewLeadType] = useState("");
+  const [newFunnel, setNewFunnel] = useState("");
 
   useEffect(() => {
     setDefaultAmount(config.default);
-    setOverrides({ ...config.byLeadType });
+    setOverrides({ ...config.byFunnel });
   }, [config]);
 
   const handleSave = async () => {
     setSaving(true);
     setSaved(false);
-    await saveConfig({ default: defaultAmount, byLeadType: overrides });
+    await saveConfig({ default: defaultAmount, byFunnel: overrides });
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const availableTypes = leadTypes.filter(lt => !(lt in overrides));
+  const availableFunnels = (funnels || []).map(f => f.name).filter(name => !(name in overrides));
 
   if (loading) {
     return (
@@ -1432,7 +1428,7 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
       <PremiumCard className="p-6 space-y-5">
         <div>
           <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Default Spiff Amount</label>
-          <p className="text-[10px] text-white/30 mb-2">Applied to all bookings unless a lead-type override is set below.</p>
+          <p className="text-[10px] text-white/30 mb-2">Applied to all bookings unless a funnel override is set below.</p>
           <div className="relative w-40">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40 text-sm">$</span>
             <input
@@ -1447,14 +1443,14 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
         </div>
 
         <div>
-          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Lead Type Overrides</label>
-          <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific lead types.</p>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Funnel Overrides</label>
+          <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific funnels.</p>
 
           {Object.keys(overrides).length > 0 && (
             <div className="space-y-2 mb-3">
-              {Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)).map(([lt, amount]) => (
-                <div key={lt} className="flex items-center gap-2">
-                  <span className="flex-1 text-sm text-white/70 truncate">{lt}</span>
+              {Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)).map(([fn, amount]) => (
+                <div key={fn} className="flex items-center gap-2">
+                  <span className="flex-1 text-sm text-white/70 truncate">{fn}</span>
                   <div className="relative w-28">
                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 text-xs">$</span>
                     <input
@@ -1462,12 +1458,12 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
                       min={0}
                       step={1}
                       value={amount}
-                      onChange={e => setOverrides(prev => ({ ...prev, [lt]: Math.max(0, Number(e.target.value)) }))}
+                      onChange={e => setOverrides(prev => ({ ...prev, [fn]: Math.max(0, Number(e.target.value)) }))}
                       className="w-full bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
                     />
                   </div>
                   <button
-                    onClick={() => setOverrides(prev => { const next = { ...prev }; delete next[lt]; return next; })}
+                    onClick={() => setOverrides(prev => { const next = { ...prev }; delete next[fn]; return next; })}
                     className="text-white/30 hover:text-red-400 text-xs px-1"
                   >
                     ✕
@@ -1477,21 +1473,21 @@ function SpiffConfigSection({ tenantId }: { tenantId: number | null }) {
             </div>
           )}
 
-          {availableTypes.length > 0 && (
+          {availableFunnels.length > 0 && (
             <div className="flex items-center gap-2">
               <select
-                value={newLeadType}
-                onChange={e => setNewLeadType(e.target.value)}
+                value={newFunnel}
+                onChange={e => setNewFunnel(e.target.value)}
                 className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
               >
-                <option value="">Add lead type override...</option>
-                {availableTypes.map(lt => (
-                  <option key={lt} value={lt}>{lt}</option>
+                <option value="">Add funnel override...</option>
+                {availableFunnels.map(fn => (
+                  <option key={fn} value={fn}>{fn}</option>
                 ))}
               </select>
               <button
-                onClick={() => { if (newLeadType) { setOverrides(prev => ({ ...prev, [newLeadType]: defaultAmount })); setNewLeadType(""); } }}
-                disabled={!newLeadType}
+                onClick={() => { if (newFunnel) { setOverrides(prev => ({ ...prev, [newFunnel]: defaultAmount })); setNewFunnel(""); } }}
+                disabled={!newFunnel}
                 className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white hover:bg-white/10 disabled:opacity-30"
               >
                 Add
@@ -2505,7 +2501,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
 function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
   return (
     <div className="space-y-6">
-      <SpiffConfigSection tenantId={tenantId} />
+      <SpiffConfigSection tenantId={tenantId} funnels={funnels} />
 
       <div className="border-t border-white/5 pt-6">
         <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />

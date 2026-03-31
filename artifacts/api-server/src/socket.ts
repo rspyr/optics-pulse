@@ -264,9 +264,20 @@ export async function getHudStats(tenantId: number | null) {
     const bookedLeadsConds = tenantId
       ? and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`)
       : and(inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${today}`);
-    const bookedLeads = await db.select({ status: leadsTable.status, leadType: leadsTable.leadType })
+    const bookedLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId })
       .from(leadsTable).where(bookedLeadsConds);
-    commission = computeSpiffCommission(bookedLeads, spiffConfig);
+    const funnelIds = [...new Set(bookedLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
+    let funnelNameLookup: Record<number, string> = {};
+    if (funnelIds.length > 0) {
+      const fRows = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+        .from(funnelTypesTable).where(inArray(funnelTypesTable.id, funnelIds));
+      funnelNameLookup = Object.fromEntries(fRows.map(f => [f.id, f.name]));
+    }
+    const bookedLeadsWithFunnel = bookedLeads.map(l => ({
+      status: l.status,
+      funnelName: l.funnelId ? (funnelNameLookup[l.funnelId] || null) : null,
+    }));
+    commission = computeSpiffCommission(bookedLeadsWithFunnel, spiffConfig);
   }
 
   const speedConditions = tenantId
