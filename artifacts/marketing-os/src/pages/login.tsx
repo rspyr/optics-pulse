@@ -12,6 +12,15 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    document.title = "Optics";
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (link) {
+      link.href = "/optics-logo.png";
+      link.type = "image/png";
+    }
+  }, []);
+
+  useEffect(() => {
     try {
       const stored = localStorage.getItem(REMEMBER_KEY);
       if (stored) {
@@ -46,10 +55,15 @@ export default function Login() {
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-secondary/20 via-background to-background pointer-events-none" />
 
       <div className="relative z-10 w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3 mb-6">
+        <div className="flex flex-col items-center mb-8">
+          <div className="flex items-center gap-3 mb-2">
             <img src="/optics-logo.png" alt="Optics" className="w-12 h-12" />
             <span className="font-display text-3xl tracking-widest text-white mt-1">OPTICS</span>
+          </div>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-muted-foreground text-base font-medium">+</span>
+            <img src="/pulse-logo.png" alt="Pulse" className="w-5 h-5" />
+            <span className="font-display text-base tracking-widest text-white">PULSE</span>
           </div>
           <p className="text-muted-foreground text-sm font-sub tracking-wide">HVAC LAUNCH ATTRIBUTION PLATFORM</p>
         </div>
