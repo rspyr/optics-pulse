@@ -2501,10 +2501,332 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   );
 }
 
+interface AliasGroup {
+  canonicalName: string;
+  aliases: { id: number; alias: string }[];
+}
+
+function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
+  const [groups, setGroups] = useState<AliasGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newCanonical, setNewCanonical] = useState("");
+  const [newAlias, setNewAlias] = useState("");
+  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [addAliasText, setAddAliasText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const fetchAliases = useCallback(async () => {
+    if (!tenantId) return;
+    try {
+      const url = `${API_BASE}/lead-source-aliases?tenantId=${tenantId}`;
+      const res = await fetch(url, { credentials: "include" });
+      const data = await res.json();
+      setGroups(data.aliases || []);
+    } catch {
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { fetchAliases(); }, [fetchAliases]);
+
+  const toggleGroup = (name: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const handleAddCanonical = async () => {
+    if (!tenantId || !newCanonical.trim() || !newAlias.trim()) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/lead-source-aliases?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ canonicalName: newCanonical.trim(), alias: newAlias.trim() }),
+      });
+      setNewCanonical("");
+      setNewAlias("");
+      await fetchAliases();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddAlias = async (canonicalName: string) => {
+    if (!tenantId || !addAliasText.trim()) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/lead-source-aliases?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ canonicalName, alias: addAliasText.trim() }),
+      });
+      setAddAliasText("");
+      setAddingTo(null);
+      await fetchAliases();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteAlias = async (id: number) => {
+    if (!tenantId) return;
+    try {
+      await fetch(`${API_BASE}/lead-source-aliases/${id}?tenantId=${tenantId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      await fetchAliases();
+    } catch {
+    }
+  };
+
+  const handleDeleteCanonical = async (canonicalName: string) => {
+    if (!tenantId) return;
+    try {
+      await fetch(`${API_BASE}/lead-source-aliases/canonical/${encodeURIComponent(canonicalName)}?tenantId=${tenantId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      await fetchAliases();
+    } catch {
+    }
+  };
+
+  const handleLoadDefaults = async () => {
+    if (!tenantId) return;
+    setLoadingDefaults(true);
+    try {
+      const res = await fetch(`${API_BASE}/lead-source-aliases/load-defaults?tenantId=${tenantId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.created > 0) await fetchAliases();
+    } catch {
+    } finally {
+      setLoadingDefaults(false);
+    }
+  };
+
+  const handleBackfill = async () => {
+    if (!tenantId) return;
+    setBackfilling(true);
+    setBackfillResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/lead-source-aliases/backfill?tenantId=${tenantId}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      setBackfillResult(`Updated ${data.updated} of ${data.totalLeads} leads`);
+      setTimeout(() => setBackfillResult(null), 5000);
+    } catch {
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Shuffle className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Lead Source Aliases</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleBackfill}
+            disabled={backfilling || groups.length === 0}
+            className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-30"
+          >
+            {backfilling ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            Apply to Existing Leads
+          </button>
+          <button
+            onClick={handleLoadDefaults}
+            disabled={loadingDefaults}
+            className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-30"
+          >
+            {loadingDefaults ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            Load Defaults
+          </button>
+        </div>
+      </div>
+
+      {backfillResult && (
+        <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="text-xs text-emerald-300">{backfillResult}</span>
+        </div>
+      )}
+
+      <PremiumCard className="p-5 space-y-4">
+        <p className="text-[10px] text-white/30">
+          Map variations of lead source names to a single canonical name. All new leads will be normalized automatically.
+        </p>
+
+        {groups.length > 0 && (
+          <div className="space-y-2">
+            {groups.map(group => (
+              <div key={group.canonicalName} className="bg-white/5 rounded-lg border border-white/10 overflow-hidden">
+                <div
+                  className="flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-white/5"
+                  onClick={() => toggleGroup(group.canonicalName)}
+                >
+                  <div className="flex items-center gap-2">
+                    {expandedGroups.has(group.canonicalName) ? (
+                      <ChevronUp className="w-3.5 h-3.5 text-white/40" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 text-white/40" />
+                    )}
+                    <span className="text-sm font-medium text-white">{group.canonicalName}</span>
+                    <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">
+                      {group.aliases.length} alias{group.aliases.length !== 1 ? "es" : ""}
+                    </span>
+                  </div>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDeleteCanonical(group.canonicalName); }}
+                    className="text-white/20 hover:text-red-400 text-xs px-1"
+                    title="Delete all aliases for this source"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {expandedGroups.has(group.canonicalName) && (
+                  <div className="border-t border-white/5 px-4 py-3 space-y-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {group.aliases.map(a => (
+                        <span
+                          key={a.id}
+                          className="inline-flex items-center gap-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/60"
+                        >
+                          {a.alias}
+                          <button
+                            onClick={() => handleDeleteAlias(a.id)}
+                            className="text-white/20 hover:text-red-400 ml-0.5"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+
+                    {addingTo === group.canonicalName ? (
+                      <div className="flex items-center gap-2 mt-2">
+                        <input
+                          type="text"
+                          value={addAliasText}
+                          onChange={e => setAddAliasText(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") handleAddAlias(group.canonicalName); }}
+                          placeholder="New alias..."
+                          className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => handleAddAlias(group.canonicalName)}
+                          disabled={saving || !addAliasText.trim()}
+                          className="bg-primary/20 text-primary rounded-md px-3 py-1.5 text-xs hover:bg-primary/30 disabled:opacity-30"
+                        >
+                          Add
+                        </button>
+                        <button
+                          onClick={() => { setAddingTo(null); setAddAliasText(""); }}
+                          className="text-white/30 hover:text-white/60 text-xs px-1"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setAddingTo(group.canonicalName); setAddAliasText(""); }}
+                        className="text-xs text-primary/70 hover:text-primary mt-1"
+                      >
+                        + Add alias
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {groups.length === 0 && (
+          <div className="text-center py-6">
+            <p className="text-xs text-white/30 mb-3">No lead source aliases configured yet.</p>
+            <button
+              onClick={handleLoadDefaults}
+              disabled={loadingDefaults}
+              className="bg-primary/20 text-primary rounded-md px-4 py-2 text-xs hover:bg-primary/30 disabled:opacity-30"
+            >
+              {loadingDefaults ? "Loading..." : "Load Default Aliases"}
+            </button>
+          </div>
+        )}
+
+        <div className="border-t border-white/5 pt-4">
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-2">Add New Source</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={newCanonical}
+              onChange={e => setNewCanonical(e.target.value)}
+              placeholder="Canonical name (e.g. Meta)"
+              className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            <input
+              type="text"
+              value={newAlias}
+              onChange={e => setNewAlias(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleAddCanonical(); }}
+              placeholder="First alias (e.g. fb)"
+              className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            <button
+              onClick={handleAddCanonical}
+              disabled={saving || !newCanonical.trim() || !newAlias.trim()}
+              className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-white px-3 py-1.5 rounded-md text-xs font-medium disabled:opacity-30"
+            >
+              {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+              Add
+            </button>
+          </div>
+        </div>
+      </PremiumCard>
+    </div>
+  );
+}
+
 function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} funnels={funnels} />
+
+      <div className="border-t border-white/5 pt-6">
+        <LeadSourceAliasSection tenantId={tenantId} />
+      </div>
 
       <div className="border-t border-white/5 pt-6">
         <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />

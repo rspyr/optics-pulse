@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { normalizeSource } from "../services/source-normalizer";
 
 const router: IRouter = Router();
 
@@ -108,7 +109,7 @@ router.post("/webhooks/ingest", async (req, res) => {
         lastName: data.lastName || "",
         phone: data.phone || null,
         email: data.email || null,
-        source: data.utmSource || source,
+        source: await normalizeSource(tenantId, data.utmSource || source),
         matchedGclid: data.gclid || null,
         interestType: null,
         leadType: resolvedLeadType,

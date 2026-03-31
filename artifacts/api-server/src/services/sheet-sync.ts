@@ -4,6 +4,7 @@ import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead, emitLeadUpdated } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { normalizeSource } from "./source-normalizer";
 
 const UPDATABLE_FIELDS = [
   "appointmentDate", "appointmentTime", "appointmentBooked",
@@ -257,7 +258,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       lastName: row.lastName || "",
       phone: row.phone || null,
       email: row.email || null,
-      source: row.source || funnelName || "Google Sheet",
+      source: await normalizeSource(config.tenantId, row.source || funnelName || "Google Sheet"),
       serviceType: row.serviceType || null,
       notes: row.notes || null,
       address: row.address || null,

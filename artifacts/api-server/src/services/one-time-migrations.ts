@@ -1,7 +1,8 @@
-import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable } from "@workspace/db";
+import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable, leadSourceAliasesTable } from "@workspace/db";
 import { eq, and, sql, isNull, isNotNull, or, ne, inArray } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
 import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
+import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
 
 interface Migration {
   id: string;
@@ -231,6 +232,66 @@ const migrations: Migration[] = [
           }
         }
       }
+    },
+  },
+  {
+    id: "2026-03-31_create-lead-source-aliases",
+    description: "Create lead_source_aliases table and seed default aliases for all tenants, then backfill existing leads",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS lead_source_aliases (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          canonical_name TEXT NOT NULL,
+          alias TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_alias_lower
+        ON lead_source_aliases (tenant_id, lower(alias))
+      `);
+      console.log("[Migration] Created lead_source_aliases table");
+
+      const tenants = await db.select({ id: tenantsTable.id }).from(tenantsTable);
+      let totalSeeded = 0;
+      for (const tenant of tenants) {
+        for (const group of DEFAULT_SOURCE_ALIASES) {
+          for (const alias of group.aliases) {
+            const existing = await db.select().from(leadSourceAliasesTable)
+              .where(and(
+                eq(leadSourceAliasesTable.tenantId, tenant.id),
+                sql`lower(${leadSourceAliasesTable.alias}) = ${alias.toLowerCase()}`
+              ));
+            if (existing.length === 0) {
+              await db.insert(leadSourceAliasesTable).values({
+                tenantId: tenant.id,
+                canonicalName: group.canonicalName,
+                alias,
+              });
+              totalSeeded++;
+            }
+          }
+        }
+      }
+      console.log(`[Migration] Seeded ${totalSeeded} default alias(es) across ${tenants.length} tenant(s)`);
+
+      let totalUpdated = 0;
+      for (const tenant of tenants) {
+        const leads = await db.select({ id: leadsTable.id, source: leadsTable.source })
+          .from(leadsTable)
+          .where(eq(leadsTable.tenantId, tenant.id));
+        for (const lead of leads) {
+          const normalized = await normalizeSource(tenant.id, lead.source);
+          if (normalized !== lead.source) {
+            await db.update(leadsTable)
+              .set({ source: normalized, updatedAt: new Date() })
+              .where(eq(leadsTable.id, lead.id));
+            totalUpdated++;
+          }
+        }
+      }
+      console.log(`[Migration] Backfilled ${totalUpdated} lead source(s) across ${tenants.length} tenant(s)`);
     },
   },
 ];

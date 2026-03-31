@@ -26,6 +26,7 @@ import salesManagerRouter from "./sales-manager";
 import leadsHubRouter from "./leads-hub";
 import googleSheetsIngestRouter from "./google-sheets-ingest";
 import sheetConfigsRouter from "./sheet-configs";
+import leadSourceAliasesRouter from "./lead-source-aliases";
 import googleOAuthRouter from "./google-oauth";
 import metaOAuthRouter from "./meta-oauth";
 
@@ -66,6 +67,7 @@ router.use(salesManagerRouter);
 router.use(leadsHubRouter);
 router.use(googleSheetsIngestRouter);
 router.use(sheetConfigsRouter);
+router.use(leadSourceAliasesRouter);
 
 export default router;
 

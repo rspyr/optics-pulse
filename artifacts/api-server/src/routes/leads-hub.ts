@@ -7,6 +7,7 @@ import {
 import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
+import { normalizeSource } from "../services/source-normalizer";
 
 const router: IRouter = Router();
 
@@ -383,13 +384,15 @@ router.post("/leads-hub/create", async (req, res) => {
     csrName = user.name;
   }
 
+  const normalizedSource = await normalizeSource(tenantId, source);
+
   const [lead] = await db.insert(leadsTable).values({
     tenantId,
     firstName,
     lastName,
     phone: phone || null,
     email: email || null,
-    source,
+    source: normalizedSource,
     serviceType: serviceType || null,
     funnelId: funnelId || null,
     assignedCsrId: validatedCsrId,
