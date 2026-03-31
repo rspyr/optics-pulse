@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
-import { eq, and, count, sql, avg, inArray, gte, ne } from "drizzle-orm";
+import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable, userLoginSessionsTable } from "@workspace/db";
+import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
 
@@ -55,8 +55,9 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
   io.engine.use(sessionMiddleware);
 
   io.on("connection", (socket: Socket) => {
-    const req = socket.request as { session?: { userId?: number; userRole?: string; tenantId?: number } };
+    const req = socket.request as { session?: { userId?: number; userRole?: string; tenantId?: number }; sessionID?: string };
     const session = req.session;
+    const sessionKey = req.sessionID;
 
     if (!session?.userId) {
       console.log(`[Socket.IO] Unauthenticated connection rejected: ${socket.id}`);
@@ -98,6 +99,16 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
 
     socket.on("disconnect", () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
+      if (session?.userId && role === "client_user" && sessionKey) {
+        db.update(userLoginSessionsTable)
+          .set({ logoutAt: new Date() })
+          .where(and(
+            eq(userLoginSessionsTable.sessionKey, sessionKey),
+            isNull(userLoginSessionsTable.logoutAt),
+          ))
+          .then(() => {})
+          .catch((err) => console.error("[Socket.IO] Failed to close login session on disconnect:", err));
+      }
     });
   });
 
@@ -110,6 +121,20 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
 
 export function getIO(): SocketIOServer | null {
   return io;
+}
+
+export async function closeStaleLoginSessions(): Promise<void> {
+  try {
+    const result = await db.update(userLoginSessionsTable)
+      .set({ logoutAt: new Date() })
+      .where(isNull(userLoginSessionsTable.logoutAt))
+      .returning({ id: userLoginSessionsTable.id });
+    if (result.length > 0) {
+      console.log(`[LoginSessions] Closed ${result.length} stale open session(s) on startup`);
+    }
+  } catch (err) {
+    console.error("[LoginSessions] Failed to close stale sessions:", err);
+  }
 }
 
 export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
@@ -289,20 +314,40 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
   if (tenantId) speedConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) speedConds.push(eq(callAttemptsTable.userId, csrId));
 
-  const firstTouches = db.select({
+  const firstTouchRows = await db.select({
     leadId: callAttemptsTable.leadId,
-    first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
+    userId: callAttemptsTable.userId,
+    firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
+    assignedAt: leadsTable.assignedAt,
+    wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
   })
     .from(callAttemptsTable)
     .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
     .where(and(...speedConds))
-    .groupBy(callAttemptsTable.leadId)
-    .as("first_touches");
+    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt);
 
-  const [speedResult] = await db.select({
-    avgSpeed: sql<number>`COALESCE(AVG(first_touch_speed), 0)`,
-  }).from(firstTouches);
-  const avgSpeedToLead = Math.round(Number(speedResult?.avgSpeed ?? 0));
+  let avgSpeedToLead = 0;
+  if (firstTouchRows.length > 0) {
+    const { getLoggedInSeconds, hasAnyLoginSessions } = await import("./services/login-time-calculator");
+    const speeds: number[] = [];
+    for (const row of firstTouchRows) {
+      const wallClock = Math.max(0, Number(row.wallClockSpeed));
+      if (wallClock <= 0) continue;
+      let speed = wallClock;
+      if (row.userId && row.assignedAt && row.firstTouchAt) {
+        try {
+          const hasSessions = await hasAnyLoginSessions(row.userId);
+          if (hasSessions) {
+            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
+          }
+        } catch {}
+      }
+      speeds.push(speed);
+    }
+    if (speeds.length > 0) {
+      avgSpeedToLead = Math.round(speeds.reduce((sum, s) => sum + s, 0) / speeds.length);
+    }
+  }
 
   return {
     callsMadeToday: totalCalls,

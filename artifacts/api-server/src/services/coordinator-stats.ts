@@ -1,6 +1,7 @@
 import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
+import { getLoggedInSeconds, hasAnyLoginSessions } from "./login-time-calculator";
 
 async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, bookerCsrId?: number) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
@@ -23,24 +24,45 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
   const bookingsCount = bookedSoldLeads.length;
   const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;
 
-  const [speedResult] = await db.select({
-    avgSpeed: sql<number>`COALESCE(AVG(first_touch_speed), 0)`,
-  }).from(
-    db.select({
-      leadId: callAttemptsTable.leadId,
-      first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
-    })
-      .from(callAttemptsTable)
-      .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
-      .where(and(
-        inArray(callAttemptsTable.leadId, leadIds),
-        ne(callAttemptsTable.actionType, "transfer"),
-        gte(callAttemptsTable.attemptedAt, dayStart),
-        lte(callAttemptsTable.attemptedAt, dayEnd),
-      ))
-      .groupBy(callAttemptsTable.leadId)
-      .as("first_touches")
-  );
+  const firstTouchRows = await db.select({
+    leadId: callAttemptsTable.leadId,
+    userId: callAttemptsTable.userId,
+    firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
+    assignedAt: leadsTable.assignedAt,
+    wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
+  })
+    .from(callAttemptsTable)
+    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+    .where(and(
+      inArray(callAttemptsTable.leadId, leadIds),
+      ne(callAttemptsTable.actionType, "transfer"),
+      gte(callAttemptsTable.attemptedAt, dayStart),
+      lte(callAttemptsTable.attemptedAt, dayEnd),
+    ))
+    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt);
+
+  let avgSpeedValue = 0;
+  if (firstTouchRows.length > 0) {
+    const speeds: number[] = [];
+    for (const row of firstTouchRows) {
+      const wallClock = Math.max(0, Number(row.wallClockSpeed));
+      if (wallClock <= 0) continue;
+
+      let speed = wallClock;
+      if (row.userId && row.assignedAt && row.firstTouchAt) {
+        try {
+          const hasSessions = await hasAnyLoginSessions(row.userId);
+          if (hasSessions) {
+            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
+          }
+        } catch {}
+      }
+      speeds.push(speed);
+    }
+    if (speeds.length > 0) {
+      avgSpeedValue = speeds.reduce((sum, s) => sum + s, 0) / speeds.length;
+    }
+  }
 
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
   let funnelNameLookup: Record<number, string> = {};
@@ -57,7 +79,7 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
   return {
     bookingsCount,
     soldCount,
-    avgSpeedToLead: Math.round(Number(speedResult?.avgSpeed ?? 0)),
+    avgSpeedToLead: Math.round(avgSpeedValue),
     bookedLeads: bookedLeadsWithFunnel,
   };
 }

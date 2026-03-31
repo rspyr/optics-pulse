@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, tenantsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, usersTable, tenantsTable, userLoginSessionsTable } from "@workspace/db";
+import { eq, and, isNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "../middleware/auth";
 
@@ -45,7 +45,21 @@ router.post("/auth/login", async (req, res) => {
     req.session.userId = user.id;
     req.session.userRole = user.role;
     req.session.tenantId = user.tenantId;
-    req.session.save(() => {
+
+    req.session.save(async () => {
+      if (user.role === "client_user") {
+        try {
+          await db.insert(userLoginSessionsTable).values({
+            userId: user.id,
+            tenantId: user.tenantId,
+            sessionKey: req.sessionID,
+            loginAt: new Date(),
+          });
+        } catch (err) {
+          console.error("[Auth] Failed to record login session:", err);
+        }
+      }
+
       res.json({
         id: user.id,
         email: user.email,
@@ -62,7 +76,26 @@ router.post("/auth/login", async (req, res) => {
   }
 });
 
-router.post("/auth/logout", (req, res) => {
+router.post("/auth/logout", async (req, res) => {
+  const userId = req.session.userId;
+  const userRole = req.session.userRole;
+
+  if (userId && userRole === "client_user") {
+    try {
+      const sessionKey = req.sessionID;
+      if (sessionKey) {
+        await db.update(userLoginSessionsTable)
+          .set({ logoutAt: new Date() })
+          .where(and(
+            eq(userLoginSessionsTable.sessionKey, sessionKey),
+            isNull(userLoginSessionsTable.logoutAt),
+          ));
+      }
+    } catch (err) {
+      console.error("[Auth] Failed to close login session:", err);
+    }
+  }
+
   req.session.destroy((err) => {
     if (err) {
       res.status(500).json({ error: "Logout failed" });

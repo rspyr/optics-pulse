@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { db, callAttemptsTable, leadsTable, usersTable, coordinatorDailyStatsTable, changeLogsTable, scriptsTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, desc, ne, isNotNull } from "drizzle-orm";
 import { generateCoachingInsights } from "../services/coaching-insights";
+import { getLoggedInSeconds, hasAnyLoginSessions } from "../services/login-time-calculator";
 
 export interface SpiffConfig {
   default: number;
@@ -160,10 +161,12 @@ router.get("/sales-manager/team", async (req, res) => {
 
   let speedToLeadByUser: Record<number, number> = {};
   if (allLeadIds.length > 0) {
-    const firstTouchPerLead = db.select({
+    const firstTouchPerLeadRows = await db.select({
       userId: callAttemptsTable.userId,
       leadId: callAttemptsTable.leadId,
-      first_touch_speed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("first_touch_speed"),
+      firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
+      assignedAt: leadsTable.assignedAt,
+      wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
     })
       .from(callAttemptsTable)
       .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
@@ -172,18 +175,28 @@ router.get("/sales-manager/team", async (req, res) => {
         gte(callAttemptsTable.attemptedAt, today),
         ne(callAttemptsTable.actionType, "transfer"),
       ))
-      .groupBy(callAttemptsTable.userId, callAttemptsTable.leadId)
-      .as("first_touch_per_lead");
+      .groupBy(callAttemptsTable.userId, callAttemptsTable.leadId, leadsTable.assignedAt);
 
-    const speedRows = await db.select({
-      userId: firstTouchPerLead.userId,
-      avgSpeed: sql<number>`AVG(first_touch_speed)`.as("avg_speed"),
-    })
-      .from(firstTouchPerLead)
-      .groupBy(firstTouchPerLead.userId);
-
-    for (const r of speedRows) {
-      speedToLeadByUser[r.userId] = Math.max(0, Math.round(Number(r.avgSpeed)));
+    const speedsByUser: Record<number, number[]> = {};
+    for (const row of firstTouchPerLeadRows) {
+      const wallClock = Math.max(0, Number(row.wallClockSpeed));
+      if (wallClock <= 0) continue;
+      let speed = wallClock;
+      if (row.userId && row.assignedAt && row.firstTouchAt) {
+        try {
+          const hasSessions = await hasAnyLoginSessions(row.userId);
+          if (hasSessions) {
+            speed = await getLoggedInSeconds(row.userId, new Date(row.assignedAt), new Date(row.firstTouchAt));
+          }
+        } catch {}
+      }
+      if (!speedsByUser[row.userId]) speedsByUser[row.userId] = [];
+      speedsByUser[row.userId].push(speed);
+    }
+    for (const [uid, speeds] of Object.entries(speedsByUser)) {
+      if (speeds.length > 0) {
+        speedToLeadByUser[Number(uid)] = Math.round(speeds.reduce((s, v) => s + v, 0) / speeds.length);
+      }
     }
   }
 

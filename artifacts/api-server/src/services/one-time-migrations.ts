@@ -458,6 +458,35 @@ const migrations: Migration[] = [
       console.log(`[Migration] Backfilled assigned_at from created_at on ${backfilled.rows.length} lead(s)`);
     },
   },
+  {
+    id: "2026-03-31_create-user-login-sessions",
+    description: "Create user_login_sessions table for tracking login/logout times",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS user_login_sessions (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          tenant_id INTEGER REFERENCES tenants(id),
+          session_key TEXT,
+          login_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          logout_at TIMESTAMPTZ
+        )
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS user_login_sessions_user_id_idx ON user_login_sessions(user_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS user_login_sessions_user_login_idx ON user_login_sessions(user_id, login_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS user_login_sessions_session_key_idx ON user_login_sessions(session_key)`);
+      console.log("[Migration] Created user_login_sessions table with indexes");
+    },
+  },
+  {
+    id: "2026-03-31_add-session-key-to-login-sessions",
+    description: "Add session_key column to user_login_sessions for per-session tracking",
+    run: async () => {
+      await db.execute(sql`ALTER TABLE user_login_sessions ADD COLUMN IF NOT EXISTS session_key TEXT`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS user_login_sessions_session_key_idx ON user_login_sessions(session_key)`);
+      console.log("[Migration] Added session_key column to user_login_sessions");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
