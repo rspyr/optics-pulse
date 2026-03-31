@@ -199,7 +199,21 @@ router.get("/sales-manager/team", async (req, res) => {
           speedToLeadByUser[Number(uid)] = Math.round(speeds.reduce((s, v) => s + v, 0) / speeds.length);
         }
       }
-    } catch {}
+    } catch (err) {
+      console.error("[SalesManager] Login-aware speed computation failed, using wall-clock fallback:", err);
+      const speedsByUser: Record<number, number[]> = {};
+      for (const w of windows) {
+        if (w.wallClockSpeed > 0) {
+          if (!speedsByUser[w.userId]) speedsByUser[w.userId] = [];
+          speedsByUser[w.userId].push(w.wallClockSpeed);
+        }
+      }
+      for (const [uid, speeds] of Object.entries(speedsByUser)) {
+        if (speeds.length > 0) {
+          speedToLeadByUser[Number(uid)] = Math.round(speeds.reduce((s, v) => s + v, 0) / speeds.length);
+        }
+      }
+    }
   }
 
   const coordinators = users.map(user => {

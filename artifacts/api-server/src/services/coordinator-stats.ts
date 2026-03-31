@@ -57,7 +57,13 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
       if (speedResults.length > 0) {
         avgSpeedValue = speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length;
       }
-    } catch {}
+    } catch (err) {
+      console.error("[CoordinatorStats] Login-aware speed computation failed, using wall-clock fallback:", err);
+      const wallClockSpeeds = windows.filter(w => w.wallClockSpeed > 0).map(w => w.wallClockSpeed);
+      if (wallClockSpeeds.length > 0) {
+        avgSpeedValue = wallClockSpeeds.reduce((sum, s) => sum + s, 0) / wallClockSpeeds.length;
+      }
+    }
   }
 
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];

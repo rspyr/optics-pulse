@@ -68,6 +68,27 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     const role = session.userRole;
     console.log(`[Socket.IO] Client connected: ${socket.id} (user ${session.userId}, role ${role})`);
 
+    if (role === "client_user" && sessionKey) {
+      db.select({ id: userLoginSessionsTable.id })
+        .from(userLoginSessionsTable)
+        .where(and(
+          eq(userLoginSessionsTable.sessionKey, sessionKey),
+          isNull(userLoginSessionsTable.logoutAt),
+        ))
+        .limit(1)
+        .then(async (rows) => {
+          if (rows.length === 0) {
+            await db.insert(userLoginSessionsTable).values({
+              userId: session.userId!,
+              tenantId: session.tenantId ?? null,
+              sessionKey,
+              loginAt: new Date(),
+            });
+          }
+        })
+        .catch((err) => console.error("[Socket.IO] Failed to ensure login session on connect:", err));
+    }
+
     if (role === "super_admin" || role === "agency_user") {
       db.select({ id: tenantsTable.id }).from(tenantsTable).then(tenants => {
         for (const t of tenants) {
@@ -366,7 +387,13 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
       if (speedResults.length > 0) {
         avgSpeedToLead = Math.round(speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length);
       }
-    } catch {}
+    } catch (err) {
+      console.error("[HUD] Login-aware speed computation failed, using wall-clock fallback:", err);
+      const wallClockSpeeds = windows.filter(w => w.wallClockSpeed > 0).map(w => w.wallClockSpeed);
+      if (wallClockSpeeds.length > 0) {
+        avgSpeedToLead = Math.round(wallClockSpeeds.reduce((sum, s) => sum + s, 0) / wallClockSpeeds.length);
+      }
+    }
   }
 
   return {

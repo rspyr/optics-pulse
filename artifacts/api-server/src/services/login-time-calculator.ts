@@ -75,34 +75,19 @@ export async function computeLoginAwareSpeeds(
   const CHUNK_SIZE = 50;
   for (let i = 0; i < leadsNeedingOverlap.length; i += CHUNK_SIZE) {
     const chunk = leadsNeedingOverlap.slice(i, i + CHUNK_SIZE);
-    const windowChecks = chunk.map(lead =>
-      sql`(SELECT COALESCE(SUM(
-        EXTRACT(EPOCH FROM (
-          LEAST(COALESCE(s.logout_at, NOW()), ${lead.firstTouchAt}::timestamp)
-          - GREATEST(s.login_at, ${lead.assignedAt}::timestamp)
-        ))
-      ), 0)
-      FROM user_login_sessions s
-      WHERE s.user_id = ${lead.userId}
-        AND s.login_at <= ${lead.firstTouchAt}::timestamp
-        AND (s.logout_at IS NULL OR s.logout_at >= ${lead.assignedAt}::timestamp)
-      ) AS lead_${sql.raw(String(lead.leadId))}`
-    );
 
-    const overlapResult = await db.execute(
-      sql`SELECT ${sql.join(windowChecks, sql`, `)}`
-    );
-    const overlapRow = (overlapResult as any).rows?.[0] ?? (overlapResult as any)[0];
-
-    const overlapRecord = overlapRow as Record<string, unknown>;
+    const overlapValues: Record<number, number> = {};
     for (const lead of chunk) {
-      const key = `lead_${lead.leadId}`;
-      const overlapSeconds = Math.max(0, Math.round(Number(overlapRecord[key] ?? 0)));
-      const hasWindowSessions = overlapSeconds > 0;
+      const overlap = await getLoggedInSeconds(lead.userId, lead.assignedAt, lead.firstTouchAt);
+      overlapValues[lead.leadId] = overlap;
+    }
+
+    for (const lead of chunk) {
+      const overlapSeconds = overlapValues[lead.leadId] ?? 0;
       results.push({
         leadId: lead.leadId,
         userId: lead.userId,
-        speed: hasWindowSessions ? overlapSeconds : lead.wallClockSpeed,
+        speed: overlapSeconds,
       });
     }
   }
