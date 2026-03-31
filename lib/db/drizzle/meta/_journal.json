@@ -141,6 +141,13 @@
       "when": 1774905600000,
       "tag": "0019_sync_paused_column",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1774992000000,
+      "tag": "0020_appt_addons_address_columns",
+      "breakpoints": true
     }
   ]
 }
