@@ -339,6 +339,17 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: "2026-03-31_recreate-automation-rule-unique-index",
+    description: "Ensure unique index on automation_rules exists (recreate after deploy-system drop)",
+    run: async () => {
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_rule_identity
+        ON automation_rules (name, condition_type, COALESCE(tenant_id, -1))
+      `);
+      console.log("[Migration] Ensured unique index uq_automation_rule_identity exists on automation_rules");
+    },
+  },
+  {
     id: "2026-03-31_wipe-automation-alerts",
     description: "Purge all automation alerts generated from duplicate rules",
     run: async () => {
