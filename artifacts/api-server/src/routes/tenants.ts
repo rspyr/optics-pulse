@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
-import { db, tenantsTable, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, tenantsTable, usersTable, leadSourceAliasesTable } from "@workspace/db";
+import { eq, sql, and } from "drizzle-orm";
 import { CreateTenantBody, GetTenantParams, UpdateTenantBody } from "@workspace/api-zod";
 import { requireRole } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
+import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
 
 const router: IRouter = Router();
 
@@ -98,6 +99,22 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
     insertData.apiConfig = encryptConfig(req.body.integrationConfig);
   }
   const [tenant] = await db.insert(tenantsTable).values(insertData as typeof tenantsTable.$inferInsert).returning();
+
+  try {
+    for (const group of DEFAULT_SOURCE_ALIASES) {
+      for (const alias of group.aliases) {
+        await db.insert(leadSourceAliasesTable).values({
+          tenantId: tenant.id,
+          canonicalName: group.canonicalName,
+          alias,
+        });
+      }
+    }
+    console.log(`[Tenants] Seeded default source aliases for new tenant ${tenant.id}`);
+  } catch (err) {
+    console.warn(`[Tenants] Failed to seed source aliases for tenant ${tenant.id}:`, err);
+  }
+
   res.status(201).json(sanitizeTenant(tenant));
 });
 
