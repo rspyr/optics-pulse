@@ -42,7 +42,7 @@ function resolveFunnelForRow(
   defaultFunnelTypeId: number | null,
 ): number | null {
   if (funnelColumn && funnelValueMap) {
-    const value = (row[funnelColumn] || "").trim();
+    const value = (row[funnelColumn] || row["__funnel__"] || "").trim();
     if (value && funnelValueMap[value] !== undefined) {
       return funnelValueMap[value];
     }

@@ -159,14 +159,16 @@ router.post("/sheet-configs/:configId/funnel-value-map", requireRole("super_admi
   if (funnelTypeIds.length > 0) {
     const tenantAssocs = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
       .from(tenantFunnelTypesTable)
+      .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
       .where(and(
         eq(tenantFunnelTypesTable.tenantId, config.tenantId),
+        eq(funnelTypesTable.isActive, true),
         inArray(tenantFunnelTypesTable.funnelTypeId, funnelTypeIds),
       ));
     const validIds = new Set(tenantAssocs.map(a => a.funnelTypeId));
     for (const [value, ftId] of Object.entries(funnelValueMap)) {
       if (!validIds.has(ftId)) {
-        res.status(400).json({ error: `Funnel type ID ${ftId} (for value "${value}") is not associated with this tenant` });
+        res.status(400).json({ error: `Funnel type ID ${ftId} (for value "${value}") is not an active funnel associated with this tenant` });
         return;
       }
     }
