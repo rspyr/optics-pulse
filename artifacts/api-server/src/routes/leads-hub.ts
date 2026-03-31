@@ -76,6 +76,8 @@ router.get("/leads-hub/queue", async (req, res) => {
   const terminalStatuses = ["appt_set", "dead"];
 
   try {
+    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
+    const hasRealAttempts = sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
     const newLeads = (tab === "all" || tab === "new") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
@@ -83,11 +85,11 @@ router.get("/leads-hub/queue", async (req, res) => {
           and(
             eq(leadsTable.hubStatus, "day_1"),
             isNull(leadsTable.callbackAt),
-            sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+            noRealAttempts,
           ),
           and(
             eq(leadsTable.hubStatus, "appt_booked"),
-            sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+            noRealAttempts,
           ),
         ),
       ))
@@ -97,7 +99,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       .where(and(
         ...baseConds,
         inArray(leadsTable.hubStatus, activeStatuses),
-        sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id})`,
+        hasRealAttempts,
         gte(leadsTable.updatedAt, todayStartUtc),
       ))
       .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
@@ -344,7 +346,7 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
     method: "transfer",
     outcome: "transferred",
     platform: "native",
-    actionType: "call",
+    actionType: "transfer",
     notes: `Transferred to ${targetUser.name}`,
   });
 
@@ -434,7 +436,7 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
     method: "transfer" as const,
     outcome: "transferred" as const,
     platform: "native" as const,
-    actionType: "call" as const,
+    actionType: "transfer" as const,
     notes: `Batch transferred from ${sourceUser.name} to ${targetUser.name}`,
   }));
 
@@ -774,6 +776,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     inArray(callAttemptsTable.leadId, filteredLeadIds.length > 0 ? filteredLeadIds : [0]),
     gte(callAttemptsTable.attemptedAt, startDate),
     lte(callAttemptsTable.attemptedAt, endDate),
+    sql`${callAttemptsTable.actionType} != 'transfer'`,
   ];
 
   const callStats = filteredLeadIds.length > 0 ? await db.select({
@@ -943,7 +946,7 @@ export async function evaluateAutoPass(): Promise<number> {
         method: "transfer",
         outcome: "auto_passed",
         platform: "native",
-        actionType: "call",
+        actionType: "transfer",
         notes: `Auto-passed after ${passLabel} inactivity`,
       });
 

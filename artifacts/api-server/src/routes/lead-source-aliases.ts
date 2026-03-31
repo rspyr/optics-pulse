@@ -24,7 +24,7 @@ function resolveTenantId(req: Request): number | null {
   return (session?.tenantId as number | null) ?? null;
 }
 
-router.use(requireManagerRole);
+router.use("/lead-source-aliases", requireManagerRole);
 
 router.get("/lead-source-aliases", async (req, res) => {
   const tenantId = resolveTenantId(req);

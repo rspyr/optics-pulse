@@ -238,7 +238,10 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
   if (csrId) soldConds.push(eq(leadsTable.assignedCsrId, csrId));
   const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(and(...soldConds));
 
-  const callAttemptsConds: any[] = [gte(callAttemptsTable.attemptedAt, today)];
+  const callAttemptsConds: any[] = [
+    gte(callAttemptsTable.attemptedAt, today),
+    sql`${callAttemptsTable.actionType} != 'transfer'`,
+  ];
   if (tenantId) callAttemptsConds.push(sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`);
   if (csrId) callAttemptsConds.push(eq(callAttemptsTable.userId, csrId));
   const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(and(...callAttemptsConds));

@@ -69,7 +69,7 @@ function resolveTenantId(req: Request): number | null {
   return (session?.tenantId as number | null) ?? null;
 }
 
-router.use(requireManagerRole);
+router.use("/sales-manager", requireManagerRole);
 
 router.get("/sales-manager/team", async (req, res) => {
   const tenantId = resolveTenantId(req);
