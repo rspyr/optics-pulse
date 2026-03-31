@@ -734,9 +734,37 @@ export async function evaluateAutoPass(): Promise<number> {
   const configs = await db.select().from(routingConfigTable)
     .where(eq(routingConfigTable.isActive, true));
 
+  const funnelSpecificIds = new Map<number, Set<number>>();
+  for (const c of configs) {
+    if (c.funnelTypeId !== null) {
+      if (!funnelSpecificIds.has(c.tenantId)) funnelSpecificIds.set(c.tenantId, new Set());
+      funnelSpecificIds.get(c.tenantId)!.add(c.funnelTypeId);
+    }
+  }
+
   for (const config of configs) {
     const passMinutes = config.passIntervalMinutes ?? 1440;
     const cutoff = new Date(Date.now() - passMinutes * 60 * 1000);
+
+    const leadConditions = [
+      eq(leadsTable.tenantId, config.tenantId),
+      inArray(leadsTable.hubStatus, ["day_1", "day_2", "day_3", "day_4"]),
+      isNotNull(leadsTable.assignedCsrId),
+      lte(leadsTable.updatedAt, cutoff),
+    ];
+
+    if (config.funnelTypeId !== null) {
+      leadConditions.push(eq(leadsTable.funnelId, config.funnelTypeId));
+    } else {
+      const specificFunnels = funnelSpecificIds.get(config.tenantId);
+      if (specificFunnels && specificFunnels.size > 0) {
+        leadConditions.push(
+          or(isNull(leadsTable.funnelId), ...Array.from(specificFunnels).map(fid =>
+            ne(leadsTable.funnelId, fid)
+          ))!
+        );
+      }
+    }
 
     const staleLeads = await db.select({
       id: leadsTable.id,
@@ -744,12 +772,7 @@ export async function evaluateAutoPass(): Promise<number> {
       tenantId: leadsTable.tenantId,
       cascadePassCount: leadsTable.cascadePassCount,
     }).from(leadsTable)
-      .where(and(
-        eq(leadsTable.tenantId, config.tenantId),
-        inArray(leadsTable.hubStatus, ["day_1", "day_2", "day_3", "day_4"]),
-        isNotNull(leadsTable.assignedCsrId),
-        lte(leadsTable.updatedAt, cutoff),
-      ))
+      .where(and(...leadConditions))
       .limit(50);
 
     if (staleLeads.length === 0) continue;

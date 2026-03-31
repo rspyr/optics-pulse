@@ -10,7 +10,7 @@ import {
   FileText, Activity, Brain, BarChart3, DollarSign, Target,
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
   Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
-  Mic, GripVertical, Eye, Wand2, ShieldCheck, AlertCircle,
+  Mic, GripVertical, Eye, Wand2, ShieldCheck, AlertCircle, Info,
 } from "lucide-react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import ScriptManagement from "@/components/script-management";
@@ -718,27 +718,57 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   const [stickyAfterCascade, setStickyAfterCascade] = useState(false);
   const [stickyCsrId, setStickyCsrId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
   const [scheduleEditId, setScheduleEditId] = useState<number | null>(null);
   const [schedPauseStart, setSchedPauseStart] = useState("");
   const [schedPauseEnd, setSchedPauseEnd] = useState("");
   const [schedError, setSchedError] = useState("");
+  const [isInherited, setIsInherited] = useState(false);
+
+  interface SavedState {
+    cascadeOrder: number[];
+    passInterval: number;
+    passUnit: "minutes" | "hours";
+    allowPassBack: boolean;
+    stickyAfterCascade: boolean;
+    stickyCsrId: number | null;
+  }
+  const [lastSavedState, setLastSavedState] = useState<SavedState | null>(null);
 
   const loading = configsLoading || csrsLoading;
 
+  const currentState: SavedState = {
+    cascadeOrder,
+    passInterval,
+    passUnit,
+    allowPassBack,
+    stickyAfterCascade,
+    stickyCsrId,
+  };
+  const isDirty = lastSavedState !== null && JSON.stringify(currentState) !== JSON.stringify(lastSavedState);
+
   useEffect(() => {
-    const config = configs.find(c =>
+    const specificConfig = configs.find(c =>
       selectedFunnelId ? c.funnelTypeId === selectedFunnelId : c.funnelTypeId === null
     );
+    const defaultConfig = configs.find(c => c.funnelTypeId === null);
+    const config = specificConfig || (selectedFunnelId ? defaultConfig : null);
+    const inherited = !specificConfig && !!selectedFunnelId && !!defaultConfig;
+    setIsInherited(inherited);
     if (config) {
-      setCascadeOrder(config.cascadeOrder || []);
+      const co = config.cascadeOrder || [];
       const mins = config.passIntervalMinutes || 1440;
+      const unit = mins % 60 === 0 && mins >= 60 ? "hours" as const : "minutes" as const;
+      const apb = config.allowPassBack || false;
+      const sac = config.stickyAfterCascade || false;
+      const sci = config.stickyCsrId || null;
+      setCascadeOrder(co);
       setPassInterval(mins);
-      setPassUnit(mins % 60 === 0 && mins >= 60 ? "hours" : "minutes");
-      setAllowPassBack(config.allowPassBack || false);
-      setStickyAfterCascade(config.stickyAfterCascade || false);
-      setStickyCsrId(config.stickyCsrId || null);
+      setPassUnit(unit);
+      setAllowPassBack(apb);
+      setStickyAfterCascade(sac);
+      setStickyCsrId(sci);
+      setLastSavedState({ cascadeOrder: co, passInterval: mins, passUnit: unit, allowPassBack: apb, stickyAfterCascade: sac, stickyCsrId: sci });
     } else {
       setCascadeOrder([]);
       setPassInterval(1440);
@@ -746,13 +776,13 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       setAllowPassBack(false);
       setStickyAfterCascade(false);
       setStickyCsrId(null);
+      setLastSavedState({ cascadeOrder: [], passInterval: 1440, passUnit: "hours", allowPassBack: false, stickyAfterCascade: false, stickyCsrId: null });
     }
   }, [selectedFunnelId, configs]);
 
   const handleSaveRouting = async () => {
     if (!tenantId) return;
     setSaving(true);
-    setSaved(false);
     try {
       const res = await fetch(`${API_BASE}/leads-hub/routing-config?tenantId=${tenantId}`, {
         method: "PUT",
@@ -768,8 +798,8 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
         }),
       });
       if (res.ok) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        setLastSavedState({ cascadeOrder, passInterval, passUnit, allowPassBack, stickyAfterCascade, stickyCsrId });
+        setIsInherited(false);
         refetchConfigs();
       } else {
         const err = await res.json().catch(() => ({ error: "Save failed" }));
@@ -835,6 +865,12 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
           <option value="">Default (All Funnels)</option>
           {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
+        {isInherited && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-2 py-1">
+            <Info className="w-3 h-3" />
+            Using default routing — save to override for this funnel
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1017,11 +1053,17 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
 
           <button
             onClick={handleSaveRouting}
-            disabled={saving}
-            className="mt-4 flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50 w-full justify-center"
+            disabled={saving || !isDirty}
+            className={cn(
+              "mt-4 flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium w-full justify-center transition-all",
+              isDirty
+                ? "bg-primary hover:bg-primary/90 text-white"
+                : "bg-white/5 text-white/40 cursor-default",
+              saving && "opacity-50"
+            )}
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-            {saved ? "Saved!" : "Save Routing Config"}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : !isDirty ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            {saving ? "Saving..." : !isDirty ? "Saved" : (isInherited ? "Save as Override" : "Save Routing Config")}
           </button>
         </PremiumCard>
 
