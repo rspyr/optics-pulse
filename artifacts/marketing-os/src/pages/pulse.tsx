@@ -555,12 +555,12 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: {
   );
 }
 
-function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, onEditAction }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; onEditAction?: (entry: HistoryEntry) => void }) {
+function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean }) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "" });
+  const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
   const [editSaving, setEditSaving] = useState(false);
 
   const fetchHistory = useCallback(() => {
@@ -582,13 +582,14 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
       callResult: entry.callResult || "",
       textResult: entry.textResult || "",
       vmResult: entry.vmResult || "",
+      deadReason: entry.deadReason || "",
     });
   };
 
   const saveEdit = async (entry: HistoryEntry) => {
     setEditSaving(true);
     try {
-      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType };
+      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: editForm.deadReason || null };
       const method = editForm.actionType || entry.actionType || entry.method;
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
@@ -623,14 +624,6 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
   const getOutcomeLabel = (entry: HistoryEntry) => {
     const result = entry.callResult || entry.textResult || entry.vmResult || entry.outcome;
     return (result || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
-  };
-
-  const getResultOptions = (entry: HistoryEntry) => {
-    const method = entry.actionType || entry.method;
-    if (method === "call") return CALL_RESULTS;
-    if (method === "text") return TEXT_RESULTS;
-    if (method === "voicemail" || method === "voicemail_drop") return VM_RESULTS;
-    return [];
   };
 
   return (
@@ -685,6 +678,18 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
                     </select>
                   );
                 })()}
+                {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
+                  <select
+                    value={editForm.deadReason}
+                    onChange={e => setEditForm(f => ({ ...f, deadReason: e.target.value }))}
+                    className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+                  >
+                    <option value="">Dead reason (optional)...</option>
+                    {DEAD_REASONS.map(r => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
+                  </select>
+                )}
                 <input
                   type="text"
                   value={editForm.notes}
@@ -716,7 +721,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
                   </span>
                   <span className="text-[10px] text-white/50">{entry.csrName}</span>
                   <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
-                  {canEdit && (
+                  {canEdit && (isAdminRole || entry.userId === currentUserId) && (
                     <button
                       onClick={e => { e.stopPropagation(); startEdit(entry); }}
                       className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
@@ -741,8 +746,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, on
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
@@ -1445,7 +1450,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       )}
 
       <PremiumCard className="p-4">
-        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} />
+        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} />
       </PremiumCard>
     </div>
   );
@@ -1913,6 +1918,8 @@ export default function Leads() {
               timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
               funnelMap={funnelMap}
               canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
+              currentUserId={user?.id}
+              isAdminRole={isAdmin}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">
