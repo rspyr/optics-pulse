@@ -33,6 +33,7 @@ export const leadsTable = pgTable("leads", {
   serviceType: text("service_type"),
   funnelId: integer("funnel_id").references(() => funnelTypesTable.id),
   assignedCsrId: integer("assigned_csr_id").references(() => usersTable.id),
+  bookedByCsrId: integer("booked_by_csr_id").references(() => usersTable.id),
   hubStatus: hubStatusEnum("hub_status").notNull().default("day_1"),
   dayInSequence: integer("day_in_sequence").notNull().default(1),
   contactPreferences: jsonb("contact_preferences").$type<string[]>().default([]),

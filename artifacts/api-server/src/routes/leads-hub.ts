@@ -230,6 +230,7 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.hubStatus = "appt_set";
     updates.status = "booked";
     updates.disposition = "booked";
+    updates.bookedByCsrId = userId;
   }
 
   if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
@@ -238,6 +239,7 @@ router.post("/leads-hub/action", async (req, res) => {
       updates.hubStatus = "appt_set";
       updates.status = "booked";
       updates.disposition = "booked";
+      updates.bookedByCsrId = userId;
     } else if (outcome === "rescheduled") {
       updates.hubStatus = "appt_booked";
     } else if (outcome === "canceled") {

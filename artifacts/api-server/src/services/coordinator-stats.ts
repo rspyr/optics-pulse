@@ -2,7 +2,7 @@ import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTab
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 
-async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, assignedCsrId?: number) {
+async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, bookerCsrId?: number) {
   if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
 
   const bookingConds = [
@@ -12,8 +12,8 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     gte(leadsTable.updatedAt, dayStart),
     lte(leadsTable.updatedAt, dayEnd),
   ];
-  if (assignedCsrId !== undefined) {
-    bookingConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
+  if (bookerCsrId !== undefined) {
+    bookingConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
   }
 
   const bookedSoldLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
@@ -30,8 +30,8 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     gte(leadsTable.updatedAt, dayStart),
     lte(leadsTable.updatedAt, dayEnd),
   ];
-  if (assignedCsrId !== undefined) {
-    speedConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
+  if (bookerCsrId !== undefined) {
+    speedConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
   }
 
   const [speedResult] = await db.select({

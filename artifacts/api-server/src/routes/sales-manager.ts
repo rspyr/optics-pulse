@@ -123,14 +123,14 @@ router.get("/sales-manager/team", async (req, res) => {
   let leadStatusMap: Record<number, string> = {};
   let leadFunnelIdMap: Record<number, number | null> = {};
   let preBookedMap: Record<number, boolean> = {};
-  let leadAssignedCsrMap: Record<number, number | null> = {};
+  let leadBookedByCsrMap: Record<number, number | null> = {};
   if (allLeadIds.length > 0) {
-    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked, assignedCsrId: leadsTable.assignedCsrId })
+    const leads = await db.select({ id: leadsTable.id, status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked, bookedByCsrId: leadsTable.bookedByCsrId })
       .from(leadsTable).where(inArray(leadsTable.id, allLeadIds));
     leadStatusMap = Object.fromEntries(leads.map(l => [l.id, l.status]));
     leadFunnelIdMap = Object.fromEntries(leads.map(l => [l.id, l.funnelId]));
     preBookedMap = Object.fromEntries(leads.map(l => [l.id, l.preBooked ?? false]));
-    leadAssignedCsrMap = Object.fromEntries(leads.map(l => [l.id, l.assignedCsrId]));
+    leadBookedByCsrMap = Object.fromEntries(leads.map(l => [l.id, l.bookedByCsrId]));
   }
 
   const funnelIdSet = new Set(Object.values(leadFunnelIdMap).filter((id): id is number => id !== null));
@@ -181,7 +181,7 @@ router.get("/sales-manager/team", async (req, res) => {
     const calls = callCountMap[user.id] || 0;
     const userLeadIds = leadIdsByUser[user.id] || [];
     const userLeads = userLeadIds
-      .filter(id => leadAssignedCsrMap[id] === user.id)
+      .filter(id => leadBookedByCsrMap[id] === user.id)
       .map(id => {
         const fId = leadFunnelIdMap[id];
         return { status: leadStatusMap[id] || "", funnelName: fId ? (funnelNameMap[fId] || null) : null, preBooked: preBookedMap[id] || false };
@@ -381,7 +381,7 @@ router.get("/sales-manager/spiffs-audit", async (req, res) => {
   if (req.query.csrId) {
     const parsed = Number(req.query.csrId);
     if (isNaN(parsed)) { res.status(400).json({ error: "Invalid csrId" }); return; }
-    conds.push(eq(leadsTable.assignedCsrId, parsed));
+    conds.push(eq(leadsTable.bookedByCsrId, parsed));
   }
   if (req.query.funnelId) {
     const parsed = Number(req.query.funnelId);
@@ -406,14 +406,14 @@ router.get("/sales-manager/spiffs-audit", async (req, res) => {
     lastName: leadsTable.lastName,
     status: leadsTable.status,
     funnelId: leadsTable.funnelId,
-    assignedCsrId: leadsTable.assignedCsrId,
+    bookedByCsrId: leadsTable.bookedByCsrId,
     updatedAt: leadsTable.updatedAt,
   })
     .from(leadsTable)
     .where(and(...conds))
     .orderBy(desc(leadsTable.updatedAt));
 
-  const csrIds = [...new Set(rows.map(r => r.assignedCsrId).filter((id): id is number => id !== null))];
+  const csrIds = [...new Set(rows.map(r => r.bookedByCsrId).filter((id): id is number => id !== null))];
   let csrNameMap: Record<number, string> = {};
   if (csrIds.length > 0) {
     const csrRows = await db.select({ id: usersTable.id, name: usersTable.name })
@@ -439,8 +439,8 @@ router.get("/sales-manager/spiffs-audit", async (req, res) => {
     return {
       id: r.id,
       leadName: [r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown",
-      csrName: r.assignedCsrId ? (csrNameMap[r.assignedCsrId] || "Unassigned") : "Unassigned",
-      csrId: r.assignedCsrId,
+      csrName: r.bookedByCsrId ? (csrNameMap[r.bookedByCsrId] || "Unassigned") : "Unassigned",
+      csrId: r.bookedByCsrId,
       funnelName: funnelName || "Default",
       funnelId: r.funnelId,
       status: r.status,
