@@ -137,12 +137,18 @@ export function getCommConfigStatus(config: CommunicationConfig): {
 } {
   const callNone = config.callPlatform === "none";
   const textNone = config.textPlatform === "none";
+  const platformLabel: Record<CommPlatform, string> = {
+    native: "native phone dialer",
+    callrail: "CallRail",
+    podium: "Podium",
+    none: "none",
+  };
   return {
     callPlatform: config.callPlatform,
     textPlatform: config.textPlatform,
     callReady: !callNone,
     textReady: !textNone,
-    callStatusMessage: callNone ? "No communication platform configured" : "Using native phone dialer",
-    textStatusMessage: textNone ? "No communication platform configured" : "Using native SMS app",
+    callStatusMessage: callNone ? "No communication platform configured" : `Using ${platformLabel[config.callPlatform]}`,
+    textStatusMessage: textNone ? "No communication platform configured" : `Using ${platformLabel[config.textPlatform]}`,
   };
 }

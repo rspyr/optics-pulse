@@ -609,7 +609,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [showScripts, setShowScripts] = useState(false);
   const [commConfig, setCommConfig] = useState<{ callPlatform: string; textPlatform: string }>({ callPlatform: "native", textPlatform: "native" });
   useEffect(() => {
-    fetch(`${API_BASE}/leads/comm-config`, { credentials: "include" })
+    fetch(`${API_BASE}/leads/comm-config?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => setCommConfig({ callPlatform: d.callPlatform || "native", textPlatform: d.textPlatform || "native" }))
       .catch(() => {});
