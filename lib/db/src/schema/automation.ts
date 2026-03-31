@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, text, timestamp, boolean, real, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, boolean, real, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { tenantsTable } from "./tenants";
 import { usersTable } from "./users";
 
@@ -25,7 +26,9 @@ export const automationRulesTable = pgTable("automation_rules", {
   createdBy: integer("created_by").notNull().references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, () => [
+  uniqueIndex("uq_automation_rule_identity").using("btree", sql`name`, sql`condition_type`, sql`COALESCE(tenant_id, -1)`),
+]);
 
 export const automationAlertsTable = pgTable("automation_alerts", {
   id: serial("id").primaryKey(),

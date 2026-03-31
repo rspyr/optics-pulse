@@ -235,6 +235,67 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: "2026-03-31_dedup-automation-rules",
+    description: "Purge duplicate automation rules, reassign alerts, and add unique constraint",
+    run: async () => {
+      const dupeGroups = await db.execute(sql`
+        SELECT name, condition_type,
+               COALESCE(tenant_id, -1) AS tenant_key,
+               MIN(id) AS keep_id,
+               COUNT(*) AS cnt
+        FROM automation_rules
+        GROUP BY name, condition_type, COALESCE(tenant_id, -1)
+        HAVING COUNT(*) > 1
+      `);
+
+      let totalDeleted = 0;
+      for (const group of dupeGroups.rows as any[]) {
+        const keepId = Number(group.keep_id);
+        const tenantKey = Number(group.tenant_key);
+        const tenantFilter = tenantKey === -1
+          ? sql`tenant_id IS NULL`
+          : sql`tenant_id = ${tenantKey}`;
+
+        await db.execute(sql`
+          UPDATE automation_alerts
+          SET rule_id = ${keepId}
+          WHERE rule_id IN (
+            SELECT id FROM automation_rules
+            WHERE name = ${group.name}
+              AND condition_type = ${group.condition_type}
+              AND ${tenantFilter}
+              AND id != ${keepId}
+          )
+        `);
+
+        const deleted = await db.execute(sql`
+          DELETE FROM automation_rules
+          WHERE name = ${group.name}
+            AND condition_type = ${group.condition_type}
+            AND ${tenantFilter}
+            AND id != ${keepId}
+          RETURNING id
+        `);
+        totalDeleted += deleted.rows.length;
+      }
+      console.log(`[Migration] Deleted ${totalDeleted} duplicate automation rule(s)`);
+
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_rule_identity
+        ON automation_rules (name, condition_type, COALESCE(tenant_id, -1))
+      `);
+      console.log("[Migration] Created unique index uq_automation_rule_identity on automation_rules");
+    },
+  },
+  {
+    id: "2026-03-31_wipe-automation-alerts",
+    description: "Purge all automation alerts generated from duplicate rules",
+    run: async () => {
+      const deleted = await db.execute(sql`DELETE FROM automation_alerts RETURNING id`);
+      console.log(`[Migration] Deleted ${deleted.rows.length} automation alert(s)`);
+    },
+  },
+  {
     id: "2026-03-31_create-lead-source-aliases",
     description: "Create lead_source_aliases table and seed default aliases for all tenants, then backfill existing leads",
     run: async () => {

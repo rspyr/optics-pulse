@@ -157,7 +157,7 @@ async function syncTenantConfigs(seedData: any) {
       await db.execute(
         sql`INSERT INTO automation_rules (name, description, condition_type, condition_value, action_type, platform, tenant_id, is_enabled, lookback_days, created_by)
             VALUES (${rule.name}, ${rule.description}, ${rule.conditionType}, ${String(rule.conditionValue)}, ${rule.actionType}, ${rule.platform}, ${tenantId}, ${rule.isEnabled}, ${rule.lookbackDays || 30}, 1)
-            ON CONFLICT DO NOTHING`
+            ON CONFLICT (name, condition_type, COALESCE(tenant_id, -1)) DO NOTHING`
       );
     }
   }
@@ -242,7 +242,7 @@ async function seedFromSnapshot(seedData: any) {
       await db.execute(
         sql`INSERT INTO automation_rules (name, description, condition_type, condition_value, action_type, platform, tenant_id, is_enabled, lookback_days, created_by)
             VALUES (${rule.name}, ${rule.description}, ${rule.conditionType}, ${String(rule.conditionValue)}, ${rule.actionType}, ${rule.platform}, ${tenantId}, ${rule.isEnabled}, ${rule.lookbackDays || 30}, 1)
-            ON CONFLICT DO NOTHING`
+            ON CONFLICT (name, condition_type, COALESCE(tenant_id, -1)) DO NOTHING`
       );
     }
     console.log(`[AutoSeed] Created ${seedData.automationRules.length} automation rules`);
