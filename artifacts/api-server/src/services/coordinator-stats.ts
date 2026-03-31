@@ -30,9 +30,6 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     gte(leadsTable.updatedAt, dayStart),
     lte(leadsTable.updatedAt, dayEnd),
   ];
-  if (bookerCsrId !== undefined) {
-    speedConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
-  }
 
   const [speedResult] = await db.select({
     avgSpeed: sql<number>`COALESCE(AVG(EXTRACT(EPOCH FROM (${leadsTable.updatedAt} - ${leadsTable.createdAt}))), 0)`,
