@@ -1,7 +1,7 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import { build as esbuild } from "esbuild";
-import { rm, readFile, copyFile, mkdir } from "fs/promises";
+import { rm, readFile } from "fs/promises";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,15 +68,6 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
-
-  const seedSrc = path.resolve(__dirname, "src", "seed-data.json");
-  const seedDest = path.resolve(distDir, "seed-data.json");
-  try {
-    await copyFile(seedSrc, seedDest);
-    console.log("copied seed-data.json to dist/");
-  } catch {
-    console.log("no seed-data.json found, skipping (default seed will be used)");
-  }
 }
 
 buildAll().catch((err) => {
