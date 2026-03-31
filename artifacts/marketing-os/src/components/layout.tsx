@@ -52,13 +52,13 @@ const CLIENT_NAV_ADMIN_BASE = [
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/training", label: "Training", icon: BookOpen },
-  { href: "/settings", label: "Client Settings", icon: Settings },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 const CLIENT_NAV_BASE = [
   { href: "/pulse", label: "Leads Hub", icon: Zap },
   { href: "/training", label: "Training", icon: BookOpen },
-  { href: "/settings", label: "Client Settings", icon: Settings },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 function getClientNav(isAdmin: boolean, leaderboardVisible: boolean) {
