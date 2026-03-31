@@ -6,27 +6,43 @@ export async function getLoggedInSecondsWithCoverage(
   windowStart: Date,
   windowEnd: Date,
 ): Promise<{ seconds: number; hasCoverage: boolean }> {
-  const [result] = await db.select({
-    totalSeconds: sql<number>`COALESCE(SUM(
-      EXTRACT(EPOCH FROM (
-        LEAST(COALESCE(${userLoginSessionsTable.logoutAt}, NOW()), ${windowEnd}::timestamp)
-        - GREATEST(${userLoginSessionsTable.loginAt}, ${windowStart}::timestamp)
-      ))
-    ), 0)`,
-    sessionCount: sql<number>`COUNT(*)`,
-  })
-    .from(userLoginSessionsTable)
-    .where(and(
-      eq(userLoginSessionsTable.userId, userId),
-      lte(userLoginSessionsTable.loginAt, windowEnd),
-      or(
-        isNull(userLoginSessionsTable.logoutAt),
-        gte(userLoginSessionsTable.logoutAt, windowStart),
-      ),
-    ));
+  const windowSeconds = Math.max(0, (windowEnd.getTime() - windowStart.getTime()) / 1000);
 
-  const sessionCount = Number(result?.sessionCount ?? 0);
-  const totalSeconds = Math.max(0, Math.round(Number(result?.totalSeconds ?? 0)));
+  const [result] = await db.execute(sql`
+    WITH clipped AS (
+      SELECT
+        GREATEST(login_at, ${windowStart}::timestamp) AS seg_start,
+        LEAST(COALESCE(logout_at, NOW()), ${windowEnd}::timestamp) AS seg_end
+      FROM user_login_sessions
+      WHERE user_id = ${userId}
+        AND login_at <= ${windowEnd}::timestamp
+        AND (logout_at IS NULL OR logout_at >= ${windowStart}::timestamp)
+    ),
+    ordered AS (
+      SELECT seg_start, seg_end,
+        MAX(seg_end) OVER (ORDER BY seg_start ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max_end
+      FROM clipped
+    ),
+    merged AS (
+      SELECT
+        CASE WHEN seg_start > COALESCE(prev_max_end, '-infinity'::timestamp)
+          THEN seg_start ELSE COALESCE(prev_max_end, seg_start) END AS merged_start,
+        seg_end
+      FROM ordered
+      WHERE seg_end > COALESCE(prev_max_end, '-infinity'::timestamp)
+    )
+    SELECT
+      COALESCE(SUM(EXTRACT(EPOCH FROM (seg_end - merged_start))), 0) AS total_seconds,
+      COUNT(*) AS session_count
+    FROM merged
+  `);
+
+  const row = (result as Record<string, unknown>);
+  const sessionCount = Number(row?.session_count ?? 0);
+  const totalSeconds = Math.min(
+    Math.max(0, Math.round(Number(row?.total_seconds ?? 0))),
+    windowSeconds,
+  );
 
   return {
     seconds: totalSeconds,

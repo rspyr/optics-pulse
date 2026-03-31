@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable, userLoginSessionsTable } from "@workspace/db";
-import { eq, and, count, sql, avg, inArray, gte, lte, ne, isNull } from "drizzle-orm";
+import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
 
@@ -165,27 +165,29 @@ export async function closeStaleLoginSessions(): Promise<void> {
   }
 }
 
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
 export function startLoginSessionExpiryJob(): void {
   setInterval(async () => {
     try {
-      const cutoff = new Date(Date.now() - SESSION_MAX_AGE_MS);
-      const result = await db.update(userLoginSessionsTable)
-        .set({ logoutAt: new Date() })
-        .where(and(
-          isNull(userLoginSessionsTable.logoutAt),
-          lte(userLoginSessionsTable.loginAt, cutoff),
-        ))
-        .returning({ id: userLoginSessionsTable.id });
-      if (result.length > 0) {
-        console.log(`[LoginSessions] Closed ${result.length} expired session(s) older than 24h`);
+      const result = await db.execute(sql`
+        UPDATE user_login_sessions uls
+        SET logout_at = NOW()
+        WHERE uls.logout_at IS NULL
+          AND uls.session_key IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM session s WHERE s.sid = uls.session_key AND s.expire > NOW()
+          )
+        RETURNING uls.id
+      `);
+      const rows = (result as { rows?: { id: number }[] }).rows ?? (result as { id: number }[]);
+      const closedCount = Array.isArray(rows) ? rows.length : 0;
+      if (closedCount > 0) {
+        console.log(`[LoginSessions] Closed ${closedCount} session(s) with expired/destroyed express sessions`);
       }
     } catch (err) {
-      console.error("[LoginSessions] Session expiry cleanup failed:", err);
+      console.error("[LoginSessions] Session expiry reconciliation failed:", err);
     }
-  }, 60 * 60 * 1000);
-  console.log("[LoginSessions] Session expiry job started (every 60min, closes sessions > 24h)");
+  }, 15 * 60 * 1000);
+  console.log("[LoginSessions] Session expiry reconciliation started (every 15min, checks session store)");
 }
 
 export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
