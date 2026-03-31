@@ -238,23 +238,38 @@ const migrations: Migration[] = [
     id: "2026-03-31_dedup-automation-rules",
     description: "Purge duplicate automation rules, reassign alerts, and add unique constraint",
     run: async () => {
+      interface DupeGroup {
+        name: string;
+        condition_type: string;
+        condition_value: number;
+        action_type: string;
+        platform: string;
+        tenant_id: string;
+        keep_id: number;
+        cnt: number;
+      }
+
       const dupeGroups = await db.execute(sql`
-        SELECT name, condition_type,
-               COALESCE(tenant_id, -1) AS tenant_key,
+        SELECT name, condition_type, condition_value, action_type,
+               COALESCE(platform, '') AS platform,
+               COALESCE(tenant_id::text, '') AS tenant_id,
                MIN(id) AS keep_id,
                COUNT(*) AS cnt
         FROM automation_rules
-        GROUP BY name, condition_type, COALESCE(tenant_id, -1)
+        GROUP BY name, condition_type, condition_value, action_type,
+                 COALESCE(platform, ''), COALESCE(tenant_id::text, '')
         HAVING COUNT(*) > 1
       `);
 
       let totalDeleted = 0;
-      for (const group of dupeGroups.rows as any[]) {
+      for (const group of dupeGroups.rows as DupeGroup[]) {
         const keepId = Number(group.keep_id);
-        const tenantKey = Number(group.tenant_key);
-        const tenantFilter = tenantKey === -1
+        const tenantFilter = group.tenant_id === ''
           ? sql`tenant_id IS NULL`
-          : sql`tenant_id = ${tenantKey}`;
+          : sql`tenant_id = ${Number(group.tenant_id)}`;
+        const platformFilter = group.platform === ''
+          ? sql`platform IS NULL`
+          : sql`platform = ${group.platform}`;
 
         await db.execute(sql`
           UPDATE automation_alerts
@@ -263,6 +278,9 @@ const migrations: Migration[] = [
             SELECT id FROM automation_rules
             WHERE name = ${group.name}
               AND condition_type = ${group.condition_type}
+              AND condition_value = ${Number(group.condition_value)}
+              AND action_type = ${group.action_type}
+              AND ${platformFilter}
               AND ${tenantFilter}
               AND id != ${keepId}
           )
@@ -272,6 +290,9 @@ const migrations: Migration[] = [
           DELETE FROM automation_rules
           WHERE name = ${group.name}
             AND condition_type = ${group.condition_type}
+            AND condition_value = ${Number(group.condition_value)}
+            AND action_type = ${group.action_type}
+            AND ${platformFilter}
             AND ${tenantFilter}
             AND id != ${keepId}
           RETURNING id
