@@ -26,6 +26,9 @@ const INTERNAL_FIELDS = [
   { field: "state", label: "State", description: "State/province" },
   { field: "zip", label: "Zip Code", description: "Zip/postal code" },
   { field: "dateTime", label: "Date/Time", description: "Date/time timestamp (ISO 8601, e.g. 2026-02-11T20:57:57) — used as the lead's created date" },
+  { field: "appointmentDate", label: "Appointment Date", description: "Date of the scheduled appointment (e.g., 2026-04-15)" },
+  { field: "appointmentTime", label: "Appointment Time", description: "Time of the scheduled appointment (e.g., 10:00 AM)" },
+  { field: "addOns", label: "Add-Ons", description: "Additional services or add-ons requested by the lead" },
   { field: "__skip__", label: "Skip (Do Not Import)", description: "Ignore this column" },
 ];
 
@@ -411,6 +414,8 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       }
 
       const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+      const hasApptDetails = !!(row.appointmentDate || row.appointmentTime);
+      const effectivePreBooked = isPreBooked || hasApptDetails;
       const funnelName = allFunnels[resolvedFunnelId]?.name;
 
       const [lead] = await db.insert(leadsTable).values({
@@ -422,11 +427,18 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         source: row.source || funnelName || "Google Sheet",
         serviceType: row.serviceType || null,
         notes: row.notes || null,
+        address: row.address || null,
+        city: row.city || null,
+        state: row.state || null,
+        zip: row.zip || null,
+        appointmentDate: row.appointmentDate || null,
+        appointmentTime: row.appointmentTime || null,
+        addOns: row.addOns || null,
         funnelId: resolvedFunnelId,
-        hubStatus: isPreBooked ? "appt_booked" : "day_1",
+        hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
         status: "new",
-        preBooked: isPreBooked,
+        preBooked: effectivePreBooked,
         contactPreferences: [],
         ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
       }).returning();
@@ -513,7 +525,9 @@ router.get("/sheet-configs/:configId/preview", requireRole("super_admin", "agenc
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "__funnel__",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked",
+  "address", "city", "state", "zip", "appointmentDate", "appointmentTime", "addOns",
+  "__skip__", "__funnel__",
 ]);
 
 router.post("/sheet-configs/:configId/backfill-notes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {

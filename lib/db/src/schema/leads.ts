@@ -42,6 +42,13 @@ export const leadsTable = pgTable("leads", {
   preBooked: boolean("pre_booked").notNull().default(false),
   cascadePassCount: integer("cascade_pass_count").notNull().default(0),
   notes: text("notes"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  appointmentDate: text("appointment_date"),
+  appointmentTime: text("appointment_time"),
+  addOns: text("add_ons"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

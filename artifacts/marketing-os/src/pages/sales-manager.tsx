@@ -1849,6 +1849,9 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                         <option value="zip">Zip Code</option>
                         <option value="dateTime">Date/Time</option>
                         <option value="appointmentBooked">Appointment Booked</option>
+                        <option value="appointmentDate">Appointment Date</option>
+                        <option value="appointmentTime">Appointment Time</option>
+                        <option value="addOns">Add-Ons</option>
                         <option value="__skip__">Skip (Do Not Import)</option>
                       </>
                     )}

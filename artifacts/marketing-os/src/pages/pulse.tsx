@@ -186,6 +186,13 @@ interface LeadData {
   disposition?: string | null;
   notes?: string | null;
   preBooked?: boolean;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  appointmentDate?: string | null;
+  appointmentTime?: string | null;
+  addOns?: string | null;
   createdAt: string;
   updatedAt: string;
   tenantId?: number;
@@ -485,6 +492,12 @@ function LeadCard({ lead, onClick, funnelMap }: { lead: LeadData; onClick: () =>
               <span className="inline-flex items-center gap-0.5">
                 <span className="text-[11px] text-white/40 font-mono">{formatPhone(lead.phone)}</span>
                 <CopyBtn text={lead.phone.replace(/[^0-9+]/g, "")} />
+              </span>
+            )}
+            {(lead.appointmentDate || lead.appointmentTime) && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                <Calendar className="w-2.5 h-2.5" />
+                {lead.appointmentDate}{lead.appointmentTime ? ` ${lead.appointmentTime}` : ""}
               </span>
             )}
           </div>
@@ -1217,6 +1230,43 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           </motion.div>
         )}
       </AnimatePresence>
+
+      {(lead.appointmentDate || lead.appointmentTime || lead.addOns || lead.address || lead.city || lead.state || lead.zip) && (
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar className="w-3.5 h-3.5 text-white/40" />
+            <span className="text-xs font-medium text-white/50 uppercase tracking-wider">Details</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            {lead.appointmentDate && (
+              <div>
+                <span className="text-[10px] text-white/30 uppercase block">Appt Date</span>
+                <span className="text-sm text-white/80">{lead.appointmentDate}</span>
+              </div>
+            )}
+            {lead.appointmentTime && (
+              <div>
+                <span className="text-[10px] text-white/30 uppercase block">Appt Time</span>
+                <span className="text-sm text-white/80">{lead.appointmentTime}</span>
+              </div>
+            )}
+            {lead.addOns && (
+              <div className="col-span-2">
+                <span className="text-[10px] text-white/30 uppercase block">Add-Ons</span>
+                <span className="text-sm text-white/80">{lead.addOns}</span>
+              </div>
+            )}
+            {(lead.address || lead.city || lead.state || lead.zip) && (
+              <div className="col-span-2">
+                <span className="text-[10px] text-white/30 uppercase block">Address</span>
+                <span className="text-sm text-white/80">
+                  {[lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ")}
+                </span>
+              </div>
+            )}
+          </div>
+        </PremiumCard>
+      )}
 
       {lead.notes && (
         <PremiumCard className="p-4">

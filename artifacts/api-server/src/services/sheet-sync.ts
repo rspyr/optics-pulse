@@ -1,8 +1,13 @@
 import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
-import { emitNewLead } from "../socket";
+import { emitNewLead, emitLeadUpdated } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
+
+const UPDATABLE_FIELDS = [
+  "appointmentDate", "appointmentTime", "appointmentBooked",
+  "addOns", "address", "city", "state", "zip",
+] as const;
 
 function headersMatch(current: string[], saved: string[]): boolean {
   if (current.length !== saved.length) return false;
@@ -66,6 +71,97 @@ async function syncAllSheets(): Promise<void> {
   }
 }
 
+async function rescanExistingRows(
+  config: typeof googleSheetConfigsTable.$inferSelect,
+  currentHeaders: string[],
+  rawRows: string[][],
+  mapping: Record<string, string>,
+): Promise<number> {
+  const existingRows = rawRows.slice(0, config.syncRowWatermark!);
+  if (existingRows.length === 0) return 0;
+
+  const hasUpdatableMapping = Object.values(mapping).some(f => (UPDATABLE_FIELDS as readonly string[]).includes(f));
+  if (!hasUpdatableMapping) return 0;
+
+  const allMappedRows = mapRawRows(currentHeaders, existingRows, mapping);
+
+  const existingLeads = await db.select({
+    id: leadsTable.id,
+    phone: leadsTable.phone,
+    appointmentDate: leadsTable.appointmentDate,
+    appointmentTime: leadsTable.appointmentTime,
+    appointmentBooked: leadsTable.preBooked,
+    addOns: leadsTable.addOns,
+    address: leadsTable.address,
+    city: leadsTable.city,
+    state: leadsTable.state,
+    zip: leadsTable.zip,
+    hubStatus: leadsTable.hubStatus,
+  }).from(leadsTable)
+    .where(eq(leadsTable.tenantId, config.tenantId));
+
+  const leadByPhone = new Map<string, typeof existingLeads[number]>();
+  for (const l of existingLeads) {
+    if (l.phone) leadByPhone.set(l.phone.replace(/[^0-9]/g, ""), l);
+  }
+
+  let updated = 0;
+  for (const row of allMappedRows) {
+    const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
+    if (!normalizedPhone) continue;
+
+    const existingLead = leadByPhone.get(normalizedPhone);
+    if (!existingLead) continue;
+
+    const updates: Record<string, unknown> = {};
+
+    const newApptDate = row.appointmentDate || null;
+    const newApptTime = row.appointmentTime || null;
+    const newAddOns = row.addOns || null;
+    const newAddress = row.address || null;
+    const newCity = row.city || null;
+    const newState = row.state || null;
+    const newZip = row.zip || null;
+    const newApptBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+
+    if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
+    if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
+    if (newAddOns && newAddOns !== existingLead.addOns) updates.addOns = newAddOns;
+    if (newAddress && newAddress !== existingLead.address) updates.address = newAddress;
+    if (newCity && newCity !== existingLead.city) updates.city = newCity;
+    if (newState && newState !== existingLead.state) updates.state = newState;
+    if (newZip && newZip !== existingLead.zip) updates.zip = newZip;
+
+    const hasNewApptInfo = newApptBooked || !!(newApptDate || newApptTime);
+    if (hasNewApptInfo && !existingLead.appointmentBooked) {
+      updates.preBooked = true;
+      if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
+        updates.hubStatus = "appt_booked";
+      }
+    }
+
+    if (Object.keys(updates).length === 0) continue;
+
+    updates.updatedAt = new Date();
+    await db.update(leadsTable)
+      .set(updates)
+      .where(eq(leadsTable.id, existingLead.id));
+
+    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingLead.id));
+    if (refreshed) {
+      emitLeadUpdated(config.tenantId, refreshed as unknown as Record<string, unknown>);
+    }
+
+    updated++;
+  }
+
+  if (updated > 0) {
+    console.log(`[SheetSync] Re-scan updated ${updated} existing lead(s) for sheet config ${config.id} (tenant ${config.tenantId})`);
+  }
+
+  return updated;
+}
+
 async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSelect): Promise<number> {
   const sheetId = config.googleSheetId;
   const tab = config.googleSheetTab;
@@ -82,6 +178,8 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     console.warn(`[SheetSync] Headers changed for sheet config ${config.id} (tenant ${config.tenantId}) — skipping`);
     return -1;
   }
+
+  await rescanExistingRows(config, currentHeaders, rawRows, mapping);
 
   if (rawRows.length <= watermark) return 0;
 
@@ -141,6 +239,8 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     }
 
     const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+    const hasApptDetails = !!(row.appointmentDate || row.appointmentTime);
+    const effectivePreBooked = isPreBooked || hasApptDetails;
     const funnelName = allFunnels[resolvedFunnelId]?.name;
 
     const [lead] = await db.insert(leadsTable).values({
@@ -152,11 +252,18 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       source: row.source || funnelName || "Google Sheet",
       serviceType: row.serviceType || null,
       notes: row.notes || null,
+      address: row.address || null,
+      city: row.city || null,
+      state: row.state || null,
+      zip: row.zip || null,
+      appointmentDate: row.appointmentDate || null,
+      appointmentTime: row.appointmentTime || null,
+      addOns: row.addOns || null,
       funnelId: resolvedFunnelId,
-      hubStatus: isPreBooked ? "appt_booked" : "day_1",
+      hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
       dayInSequence: 1,
       status: "new",
-      preBooked: isPreBooked,
+      preBooked: effectivePreBooked,
       contactPreferences: [],
       ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
     }).returning();
@@ -203,7 +310,9 @@ interface MappedRow {
 
 const LEAD_DB_FIELDS = new Set([
   "firstName", "lastName", "fullName", "phone", "email",
-  "source", "serviceType", "status", "dateTime", "appointmentBooked", "__skip__", "notes", "__funnel__",
+  "source", "serviceType", "status", "dateTime", "appointmentBooked",
+  "address", "city", "state", "zip", "appointmentDate", "appointmentTime", "addOns",
+  "__skip__", "notes", "__funnel__",
 ]);
 
 function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<string, string>): MappedRow[] {
