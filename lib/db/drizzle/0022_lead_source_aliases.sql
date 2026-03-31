@@ -6,4 +6,4 @@ CREATE TABLE IF NOT EXISTS "lead_source_aliases" (
   "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_tenant_alias_lower" ON "lead_source_aliases" ("tenant_id", lower("alias"));
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_tenant_alias_lower" ON "lead_source_aliases" (tenant_id, (lower(alias)));
