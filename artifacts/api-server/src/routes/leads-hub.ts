@@ -313,7 +313,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   const validCallResults = ["no_answer", "left_voicemail", "vm_full", "vm_not_setup", "bad_number", "spoke_with_customer", "hung_up", "blocked", "out_of_service_area"];
   const validTextResults = ["yes", "not_able_to", "dead", "no_need"];
   const validVmResults = ["yes", "no", "bad_number", "vm_full", "vm_not_setup", "spoke_with_customer"];
-  const validActionTypes = ["call", "text", "voicemail_drop"];
+  const validActionTypes = ["call", "text", "voicemail_drop", "voicemail"];
 
   if (actionType !== undefined && !validActionTypes.includes(actionType)) {
     res.status(400).json({ error: "Invalid action type" }); return;

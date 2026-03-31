@@ -604,8 +604,11 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       if (res.ok) {
         setEditingId(null);
         fetchHistory();
+      } else {
+        const err = await res.json().catch(() => ({ error: "Save failed" }));
+        alert(err.error || "Save failed");
       }
-    } catch {} finally { setEditSaving(false); }
+    } catch { alert("Network error — could not save"); } finally { setEditSaving(false); }
   };
 
   if (loading) return <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>;
@@ -1629,13 +1632,13 @@ export default function Leads() {
     if (callbackNotification) return;
     const dueCallbacks = queueData.callbacks.filter(l => {
       if (!l.callbackAt) return false;
-      const key = `${l.id}:${l.callbackAt}`;
+      const key = `${effectiveTenantId}:${l.id}:${l.callbackAt}`;
       if (notifiedCallbackKeysRef.current.has(key)) return false;
       return new Date(l.callbackAt).getTime() <= Date.now();
     });
     if (dueCallbacks.length > 0) {
       const lead = dueCallbacks[0];
-      notifiedCallbackKeysRef.current.add(`${lead.id}:${lead.callbackAt}`);
+      notifiedCallbackKeysRef.current.add(`${effectiveTenantId}:${lead.id}:${lead.callbackAt}`);
       setCallbackNotification(lead);
       if (callbackTimerRef.current) clearTimeout(callbackTimerRef.current);
       callbackTimerRef.current = setTimeout(() => {
