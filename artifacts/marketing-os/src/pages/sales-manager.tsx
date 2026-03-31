@@ -1431,21 +1431,30 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
   const [defaultAmount, setDefaultAmount] = useState(20);
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [newFunnel, setNewFunnel] = useState("");
+
+  interface SpiffSavedState {
+    defaultAmount: number;
+    overrides: Record<string, number>;
+  }
+  const [lastSavedSpiff, setLastSavedSpiff] = useState<SpiffSavedState | null>(null);
+
+  const isSpiffDirty = lastSavedSpiff !== null && (
+    defaultAmount !== lastSavedSpiff.defaultAmount ||
+    JSON.stringify(overrides) !== JSON.stringify(lastSavedSpiff.overrides)
+  );
 
   useEffect(() => {
     setDefaultAmount(config.default);
     setOverrides({ ...config.byFunnel });
+    setLastSavedSpiff({ defaultAmount: config.default, overrides: { ...config.byFunnel } });
   }, [config]);
 
   const handleSave = async () => {
     setSaving(true);
-    setSaved(false);
     await saveConfig({ default: defaultAmount, byFunnel: overrides });
+    setLastSavedSpiff({ defaultAmount, overrides: { ...overrides } });
     setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const availableFunnels = (funnels || []).map(f => f.name).filter(name => !(name in overrides));
@@ -1538,11 +1547,17 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
 
         <button
           onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
+          disabled={saving || !isSpiffDirty}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
+            isSpiffDirty
+              ? "bg-primary hover:bg-primary/90 text-white"
+              : "bg-white/5 text-white/40 cursor-default",
+            saving && "opacity-50"
+          )}
         >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <DollarSign className="w-4 h-4" />}
-          {saved ? "Saved!" : "Save Spiff Settings"}
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : !isSpiffDirty ? <CheckCircle2 className="w-4 h-4" /> : <DollarSign className="w-4 h-4" />}
+          {saving ? "Saving..." : !isSpiffDirty ? "Saved" : "Save Spiff Settings"}
         </button>
       </PremiumCard>
     </div>
