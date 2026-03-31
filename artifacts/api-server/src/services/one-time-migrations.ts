@@ -248,8 +248,8 @@ const migrations: Migration[] = [
         )
       `);
       await db.execute(sql`
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_alias_lower
-        ON lead_source_aliases (tenant_id, lower(alias))
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_alias
+        ON lead_source_aliases (tenant_id, alias)
       `);
       console.log("[Migration] Created lead_source_aliases table");
 
@@ -261,13 +261,13 @@ const migrations: Migration[] = [
             const existing = await db.select().from(leadSourceAliasesTable)
               .where(and(
                 eq(leadSourceAliasesTable.tenantId, tenant.id),
-                sql`lower(${leadSourceAliasesTable.alias}) = ${alias.toLowerCase()}`
+                eq(leadSourceAliasesTable.alias, alias.toLowerCase())
               ));
             if (existing.length === 0) {
               await db.insert(leadSourceAliasesTable).values({
                 tenantId: tenant.id,
                 canonicalName: group.canonicalName,
-                alias,
+                alias: alias.toLowerCase(),
               });
               totalSeeded++;
             }

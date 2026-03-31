@@ -67,7 +67,7 @@ router.post("/lead-source-aliases", async (req, res) => {
   const existing = await db.select().from(leadSourceAliasesTable)
     .where(and(
       eq(leadSourceAliasesTable.tenantId, tenantId),
-      sql`lower(${leadSourceAliasesTable.alias}) = ${trimmedAlias.toLowerCase()}`
+      eq(leadSourceAliasesTable.alias, trimmedAlias.toLowerCase())
     ));
 
   if (existing.length > 0) {
@@ -78,7 +78,7 @@ router.post("/lead-source-aliases", async (req, res) => {
   const [row] = await db.insert(leadSourceAliasesTable).values({
     tenantId,
     canonicalName: trimmedCanonical,
-    alias: trimmedAlias,
+    alias: trimmedAlias.toLowerCase(),
   }).returning();
 
   invalidateSourceCache(tenantId);
@@ -108,7 +108,7 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
     const existing = await db.select().from(leadSourceAliasesTable)
       .where(and(
         eq(leadSourceAliasesTable.tenantId, tenantId),
-        sql`lower(${leadSourceAliasesTable.alias}) = ${trimmedAlias.toLowerCase()}`
+        eq(leadSourceAliasesTable.alias, trimmedAlias.toLowerCase())
       ));
 
     if (existing.length > 0) {
@@ -119,7 +119,7 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
     await db.insert(leadSourceAliasesTable).values({
       tenantId,
       canonicalName: trimmedCanonical,
-      alias: trimmedAlias,
+      alias: trimmedAlias.toLowerCase(),
     });
     results.push({ alias: trimmedAlias, status: "created" });
   }
@@ -148,10 +148,11 @@ router.put("/lead-source-aliases/:id", async (req, res) => {
   }
 
   if (updates.alias) {
+    updates.alias = updates.alias.toLowerCase();
     const existing = await db.select().from(leadSourceAliasesTable)
       .where(and(
         eq(leadSourceAliasesTable.tenantId, tenantId),
-        sql`lower(${leadSourceAliasesTable.alias}) = ${updates.alias.toLowerCase()}`,
+        eq(leadSourceAliasesTable.alias, updates.alias),
         sql`${leadSourceAliasesTable.id} != ${id}`
       ));
 
@@ -230,7 +231,7 @@ router.post("/lead-source-aliases/load-defaults", async (req, res) => {
       const existing = await db.select().from(leadSourceAliasesTable)
         .where(and(
           eq(leadSourceAliasesTable.tenantId, tenantId),
-          sql`lower(${leadSourceAliasesTable.alias}) = ${alias.toLowerCase()}`
+          eq(leadSourceAliasesTable.alias, alias.toLowerCase())
         ));
 
       if (existing.length > 0) {
@@ -241,7 +242,7 @@ router.post("/lead-source-aliases/load-defaults", async (req, res) => {
       await db.insert(leadSourceAliasesTable).values({
         tenantId,
         canonicalName: group.canonicalName,
-        alias,
+        alias: alias.toLowerCase(),
       });
       created++;
     }

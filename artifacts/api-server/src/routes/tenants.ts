@@ -106,7 +106,7 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
         await db.insert(leadSourceAliasesTable).values({
           tenantId: tenant.id,
           canonicalName: group.canonicalName,
-          alias,
+          alias: alias.toLowerCase(),
         });
       }
     }
