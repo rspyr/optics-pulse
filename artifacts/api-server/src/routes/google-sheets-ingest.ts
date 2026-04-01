@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
@@ -457,7 +457,31 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         try {
           const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {
-            scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+            const passIntervalMs = result.passIntervalMinutes * 60 * 1000;
+            const visibilityDelayMs = visibleAfter ? Math.max(0, visibleAfter.getTime() - Date.now()) : 0;
+            scheduleAutoPass(lead.id, passIntervalMs + visibilityDelayMs);
+
+            await db.insert(callAttemptsTable).values({
+              leadId: lead.id,
+              userId: result.assignedCsrId,
+              method: "system",
+              outcome: "initial_assignment",
+              platform: "native",
+              actionType: "system",
+              notes: `Lead initially assigned to ${result.csrName}`,
+            });
+
+            if (visibleAfter) {
+              await db.insert(callAttemptsTable).values({
+                leadId: lead.id,
+                userId: result.assignedCsrId,
+                method: "system",
+                outcome: "visibility_delay",
+                platform: "native",
+                actionType: "system",
+                notes: `Lead visibility delayed 10 minutes (auto-book window)`,
+              });
+            }
           } else if (!result.assignedCsrId) {
             console.warn(`[SheetsIngest] Lead ${lead.id} not assigned: ${result.reason}`);
           }

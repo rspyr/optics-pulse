@@ -99,8 +99,8 @@ router.get("/leads-hub/queue", async (req, res) => {
   const terminalStatuses = ["appt_set", "dead"];
 
   try {
-    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
-    const hasRealAttempts = sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
+    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
+    const hasRealAttempts = sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
     const newLeads = (tab === "all" || tab === "new") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
@@ -229,7 +229,10 @@ router.get("/leads-hub/queue", async (req, res) => {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
         const passMinutes = cfg.passIntervalMinutes ?? 1440;
-        const nextPassAt = new Date(new Date(l.assignedAt).getTime() + passMinutes * 60 * 1000).toISOString();
+        const baseTime = l.visibleAfter
+          ? new Date(l.visibleAfter).getTime()
+          : new Date(l.assignedAt).getTime();
+        const nextPassAt = new Date(baseTime + passMinutes * 60 * 1000).toISOString();
         return { ...l, nextPassAt, passIntervalMinutes: passMinutes };
       });
     }
@@ -768,6 +771,17 @@ router.post("/leads-hub/create", async (req, res) => {
         if (result.passIntervalMinutes != null) {
           scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
         }
+
+        await db.insert(callAttemptsTable).values({
+          leadId: lead.id,
+          userId: result.assignedCsrId,
+          method: "system",
+          outcome: "initial_assignment",
+          platform: "native",
+          actionType: "system",
+          notes: `Lead initially assigned to ${result.csrName}`,
+        });
+
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
         emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
         res.status(201).json(refreshed ?? lead);
@@ -1036,7 +1050,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     inArray(callAttemptsTable.leadId, filteredLeadIds.length > 0 ? filteredLeadIds : [0]),
     gte(callAttemptsTable.attemptedAt, startDate),
     lte(callAttemptsTable.attemptedAt, endDate),
-    sql`${callAttemptsTable.actionType} != 'transfer'`,
+    sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
   ];
 
   const callStats = filteredLeadIds.length > 0 ? await db.select({

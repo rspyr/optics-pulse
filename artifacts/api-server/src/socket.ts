@@ -331,7 +331,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
   const callAttemptsConds: any[] = [
     gte(callAttemptsTable.attemptedAt, rangeStart),
     sql`${callAttemptsTable.attemptedAt} <= ${rangeEnd}`,
-    sql`${callAttemptsTable.actionType} != 'transfer'`,
+    sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
   ];
   if (tenantId) callAttemptsConds.push(sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`);
   if (csrId) callAttemptsConds.push(eq(callAttemptsTable.userId, csrId));
@@ -372,7 +372,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
   }
 
   const speedConds: any[] = [
-    ne(callAttemptsTable.actionType, "transfer"),
+    sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
     gte(callAttemptsTable.attemptedAt, rangeStart),
     sql`${callAttemptsTable.attemptedAt} <= ${rangeEnd}`,
   ];

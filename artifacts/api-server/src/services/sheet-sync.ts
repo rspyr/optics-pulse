@@ -1,4 +1,4 @@
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable } from "@workspace/db";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead, emitLeadUpdated } from "../socket";
@@ -283,7 +283,31 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       try {
         const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
         if (result.assignedCsrId && result.passIntervalMinutes != null) {
-          scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+          const passIntervalMs = result.passIntervalMinutes * 60 * 1000;
+          const visibilityDelayMs = visibleAfter ? Math.max(0, visibleAfter.getTime() - Date.now()) : 0;
+          scheduleAutoPass(lead.id, passIntervalMs + visibilityDelayMs);
+
+          await db.insert(callAttemptsTable).values({
+            leadId: lead.id,
+            userId: result.assignedCsrId,
+            method: "system",
+            outcome: "initial_assignment",
+            platform: "native",
+            actionType: "system",
+            notes: `Lead initially assigned to ${result.csrName}`,
+          });
+
+          if (visibleAfter) {
+            await db.insert(callAttemptsTable).values({
+              leadId: lead.id,
+              userId: result.assignedCsrId,
+              method: "system",
+              outcome: "visibility_delay",
+              platform: "native",
+              actionType: "system",
+              notes: `Lead visibility delayed 10 minutes (auto-book window)`,
+            });
+          }
         } else if (!result.assignedCsrId) {
           console.warn(`[SheetSync] Lead ${lead.id} not assigned: ${result.reason}`);
         }

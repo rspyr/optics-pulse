@@ -100,6 +100,7 @@ router.get("/sales-manager/team", async (req, res) => {
       inArray(callAttemptsTable.userId, userIds),
       gte(callAttemptsTable.attemptedAt, today),
       ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
     ))
     .groupBy(callAttemptsTable.userId);
 
@@ -112,6 +113,7 @@ router.get("/sales-manager/team", async (req, res) => {
       inArray(callAttemptsTable.userId, userIds),
       gte(callAttemptsTable.attemptedAt, today),
       ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
     ));
 
   const leadIdsByUser: Record<number, number[]> = {};
@@ -174,6 +176,7 @@ router.get("/sales-manager/team", async (req, res) => {
         inArray(callAttemptsTable.userId, userIds),
         gte(callAttemptsTable.attemptedAt, today),
         ne(callAttemptsTable.actionType, "transfer"),
+        ne(callAttemptsTable.actionType, "system"),
       ))
       .groupBy(callAttemptsTable.leadId, leadsTable.assignedAt);
 

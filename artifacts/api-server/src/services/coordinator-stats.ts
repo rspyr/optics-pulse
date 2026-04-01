@@ -36,6 +36,7 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
     .where(and(
       inArray(callAttemptsTable.leadId, leadIds),
       ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
       gte(callAttemptsTable.attemptedAt, dayStart),
       lte(callAttemptsTable.attemptedAt, dayEnd),
     ))
@@ -113,6 +114,7 @@ export async function aggregateDailyStats(dateStr: string) {
       gte(callAttemptsTable.attemptedAt, startOfDay),
       lte(callAttemptsTable.attemptedAt, endOfDay),
       ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
     );
 
     const [callsResult] = await db.select({ count: count() })
@@ -243,6 +245,7 @@ async function getUserTodayStats(userId: number, tenantId: number | null = null)
     eq(callAttemptsTable.userId, userId),
     gte(callAttemptsTable.attemptedAt, today),
     ne(callAttemptsTable.actionType, "transfer"),
+    ne(callAttemptsTable.actionType, "system"),
   ];
 
   const [callsResult] = await db.select({ count: count() })
@@ -282,6 +285,7 @@ async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
   const attemptConds = [
     gte(callAttemptsTable.attemptedAt, today),
     ne(callAttemptsTable.actionType, "transfer"),
+    ne(callAttemptsTable.actionType, "system"),
   ];
 
   const usersInTenant = await db.select({ id: usersTable.id })

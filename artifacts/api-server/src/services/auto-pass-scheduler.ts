@@ -91,6 +91,7 @@ export async function leadHasRealTouch(leadId: number): Promise<boolean> {
     .where(and(
       eq(callAttemptsTable.leadId, leadId),
       ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
     ))
     .limit(1);
   return !!result;
@@ -278,12 +279,13 @@ export async function recoverTimers(): Promise<number> {
       }
     }
 
-    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
+    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
     leadConditions.push(noRealAttempts);
 
     const leads = await db.select({
       id: leadsTable.id,
       assignedAt: leadsTable.assignedAt,
+      visibleAfter: leadsTable.visibleAfter,
       assignedCsrId: leadsTable.assignedCsrId,
       cascadePassCount: leadsTable.cascadePassCount,
     }).from(leadsTable)
@@ -301,7 +303,10 @@ export async function recoverTimers(): Promise<number> {
         continue;
       }
 
-      const elapsed = Date.now() - new Date(lead.assignedAt).getTime();
+      const baseTime = lead.visibleAfter
+        ? new Date(lead.visibleAfter).getTime()
+        : new Date(lead.assignedAt).getTime();
+      const elapsed = Date.now() - baseTime;
       const remaining = passMs - elapsed;
       scheduleAutoPass(lead.id, remaining);
       scheduled++;

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable, callAttemptsTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
@@ -128,6 +128,16 @@ router.post("/webhooks/ingest", async (req, res) => {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {
             scheduleAutoPass(newLead.id, result.passIntervalMinutes * 60 * 1000);
+
+            await db.insert(callAttemptsTable).values({
+              leadId: newLead.id,
+              userId: result.assignedCsrId,
+              method: "system",
+              outcome: "initial_assignment",
+              platform: "native",
+              actionType: "system",
+              notes: `Lead initially assigned to ${result.csrName}`,
+            });
           } else if (!result.assignedCsrId) {
             console.warn(`[Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);
           }
