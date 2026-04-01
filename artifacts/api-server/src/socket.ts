@@ -206,6 +206,12 @@ export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>)
   }
 }
 
+export function emitPodiumMessage(tenantId: number, message: Record<string, unknown>) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("podium-message", message);
+  }
+}
+
 async function loadFunnelTypesCache(): Promise<void> {
   try {
     const rows = await db.select({

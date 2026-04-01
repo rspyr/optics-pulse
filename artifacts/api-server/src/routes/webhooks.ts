@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
@@ -150,8 +150,130 @@ router.post("/webhooks/ghl", async (_req, res) => {
   res.json({ success: false, message: "GHL integration is currently paused" });
 });
 
-router.post("/webhooks/podium", async (_req, res): Promise<void> => {
-  res.json({ success: false, message: "Podium integration is currently paused" });
+router.post("/webhooks/podium", async (req, res): Promise<void> => {
+  try {
+    const verifyToken = req.query.verify as string | undefined;
+    const body = req.body as Record<string, unknown>;
+    const eventType = body.eventType as string || body.event_type as string || "";
+    const data = (body.data || body) as Record<string, unknown>;
+
+    const validEvents = ["message.sent", "message.received", "message.failed"];
+    if (!validEvents.includes(eventType)) {
+      res.json({ success: true, message: "Event type ignored" });
+      return;
+    }
+
+    const messageUid = String(data.uid || data.messageUid || "");
+    const conversationUid = String(data.conversationUid || data.conversation_uid || "");
+    const messageBody = String(data.body || data.text || "");
+    const direction = eventType === "message.received" ? "inbound" : "outbound";
+    const channelType = String(data.channelType || data.channel_type || "sms");
+    const senderName = String(data.senderName || data.sender_name || "");
+    const deliveryStatus = eventType === "message.failed" ? "failed" : (String(data.deliveryStatus || data.delivery_status || "delivered"));
+    const podiumCreatedAt = data.createdAt ? new Date(String(data.createdAt)) : new Date();
+
+    const conversation = data.conversation as Record<string, unknown> | undefined;
+    const channel = conversation?.channel as Record<string, unknown> | undefined;
+    const phoneIdentifier = String(channel?.identifier || data.phoneNumber || data.phone_number || "");
+
+    const locationUid = String(data.locationUid || data.location_uid || conversation?.locationUid || "");
+
+    if (!messageUid || !conversationUid) {
+      res.json({ success: false, message: "Missing message or conversation UID" });
+      return;
+    }
+
+    let matchedTenantId: number | null = null;
+    let matchedLeadId: number | null = null;
+
+    if (locationUid) {
+      const { decryptConfig } = await import("../lib/encryption");
+      const tenants = await db.select().from(tenantsTable);
+      for (const tenant of tenants) {
+        if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") continue;
+        try {
+          const config = decryptConfig(tenant.apiConfig);
+          if (config.podiumLocationUid === locationUid) {
+            if (config.podiumWebhookVerifyToken) {
+              if (!verifyToken || verifyToken !== config.podiumWebhookVerifyToken) {
+                console.warn(`[Podium Webhook] Verify token missing or mismatch for tenant ${tenant.id}`);
+                continue;
+              }
+            }
+            matchedTenantId = tenant.id;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    if (!matchedTenantId) {
+      console.warn("[Podium Webhook] Could not match tenant for location:", locationUid);
+      res.json({ success: true, message: "No matching tenant" });
+      return;
+    }
+
+    if (phoneIdentifier) {
+      const cleanPhone = phoneIdentifier.replace(/[^0-9]/g, "");
+      if (cleanPhone.length >= 7) {
+        const leads = await db.select({ id: leadsTable.id })
+          .from(leadsTable)
+          .where(and(
+            eq(leadsTable.tenantId, matchedTenantId),
+            sql`REGEXP_REPLACE(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${cleanPhone.slice(-10)}`
+          ))
+          .limit(1);
+        if (leads.length > 0) {
+          matchedLeadId = leads[0].id;
+        }
+      }
+    }
+
+    const { podiumMessagesTable } = await import("@workspace/db");
+
+    const existing = await db.select({ id: podiumMessagesTable.id })
+      .from(podiumMessagesTable)
+      .where(and(
+        eq(podiumMessagesTable.tenantId, matchedTenantId),
+        eq(podiumMessagesTable.podiumMessageUid, messageUid),
+      ))
+      .limit(1);
+
+    if (existing.length > 0) {
+      if (eventType === "message.failed") {
+        await db.update(podiumMessagesTable)
+          .set({ deliveryStatus: "failed" })
+          .where(eq(podiumMessagesTable.id, existing[0].id));
+      }
+      res.json({ success: true, message: "Message already stored" });
+      return;
+    }
+
+    const [inserted] = await db.insert(podiumMessagesTable).values({
+      tenantId: matchedTenantId,
+      leadId: matchedLeadId,
+      podiumConversationUid: conversationUid,
+      podiumMessageUid: messageUid,
+      direction,
+      body: messageBody,
+      channelType,
+      senderName,
+      deliveryStatus,
+      podiumCreatedAt,
+    }).returning();
+
+    const { emitPodiumMessage } = await import("../socket");
+    emitPodiumMessage(matchedTenantId, {
+      ...inserted,
+      eventType,
+    } as unknown as Record<string, unknown>);
+
+    console.log(`[Podium Webhook] ${eventType} — message ${messageUid} stored for tenant ${matchedTenantId}, lead ${matchedLeadId}`);
+    res.json({ success: true, message: "Webhook processed" });
+  } catch (error) {
+    console.error("[Podium Webhook] Error:", error);
+    res.status(500).json({ success: false, message: "Webhook processing failed" });
+  }
 });
 
 export default router;

@@ -113,6 +113,51 @@ export async function initiateText(
     };
   }
 
+  if (config.textPlatform === "podium" && messageBody) {
+    try {
+      const { ensurePodiumContact, sendMessage } = await import("./podium-api");
+      await ensurePodiumContact(tenantId, leadId);
+
+      const fullName = `${lead.firstName} ${lead.lastName}`.trim();
+      const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
+      const sendResult = await sendMessage(tenantId, customerPhone, messageBody, fullName);
+
+      await db.insert(callAttemptsTable).values({
+        leadId,
+        userId,
+        method: "text",
+        outcome: sendResult.success ? "sent" : "failed",
+        platform: "podium",
+        actionType: "text",
+      });
+
+      cancelAutoPass(leadId);
+
+      return {
+        success: sendResult.success,
+        platform: "podium",
+        message: sendResult.success ? "Text sent via Podium" : "Failed to send text via Podium",
+        externalId: sendResult.messageUid,
+      };
+    } catch (err) {
+      console.error("[Communication] Podium text failed:", err);
+      await db.insert(callAttemptsTable).values({
+        leadId,
+        userId,
+        method: "text",
+        outcome: "failed",
+        platform: "podium",
+        actionType: "text",
+      });
+      cancelAutoPass(leadId);
+      return {
+        success: false,
+        platform: "podium",
+        message: `Failed to send via Podium: ${err instanceof Error ? err.message : "Unknown error"}`,
+      };
+    }
+  }
+
   const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
   const result: TextResult = {
     success: true,

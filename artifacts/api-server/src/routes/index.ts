@@ -29,6 +29,8 @@ import sheetConfigsRouter from "./sheet-configs";
 import leadSourceAliasesRouter from "./lead-source-aliases";
 import googleOAuthRouter from "./google-oauth";
 import metaOAuthRouter from "./meta-oauth";
+import podiumOAuthRouter from "./podium-oauth";
+import podiumRoutesRouter from "./podium-routes";
 
 const router: IRouter = Router();
 
@@ -39,6 +41,7 @@ router.use(trackerRouter);
 
 router.use(googleOAuthRouter);
 router.use(metaOAuthRouter);
+router.use(podiumOAuthRouter);
 
 router.use(requireAuth);
 
@@ -68,6 +71,7 @@ router.use(leadsHubRouter);
 router.use(googleSheetsIngestRouter);
 router.use(sheetConfigsRouter);
 router.use(leadSourceAliasesRouter);
+router.use(podiumRoutesRouter);
 
 export default router;
 

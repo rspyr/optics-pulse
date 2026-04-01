@@ -487,6 +487,35 @@ const migrations: Migration[] = [
       console.log("[Migration] Added session_key column to user_login_sessions");
     },
   },
+  {
+    id: "2026-04-01_create-podium-messages",
+    description: "Create podium_messages table and add podium_contact_uid column to leads for Podium integration",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS podium_messages (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          lead_id INTEGER REFERENCES leads(id),
+          podium_conversation_uid TEXT NOT NULL,
+          podium_message_uid TEXT NOT NULL,
+          direction TEXT NOT NULL DEFAULT 'inbound',
+          body TEXT,
+          channel_type TEXT DEFAULT 'sms',
+          sender_name TEXT,
+          delivery_status TEXT DEFAULT 'delivered',
+          podium_created_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(tenant_id, podium_message_uid)
+        )
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS podium_messages_tenant_lead_idx ON podium_messages(tenant_id, lead_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS podium_messages_conversation_idx ON podium_messages(podium_conversation_uid)`);
+      console.log("[Migration] Created podium_messages table with indexes");
+
+      await db.execute(sql`ALTER TABLE leads ADD COLUMN IF NOT EXISTS podium_contact_uid TEXT`);
+      console.log("[Migration] Added podium_contact_uid column to leads");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

@@ -9,5 +9,7 @@ declare module "express-session" {
     googleOAuthTenantId?: number;
     metaOAuthState?: string;
     metaOAuthTenantId?: number;
+    podiumOAuthState?: string;
+    podiumOAuthTenantId?: number;
   }
 }

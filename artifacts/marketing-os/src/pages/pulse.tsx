@@ -13,7 +13,7 @@ import {
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
-  Pencil, Timer
+  Pencil, Timer, Send, ArrowDown
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -663,20 +663,44 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: {
   );
 }
 
+interface TimelineEntry {
+  type: "pulse_action" | "podium_text" | "podium_call";
+  source: string;
+  timestamp: string;
+  id: number;
+  direction?: string;
+  body?: string;
+  channelType?: string;
+  senderName?: string;
+  deliveryStatus?: string;
+  [key: string]: unknown;
+}
+
 function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean }) {
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [unifiedTimeline, setUnifiedTimeline] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
   const [editSaving, setEditSaving] = useState(false);
+  const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
+
+  const toggleCallExpand = (id: number) => {
+    setExpandedCallIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const fetchHistory = useCallback(() => {
     setLoading(true);
-    fetch(`${API_BASE}/leads-hub/${leadId}/history?tenantId=${tenantId}`, { credentials: "include" })
+    fetch(`${API_BASE}/podium/timeline/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
-      .then(d => setHistory(d.history || []))
-      .catch(() => {})
+      .then(data => {
+        setUnifiedTimeline(data.timeline || []);
+      })
+      .catch(() => setUnifiedTimeline([]))
       .finally(() => setLoading(false));
   }, [leadId, tenantId]);
 
@@ -720,11 +744,13 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   };
 
   if (loading) return <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>;
-  if (history.length === 0) return <p className="text-xs text-white/20 py-3 text-center">No actions logged yet</p>;
+  if (unifiedTimeline.length === 0) return <p className="text-xs text-white/20 py-3 text-center">No actions logged yet</p>;
 
-  const displayed = expanded ? history : history.slice(0, 3);
+  const displayed = expanded ? unifiedTimeline : unifiedTimeline.slice(0, 5);
 
-  const getIcon = (entry: HistoryEntry) => {
+  const getIcon = (entry: TimelineEntry) => {
+    if (entry.type === "podium_text") return <MessageSquare className="w-3 h-3 text-blue-400" />;
+    if (entry.type === "podium_call") return <Phone className="w-3 h-3 text-cyan-400" />;
     if (entry.actionType === "call" || entry.method === "call") return <Phone className="w-3 h-3" />;
     if (entry.actionType === "text" || entry.method === "text") return <MessageSquare className="w-3 h-3" />;
     if (entry.actionType === "voicemail_drop" || entry.method === "voicemail") return <Mic className="w-3 h-3" />;
@@ -732,128 +758,348 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     return <Clock className="w-3 h-3" />;
   };
 
-  const getOutcomeLabel = (entry: HistoryEntry) => {
-    const result = entry.callResult || entry.textResult || entry.vmResult || entry.outcome;
-    return (result || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+  const getNodeColor = (entry: TimelineEntry) => {
+    if (entry.source === "podium") return "bg-blue-500/20 border-blue-500/30";
+    return "bg-card border-white/10";
   };
+
+  const getOutcomeLabel = (entry: TimelineEntry) => {
+    const result = entry.callResult || entry.textResult || entry.vmResult || entry.outcome;
+    return ((result as string) || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const renderPulseAction = (entry: TimelineEntry) => {
+    const histEntry = entry as unknown as HistoryEntry;
+    if (editingId === entry.id) {
+      return (
+        <div className="space-y-2 py-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/30 font-mono shrink-0">
+              {formatDateTimeInTz(entry.timestamp, timezone)}
+            </span>
+            <span className="text-[10px] text-amber-400 font-medium">Editing</span>
+          </div>
+          <select
+            value={editForm.actionType}
+            onChange={e => setEditForm(f => ({ ...f, actionType: e.target.value, callResult: "", textResult: "", vmResult: "" }))}
+            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+          >
+            <option value="call">Call</option>
+            <option value="text">Text</option>
+            <option value="voicemail_drop">VM Drop</option>
+          </select>
+          {(() => {
+            const m = editForm.actionType;
+            const opts = m === "call" ? CALL_RESULTS : m === "text" ? TEXT_RESULTS : (m === "voicemail" || m === "voicemail_drop") ? VM_RESULTS : [];
+            const val = m === "call" ? editForm.callResult : m === "text" ? editForm.textResult : editForm.vmResult;
+            if (opts.length === 0) return null;
+            return (
+              <select
+                value={val}
+                onChange={e => {
+                  if (m === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
+                  else if (m === "text") setEditForm(f => ({ ...f, textResult: e.target.value }));
+                  else setEditForm(f => ({ ...f, vmResult: e.target.value }));
+                }}
+                className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+              >
+                <option value="">Select outcome...</option>
+                {opts.map(r => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+            );
+          })()}
+          {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
+            <select
+              value={editForm.deadReason}
+              onChange={e => setEditForm(f => ({ ...f, deadReason: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
+            >
+              <option value="">Dead reason (optional)...</option>
+              {DEAD_REASONS.map(r => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+          )}
+          <input
+            type="text"
+            value={editForm.notes}
+            onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+            placeholder="Notes..."
+            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white placeholder:text-white/20"
+          />
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => saveEdit(histEntry)}
+              disabled={editSaving}
+              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
+            >
+              {editSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
+            </button>
+            <button
+              onClick={() => setEditingId(null)}
+              className="px-2 py-0.5 rounded bg-white/5 text-white/40 text-[10px] hover:bg-white/10 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/30 font-mono shrink-0">
+            {formatDateTimeInTz(entry.timestamp, timezone)}
+          </span>
+          <span className="text-[10px] text-white/50">{entry.csrName as string}</span>
+          <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
+          {canEdit && (isAdminRole || (entry as unknown as HistoryEntry).userId === currentUserId) && (
+            <button
+              onClick={e => { e.stopPropagation(); startEdit(histEntry); }}
+              className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
+              title="Edit action"
+            >
+              <Pencil className="w-2.5 h-2.5" />
+            </button>
+          )}
+        </div>
+        {(entry as unknown as HistoryEntry).notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{(entry as unknown as HistoryEntry).notes}</p>}
+      </>
+    );
+  };
+
+  const renderPodiumText = (entry: TimelineEntry) => (
+    <div className={cn("flex gap-2 py-1", entry.direction === "outbound" ? "flex-row-reverse" : "")}>
+      <div className={cn(
+        "max-w-[85%] rounded-lg px-2.5 py-1.5",
+        entry.direction === "outbound"
+          ? "bg-blue-500/10 border border-blue-500/15"
+          : "bg-white/5 border border-white/10"
+      )}>
+        <p className="text-[11px] text-white/60 leading-relaxed">{(entry.body as string) || ""}</p>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[9px] text-white/20 font-mono">
+            {formatDateTimeInTz(entry.timestamp, timezone)}
+          </span>
+          <span className="text-[8px] px-1 rounded bg-blue-500/10 text-blue-400/60">Podium SMS</span>
+          <span className={cn(
+            "text-[8px]",
+            entry.direction === "outbound" ? "text-blue-400/40" : "text-emerald-400/40"
+          )}>
+            {entry.direction === "outbound" ? "Sent" : "Received"}
+          </span>
+          {entry.deliveryStatus === "failed" && (
+            <span className="text-[8px] text-red-400">Failed</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderPodiumCall = (entry: TimelineEntry) => {
+    const isExpanded = expandedCallIds.has(entry.id);
+    return (
+      <div className="py-1">
+        <button
+          onClick={() => toggleCallExpand(entry.id)}
+          className="w-full text-left rounded-lg px-2.5 py-1.5 bg-cyan-500/5 border border-cyan-500/15 hover:bg-cyan-500/10 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Phone className="w-3 h-3 text-cyan-400 shrink-0" />
+            <span className="text-[11px] text-cyan-300 font-medium">
+              {entry.direction === "inbound" ? "Incoming Call" : "Outgoing Call"}
+            </span>
+            {entry.senderName && <span className="text-[10px] text-white/40">— {entry.senderName as string}</span>}
+            <ChevronDown className={cn("w-3 h-3 text-cyan-400/50 ml-auto transition-transform", isExpanded && "rotate-180")} />
+          </div>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-[9px] text-white/20 font-mono">
+              {formatDateTimeInTz(entry.timestamp, timezone)}
+            </span>
+            <span className="text-[8px] px-1 rounded bg-cyan-500/10 text-cyan-400/60">Podium Call</span>
+            {entry.deliveryStatus === "failed" && (
+              <span className="text-[8px] text-red-400">Failed</span>
+            )}
+          </div>
+        </button>
+        {isExpanded && (entry.body as string) && (
+          <div className="mt-1 ml-3 pl-3 border-l border-cyan-500/10 py-1.5">
+            <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Transcript / Notes</p>
+            <p className="text-[11px] text-white/50 leading-relaxed whitespace-pre-wrap">{entry.body as string}</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderPodiumEntry = (entry: TimelineEntry) => {
+    if (entry.type === "podium_call") return renderPodiumCall(entry);
+    return renderPodiumText(entry);
+  };
+
+  const pulseCount = unifiedTimeline.filter(e => e.source === "pulse").length;
+  const podiumCount = unifiedTimeline.filter(e => e.source === "podium").length;
 
   return (
     <div className="space-y-0">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 mb-2 transition-colors">
         <History className="w-3 h-3" />
-        Action History ({history.length})
+        Interaction Timeline ({unifiedTimeline.length})
+        {podiumCount > 0 && <span className="text-[9px] text-blue-400/50 ml-1">{podiumCount} Podium</span>}
+        {pulseCount > 0 && <span className="text-[9px] text-white/30 ml-1">{pulseCount} Pulse</span>}
         <ChevronDown className={cn("w-3 h-3 transition-transform", expanded && "rotate-180")} />
       </button>
       <div className="relative pl-4 border-l border-white/5 space-y-2">
         {displayed.map(entry => (
-          <div key={entry.id} className="relative">
-            <div className="absolute -left-[21px] top-1.5 w-3 h-3 rounded-full bg-card border border-white/10 flex items-center justify-center text-white/40">
+          <div key={`${entry.source}-${entry.id}`} className="relative">
+            <div className={cn("absolute -left-[21px] top-1.5 w-3 h-3 rounded-full flex items-center justify-center border", getNodeColor(entry))}>
               {getIcon(entry)}
             </div>
-            {editingId === entry.id ? (
-              <div className="space-y-2 py-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-white/30 font-mono shrink-0">
-                    {formatDateTimeInTz(entry.attemptedAt, timezone)}
-                  </span>
-                  <span className="text-[10px] text-amber-400 font-medium">Editing</span>
-                </div>
-                <select
-                  value={editForm.actionType}
-                  onChange={e => setEditForm(f => ({ ...f, actionType: e.target.value, callResult: "", textResult: "", vmResult: "" }))}
-                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-                >
-                  <option value="call">Call</option>
-                  <option value="text">Text</option>
-                  <option value="voicemail_drop">VM Drop</option>
-                </select>
-                {(() => {
-                  const m = editForm.actionType;
-                  const opts = m === "call" ? CALL_RESULTS : m === "text" ? TEXT_RESULTS : (m === "voicemail" || m === "voicemail_drop") ? VM_RESULTS : [];
-                  const val = m === "call" ? editForm.callResult : m === "text" ? editForm.textResult : editForm.vmResult;
-                  if (opts.length === 0) return null;
-                  return (
-                    <select
-                      value={val}
-                      onChange={e => {
-                        if (m === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
-                        else if (m === "text") setEditForm(f => ({ ...f, textResult: e.target.value }));
-                        else setEditForm(f => ({ ...f, vmResult: e.target.value }));
-                      }}
-                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-                    >
-                      <option value="">Select outcome...</option>
-                      {opts.map(r => (
-                        <option key={r.value} value={r.value}>{r.label}</option>
-                      ))}
-                    </select>
-                  );
-                })()}
-                {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
-                  <select
-                    value={editForm.deadReason}
-                    onChange={e => setEditForm(f => ({ ...f, deadReason: e.target.value }))}
-                    className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-                  >
-                    <option value="">Dead reason (optional)...</option>
-                    {DEAD_REASONS.map(r => (
-                      <option key={r.value} value={r.value}>{r.label}</option>
-                    ))}
-                  </select>
-                )}
-                <input
-                  type="text"
-                  value={editForm.notes}
-                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
-                  placeholder="Notes..."
-                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white placeholder:text-white/20"
-                />
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => saveEdit(entry)}
-                    disabled={editSaving}
-                    className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
-                  >
-                    {editSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-                  </button>
-                  <button
-                    onClick={() => setEditingId(null)}
-                    className="px-2 py-0.5 rounded bg-white/5 text-white/40 text-[10px] hover:bg-white/10 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-white/30 font-mono shrink-0">
-                    {formatDateTimeInTz(entry.attemptedAt, timezone)}
-                  </span>
-                  <span className="text-[10px] text-white/50">{entry.csrName}</span>
-                  <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
-                  {canEdit && (isAdminRole || entry.userId === currentUserId) && (
-                    <button
-                      onClick={e => { e.stopPropagation(); startEdit(entry); }}
-                      className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
-                      title="Edit action"
-                    >
-                      <Pencil className="w-2.5 h-2.5" />
-                    </button>
-                  )}
-                </div>
-                {entry.notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{entry.notes}</p>}
-              </>
-            )}
+            {entry.source === "podium" ? renderPodiumEntry(entry) : renderPulseAction(entry)}
           </div>
         ))}
       </div>
-      {history.length > 3 && !expanded && (
+      {unifiedTimeline.length > 5 && !expanded && (
         <button onClick={() => setExpanded(true)} className="text-[10px] text-primary/60 hover:text-primary ml-4 mt-1">
-          Show {history.length - 3} more...
+          Show {unifiedTimeline.length - 5} more...
         </button>
       )}
     </div>
+  );
+}
+
+interface PodiumMsg {
+  id: number;
+  direction: string;
+  body: string | null;
+  senderName: string | null;
+  deliveryStatus: string | null;
+  channelType: string;
+  podiumCreatedAt: string | null;
+  createdAt: string;
+}
+
+function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: number; tenantId: number; timezone: string; onClose: () => void }) {
+  const [messages, setMessages] = useState<PodiumMsg[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [messageText, setMessageText] = useState("");
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchMessages = useCallback(() => {
+    fetch(`${API_BASE}/podium/conversations/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const msgs = (d.messages || []) as PodiumMsg[];
+        msgs.sort((a: PodiumMsg, b: PodiumMsg) => new Date(a.podiumCreatedAt || a.createdAt).getTime() - new Date(b.podiumCreatedAt || b.createdAt).getTime());
+        setMessages(msgs);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [leadId, tenantId]);
+
+  useEffect(() => { fetchMessages(); }, [fetchMessages]);
+
+  useEffect(() => {
+    const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
+    socket.on("podium-message", (msg: PodiumMsg & { leadId?: number }) => {
+      if (msg.leadId === leadId) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === msg.id)) return prev;
+          return [...prev, msg];
+        });
+      }
+    });
+    return () => { socket.disconnect(); };
+  }, [leadId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSend = async () => {
+    if (!messageText.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch(`${API_BASE}/podium/messages?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ leadId, body: messageText.trim() }),
+      });
+      if (res.ok) {
+        setMessageText("");
+        fetchMessages();
+      }
+    } catch {} finally { setSending(false); }
+  };
+
+  return (
+    <PremiumCard className="p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4 text-blue-400" />
+          <span className="text-sm font-medium text-blue-400">SMS Chat</span>
+          <span className="text-[9px] text-white/20 px-1.5 py-0.5 rounded bg-white/5">via Podium</span>
+        </div>
+        <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="max-h-64 overflow-y-auto space-y-2 mb-3 pr-1">
+        {loading && <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>}
+        {!loading && messages.length === 0 && (
+          <p className="text-xs text-white/20 text-center py-4">No messages yet. Send the first text!</p>
+        )}
+        {messages.map(msg => (
+          <div key={msg.id} className={cn("flex", msg.direction === "outbound" ? "justify-end" : "justify-start")}>
+            <div className={cn(
+              "max-w-[80%] rounded-xl px-3 py-2",
+              msg.direction === "outbound"
+                ? "bg-blue-500/20 border border-blue-500/20 text-white/80"
+                : "bg-white/5 border border-white/10 text-white/70"
+            )}>
+              <p className="text-xs leading-relaxed">{msg.body || ""}</p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[9px] text-white/25">
+                  {msg.podiumCreatedAt ? formatDateTimeInTz(msg.podiumCreatedAt, timezone) : ""}
+                </span>
+                {msg.deliveryStatus && msg.direction === "outbound" && (
+                  <span className={cn(
+                    "text-[8px] px-1 py-0.5 rounded",
+                    msg.deliveryStatus === "failed" ? "text-red-400 bg-red-500/10" : "text-white/20"
+                  )}>
+                    {msg.deliveryStatus}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={messageText}
+          onChange={e => setMessageText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+          placeholder="Type a message..."
+          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-blue-500/30"
+        />
+        <button
+          onClick={handleSend}
+          disabled={!messageText.trim() || sending}
+          className="px-3 py-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
+        >
+          {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        </button>
+      </div>
+    </PremiumCard>
   );
 }
 
@@ -882,6 +1128,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [callbackDate, setCallbackDate] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [showChatPanel, setShowChatPanel] = useState(false);
 
   const contactPrefs = (lead.contactPreferences || []) as string[];
   const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
@@ -962,6 +1209,14 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   };
 
   const handleText = () => {
+    if (commConfig.textPlatform === "podium" && lead.phone) {
+      setShowChatPanel(true);
+      if (lead.hubStatus === "appt_booked") {
+        setApptBookedChannel("text");
+        setActionStep("appt_booked_flow");
+      }
+      return;
+    }
     if (commConfig.textPlatform !== "none" && lead.phone) {
       window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
     }
@@ -1202,6 +1457,18 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-red-400">This lead has a "Text Only" or "Do Not Call" flag. Calling is blocked.</p>
         </div>
+      )}
+
+      {showChatPanel && (
+        <PodiumChatPanel
+          leadId={lead.id}
+          tenantId={tenantId}
+          timezone={timezone}
+          onClose={() => {
+            setShowChatPanel(false);
+            if (!actionStep) setActionStep("text_done");
+          }}
+        />
       )}
 
       <AnimatePresence mode="wait">
