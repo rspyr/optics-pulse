@@ -303,9 +303,9 @@ export async function recoverTimers(): Promise<number> {
         continue;
       }
 
-      const baseTime = lead.visibleAfter
-        ? new Date(lead.visibleAfter).getTime()
-        : new Date(lead.assignedAt).getTime();
+      const assignedMs = new Date(lead.assignedAt).getTime();
+      const visibleMs = lead.visibleAfter ? new Date(lead.visibleAfter).getTime() : 0;
+      const baseTime = Math.max(assignedMs, visibleMs);
       const elapsed = Date.now() - baseTime;
       const remaining = passMs - elapsed;
       scheduleAutoPass(lead.id, remaining);

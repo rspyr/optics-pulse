@@ -229,9 +229,9 @@ router.get("/leads-hub/queue", async (req, res) => {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
         const passMinutes = cfg.passIntervalMinutes ?? 1440;
-        const baseTime = l.visibleAfter
-          ? new Date(l.visibleAfter).getTime()
-          : new Date(l.assignedAt).getTime();
+        const assignedMs = new Date(l.assignedAt).getTime();
+        const visibleMs = l.visibleAfter ? new Date(l.visibleAfter).getTime() : 0;
+        const baseTime = Math.max(assignedMs, visibleMs);
         const nextPassAt = new Date(baseTime + passMinutes * 60 * 1000).toISOString();
         return { ...l, nextPassAt, passIntervalMinutes: passMinutes };
       });
