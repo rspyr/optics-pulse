@@ -136,7 +136,7 @@ router.post("/webhooks/ingest", async (req, res) => {
               outcome: "initial_assignment",
               platform: "native",
               actionType: "system",
-              notes: `Lead initially assigned to ${result.csrName}`,
+              notes: `System: Lead initially assigned to ${result.csrName}`,
             });
           } else if (!result.assignedCsrId) {
             console.warn(`[Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);

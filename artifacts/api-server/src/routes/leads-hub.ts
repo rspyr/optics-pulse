@@ -779,7 +779,7 @@ router.post("/leads-hub/create", async (req, res) => {
           outcome: "initial_assignment",
           platform: "native",
           actionType: "system",
-          notes: `Lead initially assigned to ${result.csrName}`,
+          notes: `System: Lead initially assigned to ${result.csrName}`,
         });
 
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));

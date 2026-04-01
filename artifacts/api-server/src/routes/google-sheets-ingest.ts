@@ -468,7 +468,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
               outcome: "initial_assignment",
               platform: "native",
               actionType: "system",
-              notes: `Lead initially assigned to ${result.csrName}`,
+              notes: `System: Lead initially assigned to ${result.csrName}`,
             });
 
             if (visibleAfter) {
@@ -479,7 +479,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
                 outcome: "visibility_delay",
                 platform: "native",
                 actionType: "system",
-                notes: `Lead visibility delayed 10 minutes (auto-book window)`,
+                notes: `System: Lead visibility delayed 10 minutes (auto-book window)`,
               });
             }
           } else if (!result.assignedCsrId) {
