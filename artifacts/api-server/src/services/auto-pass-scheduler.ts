@@ -129,11 +129,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
   if (config.allowPassBack) {
     if (config.stickyAfterCascade && config.stickyCsrId && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
       if (config.stickyCsrId === lead.assignedCsrId) {
-        const passMinutes = config.passIntervalMinutes ?? 1440;
-        await db.update(leadsTable)
-          .set({ updatedAt: new Date() })
-          .where(eq(leadsTable.id, leadId));
-        scheduleAutoPass(leadId, passMinutes * 60 * 1000);
+        console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} (terminal) — no further passes`);
         return;
       }
       nextCsrId = config.stickyCsrId;
@@ -203,10 +199,19 @@ async function fireAutoPass(leadId: number): Promise<void> {
     emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   }
 
-  const canPassAgain = config.allowPassBack ||
-    (activeOrder.indexOf(nextCsrId) < activeOrder.length - 1);
-  if (canPassAgain) {
-    scheduleAutoPass(leadId, passMinutes * 60 * 1000);
+  const isStickyTerminal = config.allowPassBack
+    && config.stickyAfterCascade && config.stickyCsrId
+    && config.stickyCsrId === nextCsrId
+    && newPassCount >= activeOrder.length - 1;
+
+  if (isStickyTerminal) {
+    console.log(`[auto-pass] Lead ${leadId}: arrived at sticky CSR ${nextCsrId} (terminal) — no further timers`);
+  } else {
+    const canPassAgain = config.allowPassBack ||
+      (activeOrder.indexOf(nextCsrId) < activeOrder.length - 1);
+    if (canPassAgain) {
+      scheduleAutoPass(leadId, passMinutes * 60 * 1000);
+    }
   }
 }
 
@@ -259,11 +264,23 @@ export async function recoverTimers(): Promise<number> {
     const leads = await db.select({
       id: leadsTable.id,
       assignedAt: leadsTable.assignedAt,
+      assignedCsrId: leadsTable.assignedCsrId,
+      cascadePassCount: leadsTable.cascadePassCount,
     }).from(leadsTable)
       .where(and(...leadConditions));
 
+    const { order: activeRecoverOrder } = await getActiveOrderForConfig(config);
+
     for (const lead of leads) {
       if (timers.has(lead.id)) continue;
+
+      if (activeRecoverOrder.length >= 2
+          && config.allowPassBack && config.stickyAfterCascade && config.stickyCsrId
+          && (lead.cascadePassCount ?? 0) >= activeRecoverOrder.length - 1
+          && config.stickyCsrId === lead.assignedCsrId) {
+        continue;
+      }
+
       const elapsed = Date.now() - new Date(lead.assignedAt).getTime();
       const remaining = passMs - elapsed;
       scheduleAutoPass(lead.id, remaining);

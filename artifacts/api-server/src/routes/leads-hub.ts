@@ -168,11 +168,11 @@ router.get("/leads-hub/queue", async (req, res) => {
       else defaultConfig = c;
     }
 
-    const now = new Date();
+    const enrichNow = new Date();
     const pausedSchedules = await db.select().from(csrScheduleTable)
       .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.isPaused, true)));
     const pausedIds = new Set(
-      pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now).map(s => s.userId)
+      pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > enrichNow).map(s => s.userId)
     );
 
     const allCascadeIds = new Set<number>();
