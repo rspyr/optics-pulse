@@ -7,10 +7,26 @@ import { cn } from "@/lib/utils";
 const API = import.meta.env.VITE_API_URL || "";
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
+interface TenantOption { id: number; name: string; }
+
 export default function Settings() {
-  const { user } = useAuth();
-  const tenantId = user?.tenantId;
+  const { user, isAgency, selectedTenantId, setSelectedTenantId, effectiveTenantId } = useAuth();
   const isClientUser = user?.role === "client_user";
+  const tenantId = effectiveTenantId;
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+
+  useEffect(() => {
+    if (!isAgency) return;
+    fetch(`${API}/api/tenants`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setTenants(data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name })));
+          if (!selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
+        }
+      })
+      .catch(() => {});
+  }, [isAgency]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -68,7 +84,8 @@ export default function Settings() {
       })
       .catch(() => {});
 
-    fetch(`${API}/api/leads/comm-config`, { credentials: "include" })
+    const commConfigUrl = `${API}/api/leads/comm-config${tenantId ? `?tenantId=${tenantId}` : ""}`;
+    fetch(commConfigUrl, { credentials: "include" })
       .then(r => r.json())
       .then(data => setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage }))
       .catch(() => {});
@@ -130,7 +147,7 @@ export default function Settings() {
         setCommSaved(true);
         setCommInitial({ ...commConfig });
         setTimeout(() => setCommSaved(false), 2000);
-        const statusRes = await fetch(`${API}/api/leads/comm-config`, { credentials: "include" });
+        const statusRes = await fetch(`${API}/api/leads/comm-config${tenantId ? `?tenantId=${tenantId}` : ""}`, { credentials: "include" });
         if (statusRes.ok) {
           const data = await statusRes.json();
           setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage });
@@ -269,6 +286,29 @@ export default function Settings() {
         <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR ACCOUNT CONFIGURATION</p>
       </header>
 
+      {isAgency && tenants.length > 0 && (
+        <PremiumCard className="p-4">
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
+            <select
+              value={selectedTenantId ?? ""}
+              onChange={e => setSelectedTenantId(parseInt(e.target.value))}
+              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            >
+              {tenants.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && !tenantId && (
+        <PremiumCard>
+          <p className="text-center text-muted-foreground py-8">Select a tenant above to manage settings.</p>
+        </PremiumCard>
+      )}
+
       <PremiumCard>
         <div className="flex items-center gap-2 mb-6">
           <Lock className="w-5 h-5 text-primary" />
@@ -383,7 +423,7 @@ export default function Settings() {
         )}
       </PremiumCard>
 
-      {!isClientUser && <PremiumCard>
+      {!isClientUser && tenantId && <PremiumCard>
         <button
           onClick={() => setApiIntegrationsOpen(o => !o)}
           className="w-full flex items-center justify-between"
@@ -506,7 +546,7 @@ export default function Settings() {
         </div> : null}
       </PremiumCard>}
 
-      {!isClientUser && <PremiumCard>
+      {!isClientUser && tenantId && <PremiumCard>
         <button
           onClick={() => setCommPlatformOpen(o => !o)}
           className="w-full flex items-center justify-between"
@@ -608,7 +648,7 @@ export default function Settings() {
         </div> : null}
       </PremiumCard>}
 
-      {!isClientUser && <PremiumCard>
+      {!isClientUser && tenantId && <PremiumCard>
         <h3 className="text-xl font-display text-white mb-2">Capture Script</h3>
         <p className="text-sm text-muted-foreground mb-6">Install this script in the &lt;head&gt; of your website to enable GCLID capture, cookie storage, and heartbeat monitoring.</p>
 
