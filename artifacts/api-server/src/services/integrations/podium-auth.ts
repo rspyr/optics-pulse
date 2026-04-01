@@ -1,4 +1,4 @@
-import { db, tenantsTable } from "@workspace/db";
+import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { encryptConfig, decryptConfig } from "../../lib/encryption";
 
@@ -9,32 +9,34 @@ interface TokenCache {
 
 const tokenCache: Map<number, TokenCache> = new Map();
 
-export async function getValidPodiumToken(tenantId: number): Promise<string> {
-  const cached = tokenCache.get(tenantId);
+export function getPodiumConfig(user: { podiumConfig: string | null }): Record<string, unknown> {
+  if (!user.podiumConfig || typeof user.podiumConfig !== "string") return {};
+  try { return decryptConfig(user.podiumConfig); } catch { return {}; }
+}
+
+export async function getValidPodiumToken(userId: number): Promise<string> {
+  const cached = tokenCache.get(userId);
   if (cached && cached.expiresAt > Date.now() + 60_000) {
     return cached.accessToken;
   }
 
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) throw new Error("Tenant not found");
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) throw new Error("User not found");
 
-  let config: Record<string, unknown> = {};
-  if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
-    try { config = decryptConfig(tenant.apiConfig); } catch {}
-  }
+  const config = getPodiumConfig(user);
 
   const accessToken = config.podiumAccessToken as string | undefined;
   const refreshToken = config.podiumRefreshToken as string | undefined;
   const expiresAtStr = config.podiumTokenExpiresAt as string | undefined;
 
   if (!refreshToken) {
-    throw new Error("Podium is not connected for this tenant");
+    throw new Error("Podium is not connected for this user");
   }
 
   const expiresAt = expiresAtStr ? new Date(expiresAtStr).getTime() : 0;
 
   if (accessToken && expiresAt > Date.now() + 60_000) {
-    tokenCache.set(tenantId, { accessToken, expiresAt });
+    tokenCache.set(userId, { accessToken, expiresAt });
     return accessToken;
   }
 
@@ -44,7 +46,7 @@ export async function getValidPodiumToken(tenantId: number): Promise<string> {
     throw new Error("PODIUM_CLIENT_ID and PODIUM_CLIENT_SECRET environment variables are required");
   }
 
-  console.log(`[Podium Auth] Refreshing token for tenant ${tenantId}`);
+  console.log(`[Podium Auth] Refreshing token for user ${userId}`);
 
   const response = await fetch("https://api.podium.com/oauth/token", {
     method: "POST",
@@ -77,22 +79,22 @@ export async function getValidPodiumToken(tenantId: number): Promise<string> {
     config.podiumRefreshToken = tokenData.refresh_token;
   }
 
-  await db.update(tenantsTable)
+  await db.update(usersTable)
     .set({
-      apiConfig: encryptConfig(config) as unknown as typeof tenantsTable.$inferInsert.apiConfig,
+      podiumConfig: encryptConfig(config) as unknown as string,
       updatedAt: new Date(),
     })
-    .where(eq(tenantsTable.id, tenantId));
+    .where(eq(usersTable.id, userId));
 
-  tokenCache.set(tenantId, {
+  tokenCache.set(userId, {
     accessToken: tokenData.access_token,
     expiresAt: newExpiresAt,
   });
 
-  console.log(`[Podium Auth] Token refreshed for tenant ${tenantId}`);
+  console.log(`[Podium Auth] Token refreshed for user ${userId}`);
   return tokenData.access_token;
 }
 
-export function clearPodiumTokenCache(tenantId: number): void {
-  tokenCache.delete(tenantId);
+export function clearPodiumTokenCache(userId: number): void {
+  tokenCache.delete(userId);
 }

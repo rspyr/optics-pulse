@@ -10,6 +10,5 @@ declare module "express-session" {
     metaOAuthState?: string;
     metaOAuthTenantId?: number;
     podiumOAuthState?: string;
-    podiumOAuthTenantId?: number;
   }
 }

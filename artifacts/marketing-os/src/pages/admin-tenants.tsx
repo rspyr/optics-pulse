@@ -150,9 +150,6 @@ export default function AdminTenants() {
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [podiumConnecting, setPodiumConnecting] = useState(false);
-  const [podiumOAuthMessage, setPodiumOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [podiumStatus, setPodiumStatus] = useState<{ connected: boolean; locationName?: string } | null>(null);
   const [togglingStSync, setTogglingStSync] = useState<number | null>(null);
 
   const handleToggleStSync = async (tenantId: number, currentlyPaused: boolean) => {
@@ -216,28 +213,6 @@ export default function AdminTenants() {
       window.history.replaceState({}, "", url.pathname + url.search);
     }
 
-    const podiumResult = params.get("podiumOAuth");
-    if (podiumResult === "success") {
-      setPodiumOAuthMessage({ type: "success", text: "Podium connected successfully! Tokens and location saved." });
-      refetch();
-      const url = new URL(window.location.href);
-      url.searchParams.delete("podiumOAuth");
-      url.searchParams.delete("tenantId");
-      window.history.replaceState({}, "", url.pathname + url.search);
-    } else if (podiumResult === "error") {
-      const message = params.get("message") || "Unknown error";
-      const readable: Record<string, string> = {
-        token_exchange_failed: "Failed to exchange authorization code for tokens.",
-        missing_podium_env_credentials: "PODIUM_CLIENT_ID and PODIUM_CLIENT_SECRET environment variables are not configured.",
-        no_refresh_token: "Podium didn't return a refresh token. Please try again.",
-        invalid_state: "Security validation failed. Please try again.",
-      };
-      setPodiumOAuthMessage({ type: "error", text: readable[message] || `OAuth error: ${message}` });
-      const url = new URL(window.location.href);
-      url.searchParams.delete("podiumOAuth");
-      url.searchParams.delete("message");
-      window.history.replaceState({}, "", url.pathname + url.search);
-    }
   }, [refetch]);
 
   const handleConnectGoogleAds = async (tenantId: number) => {
@@ -277,52 +252,6 @@ export default function AdminTenants() {
       setMetaConnecting(false);
     }
   };
-
-  const handleConnectPodium = async (tenantId: number) => {
-    setPodiumConnecting(true);
-    setPodiumOAuthMessage(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/oauth/podium/authorize?tenantId=${tenantId}`, { credentials: "include" });
-      if (!res.ok) {
-        const data = await res.json();
-        setPodiumOAuthMessage({ type: "error", text: data.error || "Failed to start OAuth flow" });
-        return;
-      }
-      const { authUrl } = await res.json();
-      window.open(authUrl, "_blank");
-    } catch {
-      setPodiumOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
-    } finally {
-      setPodiumConnecting(false);
-    }
-  };
-
-  const handleDisconnectPodium = async (tenantId: number) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/oauth/podium/disconnect?tenantId=${tenantId}`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (res.ok) {
-        setPodiumStatus({ connected: false });
-        setPodiumOAuthMessage({ type: "success", text: "Podium disconnected successfully." });
-        refetch();
-      }
-    } catch {
-      setPodiumOAuthMessage({ type: "error", text: "Failed to disconnect Podium" });
-    }
-  };
-
-  useEffect(() => {
-    if (editId) {
-      fetch(`${API_BASE}/api/oauth/podium/status?tenantId=${editId}`, { credentials: "include" })
-        .then(r => r.json())
-        .then(data => setPodiumStatus({ connected: data.connected, locationName: data.locationName }))
-        .catch(() => setPodiumStatus(null));
-    } else {
-      setPodiumStatus(null);
-    }
-  }, [editId]);
 
   const fetchTenantSyncStatus = useCallback(async (tenantId: number) => {
     try {
@@ -634,52 +563,8 @@ export default function AdminTenants() {
             </SetupGuide>
           </div>
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider">Podium</h4>
-              <div className="flex items-center gap-2">
-                {podiumStatus?.connected && (
-                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3" /> Connected{podiumStatus.locationName ? ` — ${podiumStatus.locationName}` : ""}
-                  </span>
-                )}
-                {editId && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => handleConnectPodium(editId)}
-                      disabled={podiumConnecting}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
-                    >
-                      {podiumConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                      {podiumStatus?.connected ? "Reconnect" : "Connect Podium"}
-                    </button>
-                    {podiumStatus?.connected && (
-                      <button
-                        type="button"
-                        onClick={() => handleDisconnectPodium(editId)}
-                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
-                      >
-                        Disconnect
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-            {podiumOAuthMessage && (
-              <div className={`mb-3 p-3 rounded-lg text-xs ${podiumOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
-                {podiumOAuthMessage.type === "success" ? <CheckCircle className="w-3.5 h-3.5 inline mr-1.5" /> : <XCircle className="w-3.5 h-3.5 inline mr-1.5" />}
-                {podiumOAuthMessage.text}
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <SecretInput field="podiumApiToken" label="API Token (legacy — use OAuth instead)" />
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Location ID (auto-filled on connect)</label>
-                <input type="text" value={form.podiumLocationId} onChange={(e) => { trackFieldChange("podiumLocationId"); setForm(f => ({ ...f, podiumLocationId: e.target.value })); }} placeholder="Auto-filled via OAuth" className={inputClass + " w-full"} readOnly={podiumStatus?.connected || false} />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">Click "Connect Podium" to authorize via OAuth. The app will automatically fetch your location, register webhooks for real-time messaging, and enable SMS from Pulse.</p>
+            <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-2">Podium</h4>
+            <p className="text-xs text-muted-foreground">Podium is connected per user. Each CSR and admin manages their own Podium connection from their Settings page.</p>
           </div>
         </div>
       )}

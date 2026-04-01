@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
@@ -188,19 +188,19 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
 
     if (locationUid) {
       const { decryptConfig } = await import("../lib/encryption");
-      const tenants = await db.select().from(tenantsTable);
-      for (const tenant of tenants) {
-        if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") continue;
+      const users = await db.select().from(usersTable).where(isNotNull(usersTable.podiumConfig));
+      for (const user of users) {
+        if (!user.podiumConfig || typeof user.podiumConfig !== "string") continue;
         try {
-          const config = decryptConfig(tenant.apiConfig);
+          const config = decryptConfig(user.podiumConfig);
           if (config.podiumLocationUid === locationUid) {
             if (config.podiumWebhookVerifyToken) {
               if (!verifyToken || verifyToken !== config.podiumWebhookVerifyToken) {
-                console.warn(`[Podium Webhook] Verify token missing or mismatch for tenant ${tenant.id}`);
+                console.warn(`[Podium Webhook] Verify token missing or mismatch for user ${user.id}`);
                 continue;
               }
             }
-            matchedTenantId = tenant.id;
+            matchedTenantId = user.tenantId;
             break;
           }
         } catch {}
@@ -208,7 +208,7 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
     }
 
     if (!matchedTenantId) {
-      console.warn("[Podium Webhook] Could not match tenant for location:", locationUid);
+      console.warn("[Podium Webhook] Could not match user/tenant for location:", locationUid);
       res.json({ success: true, message: "No matching tenant" });
       return;
     }

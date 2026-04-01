@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -154,6 +154,77 @@ export default function Settings() {
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMessage, setPwMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const [podiumStatus, setPodiumStatus] = useState<{ connected: boolean; locationName?: string | null } | null>(null);
+  const [podiumConnecting, setPodiumConnecting] = useState(false);
+  const [podiumMessage, setPodiumMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/oauth/podium/status`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setPodiumStatus({ connected: data.connected, locationName: data.locationName }))
+      .catch(() => setPodiumStatus(null));
+
+    const params = new URLSearchParams(window.location.search);
+    const podiumResult = params.get("podiumOAuth");
+    if (podiumResult === "success") {
+      setPodiumMessage({ type: "success", text: "Podium connected successfully!" });
+      fetch(`${API}/api/oauth/podium/status`, { credentials: "include" })
+        .then(r => r.json())
+        .then(data => setPodiumStatus({ connected: data.connected, locationName: data.locationName }))
+        .catch(() => {});
+      const url = new URL(window.location.href);
+      url.searchParams.delete("podiumOAuth");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    } else if (podiumResult === "error") {
+      const message = params.get("message") || "Unknown error";
+      const readable: Record<string, string> = {
+        token_exchange_failed: "Failed to exchange authorization code for tokens.",
+        missing_podium_env_credentials: "Podium integration is not configured. Contact your administrator.",
+        no_refresh_token: "Podium didn't return a refresh token. Please try again.",
+        invalid_state: "Security validation failed. Please try again.",
+      };
+      setPodiumMessage({ type: "error", text: readable[message] || `OAuth error: ${message}` });
+      const url = new URL(window.location.href);
+      url.searchParams.delete("podiumOAuth");
+      url.searchParams.delete("message");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, []);
+
+  async function handleConnectPodium() {
+    setPodiumConnecting(true);
+    setPodiumMessage(null);
+    try {
+      const res = await fetch(`${API}/api/oauth/podium/authorize`, { credentials: "include" });
+      if (!res.ok) {
+        const data = await res.json();
+        setPodiumMessage({ type: "error", text: data.error || "Failed to start OAuth flow" });
+        return;
+      }
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
+    } catch {
+      setPodiumMessage({ type: "error", text: "Network error starting OAuth flow" });
+    } finally {
+      setPodiumConnecting(false);
+    }
+  }
+
+  async function handleDisconnectPodium() {
+    try {
+      const res = await fetch(`${API}/api/oauth/podium/disconnect`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        setPodiumStatus({ connected: false });
+        setPodiumMessage({ type: "success", text: "Podium disconnected." });
+      }
+    } catch {
+      setPodiumMessage({ type: "error", text: "Failed to disconnect Podium" });
+    }
+  }
+
   async function handleChangePassword() {
     setPwMessage(null);
     if (!pwForm.currentPassword || !pwForm.newPassword) {
@@ -253,6 +324,63 @@ export default function Settings() {
           {pwSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
           {pwSaving ? "Changing..." : "Change Password"}
         </button>
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="flex items-center gap-2 mb-4">
+          <MessageSquare className="w-5 h-5 text-cyan-400" />
+          <h3 className="text-xl font-display text-white">Podium Integration</h3>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Connect your Podium account to send and receive texts through Pulse. Each user connects their own account so conversations are properly attributed.
+        </p>
+
+        {podiumMessage && (
+          <div className={cn(
+            "px-4 py-3 rounded-lg text-sm mb-4 border flex items-center gap-2",
+            podiumMessage.type === "success"
+              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+              : "bg-red-500/10 border-red-500/20 text-red-400"
+          )}>
+            {podiumMessage.type === "success" ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+            {podiumMessage.text}
+          </div>
+        )}
+
+        {podiumStatus?.connected ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
+              <CheckCircle className="w-4 h-4" />
+              Connected{podiumStatus.locationName ? ` — ${podiumStatus.locationName}` : ""}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleConnectPodium}
+                disabled={podiumConnecting}
+                className="bg-white/10 hover:bg-white/20 text-white font-medium px-4 py-2 rounded-lg transition-all text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {podiumConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+                Reconnect
+              </button>
+              <button
+                onClick={handleDisconnectPodium}
+                className="bg-red-500/10 hover:bg-red-500/20 text-red-400 font-medium px-4 py-2 rounded-lg transition-all text-sm flex items-center gap-2 border border-red-500/20"
+              >
+                <Unplug className="w-4 h-4" />
+                Disconnect
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={handleConnectPodium}
+            disabled={podiumConnecting}
+            className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-3 rounded-lg transition-all flex items-center gap-2 disabled:opacity-50"
+          >
+            {podiumConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+            Connect Podium
+          </button>
+        )}
       </PremiumCard>
 
       {!isClientUser && <PremiumCard>

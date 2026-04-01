@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
-import { db, tenantsTable } from "@workspace/db";
+import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireRole } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { clearPodiumTokenCache } from "../services/integrations/podium-auth";
 import crypto from "crypto";
@@ -20,16 +20,10 @@ function getRedirectUri(): string {
   return "http://localhost:8080/api/oauth/podium/callback";
 }
 
-router.get("/oauth/podium/authorize", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const tenantId = Number(req.query.tenantId);
-  if (!tenantId || isNaN(tenantId)) {
-    res.status(400).json({ error: "tenantId query param is required" });
-    return;
-  }
-
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) {
-    res.status(404).json({ error: "Tenant not found" });
+router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
     return;
   }
 
@@ -41,7 +35,6 @@ router.get("/oauth/podium/authorize", requireRole("super_admin", "agency_user"),
 
   const state = crypto.randomBytes(16).toString("hex");
   req.session.podiumOAuthState = state;
-  req.session.podiumOAuthTenantId = tenantId;
 
   const redirectUri = getRedirectUri();
 
@@ -54,45 +47,39 @@ router.get("/oauth/podium/authorize", requireRole("super_admin", "agency_user"),
   });
 
   const authUrl = `${PODIUM_AUTH_URL}?${params.toString()}`;
-  console.log(`[Podium OAuth] Authorize requested for tenant ${tenantId}, redirect_uri=${redirectUri}`);
+  console.log(`[Podium OAuth] Authorize requested for user ${userId}, redirect_uri=${redirectUri}`);
   res.json({ authUrl });
 });
 
 router.get("/oauth/podium/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
-  if (!req.session.userId) {
-    res.redirect("/internal?podiumOAuth=error&message=not_authenticated");
+  const userId = req.session?.userId;
+  if (!userId) {
+    res.redirect("/settings?podiumOAuth=error&message=not_authenticated");
     return;
   }
 
   if (error) {
-    res.redirect(`/internal?podiumOAuth=error&message=${encodeURIComponent(String(error))}`);
+    res.redirect(`/settings?podiumOAuth=error&message=${encodeURIComponent(String(error))}`);
     return;
   }
 
   if (!code || !state) {
-    res.redirect("/internal?podiumOAuth=error&message=missing_code_or_state");
+    res.redirect("/settings?podiumOAuth=error&message=missing_code_or_state");
     return;
   }
 
   if (state !== req.session.podiumOAuthState) {
-    res.redirect("/internal?podiumOAuth=error&message=invalid_state");
-    return;
-  }
-
-  const tenantId = req.session.podiumOAuthTenantId;
-  if (!tenantId) {
-    res.redirect("/internal?podiumOAuth=error&message=missing_tenant_id");
+    res.redirect("/settings?podiumOAuth=error&message=invalid_state");
     return;
   }
 
   delete req.session.podiumOAuthState;
-  delete req.session.podiumOAuthTenantId;
 
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) {
-    res.redirect("/internal?podiumOAuth=error&message=tenant_not_found");
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) {
+    res.redirect("/settings?podiumOAuth=error&message=user_not_found");
     return;
   }
 
@@ -100,7 +87,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
   const clientSecret = process.env.PODIUM_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    res.redirect("/internal?podiumOAuth=error&message=missing_podium_env_credentials");
+    res.redirect("/settings?podiumOAuth=error&message=missing_podium_env_credentials");
     return;
   }
 
@@ -122,7 +109,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error(`[Podium OAuth] Token exchange failed (${tokenResponse.status}): ${errorText}`);
-      res.redirect("/internal?podiumOAuth=error&message=token_exchange_failed");
+      res.redirect("/settings?podiumOAuth=error&message=token_exchange_failed");
       return;
     }
 
@@ -135,13 +122,13 @@ router.get("/oauth/podium/callback", async (req, res) => {
 
     if (!tokenData.refresh_token) {
       console.error("[Podium OAuth] No refresh_token in response");
-      res.redirect("/internal?podiumOAuth=error&message=no_refresh_token");
+      res.redirect("/settings?podiumOAuth=error&message=no_refresh_token");
       return;
     }
 
     let config: Record<string, unknown> = {};
-    if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
-      try { config = decryptConfig(tenant.apiConfig); } catch {}
+    if (user.podiumConfig && typeof user.podiumConfig === "string") {
+      try { config = decryptConfig(user.podiumConfig); } catch {}
     }
 
     config.podiumAccessToken = tokenData.access_token;
@@ -206,38 +193,38 @@ router.get("/oauth/podium/callback", async (req, res) => {
       }
     }
 
-    await db.update(tenantsTable)
+    await db.update(usersTable)
       .set({
-        apiConfig: encryptConfig(config) as unknown as typeof tenantsTable.$inferInsert.apiConfig,
+        podiumConfig: encryptConfig(config) as unknown as string,
         updatedAt: new Date(),
       })
-      .where(eq(tenantsTable.id, tenantId));
+      .where(eq(usersTable.id, userId));
 
-    clearPodiumTokenCache(tenantId);
-    console.log(`[Podium OAuth] Successfully stored tokens for tenant ${tenantId}`);
-    res.redirect(`/internal?podiumOAuth=success&tenantId=${tenantId}`);
+    clearPodiumTokenCache(userId);
+    console.log(`[Podium OAuth] Successfully stored tokens for user ${userId}`);
+    res.redirect(`/settings?podiumOAuth=success`);
   } catch (err) {
     console.error("[Podium OAuth] Token exchange error:", err);
-    res.redirect("/internal?podiumOAuth=error&message=server_error");
+    res.redirect("/settings?podiumOAuth=error&message=server_error");
   }
 });
 
-router.get("/oauth/podium/status", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const tenantId = Number(req.query.tenantId);
-  if (!tenantId || isNaN(tenantId)) {
-    res.status(400).json({ error: "tenantId required" });
+router.get("/oauth/podium/status", requireAuth, async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
     return;
   }
 
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) {
-    res.status(404).json({ error: "Tenant not found" });
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
     return;
   }
 
   let config: Record<string, unknown> = {};
-  if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
-    try { config = decryptConfig(tenant.apiConfig); } catch {}
+  if (user.podiumConfig && typeof user.podiumConfig === "string") {
+    try { config = decryptConfig(user.podiumConfig); } catch {}
   }
 
   res.json({
@@ -249,40 +236,28 @@ router.get("/oauth/podium/status", requireRole("super_admin", "agency_user"), as
   });
 });
 
-router.post("/oauth/podium/disconnect", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const tenantId = Number(req.query.tenantId || req.body?.tenantId);
-  if (!tenantId || isNaN(tenantId)) {
-    res.status(400).json({ error: "tenantId required" });
+router.post("/oauth/podium/disconnect", requireAuth, async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Not authenticated" });
     return;
   }
 
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) {
-    res.status(404).json({ error: "Tenant not found" });
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
     return;
   }
 
-  let config: Record<string, unknown> = {};
-  if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
-    try { config = decryptConfig(tenant.apiConfig); } catch {}
-  }
-
-  delete config.podiumAccessToken;
-  delete config.podiumRefreshToken;
-  delete config.podiumTokenExpiresAt;
-  delete config.podiumLocationUid;
-  delete config.podiumLocationName;
-  delete config.podiumWebhookVerifyToken;
-
-  await db.update(tenantsTable)
+  await db.update(usersTable)
     .set({
-      apiConfig: encryptConfig(config) as unknown as typeof tenantsTable.$inferInsert.apiConfig,
+      podiumConfig: null,
       updatedAt: new Date(),
     })
-    .where(eq(tenantsTable.id, tenantId));
+    .where(eq(usersTable.id, userId));
 
-  clearPodiumTokenCache(tenantId);
-  console.log(`[Podium OAuth] Disconnected for tenant ${tenantId}, token cache cleared`);
+  clearPodiumTokenCache(userId);
+  console.log(`[Podium OAuth] Disconnected for user ${userId}, token cache cleared`);
   res.json({ success: true });
 });
 

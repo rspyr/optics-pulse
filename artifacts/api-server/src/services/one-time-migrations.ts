@@ -516,6 +516,14 @@ const migrations: Migration[] = [
       console.log("[Migration] Added podium_contact_uid column to leads");
     },
   },
+  {
+    id: "2026-04-01_add-user-podium-config",
+    description: "Add podium_config column to users table for per-user Podium OAuth credentials",
+    run: async () => {
+      await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS podium_config TEXT`);
+      console.log("[Migration] Added podium_config column to users table");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
