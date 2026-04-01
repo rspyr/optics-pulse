@@ -13,7 +13,7 @@ import {
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
-  Pencil
+  Pencil, Timer
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -208,6 +208,9 @@ interface LeadData {
   updatedAt: string;
   tenantId?: number;
   funnelId?: number | null;
+  nextPassAt?: string | null;
+  passIntervalMinutes?: number | null;
+  assignedAt?: string | null;
 }
 
 interface HistoryEntry {
@@ -395,46 +398,88 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
   return { latestLead, clearLatestLead: useCallback(() => setLatestLead(null), []), leadUpdatedSignal, soundEnabled, setSoundEnabled };
 }
 
-function formatTimeSince(dateStr: string): { text: string; mins: number } {
-  const ts = new Date(dateStr).getTime();
-  if (!Number.isFinite(ts)) return { text: "just now", mins: 0 };
-  const diff = Date.now() - ts;
-  if (diff < 0) return { text: "just now", mins: 0 };
-  const secs = Math.floor(diff / 1000);
-  const mins = Math.floor(diff / 60000);
-  if (secs < 60) return { text: `${secs}s ago`, mins: 0 };
-  if (mins < 60) return { text: `${mins}m ${Math.floor(secs % 60)}s ago`, mins };
+function formatElapsed(ms: number): string {
+  if (ms < 0) ms = 0;
+  const secs = Math.floor(ms / 1000);
+  const mins = Math.floor(secs / 60);
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return { text: `${hrs}h ${mins % 60}m ago`, mins };
   const days = Math.floor(hrs / 24);
-  return { text: `${days}d ago`, mins };
+  if (secs < 60) return `${secs}s`;
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
+  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+  return `${days}d ${hrs % 24}h`;
 }
 
-function useTimeSince(dateStr: string): { text: string; mins: number } {
-  const [result, setResult] = useState(() => formatTimeSince(dateStr));
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "0s";
+  const secs = Math.floor(ms / 1000);
+  const mins = Math.floor(secs / 60);
+  const hrs = Math.floor(mins / 60);
+  if (secs < 60) return `${secs}s`;
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
+  return `${hrs}h ${mins % 60}m`;
+}
 
+function useTickingTimer(deps: any[]): number {
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    setResult(formatTimeSince(dateStr));
-    const id = setInterval(() => setResult(formatTimeSince(dateStr)), 1000);
+    setTick(t => t + 1);
+    const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
-  }, [dateStr]);
-
-  return result;
+  }, deps);
+  return tick;
 }
 
-function TimeSinceBadge({ dateStr }: { dateStr: string }) {
-  const { text, mins } = useTimeSince(dateStr);
-  const colorClass = mins < 10
-    ? "bg-emerald-500/20 text-emerald-400"
-    : mins < 60
-      ? "bg-amber-500/20 text-amber-400"
-      : "text-white/40";
+function LeadTimerBadge({ createdAt, nextPassAt, passIntervalMinutes }: { createdAt: string; nextPassAt?: string | null; passIntervalMinutes?: number | null }) {
+  useTickingTimer([createdAt, nextPassAt]);
+
+  const now = Date.now();
+  const totalMs = now - new Date(createdAt).getTime();
+  const totalText = formatElapsed(totalMs);
+
+  if (!nextPassAt) {
+    return (
+      <span className="text-[10px] font-mono text-white/35 px-1.5 py-0.5 rounded flex items-center gap-1">
+        <Clock className="w-3 h-3" />
+        {totalText}
+      </span>
+    );
+  }
+
+  const targetMs = new Date(nextPassAt).getTime();
+  const remainingMs = targetMs - now;
+  const totalIntervalMs = (passIntervalMinutes ?? 1440) * 60 * 1000;
+  const fraction = totalIntervalMs > 0 ? Math.max(0, remainingMs / totalIntervalMs) : 0;
+
+  const countdownColor = remainingMs <= 0
+    ? "text-red-400"
+    : fraction > 0.5
+      ? "text-emerald-400"
+      : fraction > 0.2
+        ? "text-amber-400"
+        : "text-red-400";
+
+  const countdownBg = remainingMs <= 0
+    ? "bg-red-500/15"
+    : fraction > 0.5
+      ? "bg-emerald-500/15"
+      : fraction > 0.2
+        ? "bg-amber-500/15"
+        : "bg-red-500/15";
+
+  const countdownText = remainingMs <= 0 ? "passing…" : formatCountdown(remainingMs);
 
   return (
-    <span className={cn("text-xs font-mono font-semibold px-1.5 py-0.5 rounded", colorClass)}>
-      <Clock className="w-3 h-3 inline-block mr-0.5 -mt-0.5" />
-      {text}
-    </span>
+    <div className="flex flex-col items-end gap-0.5">
+      <span className={cn("text-xs font-mono font-semibold px-1.5 py-0.5 rounded flex items-center gap-1", countdownBg, countdownColor)}>
+        <Timer className="w-3 h-3" />
+        {countdownText}
+      </span>
+      <span className="text-[9px] font-mono text-white/30 flex items-center gap-0.5">
+        <Clock className="w-2.5 h-2.5" />
+        {totalText}
+      </span>
+    </div>
   );
 }
 
@@ -575,7 +620,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: {
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <TimeSinceBadge dateStr={lead.createdAt} />
+          <LeadTimerBadge createdAt={lead.createdAt} nextPassAt={lead.nextPassAt} passIntervalMinutes={lead.passIntervalMinutes} />
           {lead.assignedTo && (
             <span className="text-[9px] text-white/25 truncate max-w-[80px]">{lead.assignedTo}</span>
           )}

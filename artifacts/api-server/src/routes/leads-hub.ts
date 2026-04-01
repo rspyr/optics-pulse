@@ -156,9 +156,40 @@ router.get("/leads-hub/queue", async (req, res) => {
     const [totalResult] = await db.select({ count: count() }).from(leadsTable)
       .where(and(...baseConds, sql`${leadsTable.hubStatus} NOT IN ('appt_set', 'dead')`));
 
+    const configs = await db.select().from(routingConfigTable)
+      .where(and(eq(routingConfigTable.tenantId, tenantId), eq(routingConfigTable.isActive, true)));
+    const configByFunnel = new Map<number | null, typeof configs[0]>();
+    let defaultConfig: typeof configs[0] | null = null;
+    for (const c of configs) {
+      if (c.funnelTypeId !== null) configByFunnel.set(c.funnelTypeId, c);
+      else defaultConfig = c;
+    }
+
+    const autoPassStatuses = new Set(["day_1", "day_2", "day_3", "day_4"]);
+    function enrichWithNextPass(leads: any[]): any[] {
+      return leads.map(l => {
+        if (!autoPassStatuses.has(l.hubStatus) || !l.assignedCsrId || !l.assignedAt) {
+          return { ...l, nextPassAt: null, passIntervalMinutes: null };
+        }
+        const cfg = (l.funnelId ? configByFunnel.get(l.funnelId) : null) || defaultConfig;
+        if (!cfg) {
+          return { ...l, nextPassAt: null, passIntervalMinutes: null };
+        }
+        const cascadeOrder = (cfg.cascadeOrder as number[]) || [];
+        const currentIdx = cascadeOrder.indexOf(l.assignedCsrId);
+        const hasNextCsr = cfg.allowPassBack || (currentIdx >= 0 && currentIdx < cascadeOrder.length - 1) || currentIdx === -1;
+        if (!hasNextCsr || cascadeOrder.length < 2) {
+          return { ...l, nextPassAt: null, passIntervalMinutes: null };
+        }
+        const passMinutes = cfg.passIntervalMinutes ?? 1440;
+        const nextPassAt = new Date(new Date(l.assignedAt).getTime() + passMinutes * 60 * 1000).toISOString();
+        return { ...l, nextPassAt, passIntervalMinutes: passMinutes };
+      });
+    }
+
     res.json({
-      newLeads,
-      today: todayLeads,
+      newLeads: enrichWithNextPass(newLeads),
+      today: enrichWithNextPass(todayLeads),
       callbacks,
       reengagement,
       oldLeads,
