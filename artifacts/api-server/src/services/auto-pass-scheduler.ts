@@ -160,7 +160,9 @@ async function fireAutoPass(leadId: number): Promise<void> {
       .from(usersTable)
       .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, lead.tenantId)));
     if (!nextUser || !nextUser.isActive) {
-      console.warn(`[auto-pass] Lead ${leadId}: target CSR ${nextCsrId} is inactive/missing, skipping`);
+      const passMinutes = config.passIntervalMinutes ?? 1440;
+      console.warn(`[auto-pass] Lead ${leadId}: target CSR ${nextCsrId} is inactive/missing, retrying in ${passMinutes}m`);
+      scheduleAutoPass(leadId, passMinutes * 60 * 1000);
       return;
     }
     resolvedName = nextUser.name;

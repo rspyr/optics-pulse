@@ -644,7 +644,7 @@ router.post("/leads-hub/create", async (req, res) => {
     try {
       const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId || null);
       if (result.assignedCsrId) {
-        if (result.passIntervalMinutes) {
+        if (result.passIntervalMinutes != null) {
           scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
@@ -835,7 +835,7 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
   if (result.assignedCsrId) {
     const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     const autoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
-    if (result.passIntervalMinutes && updated && autoPassStatuses.includes(updated.hubStatus)) {
+    if (result.passIntervalMinutes != null && updated && autoPassStatuses.includes(updated.hubStatus)) {
       scheduleAutoPass(leadId, result.passIntervalMinutes * 60 * 1000);
     }
     res.json({ assignedCsrId: result.assignedCsrId, csrName: result.csrName, lead: updated });

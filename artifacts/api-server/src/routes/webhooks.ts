@@ -126,7 +126,7 @@ router.post("/webhooks/ingest", async (req, res) => {
       if (newLead) {
         try {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
-          if (result.assignedCsrId && result.passIntervalMinutes) {
+          if (result.assignedCsrId && result.passIntervalMinutes != null) {
             scheduleAutoPass(newLead.id, result.passIntervalMinutes * 60 * 1000);
           } else if (!result.assignedCsrId) {
             console.warn(`[Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);

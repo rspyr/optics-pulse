@@ -260,7 +260,7 @@ async function createDemoLead(): Promise<void> {
     if (lead) {
       try {
         const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId);
-        if (result.assignedCsrId && result.passIntervalMinutes) {
+        if (result.assignedCsrId && result.passIntervalMinutes != null) {
           scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
         } else if (!result.assignedCsrId) {
           console.warn(`[Demo] Lead ${lead.id} not assigned: ${result.reason}`);

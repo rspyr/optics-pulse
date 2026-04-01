@@ -282,7 +282,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     if (lead) {
       try {
         const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
-        if (result.assignedCsrId && result.passIntervalMinutes) {
+        if (result.assignedCsrId && result.passIntervalMinutes != null) {
           scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
         } else if (!result.assignedCsrId) {
           console.warn(`[SheetSync] Lead ${lead.id} not assigned: ${result.reason}`);
