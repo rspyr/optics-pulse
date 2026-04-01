@@ -213,7 +213,18 @@ router.get("/leads-hub/queue", async (req, res) => {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
         const currentIdx = activeOrder.indexOf(l.assignedCsrId);
-        const hasNextCsr = cfg.allowPassBack || (currentIdx >= 0 && currentIdx < activeOrder.length - 1) || currentIdx === -1;
+        let hasNextCsr: boolean;
+        if (cfg.allowPassBack) {
+          if (cfg.stickyAfterCascade && cfg.stickyCsrId
+              && (l.cascadePassCount ?? 0) >= activeOrder.length - 1
+              && cfg.stickyCsrId === l.assignedCsrId) {
+            hasNextCsr = false;
+          } else {
+            hasNextCsr = true;
+          }
+        } else {
+          hasNextCsr = (currentIdx >= 0 && currentIdx < activeOrder.length - 1) || currentIdx === -1;
+        }
         if (!hasNextCsr) {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
