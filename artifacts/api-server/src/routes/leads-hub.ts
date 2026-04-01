@@ -375,6 +375,37 @@ router.post("/leads-hub/action", async (req, res) => {
     }
   }
 
+  const UNRESPONSIVE_THRESHOLD = 5;
+  const skipAutoOld = ["appt_set", "appt_booked", "dead", "day_5_old", "call_back"];
+  const currentStatus = (updates.hubStatus as string) || lead.hubStatus;
+  if (!skipAutoOld.includes(currentStatus)) {
+    const [{ count: unresponsiveCount }] = await db
+      .select({ count: count() })
+      .from(callAttemptsTable)
+      .where(and(
+        eq(callAttemptsTable.leadId, leadId),
+        or(
+          and(
+            eq(callAttemptsTable.actionType, "call"),
+            inArray(callAttemptsTable.callResult, [
+              "no_answer", "left_voicemail", "vm_full", "vm_not_setup",
+              "bad_number", "hung_up", "blocked", "out_of_service_area",
+            ]),
+          ),
+          and(
+            eq(callAttemptsTable.actionType, "text"),
+            inArray(callAttemptsTable.textResult, ["not_able_to", "no_need"]),
+          ),
+          eq(callAttemptsTable.actionType, "voicemail_drop"),
+        ),
+      ));
+
+    if (unresponsiveCount >= UNRESPONSIVE_THRESHOLD) {
+      updates.hubStatus = "day_5_old";
+      updates.dayInSequence = 5;
+    }
+  }
+
   if (updates.hubStatus) {
     updates.status = hubStatusToLegacy(updates.hubStatus as HubStatus);
   }
