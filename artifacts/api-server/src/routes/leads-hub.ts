@@ -376,7 +376,7 @@ router.post("/leads-hub/action", async (req, res) => {
   }
 
   const UNRESPONSIVE_THRESHOLD = 5;
-  const skipAutoOld = ["appt_set", "appt_booked", "dead", "day_5_old", "call_back"];
+  const skipAutoOld = ["appt_set", "appt_booked", "dead", "day_5_old"];
   const currentStatus = (updates.hubStatus as string) || lead.hubStatus;
   if (!skipAutoOld.includes(currentStatus)) {
     const [{ count: unresponsiveCount }] = await db
