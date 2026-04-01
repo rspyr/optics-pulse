@@ -6,6 +6,7 @@ import { requireRole } from "../middleware/auth";
 import { emitNewLead } from "../socket";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
+import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 
@@ -455,7 +456,9 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       if (lead) {
         try {
           const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
-          if (!result.assignedCsrId) {
+          if (result.assignedCsrId && result.passIntervalMinutes) {
+            scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+          } else if (!result.assignedCsrId) {
             console.warn(`[SheetsIngest] Lead ${lead.id} not assigned: ${result.reason}`);
           }
         } catch (err) {

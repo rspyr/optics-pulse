@@ -1,10 +1,11 @@
 import { db, leadsTable, usersTable, routingConfigTable, csrScheduleTable } from "@workspace/db";
-import { eq, and, isNull, isNotNull, gte, count } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, gte, count, inArray } from "drizzle-orm";
 
 export interface RoundRobinResult {
   assignedCsrId: number | null;
   csrName: string | null;
   reason?: string;
+  passIntervalMinutes?: number;
 }
 
 export async function assignLeadRoundRobin(
@@ -39,9 +40,28 @@ export async function assignLeadRoundRobin(
       .map(s => s.userId)
   );
 
-  const order = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
-  if (order.length === 0) {
+  const rawOrder = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
+  if (rawOrder.length === 0) {
     return { assignedCsrId: null, csrName: null, reason: "All CSRs are paused" };
+  }
+
+  const activeUsers = await db.select({ id: usersTable.id, name: usersTable.name })
+    .from(usersTable)
+    .where(and(
+      eq(usersTable.tenantId, tenantId),
+      eq(usersTable.isActive, true),
+      inArray(usersTable.id, rawOrder),
+    ));
+  const activeUserMap = new Map(activeUsers.map(u => [u.id, u.name]));
+
+  const invalidIds = rawOrder.filter(id => !activeUserMap.has(id));
+  if (invalidIds.length > 0) {
+    console.warn(`[RoundRobin] Tenant ${tenantId}: cascade_order contains invalid/inactive user IDs: [${invalidIds.join(", ")}]`);
+  }
+
+  const order = rawOrder.filter(id => activeUserMap.has(id));
+  if (order.length === 0) {
+    return { assignedCsrId: null, csrName: null, reason: "All CSRs in cascade_order are inactive or missing" };
   }
 
   const passMinutes = config.passIntervalMinutes ?? 1440;
@@ -90,17 +110,12 @@ export async function assignLeadRoundRobin(
     }
   }
 
-  const [user] = await db.select({ name: usersTable.name, isActive: usersTable.isActive })
-    .from(usersTable)
-    .where(and(eq(usersTable.id, selectedCsrId), eq(usersTable.tenantId, tenantId)));
-  if (!user || !user.isActive) {
-    return { assignedCsrId: null, csrName: null, reason: "Selected CSR not found or inactive in this tenant" };
-  }
+  const csrName = activeUserMap.get(selectedCsrId)!;
 
   const [updated] = await db.update(leadsTable)
-    .set({ assignedCsrId: selectedCsrId, assignedTo: user.name, updatedAt: new Date(), cascadePassCount: 0 })
+    .set({ assignedCsrId: selectedCsrId, assignedTo: csrName, updatedAt: new Date(), assignedAt: new Date(), cascadePassCount: 0 })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
-  return { assignedCsrId: selectedCsrId, csrName: user.name };
+  return { assignedCsrId: selectedCsrId, csrName, passIntervalMinutes: passMinutes };
 }

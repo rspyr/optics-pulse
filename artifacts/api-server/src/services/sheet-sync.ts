@@ -3,6 +3,7 @@ import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead, emitLeadUpdated } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
+import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "./source-normalizer";
 
@@ -281,7 +282,9 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     if (lead) {
       try {
         const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
-        if (!result.assignedCsrId) {
+        if (result.assignedCsrId && result.passIntervalMinutes) {
+          scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+        } else if (!result.assignedCsrId) {
           console.warn(`[SheetSync] Lead ${lead.id} not assigned: ${result.reason}`);
         }
       } catch (err) {

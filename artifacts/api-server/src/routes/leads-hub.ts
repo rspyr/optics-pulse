@@ -8,6 +8,26 @@ import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNo
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
+import { scheduleAutoPass, cancelAutoPass } from "../services/auto-pass-scheduler";
+
+async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
+  if (funnelId) {
+    const [specific] = await db.select().from(routingConfigTable)
+      .where(and(
+        eq(routingConfigTable.tenantId, tenantId),
+        eq(routingConfigTable.isActive, true),
+        eq(routingConfigTable.funnelTypeId, funnelId),
+      ));
+    if (specific) return specific;
+  }
+  const [fallback] = await db.select().from(routingConfigTable)
+    .where(and(
+      eq(routingConfigTable.tenantId, tenantId),
+      eq(routingConfigTable.isActive, true),
+      isNull(routingConfigTable.funnelTypeId),
+    ));
+  return fallback || null;
+}
 
 const router: IRouter = Router();
 
@@ -283,6 +303,18 @@ router.post("/leads-hub/action", async (req, res) => {
 
   const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
 
+  const activeAutoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
+  const finalStatus = (updates.hubStatus as string) || lead.hubStatus;
+  if (!activeAutoPassStatuses.includes(finalStatus)) {
+    cancelAutoPass(leadId);
+  } else {
+    cancelAutoPass(leadId);
+    const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
+    if (config) {
+      scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+    }
+  }
+
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated, action: { actionType, outcome } });
 });
@@ -433,6 +465,15 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
     .where(eq(leadsTable.id, leadId))
     .returning();
 
+  cancelAutoPass(leadId);
+  const transferActiveStatuses = ["day_1", "day_2", "day_3", "day_4"];
+  if (transferActiveStatuses.includes(lead.hubStatus)) {
+    const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
+    if (config) {
+      scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+    }
+  }
+
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated });
 });
@@ -532,7 +573,21 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
   const updatedLeads = await db.select().from(leadsTable)
     .where(inArray(leadsTable.id, leadIds));
 
+  const batchActiveStatuses = ["day_1", "day_2", "day_3", "day_4"];
+  const configCache = new Map<string, typeof routingConfigTable.$inferSelect | null>();
+
   for (const lead of updatedLeads) {
+    cancelAutoPass(lead.id);
+    if (batchActiveStatuses.includes(lead.hubStatus)) {
+      const cacheKey = `${tenantId}:${lead.funnelId ?? "null"}`;
+      if (!configCache.has(cacheKey)) {
+        configCache.set(cacheKey, await findRoutingConfigForLead(tenantId, lead.funnelId));
+      }
+      const config = configCache.get(cacheKey);
+      if (config) {
+        scheduleAutoPass(lead.id, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+      }
+    }
     emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
   }
 
@@ -589,6 +644,9 @@ router.post("/leads-hub/create", async (req, res) => {
     try {
       const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId || null);
       if (result.assignedCsrId) {
+        if (result.passIntervalMinutes) {
+          scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+        }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
         emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
         res.status(201).json(refreshed ?? lead);
@@ -598,6 +656,11 @@ router.post("/leads-hub/create", async (req, res) => {
       }
     } catch (err) {
       console.warn("[LeadsHub Create] Auto-assign round-robin failed for lead", lead.id, err);
+    }
+  } else {
+    const manualConfig = await findRoutingConfigForLead(tenantId, funnelId || null);
+    if (manualConfig) {
+      scheduleAutoPass(lead.id, (manualConfig.passIntervalMinutes ?? 1440) * 60 * 1000);
     }
   }
 
@@ -770,6 +833,9 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
 
   const result = await assignLeadRoundRobin(tenantId, leadId, funnelTypeId || null);
   if (result.assignedCsrId) {
+    if (result.passIntervalMinutes) {
+      scheduleAutoPass(leadId, result.passIntervalMinutes * 60 * 1000);
+    }
     const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     res.json({ assignedCsrId: result.assignedCsrId, csrName: result.csrName, lead: updated });
   } else {
@@ -912,120 +978,5 @@ router.get("/leads-hub/stats", async (req, res) => {
   });
 });
 
-export async function evaluateAutoPass(): Promise<number> {
-  let passed = 0;
-  const configs = await db.select().from(routingConfigTable)
-    .where(eq(routingConfigTable.isActive, true));
-
-  const funnelSpecificIds = new Map<number, Set<number>>();
-  for (const c of configs) {
-    if (c.funnelTypeId !== null) {
-      if (!funnelSpecificIds.has(c.tenantId)) funnelSpecificIds.set(c.tenantId, new Set());
-      funnelSpecificIds.get(c.tenantId)!.add(c.funnelTypeId);
-    }
-  }
-
-  for (const config of configs) {
-    const passMinutes = config.passIntervalMinutes ?? 1440;
-    const cutoff = new Date(Date.now() - passMinutes * 60 * 1000);
-
-    const leadConditions = [
-      eq(leadsTable.tenantId, config.tenantId),
-      inArray(leadsTable.hubStatus, ["day_1", "day_2", "day_3", "day_4"]),
-      isNotNull(leadsTable.assignedCsrId),
-      lte(leadsTable.updatedAt, cutoff),
-    ];
-
-    if (config.funnelTypeId !== null) {
-      leadConditions.push(eq(leadsTable.funnelId, config.funnelTypeId));
-    } else {
-      const specificFunnels = funnelSpecificIds.get(config.tenantId);
-      if (specificFunnels && specificFunnels.size > 0) {
-        const excludedFunnelIds = Array.from(specificFunnels);
-        leadConditions.push(
-          or(
-            isNull(leadsTable.funnelId),
-            and(...excludedFunnelIds.map(fid => ne(leadsTable.funnelId, fid)))
-          )!
-        );
-      }
-    }
-
-    const staleLeads = await db.select({
-      id: leadsTable.id,
-      assignedCsrId: leadsTable.assignedCsrId,
-      tenantId: leadsTable.tenantId,
-      cascadePassCount: leadsTable.cascadePassCount,
-    }).from(leadsTable)
-      .where(and(...leadConditions))
-      .limit(50);
-
-    if (staleLeads.length === 0) continue;
-
-    const cascadeOrder = (config.cascadeOrder as number[]) || [];
-    if (cascadeOrder.length < 2) continue;
-
-    const now = new Date();
-    const pausedSchedules = await db.select().from(csrScheduleTable)
-      .where(and(eq(csrScheduleTable.tenantId, config.tenantId), eq(csrScheduleTable.isPaused, true)));
-    const pausedIds = new Set(
-      pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now).map(s => s.userId)
-    );
-    const activeOrder = cascadeOrder.filter(id => !pausedIds.has(id));
-    if (activeOrder.length < 2) continue;
-
-    for (const lead of staleLeads) {
-      const currentIdx = activeOrder.indexOf(lead.assignedCsrId!);
-      let nextCsrId: number;
-
-      if (config.allowPassBack) {
-        if (config.stickyAfterCascade && config.stickyCsrId && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
-          if (config.stickyCsrId === lead.assignedCsrId) {
-            await db.update(leadsTable)
-              .set({ updatedAt: new Date() })
-              .where(eq(leadsTable.id, lead.id));
-            continue;
-          }
-          nextCsrId = config.stickyCsrId;
-        } else {
-          nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
-        }
-      } else {
-        if (currentIdx < activeOrder.length - 1) {
-          nextCsrId = activeOrder[currentIdx + 1];
-        } else {
-          continue;
-        }
-      }
-
-      const [nextUser] = await db.select({ name: usersTable.name })
-        .from(usersTable)
-        .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, config.tenantId)));
-      if (!nextUser) continue;
-
-      const newPassCount = (config.allowPassBack && config.stickyAfterCascade)
-        ? (lead.cascadePassCount ?? 0) + 1
-        : (lead.cascadePassCount ?? 0);
-      await db.update(leadsTable)
-        .set({ assignedCsrId: nextCsrId, assignedTo: nextUser.name, assignedAt: new Date(), updatedAt: new Date(), cascadePassCount: newPassCount })
-        .where(eq(leadsTable.id, lead.id));
-
-      const passLabel = passMinutes >= 60 ? `${Math.round(passMinutes / 60)}h` : `${passMinutes}m`;
-      await db.insert(callAttemptsTable).values({
-        leadId: lead.id,
-        userId: nextCsrId,
-        method: "transfer",
-        outcome: "auto_passed",
-        platform: "native",
-        actionType: "transfer",
-        notes: `Auto-passed after ${passLabel} inactivity`,
-      });
-
-      passed++;
-    }
-  }
-
-  return passed;
-}
 
 export default router;

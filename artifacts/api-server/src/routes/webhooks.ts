@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
+import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 
@@ -125,7 +126,9 @@ router.post("/webhooks/ingest", async (req, res) => {
       if (newLead) {
         try {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
-          if (!result.assignedCsrId) {
+          if (result.assignedCsrId && result.passIntervalMinutes) {
+            scheduleAutoPass(newLead.id, result.passIntervalMinutes * 60 * 1000);
+          } else if (!result.assignedCsrId) {
             console.warn(`[Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);
           }
         } catch (err) {

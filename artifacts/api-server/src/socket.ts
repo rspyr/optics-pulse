@@ -4,6 +4,7 @@ import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable,
 import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
+import { scheduleAutoPass } from "./services/auto-pass-scheduler";
 
 const DEMO_FIRST_NAMES = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "Robert", "Amanda", "William", "Jennifer", "James", "Lisa", "Daniel", "Maria", "Christopher"];
 const DEMO_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"];
@@ -259,7 +260,9 @@ async function createDemoLead(): Promise<void> {
     if (lead) {
       try {
         const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId);
-        if (!result.assignedCsrId) {
+        if (result.assignedCsrId && result.passIntervalMinutes) {
+          scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
+        } else if (!result.assignedCsrId) {
           console.warn(`[Demo] Lead ${lead.id} not assigned: ${result.reason}`);
         }
       } catch (err) {

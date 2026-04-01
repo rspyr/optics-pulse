@@ -3,7 +3,6 @@ import app, { sessionMiddleware } from "./app";
 import { initSocketIO, closeStaleLoginSessions, startLoginSessionExpiryJob } from "./socket";
 import { startReconciliationCron } from "./services/cron";
 import { startSyncScheduler } from "./services/sync-scheduler";
-import { evaluateAutoPass } from "./routes/leads-hub";
 import { startTrainingAlertScheduler } from "./services/training-scheduler";
 import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
@@ -11,6 +10,7 @@ import { startNightlyAggregation } from "./services/coordinator-stats";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
+import { recoverTimers } from "./services/auto-pass-scheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -42,12 +42,5 @@ httpServer.listen(port, async () => {
   startNightlyAggregation();
   startStDataPurgeScheduler();
   startSheetSyncScheduler();
-  setInterval(async () => {
-    try {
-      const count = await evaluateAutoPass();
-      if (count > 0) console.log(`[auto-pass] Reassigned ${count} stale leads`);
-    } catch (err) {
-      console.error("[auto-pass] Error:", err);
-    }
-  }, 15 * 60 * 1000);
+  recoverTimers().catch(err => console.error("[auto-pass] Recovery error:", err));
 });
