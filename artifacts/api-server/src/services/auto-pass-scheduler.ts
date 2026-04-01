@@ -1,7 +1,7 @@
 import {
   db, leadsTable, usersTable, routingConfigTable, csrScheduleTable, callAttemptsTable,
 } from "@workspace/db";
-import { eq, and, inArray, isNull, isNotNull, or, ne } from "drizzle-orm";
+import { eq, and, inArray, isNull, isNotNull, or, ne, sql } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -85,6 +85,17 @@ async function findConfigForLead(lead: { tenantId: number; funnelId: number | nu
   return fallback || null;
 }
 
+export async function leadHasRealTouch(leadId: number): Promise<boolean> {
+  const [result] = await db.select({ id: callAttemptsTable.id })
+    .from(callAttemptsTable)
+    .where(and(
+      eq(callAttemptsTable.leadId, leadId),
+      ne(callAttemptsTable.actionType, "transfer"),
+    ))
+    .limit(1);
+  return !!result;
+}
+
 async function fireAutoPass(leadId: number): Promise<void> {
   const [lead] = await db.select({
     id: leadsTable.id,
@@ -97,6 +108,12 @@ async function fireAutoPass(leadId: number): Promise<void> {
 
   if (!lead || !lead.assignedCsrId) return;
   if (!AUTO_PASS_STATUSES.includes(lead.hubStatus)) return;
+
+  const touched = await leadHasRealTouch(leadId);
+  if (touched) {
+    console.log(`[auto-pass] Lead ${leadId}: has real call attempts, skipping auto-pass`);
+    return;
+  }
 
   const config = await findConfigForLead(lead);
   if (!config) return;
@@ -260,6 +277,9 @@ export async function recoverTimers(): Promise<number> {
         );
       }
     }
+
+    const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type != 'transfer')`;
+    leadConditions.push(noRealAttempts);
 
     const leads = await db.select({
       id: leadsTable.id,

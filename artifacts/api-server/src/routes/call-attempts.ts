@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
 import { eq, desc, and, lte, gte } from "drizzle-orm";
 import { analyzeContactPattern, logAttemptWithFollowup } from "../services/lead-scoring";
+import { cancelAutoPass } from "../services/auto-pass-scheduler";
 import type { SessionData } from "express-session";
 
 const router: IRouter = Router();
@@ -78,6 +79,11 @@ router.post("/call-attempts", async (req: Request, res): Promise<void> => {
     attemptedAt: attemptedAt ? new Date(attemptedAt) : undefined,
     notes: notes || null,
   });
+
+  const realTouchMethods = ["call", "text", "voicemail_drop", "voicemail"];
+  if (realTouchMethods.includes(resolvedMethod)) {
+    cancelAutoPass(leadId);
+  }
 
   const [attempt] = await db.select().from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))

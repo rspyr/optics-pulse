@@ -8,7 +8,7 @@ import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNo
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
-import { scheduleAutoPass, cancelAutoPass } from "../services/auto-pass-scheduler";
+import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch } from "../services/auto-pass-scheduler";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -412,15 +412,23 @@ router.post("/leads-hub/action", async (req, res) => {
 
   const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
 
+  const realTouchActions = ["call", "text", "voicemail_drop", "voicemail"];
+  const isRealTouch = realTouchActions.includes(actionType);
   const activeAutoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
   const finalStatus = (updates.hubStatus as string) || lead.hubStatus;
-  if (!activeAutoPassStatuses.includes(finalStatus)) {
+
+  if (isRealTouch) {
+    cancelAutoPass(leadId);
+  } else if (!activeAutoPassStatuses.includes(finalStatus)) {
     cancelAutoPass(leadId);
   } else {
     cancelAutoPass(leadId);
-    const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
-    if (config) {
-      scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+    const alreadyTouched = await leadHasRealTouch(leadId);
+    if (!alreadyTouched) {
+      const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
+      if (config) {
+        scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+      }
     }
   }
 
@@ -576,7 +584,8 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
 
   cancelAutoPass(leadId);
   const transferActiveStatuses = ["day_1", "day_2", "day_3", "day_4"];
-  if (transferActiveStatuses.includes(lead.hubStatus)) {
+  const touched = await leadHasRealTouch(leadId);
+  if (!touched && transferActiveStatuses.includes(lead.hubStatus)) {
     const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
     if (config) {
       scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
@@ -688,13 +697,16 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
   for (const lead of updatedLeads) {
     cancelAutoPass(lead.id);
     if (batchActiveStatuses.includes(lead.hubStatus)) {
-      const cacheKey = `${tenantId}:${lead.funnelId ?? "null"}`;
-      if (!configCache.has(cacheKey)) {
-        configCache.set(cacheKey, await findRoutingConfigForLead(tenantId, lead.funnelId));
-      }
-      const config = configCache.get(cacheKey);
-      if (config) {
-        scheduleAutoPass(lead.id, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+      const touched = await leadHasRealTouch(lead.id);
+      if (!touched) {
+        const cacheKey = `${tenantId}:${lead.funnelId ?? "null"}`;
+        if (!configCache.has(cacheKey)) {
+          configCache.set(cacheKey, await findRoutingConfigForLead(tenantId, lead.funnelId));
+        }
+        const config = configCache.get(cacheKey);
+        if (config) {
+          scheduleAutoPass(lead.id, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
+        }
       }
     }
     emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
@@ -944,7 +956,8 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
   if (result.assignedCsrId) {
     const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     const autoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
-    if (result.passIntervalMinutes != null && updated && autoPassStatuses.includes(updated.hubStatus)) {
+    const alreadyTouched = await leadHasRealTouch(leadId);
+    if (!alreadyTouched && result.passIntervalMinutes != null && updated && autoPassStatuses.includes(updated.hubStatus)) {
       scheduleAutoPass(leadId, result.passIntervalMinutes * 60 * 1000);
     }
     res.json({ assignedCsrId: result.assignedCsrId, csrName: result.csrName, lead: updated });

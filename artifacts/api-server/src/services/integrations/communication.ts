@@ -1,5 +1,6 @@
 import { db, callAttemptsTable, leadsTable, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { cancelAutoPass } from "../auto-pass-scheduler";
 
 export type CommPlatform = "native" | "callrail" | "podium" | "none";
 
@@ -54,6 +55,7 @@ export async function initiateCall(
       platform: "none",
       actionType: "call",
     });
+    cancelAutoPass(leadId);
     return {
       success: true,
       platform: "none",
@@ -76,6 +78,8 @@ export async function initiateCall(
     platform: config.callPlatform,
     actionType: "call",
   });
+
+  cancelAutoPass(leadId);
 
   return result;
 }
@@ -101,6 +105,7 @@ export async function initiateText(
       platform: "none",
       actionType: "text",
     });
+    cancelAutoPass(leadId);
     return {
       success: true,
       platform: "none",
@@ -123,6 +128,8 @@ export async function initiateText(
     platform: config.textPlatform,
     actionType: "text",
   });
+
+  cancelAutoPass(leadId);
 
   return result;
 }

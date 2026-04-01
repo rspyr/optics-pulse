@@ -334,6 +334,8 @@ router.patch("/leads/:leadId", async (req, res) => {
         platform: "native",
         notes: `Disposition: ${body.disposition}`,
       });
+      const { cancelAutoPass } = await import("../services/auto-pass-scheduler");
+      cancelAutoPass(leadId);
     } catch (err) {
       console.error("[Leads] Auto-log call attempt on disposition failed:", err);
     }

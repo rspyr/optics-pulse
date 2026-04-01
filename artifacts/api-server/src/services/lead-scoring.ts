@@ -396,6 +396,7 @@ interface LogAttemptInput {
   platform: string;
   notes: string | null;
   attemptedAt?: Date;
+  actionType?: string;
 }
 
 export async function logAttemptWithFollowup(
@@ -410,6 +411,7 @@ export async function logAttemptWithFollowup(
     platform: input.platform,
     attemptedAt: input.attemptedAt || new Date(),
     notes: input.notes,
+    actionType: input.actionType || input.method,
   });
 
   if (input.outcome === "voicemail" || input.outcome === "no_answer" || input.outcome === "busy") {
