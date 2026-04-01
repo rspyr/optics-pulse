@@ -10,7 +10,7 @@ const router: IRouter = Router();
 
 const PODIUM_AUTH_URL = "https://api.podium.com/oauth/authorize";
 const PODIUM_TOKEN_URL = "https://api.podium.com/oauth/token";
-const SCOPES = "read:contacts write:contacts read:conversations write:conversations read:locations";
+const SCOPES = "read_messages write_messages read_contacts write_contacts read_locations";
 
 function getRedirectUri(): string {
   const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
