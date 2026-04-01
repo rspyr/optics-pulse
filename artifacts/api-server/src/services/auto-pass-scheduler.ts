@@ -104,10 +104,12 @@ async function fireAutoPass(leadId: number): Promise<void> {
   const { order: activeOrder, userMap } = await getActiveOrderForConfig(config);
 
   if (activeOrder.length === 0) {
+    const passMinutes = config.passIntervalMinutes ?? 1440;
     await db.update(leadsTable)
       .set({ updatedAt: new Date() })
       .where(eq(leadsTable.id, leadId));
-    console.warn(`[auto-pass] Lead ${leadId}: no active CSRs in cascade, skipping`);
+    console.warn(`[auto-pass] Lead ${leadId}: no active CSRs in cascade, retrying in ${passMinutes}m`);
+    scheduleAutoPass(leadId, passMinutes * 60 * 1000);
     return;
   }
 
