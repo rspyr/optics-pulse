@@ -156,29 +156,65 @@ router.get("/leads-hub/queue", async (req, res) => {
     const [totalResult] = await db.select({ count: count() }).from(leadsTable)
       .where(and(...baseConds, sql`${leadsTable.hubStatus} NOT IN ('appt_set', 'dead')`));
 
-    const configs = await db.select().from(routingConfigTable)
+    type RoutingConfig = typeof routingConfigTable.$inferSelect;
+    type LeadRow = typeof leadsTable.$inferSelect;
+
+    const configs: RoutingConfig[] = await db.select().from(routingConfigTable)
       .where(and(eq(routingConfigTable.tenantId, tenantId), eq(routingConfigTable.isActive, true)));
-    const configByFunnel = new Map<number | null, typeof configs[0]>();
-    let defaultConfig: typeof configs[0] | null = null;
+    const configByFunnel = new Map<number | null, RoutingConfig>();
+    let defaultConfig: RoutingConfig | null = null;
     for (const c of configs) {
       if (c.funnelTypeId !== null) configByFunnel.set(c.funnelTypeId, c);
       else defaultConfig = c;
     }
 
+    const now = new Date();
+    const pausedSchedules = await db.select().from(csrScheduleTable)
+      .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.isPaused, true)));
+    const pausedIds = new Set(
+      pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now).map(s => s.userId)
+    );
+
+    const allCascadeIds = new Set<number>();
+    for (const c of configs) {
+      for (const id of ((c.cascadeOrder as number[]) || [])) allCascadeIds.add(id);
+    }
+    const activeUserIds = new Set<number>();
+    if (allCascadeIds.size > 0) {
+      const activeUsers = await db.select({ id: usersTable.id })
+        .from(usersTable)
+        .where(and(
+          eq(usersTable.tenantId, tenantId),
+          eq(usersTable.isActive, true),
+          inArray(usersTable.id, [...allCascadeIds]),
+        ));
+      for (const u of activeUsers) activeUserIds.add(u.id);
+    }
+
+    const activeOrderByConfigId = new Map<number, number[]>();
+    for (const c of configs) {
+      const raw = (c.cascadeOrder as number[]) || [];
+      const active = raw.filter(id => !pausedIds.has(id) && activeUserIds.has(id));
+      activeOrderByConfigId.set(c.id, active);
+    }
+
     const autoPassStatuses = new Set(["day_1", "day_2", "day_3", "day_4"]);
-    function enrichWithNextPass(leads: any[]): any[] {
+    function enrichWithNextPass(leads: LeadRow[]): (LeadRow & { nextPassAt: string | null; passIntervalMinutes: number | null })[] {
       return leads.map(l => {
-        if (!autoPassStatuses.has(l.hubStatus) || !l.assignedCsrId || !l.assignedAt) {
+        if (!autoPassStatuses.has(l.hubStatus ?? "") || !l.assignedCsrId || !l.assignedAt) {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
         const cfg = (l.funnelId ? configByFunnel.get(l.funnelId) : null) || defaultConfig;
         if (!cfg) {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
-        const cascadeOrder = (cfg.cascadeOrder as number[]) || [];
-        const currentIdx = cascadeOrder.indexOf(l.assignedCsrId);
-        const hasNextCsr = cfg.allowPassBack || (currentIdx >= 0 && currentIdx < cascadeOrder.length - 1) || currentIdx === -1;
-        if (!hasNextCsr || cascadeOrder.length < 2) {
+        const activeOrder = activeOrderByConfigId.get(cfg.id) ?? [];
+        if (activeOrder.length < 2) {
+          return { ...l, nextPassAt: null, passIntervalMinutes: null };
+        }
+        const currentIdx = activeOrder.indexOf(l.assignedCsrId);
+        const hasNextCsr = cfg.allowPassBack || (currentIdx >= 0 && currentIdx < activeOrder.length - 1) || currentIdx === -1;
+        if (!hasNextCsr) {
           return { ...l, nextPassAt: null, passIntervalMinutes: null };
         }
         const passMinutes = cfg.passIntervalMinutes ?? 1440;

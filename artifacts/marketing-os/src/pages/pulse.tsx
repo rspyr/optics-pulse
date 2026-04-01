@@ -420,7 +420,7 @@ function formatCountdown(ms: number): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
-function useTickingTimer(deps: any[]): number {
+function useTickingTimer(deps: readonly (string | number | null | undefined)[]): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     setTick(t => t + 1);
