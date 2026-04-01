@@ -152,15 +152,17 @@ async function fireAutoPass(leadId: number): Promise<void> {
     }
   }
 
-  const nextName = userMap.get(nextCsrId);
-  if (!nextName) {
-    const [nextUser] = await db.select({ name: usersTable.name })
+  let resolvedName = userMap.get(nextCsrId);
+  if (!resolvedName) {
+    const [nextUser] = await db.select({ name: usersTable.name, isActive: usersTable.isActive })
       .from(usersTable)
       .where(and(eq(usersTable.id, nextCsrId), eq(usersTable.tenantId, lead.tenantId)));
-    if (!nextUser) return;
+    if (!nextUser || !nextUser.isActive) {
+      console.warn(`[auto-pass] Lead ${leadId}: target CSR ${nextCsrId} is inactive/missing, skipping`);
+      return;
+    }
+    resolvedName = nextUser.name;
   }
-
-  const resolvedName = nextName || (await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, nextCsrId)))[0]?.name;
   if (!resolvedName) return;
 
   const newPassCount = (config.allowPassBack && config.stickyAfterCascade)
