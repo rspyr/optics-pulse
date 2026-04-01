@@ -34,7 +34,7 @@ export const VM_RESULTS = [
 export type VmResult = typeof VM_RESULTS[number];
 
 export const TEXT_RESULTS = [
-  "yes", "not_able_to", "dead", "no_need",
+  "yes", "not_able_to", "dead", "no_need", "reached_out",
 ] as const;
 export type TextResult = typeof TEXT_RESULTS[number];
 

@@ -394,7 +394,7 @@ router.post("/leads-hub/action", async (req, res) => {
           ),
           and(
             eq(callAttemptsTable.actionType, "text"),
-            inArray(callAttemptsTable.textResult, ["not_able_to", "no_need"]),
+            inArray(callAttemptsTable.textResult, ["not_able_to", "no_need", "reached_out"]),
           ),
           eq(callAttemptsTable.actionType, "voicemail_drop"),
         ),
@@ -466,7 +466,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   const { actionType, callResult, vmResult, textResult, deadReason, notes } = req.body;
 
   const validCallResults = ["no_answer", "left_voicemail", "vm_full", "vm_not_setup", "bad_number", "spoke_with_customer", "hung_up", "blocked", "out_of_service_area"];
-  const validTextResults = ["yes", "not_able_to", "dead", "no_need"];
+  const validTextResults = ["yes", "not_able_to", "dead", "no_need", "reached_out"];
   const validVmResults = ["yes", "no", "bad_number", "vm_full", "vm_not_setup", "spoke_with_customer"];
   const validActionTypes = ["call", "text", "voicemail_drop", "voicemail"];
 

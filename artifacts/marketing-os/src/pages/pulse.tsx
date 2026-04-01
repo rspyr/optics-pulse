@@ -118,6 +118,7 @@ const DEAD_REASONS = [
 
 const TEXT_RESULTS = [
   { value: "yes", label: "Yes — Interested" },
+  { value: "reached_out", label: "Reached Out" },
   { value: "not_able_to", label: "Not Able To" },
   { value: "dead", label: "Dead Lead" },
   { value: "no_need", label: "No Need to Log" },
