@@ -481,17 +481,21 @@ function LeadTimerBadge({ createdAt, nextPassAt, passIntervalMinutes }: { create
   const totalIntervalMs = (passIntervalMinutes ?? 1440) * 60 * 1000;
   const fraction = totalIntervalMs > 0 ? Math.max(0, remainingMs / totalIntervalMs) : 0;
 
-  const countdownColor = fraction > 0.5
-    ? "text-emerald-400"
-    : fraction > 0.2
-      ? "text-amber-400"
-      : "text-red-400";
+  const countdownColor = remainingMs <= 60000
+    ? "text-red-400"
+    : fraction > 0.5
+      ? "text-emerald-400"
+      : fraction > 0.2
+        ? "text-amber-400"
+        : "text-red-400";
 
-  const countdownBg = fraction > 0.5
-    ? "bg-emerald-500/15"
-    : fraction > 0.2
-      ? "bg-amber-500/15"
-      : "bg-red-500/15";
+  const countdownBg = remainingMs <= 60000
+    ? "bg-red-500/15"
+    : fraction > 0.5
+      ? "bg-emerald-500/15"
+      : fraction > 0.2
+        ? "bg-amber-500/15"
+        : "bg-red-500/15";
 
   const totalMs = now - new Date(createdAt).getTime();
   const totalText = formatElapsed(totalMs);
