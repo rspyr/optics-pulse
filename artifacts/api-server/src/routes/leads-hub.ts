@@ -237,9 +237,9 @@ router.get("/leads-hub/queue", async (req, res) => {
     res.json({
       newLeads: enrichWithNextPass(newLeads),
       today: enrichWithNextPass(todayLeads),
-      callbacks,
-      reengagement,
-      oldLeads,
+      callbacks: enrichWithNextPass(callbacks),
+      reengagement: enrichWithNextPass(reengagement),
+      oldLeads: enrichWithNextPass(oldLeads),
       total: totalResult.count,
       timezone: tz,
     });
