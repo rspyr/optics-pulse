@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 interface TenantForm {
   name: string;
@@ -606,16 +607,17 @@ export default function AdminTenants() {
               placeholder="ServiceTitan Tenant ID"
               className={inputClass}
             />
-            <select
-              value={form.timezone}
-              onChange={(e) => setForm(f => ({ ...f, timezone: e.target.value }))}
-              className={inputClass}
-            >
-              <option value="America/New_York">Eastern</option>
-              <option value="America/Chicago">Central</option>
-              <option value="America/Denver">Mountain</option>
-              <option value="America/Los_Angeles">Pacific</option>
-            </select>
+            <Select value={form.timezone} onValueChange={(v) => setForm(f => ({ ...f, timezone: v }))}>
+              <SelectTrigger className={inputClass}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="America/New_York">Eastern</SelectItem>
+                <SelectItem value="America/Chicago">Central</SelectItem>
+                <SelectItem value="America/Denver">Mountain</SelectItem>
+                <SelectItem value="America/Los_Angeles">Pacific</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <IntegrationFields />
           <div className="mt-4">
@@ -677,13 +679,17 @@ export default function AdminTenants() {
                             className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" />
                         </td>
                         <td className="p-4">
-                          <select value={form.timezone} onChange={(e) => setForm(f => ({ ...f, timezone: e.target.value }))}
-                            className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
-                            <option value="America/New_York">Eastern</option>
-                            <option value="America/Chicago">Central</option>
-                            <option value="America/Denver">Mountain</option>
-                            <option value="America/Los_Angeles">Pacific</option>
-                          </select>
+                          <Select value={form.timezone} onValueChange={(v) => setForm(f => ({ ...f, timezone: v }))}>
+                            <SelectTrigger className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="America/New_York">Eastern</SelectItem>
+                              <SelectItem value="America/Chicago">Central</SelectItem>
+                              <SelectItem value="America/Denver">Mountain</SelectItem>
+                              <SelectItem value="America/Los_Angeles">Pacific</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </td>
                         <td className="p-4">
                           <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>

@@ -6,6 +6,7 @@ import {
   useDeleteTrainingItem,
   useCheckTrainingAlerts,
 } from "@workspace/api-client-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import type {
   CreateTrainingItemBody,
   CreateTrainingItemBodyMetricTrigger,
@@ -276,13 +277,14 @@ export default function AdminTraining() {
             </div>
             <div>
               <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Category</label>
-              <select
-                value={form.category}
-                onChange={e => setForm({ ...form, category: e.target.value })}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-              >
-                {CATEGORY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <Select value={form.category} onValueChange={v => setForm({ ...form, category: v })}>
+                <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CATEGORY_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Content Type</label>
@@ -313,13 +315,14 @@ export default function AdminTraining() {
             </div>
             <div>
               <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Metric Trigger</label>
-              <select
-                value={form.metricTrigger}
-                onChange={e => setForm({ ...form, metricTrigger: e.target.value })}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-              >
-                {METRIC_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
+              <Select value={form.metricTrigger || "none"} onValueChange={v => setForm({ ...form, metricTrigger: v === "none" ? "" : v })}>
+                <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {METRIC_OPTIONS.map(m => <SelectItem key={m.value || "none"} value={m.value || "none"}>{m.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             {form.metricTrigger && (
               <>

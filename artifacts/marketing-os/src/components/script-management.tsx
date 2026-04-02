@@ -6,6 +6,7 @@ import {
   ChevronDown, Eye, RotateCcw, Trash2, Loader2, Check, AlertTriangle,
   Filter,
 } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -382,23 +383,25 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
       <div className="flex items-center gap-2 flex-wrap">
         <Filter className="w-3.5 h-3.5 text-white/20" />
         {funnels.length > 0 && (
-          <select
-            value={funnelFilter}
-            onChange={e => setFunnelFilter(e.target.value)}
-            className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="">All Funnels</option>
-            {funnels.map(f => <option key={f.id} value={f.slug}>{f.name}</option>)}
-          </select>
+          <Select value={funnelFilter || "all"} onValueChange={v => setFunnelFilter(v === "all" ? "" : v)}>
+            <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-auto min-w-[100px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Funnels</SelectItem>
+              {funnels.map(f => <SelectItem key={f.id} value={f.slug}>{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         )}
-        <select
-          value={serviceFilter}
-          onChange={e => setServiceFilter(e.target.value)}
-          className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-        >
-          <option value="">All Service Types</option>
-          {SERVICE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <Select value={serviceFilter || "all"} onValueChange={v => setServiceFilter(v === "all" ? "" : v)}>
+          <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-auto min-w-[120px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Service Types</SelectItem>
+            {SERVICE_TYPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -517,37 +520,40 @@ export default function ScriptManagement({ tenantId }: { tenantId?: number | nul
                 </div>
                 <div>
                   <label className="text-[10px] text-white/30 uppercase tracking-wider">Lead Source</label>
-                  <select
-                    value={editSource}
-                    onChange={e => setEditSource(e.target.value)}
-                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-                  >
-                    <option value="">Any Source</option>
-                    {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <Select value={editSource || "any"} onValueChange={v => setEditSource(v === "any" ? "" : v)}>
+                    <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="any">Any Source</SelectItem>
+                      {SOURCES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] text-white/30 uppercase tracking-wider">Lead Stage</label>
-                  <select
-                    value={editStage}
-                    onChange={e => setEditStage(e.target.value)}
-                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-                  >
-                    {STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
+                  <Select value={editStage || "any"} onValueChange={v => setEditStage(v === "any" ? "" : v)}>
+                    <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STAGES.map(s => <SelectItem key={s.value || "any"} value={s.value || "any"}>{s.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label className="text-[10px] text-white/30 uppercase tracking-wider">Disposition</label>
-                  <select
-                    value={editDisposition}
-                    onChange={e => setEditDisposition(e.target.value)}
-                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-                  >
-                    {DISPOSITIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                  </select>
+                  <Select value={editDisposition || "any"} onValueChange={v => setEditDisposition(v === "any" ? "" : v)}>
+                    <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DISPOSITIONS.map(d => <SelectItem key={d.value || "any"} value={d.value || "any"}>{d.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 

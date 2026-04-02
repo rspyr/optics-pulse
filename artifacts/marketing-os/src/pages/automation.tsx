@@ -10,6 +10,7 @@ import {
   useGetAutomationAlertCount,
   useListTenants,
 } from "@workspace/api-client-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import type {
   AutomationRule,
   AutomationAlert,
@@ -435,15 +436,16 @@ export default function Automation() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-white/70 mb-1">Condition</label>
-                  <select
-                    value={formData.conditionType}
-                    onChange={(e) => setFormData({ ...formData, conditionType: e.target.value as CreateAutomationRuleBody["conditionType"] })}
-                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
-                  >
-                    {Object.entries(CONDITION_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
+                  <Select value={formData.conditionType} onValueChange={(v) => setFormData({ ...formData, conditionType: v as CreateAutomationRuleBody["conditionType"] })}>
+                    <SelectTrigger className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(CONDITION_LABELS).map(([k, v]) => (
+                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div>
@@ -464,47 +466,50 @@ export default function Automation() {
 
               <div>
                 <label className="block text-sm text-white/70 mb-1">Action</label>
-                <select
-                  value={formData.actionType}
-                  onChange={(e) => setFormData({ ...formData, actionType: e.target.value as CreateAutomationRuleBody["actionType"] })}
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
-                >
-                  {Object.entries(ACTION_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
+                <Select value={formData.actionType} onValueChange={(v) => setFormData({ ...formData, actionType: v as CreateAutomationRuleBody["actionType"] })}>
+                  <SelectTrigger className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(ACTION_LABELS).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-white/70 mb-1">Lookback Window</label>
-                  <select
-                    value={formData.lookbackDays || 30}
-                    onChange={(e) => setFormData({ ...formData, lookbackDays: Number(e.target.value) })}
-                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
-                  >
-                    <option value={1}>Last 1 day</option>
-                    <option value={3}>Last 3 days</option>
-                    <option value={7}>Last 7 days</option>
-                    <option value={14}>Last 14 days</option>
-                    <option value={30}>Last 30 days</option>
-                    <option value={60}>Last 60 days</option>
-                    <option value={90}>Last 90 days</option>
-                  </select>
+                  <Select value={String(formData.lookbackDays || 30)} onValueChange={(v) => setFormData({ ...formData, lookbackDays: Number(v) })}>
+                    <SelectTrigger className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Last 1 day</SelectItem>
+                      <SelectItem value="3">Last 3 days</SelectItem>
+                      <SelectItem value="7">Last 7 days</SelectItem>
+                      <SelectItem value="14">Last 14 days</SelectItem>
+                      <SelectItem value="30">Last 30 days</SelectItem>
+                      <SelectItem value="60">Last 60 days</SelectItem>
+                      <SelectItem value="90">Last 90 days</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div>
                   <label className="block text-sm text-white/70 mb-1">Tenant Scope</label>
-                  <select
-                    value={formData.tenantId || ""}
-                    onChange={(e) => setFormData({ ...formData, tenantId: e.target.value ? Number(e.target.value) : undefined })}
-                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none"
-                  >
-                    <option value="">All Tenants (Global)</option>
-                    {tenants?.map((t: { id: number; name: string }) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
+                  <Select value={formData.tenantId ? String(formData.tenantId) : "all"} onValueChange={(v) => setFormData({ ...formData, tenantId: v === "all" ? undefined : Number(v) })}>
+                    <SelectTrigger className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Tenants (Global)</SelectItem>
+                      {tenants?.map((t: { id: number; name: string }) => (
+                        <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 

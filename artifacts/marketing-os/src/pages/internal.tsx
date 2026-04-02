@@ -3,6 +3,7 @@ import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, us
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
@@ -286,16 +287,17 @@ export default function Internal() {
           </div>
           <div className="flex items-center gap-3">
             {data?.tenants && data.tenants.length > 0 && (
-              <select
-                value={syncTenantId ?? ""}
-                onChange={(e) => setSyncTenantId(e.target.value ? Number(e.target.value) : null)}
-                className="bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <option value="">All Tenants</option>
-                {data.tenants.map((t) => (
-                  <option key={t.tenantId} value={t.tenantId}>{t.tenantName}</option>
-                ))}
-              </select>
+              <Select value={syncTenantId != null ? String(syncTenantId) : "all"} onValueChange={(v) => setSyncTenantId(v === "all" ? null : Number(v))}>
+                <SelectTrigger className="bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-primary/50 w-auto min-w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Tenants</SelectItem>
+                  {data.tenants.map((t) => (
+                    <SelectItem key={t.tenantId} value={String(t.tenantId)}>{t.tenantName}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
               <RefreshCw className="w-3 h-3" /> Refresh
@@ -516,41 +518,43 @@ function BudgetControlsSection({ tenants, apiBase }: { tenants: Array<{ tenantId
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground uppercase tracking-wider">Client</label>
-          <select
-            value={selectedTenant}
-            onChange={(e) => setSelectedTenant(e.target.value ? Number(e.target.value) : "")}
-            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="">Select client</option>
-            {tenants.map((t) => (
-              <option key={t.tenantId} value={t.tenantId}>{t.tenantName}</option>
-            ))}
-          </select>
+          <Select value={selectedTenant ? String(selectedTenant) : "none"} onValueChange={(v) => setSelectedTenant(v === "none" ? "" : Number(v))}>
+            <SelectTrigger className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Select client</SelectItem>
+              {tenants.map((t) => (
+                <SelectItem key={t.tenantId} value={String(t.tenantId)}>{t.tenantName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground uppercase tracking-wider">Platform</label>
-          <select
-            value={platform}
-            onChange={(e) => setPlatform(e.target.value as "google_ads" | "meta")}
-            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="google_ads">Google Ads</option>
-            <option value="meta">Meta</option>
-          </select>
+          <Select value={platform} onValueChange={(v) => setPlatform(v as "google_ads" | "meta")}>
+            <SelectTrigger className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="google_ads">Google Ads</SelectItem>
+              <SelectItem value="meta">Meta</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground uppercase tracking-wider">Campaign</label>
-          <select
-            value={campaignId}
-            onChange={(e) => setCampaignId(e.target.value)}
-            disabled={!selectedTenant || campaignsLoading}
-            className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50"
-          >
-            <option value="">{campaignsLoading ? "Loading..." : !selectedTenant ? "Select client first" : campaigns.length === 0 ? "No campaigns" : "Select campaign"}</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.externalId}>{c.name} ({c.externalId})</option>
-            ))}
-          </select>
+          <Select value={campaignId || "none"} onValueChange={(v) => setCampaignId(v === "none" ? "" : v)} disabled={!selectedTenant || campaignsLoading}>
+            <SelectTrigger className="w-full bg-background/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50">
+              <SelectValue placeholder={campaignsLoading ? "Loading..." : !selectedTenant ? "Select client first" : campaigns.length === 0 ? "No campaigns" : "Select campaign"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">{campaignsLoading ? "Loading..." : !selectedTenant ? "Select client first" : campaigns.length === 0 ? "No campaigns" : "Select campaign"}</SelectItem>
+              {campaigns.map((c) => (
+                <SelectItem key={c.id} value={c.externalId}>{c.name} ({c.externalId})</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground uppercase tracking-wider">New Daily Budget ($)</label>

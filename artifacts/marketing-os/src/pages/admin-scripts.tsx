@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { GradientHeading, PremiumCard } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
 import ScriptManagement from "@/components/script-management";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -48,15 +49,16 @@ export default function AdminScripts() {
         <PremiumCard className="p-4">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <select
-              value={selectedTenantId ?? ""}
-              onChange={e => setSelectedTenantId(parseInt(e.target.value))}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              {tenants.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+            <Select value={selectedTenantId != null ? String(selectedTenantId) : ""} onValueChange={v => setSelectedTenantId(parseInt(v))}>
+              <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-auto min-w-[160px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map(t => (
+                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </PremiumCard>
       )}

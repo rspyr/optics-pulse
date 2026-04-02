@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Plus, Pencil, Trash2, X, Save } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -90,14 +91,15 @@ export default function AdminChangeLogs() {
           <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE MARKETING CHANGES SHOWN ON CLIENT CHARTS</p>
         </div>
         <div className="flex items-center gap-3">
-          <select
-            value={filterTenant}
-            onChange={e => setFilterTenant(e.target.value ? Number(e.target.value) : "")}
-            className="bg-card border border-white/10 text-white text-sm rounded-lg px-4 py-2"
-          >
-            <option value="">All Tenants</option>
-            {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <Select value={filterTenant ? String(filterTenant) : "all"} onValueChange={v => setFilterTenant(v === "all" ? "" : Number(v))}>
+            <SelectTrigger className="bg-card border border-white/10 text-white text-sm rounded-lg px-4 py-2 w-auto min-w-[160px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Tenants</SelectItem>
+              {tenants.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <button onClick={openNew} className="bg-primary hover:bg-primary/90 text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(242,5,5,0.3)]">
             <Plus className="w-4 h-4" /> Add Entry
           </button>
@@ -114,10 +116,15 @@ export default function AdminChangeLogs() {
             {!editingId && (
               <div className="space-y-1">
                 <label className="text-sm text-gray-300">Tenant</label>
-                <select value={form.tenantId} onChange={e => setForm({...form, tenantId: e.target.value})} className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5">
-                  <option value="">Select tenant</option>
-                  {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+                <Select value={form.tenantId || "none"} onValueChange={v => setForm({...form, tenantId: v === "none" ? "" : v})}>
+                  <SelectTrigger className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Select tenant</SelectItem>
+                    {tenants.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             <div className="space-y-1">
@@ -126,9 +133,14 @@ export default function AdminChangeLogs() {
             </div>
             <div className="space-y-1">
               <label className="text-sm text-gray-300">Category</label>
-              <select value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5">
-                {CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
-              </select>
+              <Select value={form.category} onValueChange={v => setForm({...form, category: v})}>
+                <SelectTrigger className="w-full bg-background border border-white/10 text-white rounded-lg px-4 py-2.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1 md:col-span-2">
               <label className="text-sm text-gray-300">Title</label>

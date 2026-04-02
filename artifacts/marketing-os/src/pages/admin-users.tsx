@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useListTenants } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Plus, Edit2, X, Check, UserCog, Trash2 } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -142,15 +143,23 @@ export default function AdminUsers() {
               placeholder="Email" type="email" className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
             <input value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
               placeholder="Password" type="password" className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            <select value={form.role} onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))}
-              className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-              {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-            </select>
-            <select value={form.tenantId} onChange={(e) => setForm(f => ({ ...f, tenantId: e.target.value }))}
-              className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-              <option value="">No Tenant (Agency)</option>
-              {tenants?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <Select value={form.role} onValueChange={(v) => setForm(f => ({ ...f, role: v }))}>
+              <SelectTrigger className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ROLES.map(r => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={form.tenantId || "none"} onValueChange={(v) => setForm(f => ({ ...f, tenantId: v === "none" ? "" : v }))}>
+              <SelectTrigger className="bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No Tenant (Agency)</SelectItem>
+                {tenants?.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex gap-2 mt-4">
             <button onClick={handleCreate} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm">
@@ -186,15 +195,25 @@ export default function AdminUsers() {
                       <td className="p-4"><input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" /></td>
                       <td className="p-4"><input value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" /></td>
                       <td className="p-4">
-                        <select value={form.role} onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
-                          {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                        </select>
+                        <Select value={form.role} onValueChange={(v) => setForm(f => ({ ...f, role: v }))}>
+                          <SelectTrigger className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ROLES.map(r => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       </td>
                       <td className="p-4">
-                        <select value={form.tenantId} onChange={(e) => setForm(f => ({ ...f, tenantId: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
-                          <option value="">None</option>
-                          {tenants?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                        </select>
+                        <Select value={form.tenantId || "none"} onValueChange={(v) => setForm(f => ({ ...f, tenantId: v === "none" ? "" : v }))}>
+                          <SelectTrigger className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">None</SelectItem>
+                            {tenants?.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       </td>
                       <td className="p-4"><Badge variant={user.isActive ? "success" : "danger"}>{user.isActive ? "Active" : "Inactive"}</Badge></td>
                       <td className="p-4 text-right space-x-2">
