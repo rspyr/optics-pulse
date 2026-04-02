@@ -393,10 +393,12 @@ export default function LeadDetailScreen() {
     }
   };
 
-  const handleText = () => {
+  const handleText = async () => {
     if (lead?.phone) {
       try {
-        Linking.openURL(`sms:${lead.phone.replace(/\D/g, "")}`);
+        const smsUrl = `sms:${lead.phone.replace(/\D/g, "")}`;
+        const canOpen = await Linking.canOpenURL(smsUrl);
+        if (canOpen) await Linking.openURL(smsUrl);
       } catch {}
     }
     if (lead?.hubStatus === "appt_booked") {
