@@ -120,13 +120,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: errorBody.error || "Login failed" };
       }
 
-      const cookie = extractSetCookie(res.headers);
+      const data = await res.json();
+
+      const cookie = data.sessionToken || extractSetCookie(res.headers);
       if (cookie) {
         setSessionCookie(cookie);
         await storeValue("pulse_session", cookie);
       }
 
-      const data = await res.json();
       setUser(data as AuthUser);
       return { success: true };
     } catch (err) {

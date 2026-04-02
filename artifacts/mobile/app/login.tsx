@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -50,10 +51,12 @@ export default function LoginScreen() {
     >
       <View style={[styles.inner, { paddingTop: insets.top + 60, paddingBottom: insets.bottom + 20 }]}>
         <View style={styles.logoSection}>
-          <View style={[styles.iconCircle, { backgroundColor: colors.primary + "20" }]}>
-            <Feather name="zap" size={36} color={colors.primary} />
-          </View>
-          <Text style={[styles.title, { color: colors.foreground }]}>Pulse</Text>
+          <Image
+            source={require("@/assets/pulse-logo.png")}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+          <Text style={[styles.title, { color: colors.foreground }]}>PULSE</Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
             Speed-to-lead command center
           </Text>
@@ -121,15 +124,13 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   inner: { flex: 1, paddingHorizontal: 24, justifyContent: "center" },
   logoSection: { alignItems: "center", marginBottom: 48 },
-  iconCircle: {
+  logo: {
     width: 72,
     height: 72,
-    borderRadius: 36,
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: 16,
+    borderRadius: 16,
   },
-  title: { fontSize: 32, fontFamily: "Inter_700Bold", marginBottom: 4 },
+  title: { fontSize: 28, fontFamily: "Inter_700Bold", marginBottom: 4, letterSpacing: 4 },
   subtitle: { fontSize: 15, fontFamily: "Inter_400Regular" },
   form: { gap: 14 },
   errorBanner: {

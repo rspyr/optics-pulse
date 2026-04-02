@@ -7,6 +7,7 @@ import {
   RefreshControl,
   Platform,
   TouchableOpacity,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -27,6 +28,34 @@ interface HudStats {
   bonusTier: string;
 }
 
+type HudTimeframe = "today" | "7d" | "30d" | "90d";
+
+const TIMEFRAME_LABELS: Record<HudTimeframe, string> = {
+  today: "Today",
+  "7d": "7D",
+  "30d": "30D",
+  "90d": "90D",
+};
+
+function getTimeframeDates(tf: HudTimeframe): { startDate: string; endDate: string } | null {
+  if (tf === "today") return null;
+  const now = new Date();
+  const end = now.toISOString();
+  const start = new Date();
+  if (tf === "7d") start.setDate(start.getDate() - 7);
+  else if (tf === "30d") start.setDate(start.getDate() - 30);
+  else if (tf === "90d") start.setDate(start.getDate() - 90);
+  start.setHours(0, 0, 0, 0);
+  return { startDate: start.toISOString(), endDate: end };
+}
+
+function getTimeframeLabel(tf: HudTimeframe): string {
+  if (tf === "today") return "today";
+  if (tf === "7d") return "past 7 days";
+  if (tf === "30d") return "past 30 days";
+  return "past 90 days";
+}
+
 function formatSpeed(seconds: number): string {
   if (seconds <= 0) return "--";
   if (seconds < 60) return `${seconds}s`;
@@ -37,11 +66,11 @@ function formatSpeed(seconds: number): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
-function getTierColor(tier: string, colors: ReturnType<typeof useColors>): string {
+function getTierColor(tier: string): string {
   if (tier === "gold") return "#FFD700";
   if (tier === "silver") return "#C0C0C0";
   if (tier === "bronze") return "#CD7F32";
-  return colors.mutedForeground;
+  return "#8B919E";
 }
 
 export default function HudScreen() {
@@ -52,17 +81,26 @@ export default function HudScreen() {
   const insets = useSafeAreaInsets();
   const [stats, setStats] = useState<HudStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [timeframe, setTimeframe] = useState<HudTimeframe>("today");
   const isWeb = Platform.OS === "web";
 
   const fetchStats = useCallback(async () => {
     if (!user) return;
     try {
-      const data = await apiFetch("/api/leads/hud/stats");
+      let url = "/api/leads/hud/stats";
+      const dates = getTimeframeDates(timeframe);
+      if (dates) {
+        const params = new URLSearchParams();
+        params.set("startDate", dates.startDate);
+        params.set("endDate", dates.endDate);
+        url += `?${params.toString()}`;
+      }
+      const data = await apiFetch(url);
       setStats(data);
     } catch (err) {
       console.error("[HUD] Failed to fetch stats:", err);
     }
-  }, [apiFetch, user]);
+  }, [apiFetch, user, timeframe]);
 
   useEffect(() => {
     fetchStats();
@@ -94,6 +132,13 @@ export default function HudScreen() {
     setRefreshing(false);
   };
 
+  const handleTimeframeChange = (tf: HudTimeframe) => {
+    setTimeframe(tf);
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+  };
+
+  const tfLabel = getTimeframeLabel(timeframe);
+
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
@@ -107,9 +152,16 @@ export default function HudScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
     >
       <View style={styles.header}>
-        <View>
-          <Text style={[styles.greeting, { color: colors.mutedForeground }]}>Welcome back</Text>
-          <Text style={[styles.userName, { color: colors.foreground }]}>{user?.name || "Agent"}</Text>
+        <View style={styles.headerLeft}>
+          <Image
+            source={require("@/assets/pulse-logo.png")}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          <View>
+            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>Welcome back</Text>
+            <Text style={[styles.userName, { color: colors.foreground }]}>{user?.name || "Agent"}</Text>
+          </View>
         </View>
         <View style={styles.headerRight}>
           <View style={styles.liveIndicator}>
@@ -124,10 +176,31 @@ export default function HudScreen() {
         </View>
       </View>
 
+      <View style={[styles.timeframeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {(["today", "7d", "30d", "90d"] as HudTimeframe[]).map(tf => (
+          <TouchableOpacity
+            key={tf}
+            style={[
+              styles.timeframeBtn,
+              timeframe === tf && { backgroundColor: "rgba(255,255,255,0.1)" },
+            ]}
+            onPress={() => handleTimeframeChange(tf)}
+            activeOpacity={0.7}
+          >
+            <Text style={[
+              styles.timeframeText,
+              { color: timeframe === tf ? "#FFFFFF" : "rgba(255,255,255,0.4)" },
+            ]}>
+              {TIMEFRAME_LABELS[tf]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {stats?.bonusTier && stats.bonusTier !== "none" && (
-        <View style={[styles.tierBanner, { backgroundColor: getTierColor(stats.bonusTier, colors) + "15", borderColor: getTierColor(stats.bonusTier, colors) + "30" }]}>
-          <Feather name="award" size={18} color={getTierColor(stats.bonusTier, colors)} />
-          <Text style={[styles.tierText, { color: getTierColor(stats.bonusTier, colors) }]}>
+        <View style={[styles.tierBanner, { backgroundColor: getTierColor(stats.bonusTier) + "15", borderColor: getTierColor(stats.bonusTier) + "30" }]}>
+          <Feather name="award" size={18} color={getTierColor(stats.bonusTier)} />
+          <Text style={[styles.tierText, { color: getTierColor(stats.bonusTier) }]}>
             {stats.bonusTier.charAt(0).toUpperCase() + stats.bonusTier.slice(1)} Tier — {stats.bookingRate}% booking rate
           </Text>
         </View>
@@ -137,13 +210,13 @@ export default function HudScreen() {
         <View style={styles.statsRow}>
           <StatCard
             icon="phone-call"
-            label="Calls"
+            label={`Calls ${tfLabel}`}
             value={stats?.callsMadeToday ?? 0}
             color={colors.primary}
           />
           <StatCard
             icon="calendar"
-            label="Booked"
+            label={`Booked ${tfLabel}`}
             value={stats?.bookingsToday ?? 0}
             color={colors.emerald}
           />
@@ -172,7 +245,7 @@ export default function HudScreen() {
           />
           <StatCard
             icon="inbox"
-            label="New Leads"
+            label={`New Leads ${tfLabel}`}
             value={stats?.newLeadsToday ?? 0}
             color={colors.purple}
           />
@@ -186,6 +259,8 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { paddingHorizontal: 16, gap: 16 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
+  headerLogo: { width: 36, height: 36, borderRadius: 8 },
   greeting: { fontSize: 13, fontFamily: "Inter_400Regular" },
   userName: { fontSize: 22, fontFamily: "Inter_700Bold" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -193,6 +268,23 @@ const styles = StyleSheet.create({
   liveDot: { width: 7, height: 7, borderRadius: 4 },
   liveText: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 1 },
   logoutBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  timeframeRow: {
+    flexDirection: "row",
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 3,
+    gap: 2,
+  },
+  timeframeBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 7,
+    alignItems: "center",
+  },
+  timeframeText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
   tierBanner: {
     flexDirection: "row",
     alignItems: "center",

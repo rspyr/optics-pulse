@@ -71,13 +71,14 @@ A native mobile app (`artifacts/mobile`) for sales reps/lead coordinators, mirro
 
 **Architecture:**
 - **Framework:** Expo (React Native) with expo-router file-based routing
-- **Auth:** Session-based — `mos.sid` cookie extracted from `Set-Cookie` header and stored in SecureStore (native) or localStorage (web). Passed via `Cookie` header in all API requests and Socket.IO `extraHeaders`.
-- **Real-time:** Socket.IO client connected with session cookie auth, path `/api/socket.io`
+- **Auth:** Session-based — on native, login endpoint returns signed `sessionToken` in response body (only for mobile user-agents) using HMAC-SHA256 matching express-session's cookie-signature. Token stored in SecureStore (native) or localStorage (web). Passed via `Cookie` header in all API requests and Socket.IO `extraHeaders`.
+- **Real-time:** Socket.IO client connected with session cookie auth, path `/api/socket.io`. Both web and mobile apps listen to `new-lead`, `lead-updated`, and `hud-stats` events for seamless cross-platform sync.
 - **Push Notifications:** Expo Push API — tokens stored in `push_tokens` DB table, backend fires notifications on `emitNewLead` events via dynamic import of push-notifications service
+- **Branding:** Matches web app exactly — Rebel Red (#F20505) primary, Midnight Sky (#0A0F1F) background, Card (#0B1224), Stratos (#002D5E) secondary, Pulse logo on login/dashboard
 
 **Screens:**
-- **Login** (`app/login.tsx`): Email/password auth with dark Pulse branding
-- **Dashboard** (`app/(tabs)/index.tsx`): HUD with live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback
+- **Login** (`app/login.tsx`): Email/password auth with Pulse logo and Rebel Red branding
+- **Dashboard** (`app/(tabs)/index.tsx`): HUD with date filters (Today/7D/30D/90D), live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback
 - **Lead Queue** (`app/(tabs)/queue.tsx`): Tabbed filtering (New, Re-engage, Callbacks, Old), pull-to-refresh, real-time updates
 - **Lead Detail** (`app/lead/[id].tsx`): Click-to-dial/SMS, action logging (call/text/VM), appointment booking, mark dead, activity history
 

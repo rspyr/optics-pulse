@@ -1,8 +1,17 @@
 import { Router, type IRouter } from "express";
+import crypto from "crypto";
 import { db, usersTable, tenantsTable, userLoginSessionsTable } from "@workspace/db";
 import { eq, and, isNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { requireAuth } from "../middleware/auth";
+
+const SESSION_SECRET = process.env.SESSION_SECRET || "mos-dev-secret-change-in-production";
+
+function buildSessionCookie(sessionId: string): string {
+  const signed = "s:" + sessionId + "." +
+    crypto.createHmac("sha256", SESSION_SECRET).update(sessionId).digest("base64").replace(/=+$/, "");
+  return "mos.sid=" + encodeURIComponent(signed);
+}
 
 const router: IRouter = Router();
 
@@ -60,6 +69,9 @@ router.post("/auth/login", async (req, res) => {
         }
       }
 
+      const isMobile = /expo|react-native|okhttp/i.test(req.headers["user-agent"] || "");
+      const sessionToken = isMobile ? buildSessionCookie(req.sessionID) : undefined;
+
       res.json({
         id: user.id,
         email: user.email,
@@ -68,6 +80,7 @@ router.post("/auth/login", async (req, res) => {
         tenantId: user.tenantId,
         tenantName,
         leaderboardConfig,
+        ...(sessionToken ? { sessionToken } : {}),
       });
     });
   } catch (error: unknown) {
