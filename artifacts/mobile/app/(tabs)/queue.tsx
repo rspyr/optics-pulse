@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,8 +9,6 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
-  AppState,
-  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -71,61 +69,6 @@ const EMPTY_MESSAGES: Record<Tab, string> = {
   archive: "No archived leads.",
 };
 
-function NewLeadToast({ lead, onPress, onDismiss }: { lead: QueueLead; onPress: () => void; onDismiss: () => void }) {
-  const colors = useColors();
-  const slideAnim = useRef(new Animated.Value(-120)).current;
-  const progressAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 300 }).start();
-    Animated.timing(progressAnim, { toValue: 0, duration: 60000, useNativeDriver: false }).start();
-    const timer = setTimeout(onDismiss, 60000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
-
-  return (
-    <Animated.View style={[toastStyles.container, { transform: [{ translateY: slideAnim }] }]}>
-      <TouchableOpacity
-        style={[toastStyles.card, { backgroundColor: "#7f1d1d", borderColor: "#F2050566" }]}
-        onPress={onPress}
-        activeOpacity={0.85}
-      >
-        <View style={toastStyles.topRow}>
-          <View style={toastStyles.pulseWrap}>
-            <View style={[toastStyles.pulseDot, { backgroundColor: "#F20505" }]} />
-          </View>
-          <Text style={toastStyles.toastTitle}>New Lead!</Text>
-          <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Feather name="x" size={16} color="rgba(255,255,255,0.4)" />
-          </TouchableOpacity>
-        </View>
-        <Text style={toastStyles.toastName}>{lead.firstName} {lead.lastName}</Text>
-        <View style={toastStyles.toastMeta}>
-          {lead.source && <Text style={toastStyles.toastSource}>{lead.source}</Text>}
-          {lead.phone && <Text style={toastStyles.toastPhone}>{lead.phone}</Text>}
-        </View>
-        <Animated.View style={[toastStyles.progressBar, { width: progressWidth }]} />
-      </TouchableOpacity>
-    </Animated.View>
-  );
-}
-
-const toastStyles = StyleSheet.create({
-  container: { position: "absolute", top: 0, left: 16, right: 16, zIndex: 100 },
-  card: { borderRadius: 12, borderWidth: 1, padding: 14, overflow: "hidden" },
-  topRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
-  pulseWrap: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
-  pulseDot: { width: 10, height: 10, borderRadius: 5 },
-  toastTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_700Bold", color: "#F87171" },
-  toastName: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#FFFFFF" },
-  toastMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
-  toastSource: { fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" },
-  toastPhone: { fontSize: 11, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.3)" },
-  progressBar: { position: "absolute", bottom: 0, left: 0, height: 2, backgroundColor: "rgba(242,5,5,0.6)" },
-});
-
 export default function QueueScreen() {
   const { user } = useAuth();
   const { on, off } = useSocket();
@@ -140,9 +83,6 @@ export default function QueueScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
-
-  const [toastLead, setToastLead] = useState<QueueLead | null>(null);
-  const recentToastIds = useRef(new Set<number>());
 
   const fetchQueue = useCallback(async () => {
     if (!user) return;
@@ -181,16 +121,7 @@ export default function QueueScreen() {
   }, [fetchQueue]);
 
   useEffect(() => {
-    const handleNewLead = (data: QueueLead) => {
-      fetchQueue();
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      if (data && data.id && AppState.currentState === "active" && !recentToastIds.current.has(data.id)) {
-        recentToastIds.current.add(data.id);
-        setTimeout(() => recentToastIds.current.delete(data.id), 120000);
-        setToastLead(data);
-      }
-    };
+    const handleNewLead = () => { fetchQueue(); };
     const handleUpdate = () => fetchQueue();
     on("new-lead", handleNewLead);
     on("lead-updated", handleUpdate);
@@ -357,19 +288,6 @@ export default function QueueScreen() {
         />
       )}
 
-      {toastLead && (
-        <View style={{ position: "absolute", top: isWeb ? 67 + 56 : insets.top + 56, left: 0, right: 0, zIndex: 100 }}>
-          <NewLeadToast
-            lead={toastLead}
-            onPress={() => {
-              const id = toastLead.id;
-              setToastLead(null);
-              router.push({ pathname: "/lead/[id]", params: { id: String(id), lead: JSON.stringify(toastLead) } });
-            }}
-            onDismiss={() => setToastLead(null)}
-          />
-        </View>
-      )}
     </View>
   );
 }

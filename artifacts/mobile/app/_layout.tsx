@@ -18,6 +18,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { SocketProvider } from "@/contexts/SocketContext";
 import { TenantProvider } from "@/contexts/TenantContext";
 import { CsrFilterProvider } from "@/contexts/CsrFilterContext";
+import { NewLeadToastProvider } from "@/contexts/NewLeadToastContext";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useColors } from "@/hooks/useColors";
 
@@ -86,12 +87,14 @@ export default function RootLayout() {
             <SocketProvider>
               <TenantProvider>
                 <CsrFilterProvider>
-                  <GestureHandlerRootView>
-                    <KeyboardProvider>
-                      <PushRegistrar />
-                      <RootLayoutNav />
-                    </KeyboardProvider>
-                  </GestureHandlerRootView>
+                  <NewLeadToastProvider>
+                    <GestureHandlerRootView>
+                      <KeyboardProvider>
+                        <PushRegistrar />
+                        <RootLayoutNav />
+                      </KeyboardProvider>
+                    </GestureHandlerRootView>
+                  </NewLeadToastProvider>
                 </CsrFilterProvider>
               </TenantProvider>
             </SocketProvider>
