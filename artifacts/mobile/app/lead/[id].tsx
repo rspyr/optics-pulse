@@ -37,7 +37,7 @@ type ActionStep =
   | "appt_booked_flow"
   | "appt_cancel_reason";
 
-type DetailTab = "actions" | "details" | "messages" | "history";
+type DetailTab = "history" | "conversation";
 
 const CALL_RESULTS = [
   { value: "no_answer", label: "No Answer" },
@@ -148,6 +148,28 @@ interface PodiumMessage {
   senderName?: string;
 }
 
+interface TimelineEntry {
+  type: "pulse_action" | "podium_text" | "podium_call";
+  source: string;
+  timestamp: string;
+  id: number;
+  actionType?: string;
+  method?: string;
+  callResult?: string;
+  textResult?: string;
+  vmResult?: string;
+  deadReason?: string;
+  outcome?: string;
+  notes?: string;
+  csrName?: string;
+  userId?: number;
+  direction?: string;
+  body?: string;
+  channelType?: string;
+  senderName?: string;
+  deliveryStatus?: string;
+}
+
 function formatPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
@@ -175,10 +197,19 @@ export default function LeadDetailScreen() {
   });
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [messages, setMessages] = useState<PodiumMessage[]>([]);
-  const [activeTab, setActiveTab] = useState<DetailTab>("actions");
+  const [activeTab, setActiveTab] = useState<DetailTab>("history");
   const [newMessage, setNewMessage] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const [unifiedTimeline, setUnifiedTimeline] = useState<TimelineEntry[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
+  const [editSaving, setEditSaving] = useState(false);
+  const [commConfig, setCommConfig] = useState<{ textPlatform: string }>({ textPlatform: "native" });
 
   const [actionStep, setActionStep] = useState<ActionStep>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -256,6 +287,18 @@ export default function LeadDetailScreen() {
     }
   }, [apiFetch, params.id, tenantQs]);
 
+  const fetchTimeline = useCallback(async () => {
+    try {
+      setTimelineLoading(true);
+      const data = await apiFetch(`/api/podium/timeline/${params.id}${tenantQs}`);
+      setUnifiedTimeline(data.timeline || []);
+    } catch {
+      setUnifiedTimeline([]);
+    } finally {
+      setTimelineLoading(false);
+    }
+  }, [apiFetch, params.id, tenantQs]);
+
   const fetchMessages = useCallback(async () => {
     try {
       const data = await apiFetch(`/api/podium/conversations/${params.id}${tenantQs}`);
@@ -263,13 +306,22 @@ export default function LeadDetailScreen() {
     } catch {}
   }, [apiFetch, params.id, tenantQs]);
 
+  const fetchCommConfig = useCallback(async () => {
+    try {
+      const data = await apiFetch(`/api/leads/comm-config${tenantQs}`);
+      setCommConfig({ textPlatform: data.textPlatform || "native" });
+    } catch {}
+  }, [apiFetch, tenantQs]);
+
   useEffect(() => {
     const init = async () => {
       const hasLead = lead ? true : await fetchLead();
       if (hasLead) {
         fetchHistory();
+        fetchTimeline();
       }
       fetchMessages();
+      fetchCommConfig();
     };
     init();
   }, []);
@@ -286,11 +338,12 @@ export default function LeadDetailScreen() {
     const handler = (data: { leadId?: number }) => {
       if (data?.leadId === Number(params.id)) {
         fetchMessages();
+        fetchTimeline();
       }
     };
     on("podium-message", handler);
     return () => off("podium-message", handler);
-  }, [on, off, params.id, fetchMessages]);
+  }, [on, off, params.id, fetchMessages, fetchTimeline]);
 
   const logAction = async (body: Record<string, unknown>) => {
     setActionLoading(true);
@@ -306,6 +359,7 @@ export default function LeadDetailScreen() {
       setCancelReason("");
       fetchLead();
       fetchHistory();
+      fetchTimeline();
     } catch (err) {
       showFeedback("error", err instanceof Error ? err.message : "Failed to log action");
     } finally {
@@ -313,12 +367,24 @@ export default function LeadDetailScreen() {
     }
   };
 
-  const handleCall = () => {
+  const handleCall = async () => {
     if (blocksCall) {
       showFeedback("error", "This lead has a contact restriction that prevents calls");
       return;
     }
-    if (lead?.phone) Linking.openURL(`tel:${lead.phone.replace(/\D/g, "")}`);
+    if (lead?.phone) {
+      const telUrl = `tel:${lead.phone.replace(/\D/g, "")}`;
+      try {
+        const canOpen = await Linking.canOpenURL(telUrl);
+        if (canOpen) {
+          await Linking.openURL(telUrl);
+        } else {
+          showFeedback("error", "Phone calls are not supported on this device");
+        }
+      } catch {
+        showFeedback("error", "Could not open the phone dialer");
+      }
+    }
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("call");
       setActionStep("appt_booked_flow");
@@ -328,7 +394,11 @@ export default function LeadDetailScreen() {
   };
 
   const handleText = () => {
-    if (lead?.phone) Linking.openURL(`sms:${lead.phone.replace(/\D/g, "")}`);
+    if (lead?.phone) {
+      try {
+        Linking.openURL(`sms:${lead.phone.replace(/\D/g, "")}`);
+      } catch {}
+    }
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("text");
       setActionStep("appt_booked_flow");
@@ -376,10 +446,11 @@ export default function LeadDetailScreen() {
     try {
       await apiFetch("/api/podium/messages" + tenantQs, {
         method: "POST",
-        body: JSON.stringify({ leadId: Number(params.id), message: newMessage.trim() }),
+        body: JSON.stringify({ leadId: Number(params.id), body: newMessage.trim() }),
       });
       setNewMessage("");
       fetchMessages();
+      fetchTimeline();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {
       Alert.alert("Error", "Failed to send message. Make sure Podium is connected.");
@@ -395,7 +466,7 @@ export default function LeadDetailScreen() {
           <>
             <Feather name="alert-circle" size={48} color={colors.red} />
             <Text style={{ color: colors.foreground, marginTop: 12, fontSize: 16 }}>{fetchError}</Text>
-            <TouchableOpacity onPress={async () => { const ok = await fetchLead(); if (ok) { fetchHistory(); fetchMessages(); } }} style={{ marginTop: 16, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }}>
+            <TouchableOpacity onPress={async () => { const ok = await fetchLead(); if (ok) { fetchHistory(); fetchTimeline(); fetchMessages(); fetchCommConfig(); } else { setTimelineLoading(false); } }} style={{ marginTop: 16, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }}>
               <Text style={{ color: "#fff", fontWeight: "600" }}>Retry</Text>
             </TouchableOpacity>
           </>
@@ -410,12 +481,90 @@ export default function LeadDetailScreen() {
   const statusColor = dayBadge?.color || colors.primary;
   const isTerminal = lead.hubStatus === "appt_set" || lead.hubStatus === "dead";
 
+  const isPodiumConnected = commConfig.textPlatform === "podium";
+
   const DETAIL_TABS: { key: DetailTab; label: string; icon: keyof typeof Feather.glyphMap; badge?: number }[] = [
-    { key: "actions", label: "Actions", icon: "zap" },
-    { key: "details", label: "Details", icon: "file-text" },
-    { key: "messages", label: "Messages", icon: "message-circle", badge: messages.length },
-    { key: "history", label: "History", icon: "clock", badge: history.length },
+    { key: "history", label: "History", icon: "clock" },
+    ...(isPodiumConnected ? [{ key: "conversation" as DetailTab, label: "Conversation", icon: "message-circle" as keyof typeof Feather.glyphMap }] : []),
   ];
+
+  const toggleCallExpand = (id: number) => {
+    setExpandedCallIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const startEdit = (entry: TimelineEntry) => {
+    setEditingId(entry.id);
+    setEditForm({
+      actionType: entry.actionType || entry.method || "",
+      notes: entry.notes || "",
+      callResult: entry.callResult || "",
+      textResult: entry.textResult || "",
+      vmResult: entry.vmResult || "",
+      deadReason: entry.deadReason || "",
+    });
+  };
+
+  const saveEdit = async (entry: TimelineEntry) => {
+    setEditSaving(true);
+    try {
+      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: editForm.deadReason || null };
+      const method = editForm.actionType || entry.actionType || entry.method;
+      if (method === "call") body.callResult = editForm.callResult || null;
+      if (method === "text") body.textResult = editForm.textResult || null;
+      if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
+
+      await apiFetch(`/api/leads-hub/action/${entry.id}${tenantQs}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      setEditingId(null);
+      fetchTimeline();
+      fetchHistory();
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const getTimelineIcon = (entry: TimelineEntry): { name: keyof typeof Feather.glyphMap; color: string } => {
+    if (entry.type === "podium_text") return { name: "message-square", color: "#3B82F6" };
+    if (entry.type === "podium_call") return { name: "phone", color: "#06B6D4" };
+    if (entry.actionType === "call" || entry.method === "call") return { name: "phone", color: colors.foreground };
+    if (entry.actionType === "text" || entry.method === "text") return { name: "message-square", color: colors.foreground };
+    if (entry.actionType === "voicemail_drop" || entry.method === "voicemail") return { name: "voicemail", color: colors.foreground };
+    if (entry.method === "transfer") return { name: "user-plus", color: colors.foreground };
+    return { name: "clock", color: colors.foreground };
+  };
+
+  const getOutcomeLabel = (entry: TimelineEntry) => {
+    const result = entry.callResult || entry.textResult || entry.vmResult || entry.outcome;
+    return ((result as string) || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const canEditEntry = (entry: TimelineEntry) => {
+    if (entry.source !== "pulse") return false;
+    const isAdminRole = ["client_admin", "agency_user", "super_admin"].includes(user?.role || "");
+    return isAdminRole || entry.userId === user?.id;
+  };
+
+  const EDIT_ACTION_TYPES = [
+    { value: "call", label: "Call" },
+    { value: "text", label: "Text" },
+    { value: "voicemail_drop", label: "VM Drop" },
+  ];
+
+  const getEditOutcomeOptions = () => {
+    const m = editForm.actionType;
+    if (m === "call") return CALL_RESULTS;
+    if (m === "text") return TEXT_RESULTS;
+    if (m === "voicemail" || m === "voicemail_drop") return VM_RESULTS;
+    return [];
+  };
 
   return (
     <>
@@ -959,123 +1108,232 @@ export default function LeadDetailScreen() {
             })}
           </ScrollView>
 
-          {activeTab === "actions" && !isTerminal && actionStep === null && (
-            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-                Tap CALL, TEXT, or VM above to log an action
-              </Text>
+          {activeTab === "history" && (
+            <View style={styles.historyContainer}>
+              {timelineLoading ? (
+                <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
+              ) : unifiedTimeline.length === 0 ? (
+                <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={styles.emptyMessages}>
+                    <Feather name="clock" size={32} color={colors.mutedForeground} />
+                    <Text style={[styles.emptyMsgText, { color: colors.mutedForeground }]}>No actions logged yet</Text>
+                  </View>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.timelineLine}>
+                    {(timelineExpanded ? unifiedTimeline : unifiedTimeline.slice(0, 5)).map(entry => {
+                      const icon = getTimelineIcon(entry);
+                      const nodeColor = entry.source === "podium" ? "#3B82F620" : colors.card;
+                      const nodeBorder = entry.source === "podium" ? "#3B82F630" : colors.border;
+                      const isEditing = editingId === entry.id;
+
+                      return (
+                        <View key={`${entry.source}-${entry.id}`} style={styles.timelineRow}>
+                          <View style={styles.timelineNodeCol}>
+                            <View style={[styles.timelineNode, { backgroundColor: nodeColor, borderColor: nodeBorder }]}>
+                              <Feather name={icon.name} size={10} color={icon.color} />
+                            </View>
+                            <View style={[styles.timelineConnector, { backgroundColor: colors.border }]} />
+                          </View>
+
+                          <View style={styles.timelineContent}>
+                            {entry.source === "podium" && entry.type === "podium_text" && (
+                              <View style={[
+                                styles.messageBubble,
+                                entry.direction === "outbound"
+                                  ? { backgroundColor: "#3B82F615", borderColor: "#3B82F620", borderWidth: 1 }
+                                  : { backgroundColor: colors.secondary, borderColor: colors.border, borderWidth: 1 },
+                              ]}>
+                                <Text style={[styles.msgBody, { color: colors.foreground }]}>{entry.body || ""}</Text>
+                                <View style={styles.podiumMeta}>
+                                  <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                    {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </Text>
+                                  <View style={[styles.podiumBadge, { backgroundColor: "#3B82F615" }]}>
+                                    <Text style={{ fontSize: 9, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>Podium SMS</Text>
+                                  </View>
+                                  <Text style={{ fontSize: 9, color: entry.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
+                                    {entry.direction === "outbound" ? "Sent" : "Received"}
+                                  </Text>
+                                  {entry.deliveryStatus === "failed" && (
+                                    <Text style={{ fontSize: 9, color: "#EF4444", fontFamily: "Inter_600SemiBold" }}>Failed</Text>
+                                  )}
+                                </View>
+                              </View>
+                            )}
+
+                            {entry.source === "podium" && entry.type === "podium_call" && (
+                              <View>
+                                <TouchableOpacity
+                                  style={[styles.podiumCallBtn, { backgroundColor: "#06B6D408", borderColor: "#06B6D420" }]}
+                                  onPress={() => toggleCallExpand(entry.id)}
+                                  activeOpacity={0.7}
+                                >
+                                  <View style={styles.podiumCallRow}>
+                                    <Feather name="phone" size={12} color="#06B6D4" />
+                                    <Text style={{ fontSize: 13, color: "#67E8F9", fontFamily: "Inter_600SemiBold", flex: 1 }}>
+                                      {entry.direction === "inbound" ? "Incoming Call" : "Outgoing Call"}
+                                    </Text>
+                                    {entry.senderName && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>— {entry.senderName}</Text>}
+                                    <Feather name="chevron-down" size={14} color="#06B6D480" style={expandedCallIds.has(entry.id) ? { transform: [{ rotate: "180deg" }] } : {}} />
+                                  </View>
+                                  <View style={styles.podiumMeta}>
+                                    <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                      {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                    </Text>
+                                    <View style={[styles.podiumBadge, { backgroundColor: "#06B6D415" }]}>
+                                      <Text style={{ fontSize: 9, color: "#06B6D4", fontFamily: "Inter_600SemiBold" }}>Podium Call</Text>
+                                    </View>
+                                  </View>
+                                </TouchableOpacity>
+                                {expandedCallIds.has(entry.id) && entry.body && (
+                                  <View style={[styles.transcriptBlock, { borderLeftColor: "#06B6D420" }]}>
+                                    <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 4 }}>TRANSCRIPT / NOTES</Text>
+                                    <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_400Regular", lineHeight: 18 }}>{entry.body}</Text>
+                                  </View>
+                                )}
+                              </View>
+                            )}
+
+                            {entry.source === "pulse" && !isEditing && (
+                              <View style={styles.pulseEntry}>
+                                <View style={styles.pulseEntryHeader}>
+                                  <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                    {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </Text>
+                                  {entry.csrName && <Text style={{ fontSize: 11, color: colors.mutedForeground + "80", fontFamily: "Inter_400Regular" }}>{entry.csrName}</Text>}
+                                  <Text style={{ fontSize: 11, color: colors.foreground + "99", fontFamily: "Inter_600SemiBold" }}>{getOutcomeLabel(entry)}</Text>
+                                  {canEditEntry(entry) && (
+                                    <TouchableOpacity onPress={() => startEdit(entry)} style={styles.editBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                      <Feather name="edit-2" size={12} color={colors.mutedForeground} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                                {entry.notes && <Text style={[styles.historyNotes, { color: colors.foreground + "60" }]}>{entry.notes}</Text>}
+                              </View>
+                            )}
+
+                            {entry.source === "pulse" && isEditing && (
+                              <View style={[styles.editCard, { backgroundColor: colors.card, borderColor: "#F59E0B40" }]}>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                  <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                    {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </Text>
+                                  <Text style={{ fontSize: 11, color: "#F59E0B", fontFamily: "Inter_600SemiBold" }}>Editing</Text>
+                                </View>
+                                <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4 }}>Action Type</Text>
+                                <View style={styles.editPickerRow}>
+                                  {EDIT_ACTION_TYPES.map(at => (
+                                    <TouchableOpacity
+                                      key={at.value}
+                                      style={[styles.editPickerItem, {
+                                        backgroundColor: editForm.actionType === at.value ? colors.primary + "20" : colors.secondary,
+                                        borderColor: editForm.actionType === at.value ? colors.primary + "40" : colors.border,
+                                      }]}
+                                      onPress={() => setEditForm(f => ({ ...f, actionType: at.value, callResult: "", textResult: "", vmResult: "" }))}
+                                    >
+                                      <Text style={{ fontSize: 12, color: editForm.actionType === at.value ? colors.primary : colors.foreground, fontFamily: "Inter_500Medium" }}>{at.label}</Text>
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+                                {getEditOutcomeOptions().length > 0 && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Outcome</Text>
+                                    <View style={styles.editPickerRow}>
+                                      {getEditOutcomeOptions().map(opt => {
+                                        const val = editForm.actionType === "call" ? editForm.callResult : editForm.actionType === "text" ? editForm.textResult : editForm.vmResult;
+                                        return (
+                                          <TouchableOpacity
+                                            key={opt.value}
+                                            style={[styles.editPickerItem, {
+                                              backgroundColor: val === opt.value ? colors.primary + "20" : colors.secondary,
+                                              borderColor: val === opt.value ? colors.primary + "40" : colors.border,
+                                            }]}
+                                            onPress={() => {
+                                              const m = editForm.actionType;
+                                              if (m === "call") setEditForm(f => ({ ...f, callResult: opt.value }));
+                                              else if (m === "text") setEditForm(f => ({ ...f, textResult: opt.value }));
+                                              else setEditForm(f => ({ ...f, vmResult: opt.value }));
+                                            }}
+                                          >
+                                            <Text style={{ fontSize: 12, color: val === opt.value ? colors.primary : colors.foreground, fontFamily: "Inter_500Medium" }}>{opt.label}</Text>
+                                          </TouchableOpacity>
+                                        );
+                                      })}
+                                    </View>
+                                  </>
+                                )}
+                                {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Dead Reason</Text>
+                                    <View style={styles.editPickerRow}>
+                                      {DEAD_REASONS.map(dr => (
+                                        <TouchableOpacity
+                                          key={dr.value}
+                                          style={[styles.editPickerItem, {
+                                            backgroundColor: editForm.deadReason === dr.value ? "#EF444420" : colors.secondary,
+                                            borderColor: editForm.deadReason === dr.value ? "#EF444440" : colors.border,
+                                          }]}
+                                          onPress={() => setEditForm(f => ({ ...f, deadReason: dr.value }))}
+                                        >
+                                          <Text style={{ fontSize: 12, color: editForm.deadReason === dr.value ? "#EF4444" : colors.foreground, fontFamily: "Inter_500Medium" }}>{dr.label}</Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
+                                  </>
+                                )}
+                                <TextInput
+                                  style={[styles.editNotesInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
+                                  placeholder="Notes..."
+                                  placeholderTextColor={colors.mutedForeground}
+                                  value={editForm.notes}
+                                  onChangeText={t => setEditForm(f => ({ ...f, notes: t }))}
+                                />
+                                <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                                  <TouchableOpacity
+                                    style={[styles.editSaveBtn, { backgroundColor: "#F59E0B20" }]}
+                                    onPress={() => saveEdit(entry)}
+                                    disabled={editSaving}
+                                  >
+                                    {editSaving ? <ActivityIndicator size="small" color="#F59E0B" /> : <Text style={{ fontSize: 12, color: "#F59E0B", fontFamily: "Inter_600SemiBold" }}>Save</Text>}
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={[styles.editCancelBtn, { backgroundColor: colors.secondary }]}
+                                    onPress={() => setEditingId(null)}
+                                  >
+                                    <Text style={{ fontSize: 12, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold" }}>Cancel</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                  {unifiedTimeline.length > 5 && !timelineExpanded && (
+                    <TouchableOpacity onPress={() => setTimelineExpanded(true)} style={{ paddingLeft: 32, marginTop: 4 }}>
+                      <Text style={{ fontSize: 12, color: colors.primary, fontFamily: "Inter_500Medium" }}>
+                        Show {unifiedTimeline.length - 5} more...
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  {timelineExpanded && unifiedTimeline.length > 5 && (
+                    <TouchableOpacity onPress={() => setTimelineExpanded(false)} style={{ paddingLeft: 32, marginTop: 4 }}>
+                      <Text style={{ fontSize: 12, color: colors.primary, fontFamily: "Inter_500Medium" }}>Show less</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
             </View>
           )}
 
-          {activeTab === "actions" && isTerminal && (
-            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={styles.terminalState}>
-                <Feather
-                  name={lead.hubStatus === "appt_set" ? "check-circle" : "x-circle"}
-                  size={32}
-                  color={statusColor}
-                />
-                <Text style={[styles.terminalText, { color: colors.foreground }]}>
-                  {lead.hubStatus === "appt_set" ? "Appointment Set" : "Lead Marked Dead"}
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {activeTab === "details" && (
-            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Lead Details</Text>
-
-              {lead.appointmentDate && (
-                <View style={[styles.detailBlock, { backgroundColor: "#10B98110" }]}>
-                  <Feather name="calendar" size={16} color="#10B981" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailBlockLabel, { color: "#10B981" }]}>Appointment</Text>
-                    <Text style={[styles.detailBlockValue, { color: colors.foreground }]}>
-                      {lead.appointmentDate}{lead.appointmentTime ? ` at ${lead.appointmentTime}` : ""}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {lead.callbackAt && (
-                <View style={[styles.detailBlock, { backgroundColor: "#F59E0B10" }]}>
-                  <Feather name="clock" size={16} color="#F59E0B" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailBlockLabel, { color: "#F59E0B" }]}>Callback Scheduled</Text>
-                    <Text style={[styles.detailBlockValue, { color: colors.foreground }]}>
-                      {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {lead.address && (
-                <View style={styles.detailFieldRow}>
-                  <Feather name="map-pin" size={14} color={colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailFieldLabel, { color: colors.mutedForeground }]}>Address</Text>
-                    <Text style={[styles.detailFieldValue, { color: colors.foreground }]}>
-                      {lead.address}{lead.city ? `, ${lead.city}` : ""}{lead.state ? `, ${lead.state}` : ""}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {lead.addOns && (
-                <View style={styles.detailFieldRow}>
-                  <Feather name="plus-circle" size={14} color={colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailFieldLabel, { color: colors.mutedForeground }]}>Add-Ons</Text>
-                    <Text style={[styles.detailFieldValue, { color: colors.foreground }]}>{lead.addOns}</Text>
-                  </View>
-                </View>
-              )}
-
-              {lead.leadType && (
-                <View style={styles.detailFieldRow}>
-                  <Feather name="layers" size={14} color={colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailFieldLabel, { color: colors.mutedForeground }]}>Lead Type</Text>
-                    <Text style={[styles.detailFieldValue, { color: colors.foreground }]}>{lead.leadType}</Text>
-                  </View>
-                </View>
-              )}
-
-              <View style={styles.detailFieldRow}>
-                <Feather name="hash" size={14} color={colors.mutedForeground} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.detailFieldLabel, { color: colors.mutedForeground }]}>Attempts</Text>
-                  <Text style={[styles.detailFieldValue, { color: colors.foreground }]}>{lead.attemptCount ?? 0}</Text>
-                </View>
-              </View>
-
-              {lead.createdAt && (
-                <View style={styles.detailFieldRow}>
-                  <Feather name="clock" size={14} color={colors.mutedForeground} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.detailFieldLabel, { color: colors.mutedForeground }]}>Created</Text>
-                    <Text style={[styles.detailFieldValue, { color: colors.foreground }]}>
-                      {new Date(lead.createdAt).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {lead.notes && (
-                <View style={[styles.notesBlock, { borderTopColor: colors.border }]}>
-                  <Text style={[styles.notesLabel, { color: colors.mutedForeground }]}>Notes</Text>
-                  <Text style={[styles.notesContent, { color: colors.foreground }]}>{lead.notes}</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {activeTab === "messages" && (
+          {activeTab === "conversation" && isPodiumConnected && (
             <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.messagesHeader}>
                 <Feather name="message-circle" size={18} color="#8B5CF6" />
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Podium Messages</Text>
+                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Conversation</Text>
               </View>
 
               {messages.length === 0 ? (
@@ -1088,31 +1346,60 @@ export default function LeadDetailScreen() {
                 </View>
               ) : (
                 <View style={styles.messagesList}>
-                  {messages.map(msg => (
-                    <View
-                      key={msg.id}
-                      style={[
-                        styles.messageBubble,
-                        msg.direction === "outbound"
-                          ? { backgroundColor: colors.primary + "15", alignSelf: "flex-end" }
-                          : { backgroundColor: colors.secondary, alignSelf: "flex-start" },
-                      ]}
-                    >
-                      {msg.channelType === "call" || msg.channelType === "phone_call" ? (
-                        <View style={styles.callEntry}>
-                          <Feather name="phone" size={12} color={colors.mutedForeground} />
-                          <Text style={[styles.callEntryText, { color: colors.mutedForeground }]}>
-                            {msg.direction === "outbound" ? "Outgoing" : "Incoming"} Call
+                  {messages.map(msg => {
+                    const isCall = msg.channelType === "call" || msg.channelType === "phone_call";
+                    if (isCall) {
+                      const isExpanded = expandedCallIds.has(msg.id + 100000);
+                      return (
+                        <View key={msg.id}>
+                          <TouchableOpacity
+                            style={[styles.podiumCallBtn, { backgroundColor: "#06B6D408", borderColor: "#06B6D420" }]}
+                            onPress={() => toggleCallExpand(msg.id + 100000)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.podiumCallRow}>
+                              <Feather name="phone" size={12} color="#06B6D4" />
+                              <Text style={{ fontSize: 13, color: "#67E8F9", fontFamily: "Inter_600SemiBold", flex: 1 }}>
+                                {msg.direction === "outbound" ? "Outgoing" : "Incoming"} Call
+                              </Text>
+                              {msg.senderName && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>— {msg.senderName}</Text>}
+                              <Feather name="chevron-down" size={14} color="#06B6D480" style={isExpanded ? { transform: [{ rotate: "180deg" }] } : {}} />
+                            </View>
+                            <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                              {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                            </Text>
+                          </TouchableOpacity>
+                          {isExpanded && msg.body && (
+                            <View style={[styles.transcriptBlock, { borderLeftColor: "#06B6D420" }]}>
+                              <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 4 }}>TRANSCRIPT / NOTES</Text>
+                              <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_400Regular", lineHeight: 18 }}>{msg.body}</Text>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    }
+                    return (
+                      <View
+                        key={msg.id}
+                        style={[
+                          styles.messageBubble,
+                          msg.direction === "outbound"
+                            ? { backgroundColor: "#3B82F615", borderColor: "#3B82F620", borderWidth: 1, alignSelf: "flex-end" }
+                            : { backgroundColor: colors.secondary, borderColor: colors.border, borderWidth: 1, alignSelf: "flex-start" },
+                        ]}
+                      >
+                        <Text style={[styles.msgBody, { color: colors.foreground }]}>{msg.body}</Text>
+                        <View style={styles.podiumMeta}>
+                          <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                            {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                          </Text>
+                          <Text style={{ fontSize: 9, color: msg.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
+                            {msg.direction === "outbound" ? "Sent" : "Received"}
                           </Text>
                         </View>
-                      ) : (
-                        <Text style={[styles.msgBody, { color: colors.foreground }]}>{msg.body}</Text>
-                      )}
-                      <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
-                        {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                      </Text>
-                    </View>
-                  ))}
+                      </View>
+                    );
+                  })}
                 </View>
               )}
 
@@ -1137,50 +1424,6 @@ export default function LeadDetailScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-            </View>
-          )}
-
-          {activeTab === "history" && (
-            <View style={styles.historyContainer}>
-              {historyError ? (
-                <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={styles.emptyMessages}>
-                    <Feather name="alert-circle" size={32} color={colors.destructive} />
-                    <Text style={[styles.emptyMsgText, { color: colors.destructive }]}>{historyError}</Text>
-                  </View>
-                </View>
-              ) : history.length === 0 ? (
-                <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={styles.emptyMessages}>
-                    <Feather name="clock" size={32} color={colors.mutedForeground} />
-                    <Text style={[styles.emptyMsgText, { color: colors.mutedForeground }]}>No activity yet</Text>
-                  </View>
-                </View>
-              ) : (
-                history.map(item => (
-                  <View key={item.id} style={[styles.historyItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <View style={styles.historyHeader}>
-                      <View style={[styles.historyIcon, { backgroundColor: colors.primary + "15" }]}>
-                        <Feather
-                          name={item.actionType === "call" ? "phone" : item.actionType === "text" ? "message-square" : "voicemail"}
-                          size={12}
-                          color={colors.primary}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.historyAction, { color: colors.foreground }]}>
-                          {item.actionType} — {(item.outcome || "").replace(/_/g, " ")}
-                        </Text>
-                        <Text style={[styles.historyMeta, { color: colors.mutedForeground }]}>
-                          {item.userName ? `${item.userName} • ` : ""}
-                          {new Date(item.attemptedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                        </Text>
-                      </View>
-                    </View>
-                    {item.notes && <Text style={[styles.historyNotes, { color: colors.foreground }]}>{item.notes}</Text>}
-                  </View>
-                ))
-              )}
             </View>
           )}
         </ScrollView>
@@ -1263,35 +1506,37 @@ const styles = StyleSheet.create({
   detailTabLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   tabBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, minWidth: 18, alignItems: "center" },
   tabBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold" },
-  terminalState: { alignItems: "center", gap: 8, paddingVertical: 20 },
-  terminalText: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  detailBlock: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10 },
-  detailBlockLabel: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
-  detailBlockValue: { fontSize: 14, fontFamily: "Inter_500Medium" },
-  detailFieldRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 6 },
-  detailFieldLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
-  detailFieldValue: { fontSize: 14, fontFamily: "Inter_400Regular" },
-  notesBlock: { borderTopWidth: 1, paddingTop: 12 },
-  notesLabel: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 0.5, marginBottom: 4 },
-  notesContent: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20 },
   messagesHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   emptyMessages: { alignItems: "center", paddingVertical: 24, gap: 8 },
   emptyMsgText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   emptyMsgSub: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center" },
   messagesList: { gap: 8 },
   messageBubble: { padding: 10, borderRadius: 12, gap: 4 },
-  callEntry: { flexDirection: "row", alignItems: "center", gap: 6 },
-  callEntryText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   msgBody: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20 },
   msgTime: { fontSize: 10, fontFamily: "Inter_400Regular" },
   msgInputRow: { flexDirection: "row", gap: 8, paddingTop: 12, borderTopWidth: 1, alignItems: "flex-end" },
   msgInput: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, fontFamily: "Inter_400Regular", maxHeight: 80 },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   historyContainer: { paddingHorizontal: 16, gap: 6, marginTop: 8 },
-  historyItem: { padding: 12, borderRadius: 10, borderWidth: 1, gap: 4 },
-  historyHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  historyIcon: { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  historyAction: { fontSize: 14, fontFamily: "Inter_500Medium", textTransform: "capitalize" as const },
-  historyMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  historyNotes: { fontSize: 13, fontFamily: "Inter_400Regular", fontStyle: "italic" as const, marginLeft: 36 },
+  historyNotes: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" as const, marginTop: 2 },
+  timelineLine: { gap: 0 },
+  timelineRow: { flexDirection: "row" as const, gap: 10, minHeight: 44 },
+  timelineNodeCol: { alignItems: "center" as const, width: 20 },
+  timelineNode: { width: 20, height: 20, borderRadius: 10, alignItems: "center" as const, justifyContent: "center" as const, borderWidth: 1, zIndex: 1 },
+  timelineConnector: { width: 1, flex: 1, marginTop: -1 },
+  timelineContent: { flex: 1, paddingBottom: 10 },
+  pulseEntry: { gap: 2 },
+  pulseEntryHeader: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, flexWrap: "wrap" as const },
+  editBtn: { padding: 2 },
+  podiumMeta: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, marginTop: 4 },
+  podiumBadge: { paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4 },
+  podiumCallBtn: { padding: 10, borderRadius: 10, borderWidth: 1, gap: 4 },
+  podiumCallRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
+  transcriptBlock: { marginLeft: 12, paddingLeft: 10, borderLeftWidth: 2, paddingVertical: 8, marginTop: 4 },
+  editCard: { padding: 12, borderRadius: 10, borderWidth: 1, gap: 4 },
+  editPickerRow: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 },
+  editPickerItem: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1 },
+  editNotesInput: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 8 },
+  editSaveBtn: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 6, alignItems: "center" as const },
+  editCancelBtn: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 6, alignItems: "center" as const },
 });
