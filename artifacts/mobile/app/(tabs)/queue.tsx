@@ -19,18 +19,23 @@ import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { LeadCard } from "@/components/LeadCard";
 
-type Tab = "new" | "reengagement" | "callbacks" | "old";
+type Tab = "new" | "reengagement" | "callbacks" | "old" | "archive";
 
 interface QueueLead {
   id: number;
-  name: string;
-  phone?: string;
-  email?: string;
-  source?: string;
-  hubStatus?: string;
+  firstName: string;
+  lastName: string;
+  phone?: string | null;
+  email?: string | null;
+  source?: string | null;
+  leadType?: string | null;
+  interestType?: string | null;
+  hubStatus?: string | null;
   dayInSequence?: number;
-  createdAt?: string;
-  callbackAt?: string;
+  createdAt: string;
+  callbackAt?: string | null;
+  nextPassAt?: string | null;
+  attemptCount?: number;
   assignedUserName?: string;
 }
 
@@ -39,6 +44,7 @@ interface QueueData {
   callbacks: QueueLead[];
   reengagement: QueueLead[];
   oldLeads: QueueLead[];
+  archive: QueueLead[];
   total: number;
 }
 
@@ -46,7 +52,8 @@ const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap }[] =
   { key: "new", label: "New", icon: "zap" },
   { key: "reengagement", label: "Re-engage", icon: "refresh-cw" },
   { key: "callbacks", label: "Callbacks", icon: "phone-incoming" },
-  { key: "old", label: "Old", icon: "archive" },
+  { key: "old", label: "Old", icon: "clock" },
+  { key: "archive", label: "Archive", icon: "archive" },
 ];
 
 function getBadgeForTab(tab: Tab, lead: QueueLead): string | undefined {
@@ -54,6 +61,7 @@ function getBadgeForTab(tab: Tab, lead: QueueLead): string | undefined {
   if (tab === "reengagement") return `Day ${lead.dayInSequence || 1}`;
   if (tab === "callbacks") return "CALLBACK";
   if (tab === "old") return "5+ DAYS";
+  if (tab === "archive") return "CLOSED";
   return undefined;
 }
 
@@ -64,7 +72,7 @@ export default function QueueScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>("new");
-  const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
+  const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], archive: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
@@ -115,6 +123,7 @@ export default function QueueScreen() {
       case "reengagement": return queue.reengagement || [];
       case "callbacks": return queue.callbacks || [];
       case "old": return queue.oldLeads || [];
+      case "archive": return queue.archive || [];
       default: return [];
     }
   };
@@ -126,6 +135,7 @@ export default function QueueScreen() {
     reengagement: (queue.reengagement || []).length,
     callbacks: (queue.callbacks || []).length,
     old: (queue.oldLeads || []).length,
+    archive: (queue.archive || []).length,
   };
 
   return (
@@ -196,6 +206,7 @@ export default function QueueScreen() {
                 {activeTab === "new" ? "New leads will appear when assigned to you" :
                  activeTab === "callbacks" ? "No scheduled callbacks due right now" :
                  activeTab === "reengagement" ? "No leads to re-engage at this time" :
+                 activeTab === "archive" ? "No archived leads" :
                  "No old leads in queue"}
               </Text>
             </View>

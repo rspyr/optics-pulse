@@ -44,10 +44,13 @@ const DEAD_REASONS = [
 
 interface LeadDetail {
   id: number;
-  name: string;
+  firstName?: string;
+  lastName?: string;
   phone?: string;
   email?: string;
   source?: string;
+  leadType?: string;
+  interestType?: string;
   hubStatus?: string;
   dayInSequence?: number;
   createdAt?: string;
@@ -56,6 +59,7 @@ interface LeadDetail {
   address?: string;
   city?: string;
   state?: string;
+  attemptCount?: number;
 }
 
 interface HistoryItem {
