@@ -39,9 +39,14 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
   const allowedOrigins: string[] = [];
   if (process.env.REPLIT_DEV_DOMAIN) {
     allowedOrigins.push(`https://${process.env.REPLIT_DEV_DOMAIN}`);
+    const expoVariant = process.env.REPLIT_DEV_DOMAIN.replace(".worf.replit.dev", ".expo.worf.replit.dev");
+    allowedOrigins.push(`https://${expoVariant}`);
   }
   if (process.env.REPLIT_DOMAINS) {
     process.env.REPLIT_DOMAINS.split(",").forEach(d => allowedOrigins.push(`https://${d}`));
+  }
+  if (process.env.REPLIT_EXPO_DEV_DOMAIN) {
+    allowedOrigins.push(`https://${process.env.REPLIT_EXPO_DEV_DOMAIN}`);
   }
   if (allowedOrigins.length === 0) {
     allowedOrigins.push("http://localhost:5173");
@@ -198,6 +203,16 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("new-lead", lead);
   }
+  import("./services/push-notifications").then(({ sendPushToTenantUsers }) => {
+    const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
+    const source = (lead.source as string) || "";
+    sendPushToTenantUsers(
+      tenantId,
+      "New Lead Assigned",
+      `${name}${source ? ` from ${source}` : ""}`,
+      { leadId: lead.id, type: "new-lead" },
+    ).catch(err => console.error("[Push] emitNewLead push error:", err));
+  }).catch(() => {});
 }
 
 export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>) {

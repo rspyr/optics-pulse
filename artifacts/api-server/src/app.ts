@@ -19,6 +19,16 @@ const allowedOrigins = process.env.REPLIT_DEV_DOMAIN
 if (process.env.REPLIT_DOMAINS) {
   process.env.REPLIT_DOMAINS.split(",").forEach(d => allowedOrigins.push(`https://${d}`));
 }
+if (process.env.REPLIT_EXPO_DEV_DOMAIN) {
+  allowedOrigins.push(`https://${process.env.REPLIT_EXPO_DEV_DOMAIN}`);
+}
+if (process.env.REPLIT_DEV_DOMAIN) {
+  const base = process.env.REPLIT_DEV_DOMAIN;
+  const expoVariant = base.replace(".worf.replit.dev", ".expo.worf.replit.dev");
+  if (!allowedOrigins.includes(`https://${expoVariant}`)) {
+    allowedOrigins.push(`https://${expoVariant}`);
+  }
+}
 
 app.use(cors({
   origin: (origin, callback) => {

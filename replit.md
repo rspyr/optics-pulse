@@ -2,7 +2,7 @@
 
 ## Overview
 
-Marketing OS is a full-stack, monorepo platform tailored for HVAC marketing agencies. It provides a comprehensive solution for managing client marketing efforts, emphasizing lead attribution, performance monitoring, and client reporting. Key features include a proprietary Attribution Engine, a multi-tenant administration portal, a client-facing portal ("Searchlight Killer"), and a gamified leads management system. The platform's goal is to streamline agency operations, enhance marketing effectiveness through data-driven insights, and improve client transparency and satisfaction.
+Marketing OS is a full-stack monorepo platform designed for HVAC marketing agencies. It aims to streamline operations, enhance marketing effectiveness, and improve client transparency through a comprehensive suite of tools. Key capabilities include lead attribution, performance monitoring, client reporting, a proprietary Attribution Engine, a multi-tenant administration portal, a client-facing portal ("Searchlight Killer"), and a gamified leads management system. The platform focuses on providing data-driven insights to manage client marketing efforts efficiently.
 
 ## User Preferences
 
@@ -10,59 +10,85 @@ I prefer iterative development with clear communication on significant changes. 
 
 ## System Architecture
 
-The Marketing OS is built as a pnpm workspace monorepo using Node.js 24 and TypeScript 5.9.
+The Marketing OS is structured as a pnpm workspace monorepo, utilizing Node.js 24 and TypeScript 5.9.
 
 **UI/UX Decisions:**
-The frontend, developed with React, Vite, TailwindCSS v4, Wouter, and TanStack React Query, uses a dark-mode-only design system with a specific brand palette (Midnight Sky, Stratos, Rebel Red, Circuit White, Steel, Ice) and typography (Söhne Extrafett, Söhne Dreiviertelfett, Inter).
+The frontend employs React, Vite, TailwindCSS v4, Wouter, and TanStack React Query. It features a dark-mode-only design system with a specific brand color palette (Midnight Sky, Stratos, Rebel Red, Circuit White, Steel, Ice) and typography (Söhne Extrafett, Söhne Dreiviertelfett, Inter).
 
 **Technical Implementations:**
-- **API:** An Express 5 server handles all API requests.
-- **Database:** PostgreSQL is used as the primary database, managed with Drizzle ORM. One-time migrations run on server startup via `one-time-migrations.ts`. Lazy-init patterns (e.g., `seedDefaultScripts` in the scripts route) insert defaults for new tenants only when none exist.
-- **Authentication:** Session-based authentication uses `express-session` with a PostgreSQL store (30-day session duration) and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) is implemented. Login page includes a "Remember Me" checkbox that persists credentials to localStorage. All users can change their own password via Settings. Admin users can hard-delete users (with FK constraint protection) or toggle them inactive.
-- **Real-time Features:** Socket.IO is integrated for real-time lead notifications and other interactive elements, ensuring tenant isolation.
-- **API Codegen:** OpenAPI specifications with Orval generate TypeScript API clients (`api-client-react`) and Zod schemas (`api-zod`).
-- **Monorepo Structure:** The project is organized into `artifacts` (applications) and `lib` (shared code).
+- **API:** An Express 5 server manages all API interactions.
+- **Database:** PostgreSQL is the primary database, interfaced via Drizzle ORM. Database migrations are handled as one-time scripts on server startup. Lazy initialization patterns are used to seed default data for new tenants.
+- **Authentication:** Session-based authentication is implemented with `express-session` and a PostgreSQL store, featuring 30-day session durations and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) is in place. User management includes password changes, user inactivation, and hard deletion with foreign key protection.
+- **Real-time Features:** Socket.IO provides real-time lead notifications and other interactive functionalities, ensuring tenant isolation.
+- **API Codegen:** OpenAPI specifications with Orval generate TypeScript API clients and Zod schemas for robust API interactions.
+- **Monorepo Structure:** The project is organized into `artifacts` for applications and `lib` for shared code.
 
 **Feature Specifications:**
-- **Attribution Engine:** A 4-level waterfall attribution model tracks lead sources. It includes a Reconciliation Engine for OCI payloads and Enhanced Conversions.
-- **Lead Auto-Assignment:** All lead creation paths (webhook ingest, manual creation, Google Sheets ingest, sheet sync, demo generator) automatically call `assignLeadRoundRobin()` from `services/round-robin.ts`. When routing config exists, it uses the cascade order, pause schedules, and pass-back rules. The cascade_order is pre-filtered against active users in the DB before CSR selection — invalid/inactive user IDs are logged as warnings and skipped. When no routing config exists, the lead is created successfully without assignment and a warning is logged. **Per-Lead Auto-Pass Timers:** Instead of a global polling interval, each lead gets its own `setTimeout` timer (via `services/auto-pass-scheduler.ts`) set to the routing config's `passIntervalMinutes`. When the timer fires, the cascade logic finds the next active CSR and reassigns the lead. Timers are cancelled when a CSR takes action (status change out of day_1–day_4) and rescheduled on transfers. On server restart, `recoverTimers()` queries all leads in active statuses with an assigned CSR and schedules timers for the remaining time based on `assignedAt` + `passIntervalMinutes`. Single-CSR cascades are handled gracefully: `updatedAt` is touched to prevent re-evaluation, a warning is logged, and the timer reschedules. **Lead Card Timers:** The queue API enriches each lead with `nextPassAt` and `passIntervalMinutes` (computed from `assignedAt` + routing config). The Pulse lead card shows a countdown timer (Timer icon, color-coded green→amber→red by fraction remaining) for leads with active auto-pass routing, plus a total-time-in-system indicator (Clock icon, from `createdAt`). Leads without routing or at end of cascade show only total time.
-- **Leads Hub:** A comprehensive lead management system with a 5-day outreach sequence lifecycle. Leads flow through statuses: day_1 through day_4 (active), day_5_old (re-engagement pool), appt_set (booked), appt_booked (pre-booked appointment, purple badge), call_back (scheduled follow-up), and dead (removed). Pre-booked leads (`preBooked=true`) arrive via Google Sheets with "Appointment Booked" = "yes" or with appointment date/time populated, and enter the `appt_booked` status directly. The leads table has dedicated columns for `address`, `city`, `state`, `zip`, `appointment_date`, `appointment_time`, and `add_ons` — all mappable from Google Sheets. **Row Re-scan:** The 60-second sync cycle re-scans all existing rows (not just new ones past the watermark) for changes to updatable fields (appointment date, time, booked, add-ons, address, city, state, zip). When a previously-blank appointment date/time gets filled in, the lead's status auto-updates to `appt_booked` and `preBooked` is set to true, with a real-time socket event (`lead-updated`) pushing the change to the frontend without requiring a page refresh. The lead card shows an appointment badge with date/time, and the lead detail view shows a "Details" section with appointment info, add-ons, and address. **Visibility Delay:** When a sheet config has appointment fields mapped (appointmentDate, appointmentTime, addOns), newly imported leads are held for 10 minutes (`visibleAfter` column) before appearing in the Pulse queue — giving the lead time to self-book. If the re-scan detects the lead booked (appointment data appeared), the hold is immediately released so the CSR can confirm. Leads from sheets without appointment mappings, or leads that already have appointment data on import, appear immediately. CSRs see a confirmation-first flow (Confirmed → appt_set, Rescheduled → stays appt_booked, Canceled → dead with free-form reason). Pre-booked leads are excluded from spiff/commission calculations, HUD booking stats, booking rate, and avg speed-to-lead. Sales Manager dashboard has an "Include Pre-Booked" toggle (defaults OFF) for stats. Features tabbed CSR queues (New, Today, Callbacks, Re-engagement, Old Leads, Archive), structured action logging (call/text/voicemail_drop with full outcome taxonomy), round-robin routing with cascade ordering and CSR pause/schedule, and lead transfer. **Google Sheets Integration (Decoupled):** Sheet configurations are now first-class entities in a `google_sheet_configs` table, decoupled from funnel types. Each config has its own `google_sheet_id`, `google_sheet_tab`, `column_mapping`, `mapping_headers`, `sync_row_watermark`, `sync_paused`, `default_funnel_type_id`, `funnel_column`, and `funnel_value_map`. **Dynamic Funnel Routing:** A single sheet can route leads into multiple funnels based on a column's values (via `funnelColumn` + `funnelValueMap`), and multiple sheets can feed the same funnel (via `defaultFunnelTypeId`). The special `__funnel__` field in column mapping designates which column controls routing; `funnelValueMap` maps cell values → funnel type IDs. CRUD API at `/api/tenants/:id/sheet-configs` and `/api/sheet-configs/:id`. **LLM-Powered Column Mapping:** Agency users can run AI analysis (Gemini 2.5 Flash) to auto-map sheet columns to internal fields (firstName, lastName, phone, email, source, serviceType, __funnel__, etc.) with confidence scores. The mapping is stored on `google_sheet_configs`. Agency users review/adjust mappings in Settings tab and approve. Import uses approved mappings; header drift detection blocks imports with 409 until re-approved. `__skip__` sentinel skips columns; `fullName` auto-splits to first/last. The `tenant_funnel_types` table now only holds tenant↔funnel associations (no sheet fields).
-- **Lead Source Normalization:** Per-tenant alias mapping system (`lead_source_aliases` table) that normalizes raw lead source values to canonical names (e.g., "fb"/"facebook"/"meta" → "Meta"). Normalization runs at ingestion time across all lead creation paths (Google Sheets sync, webhook ingest, manual creation). A `normalizeSource()` utility with in-memory caching (60s TTL) does case-insensitive lookups. Default aliases are seeded for common sources (Meta, Google, LSA, GMB, YouTube, TikTok, Direct Mail, Email, Referral). The Settings tab in Sales Manager provides a full management UI for adding/editing/deleting canonical sources and their aliases, loading defaults, and backfilling existing leads. All downstream dashboards, coaching insights, and analytics automatically see clean grouped data.
-- **Login-Aware Speed-to-Lead:** The avg speed-to-lead metric only counts time that client_users are logged in. A `user_login_sessions` table tracks login/logout timestamps. Login sessions are opened on successful login for `client_user` role users and closed on logout, socket disconnect, or server restart (stale session cleanup). The speed-to-lead calculation computes the overlap between each lead's assignment→first-touch window and the user's active login sessions. If no login session data exists for a user (historical data), it falls back to wall-clock time. This applies across all speed-to-lead displays: Pulse HUD, coordinator daily stats, Sales Manager team view, and coaching insights.
-- **Sales Manager Hub:** Rebuilt dashboard with 7 tabs: Dashboard (stats with date range + funnel filter, by-source and by-funnel breakdowns), Team (per-CSR stats: calls/VMs/texts/appts/rate with collapsible funnel breakdown), Scripts (funnel/service type filtering + smart fields), Routing (round-robin cascade order per funnel, pass interval, pass-back toggle, sticky-after-cascade toggle with designated CSR selector, CSR pause/schedule), Activity Feed, Coaching Insights, and Settings (spiff config, lead source aliases, Google Sheet config per funnel, native-only comms). Podium/CallRail/ServiceTitan options removed from UI. **Sticky After Cascade:** When Allow Pass-Back is enabled, a "Sticky After Cascade" toggle lets managers designate a specific CSR that leads are assigned to after completing one full cycle through the cascade. The lead's `cascade_pass_count` tracks auto-passes; once it reaches `activeOrder.length - 1`, the lead is transferred to the designated `sticky_csr_id`. Count resets on manual transfer or round-robin reassignment. Server-side validation requires a valid `sticky_csr_id` when `sticky_after_cascade` is enabled. Leads already at their sticky CSR get their timestamp refreshed to prevent repeated cron re-evaluation.
-- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history and CRUD API. Scripts support `sourceFilter`, `stageFilter`, `dispositionFilter` for targeted matching, plus text-based funnel and service type filtering. Smart field placeholders use `{{lead_name}}`, `{{csr_name}}`, `{{service_type}}`, `{{funnel}}`, `{{company}}` format with live preview. Disposition-based scripts (callback_requested, already_had_estimate, dont_remember, never_answered) override source/stage matching in the Pulse queue.
-- **Media Buying Automation:** Rules-based system for managing marketing campaigns, including condition-based alerts and actions.
-- **Budget Controls:** Campaign management integrated with budget API calls.
-- **Spiff Configuration:** Per-tenant configurable spiff amounts for bookings, with funnel-based overrides (keyed by funnel name). Commission calculation resolves lead's `funnelId` to funnel name for override matching. Legacy `byLeadType` configs are parsed as `byFunnel` for backward compatibility but old lead-type overrides are superseded by funnel-based overrides.
+- **Attribution Engine:** Implements a 4-level waterfall attribution model for lead source tracking, including a Reconciliation Engine for OCI payloads and Enhanced Conversions.
+- **Lead Auto-Assignment:** All lead creation paths trigger `assignLeadRoundRobin()`, which uses routing configurations, pause schedules, and pass-back rules. Leads receive per-lead `setTimeout` timers for auto-pass functionality based on routing configuration `passIntervalMinutes`.
+- **Leads Hub:** A comprehensive lead management system with a 5-day outreach sequence lifecycle. It handles lead statuses (e.g., `day_1` through `day_4`, `appt_set`, `dead`), pre-booked leads, and Google Sheets integration. The system includes row re-scanning for updates, a visibility delay for newly imported leads, and confirmation-first flows for pre-booked leads. CSR queues are tabbed (New, Today, Callbacks, Re-engagement, Old Leads, Archive) with structured action logging and lead transfer capabilities.
+- **Google Sheets Integration:** Decoupled sheet configurations are stored in `google_sheet_configs`, allowing dynamic funnel routing based on column values and multiple sheets feeding the same funnel. An LLM-powered column mapping feature (Gemini 2.5 Flash) automates field mapping with confidence scores.
+- **Lead Source Normalization:** A per-tenant alias mapping system (`lead_source_aliases` table) normalizes raw lead source values to canonical names at ingestion.
+- **Login-Aware Speed-to-Lead:** The average speed-to-lead metric considers only the time `client_users` are logged in, tracked via `user_login_sessions` table.
+- **Sales Manager Hub:** A rebuilt dashboard with tabs for Dashboard, Team, Scripts, Routing (including "Sticky After Cascade" functionality), Activity Feed, Coaching Insights, and Settings (spiff config, lead source aliases, Google Sheet config).
+- **Script Management:** Database-backed management for call, text, email, and voicemail templates with version history. Scripts support filtering by source, stage, and disposition, with smart field placeholders.
+- **Media Buying Automation:** A rules-based system for managing marketing campaigns with condition-based alerts and actions.
+- **Budget Controls:** Campaign management integrates with budget API calls.
+- **Spiff Configuration:** Per-tenant configurable spiff amounts for bookings, with funnel-based overrides.
 - **Client Alerts:** Per-tenant configurable alert thresholds with custom email recipients.
-- **Chat Analytics (Ask Your Data):** AI-powered natural language data querying using Gemini AI. It generates structured JSON query plans, executes safe Drizzle ORM queries, and presents streaming OpenUI Lang markup with visualizations.
+- **Chat Analytics (Ask Your Data):** AI-powered natural language data querying using Gemini AI, generating structured JSON query plans and streaming OpenUI Lang markup with visualizations.
 - **Client Portal:** A dashboard providing clients with KPIs, financial transparency, and chat analytics.
 
 **System Design Choices:**
-- **Modularity:** Monorepo structure with pnpm workspaces promotes code reuse and separation of concerns.
-- **Scalability:** Multi-tenancy support for managing multiple client accounts.
-- **Demo vs Real Tenant Isolation:** Tenants are flagged as `isDemo` to receive auto-generated dummy data, while real tenants receive zero dummy data.
-- **Data Security:** Sensitive configurations and API credentials are encrypted. A `sanitizeTenant` function masks secret fields.
-- **Funnel-Aware Tracking:** Global funnel types with tenant association via `tenant_funnel_types` (association-only, no sheet fields) for tracking and webhook ingestion. Sheet configurations are managed separately in `google_sheet_configs`.
+- **Modularity:** Monorepo structure with pnpm workspaces for code reuse and separation.
+- **Scalability:** Multi-tenancy support for client account management.
+- **Demo vs Real Tenant Isolation:** `isDemo` flag for tenants to receive auto-generated dummy data.
+- **Data Security:** Sensitive configurations and API credentials are encrypted, with a `sanitizeTenant` function to mask secret fields.
+- **Funnel-Aware Tracking:** Global funnel types with tenant associations for tracking and webhook ingestion.
 
 ## External Dependencies
 
-- **Google Sheets API:** Lead ingestion from Google Sheets via Replit Connectors integration (`googleapis` package). Sheet configurations are standalone entities in `google_sheet_configs`, supporting many-to-many relationships between sheets and funnels via dynamic funnel routing.
-- **ServiceTitan:** PAUSED — OAuth2 client code preserved but sync disabled and data wiped for compliance.
-- **Google Ads API:** Used for campaign performance queries, Offline Conversion Import (OCI), and Enhanced Conversions uploads, with OAuth2 for authentication.
-- **Meta Marketing API:** For fetching campaign insights and server-side event uploads via Conversions API (CAPI), with OAuth2 for authentication.
-- **CallRail API:** PAUSED — Webhook ingestion code preserved but communication integration disabled.
-- **Podium API:** PAUSED — Review sync and communication integration disabled.
-- **PostgreSQL:** Primary database.
-- **Express:** Web application framework for the API server.
-- **React:** Frontend library.
+- **Google Sheets API:** Integrated via Replit Connectors for lead ingestion.
+- **Google Ads API:** Used for campaign performance queries, Offline Conversion Import (OCI), and Enhanced Conversions uploads.
+- **Meta Marketing API:** Used for fetching campaign insights and server-side event uploads via Conversions API (CAPI).
+- **PostgreSQL:** Primary database for the application.
+- **Express:** Web framework for the API server.
+- **React:** Frontend library for user interfaces.
 - **Vite:** Frontend build tool.
 - **TailwindCSS:** Utility-first CSS framework.
 - **Wouter:** Lightweight React router.
-- **TanStack React Query:** Data fetching and caching library.
-- **Zod:** Schema declaration and validation library.
+- **TanStack React Query:** Data fetching and caching.
+- **Zod:** Schema declaration and validation.
 - **Drizzle ORM:** TypeScript ORM for PostgreSQL.
 - **Orval:** OpenAPI client code generator.
-- **Socket.IO:** WebSocket library for real-time communication.
-- **bcryptjs:** Library for hashing passwords.
+- **Socket.IO:** For real-time communication.
+- **bcryptjs:** For password hashing.
 - **express-session & connect-pg-simple:** For session management.
+
+## Pulse Mobile (Expo App)
+
+A native mobile app (`artifacts/mobile`) for sales reps/lead coordinators, mirroring core Pulse web features.
+
+**Architecture:**
+- **Framework:** Expo (React Native) with expo-router file-based routing
+- **Auth:** Session-based — `mos.sid` cookie extracted from `Set-Cookie` header and stored in SecureStore (native) or localStorage (web). Passed via `Cookie` header in all API requests and Socket.IO `extraHeaders`.
+- **Real-time:** Socket.IO client connected with session cookie auth, path `/api/socket.io`
+- **Push Notifications:** Expo Push API — tokens stored in `push_tokens` DB table, backend fires notifications on `emitNewLead` events via dynamic import of push-notifications service
+
+**Screens:**
+- **Login** (`app/login.tsx`): Email/password auth with dark Pulse branding
+- **Dashboard** (`app/(tabs)/index.tsx`): HUD with live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback
+- **Lead Queue** (`app/(tabs)/queue.tsx`): Tabbed filtering (New, Re-engage, Callbacks, Old), pull-to-refresh, real-time updates
+- **Lead Detail** (`app/lead/[id].tsx`): Click-to-dial/SMS, action logging (call/text/VM), appointment booking, mark dead, activity history
+
+**Key Files:**
+- `contexts/AuthContext.tsx` — Auth state, SecureStore persistence, session cookie management
+- `contexts/SocketContext.tsx` — Socket.IO connection with cookie auth
+- `hooks/useApi.ts` — Authenticated API fetch hook
+- `hooks/usePushNotifications.ts` — Push notification registration with retry logic
+- `constants/colors.ts` — Dark Pulse theme colors
+
+**Backend Push Infra:**
+- `push_tokens` table: `user_id`, `token`, `platform`, unique(user_id, token)
+- `POST/DELETE /api/push-tokens` — Registration endpoints
+- `api-server/src/services/push-notifications.ts` — Expo Push API service

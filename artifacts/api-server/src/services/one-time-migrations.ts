@@ -524,6 +524,23 @@ const migrations: Migration[] = [
       console.log("[Migration] Added podium_config column to users table");
     },
   },
+  {
+    id: "2026-04-02_create-push-tokens",
+    description: "Create push_tokens table for mobile push notifications",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS push_tokens (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token TEXT NOT NULL,
+          platform TEXT NOT NULL DEFAULT 'expo',
+          created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+          UNIQUE(user_id, token)
+        )
+      `);
+      console.log("[Migration] Created push_tokens table");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

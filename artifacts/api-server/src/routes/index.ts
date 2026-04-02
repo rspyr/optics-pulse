@@ -31,6 +31,7 @@ import googleOAuthRouter from "./google-oauth";
 import metaOAuthRouter from "./meta-oauth";
 import podiumOAuthRouter from "./podium-oauth";
 import podiumRoutesRouter from "./podium-routes";
+import pushTokensRouter from "./push-tokens";
 
 const router: IRouter = Router();
 
@@ -72,6 +73,7 @@ router.use(googleSheetsIngestRouter);
 router.use(sheetConfigsRouter);
 router.use(leadSourceAliasesRouter);
 router.use(podiumRoutesRouter);
+router.use(pushTokensRouter);
 
 export default router;
 
