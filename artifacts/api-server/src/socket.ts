@@ -203,13 +203,13 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("new-lead", lead);
   }
-  const assignedUserId = lead.assignedUserId as number | undefined;
-  if (assignedUserId) {
+  const assignedCsrId = (lead.assignedCsrId ?? lead.assignedUserId) as number | undefined;
+  if (assignedCsrId) {
     import("./services/push-notifications").then(({ sendPushToUser }) => {
       const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
       const source = (lead.source as string) || "";
       sendPushToUser(
-        assignedUserId,
+        assignedCsrId,
         "New Lead Assigned",
         `${name}${source ? ` from ${source}` : ""}`,
         { leadId: lead.id, type: "new-lead" },
