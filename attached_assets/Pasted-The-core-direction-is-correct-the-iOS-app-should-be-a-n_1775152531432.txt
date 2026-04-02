@@ -1,0 +1,21 @@
+The core direction is correct: the iOS app should be a native client on top of the same backend services as the web app, with three channels of communication: normal API calls, live socket updates while open, and APNs push notifications while backgrounded. The missing piece is not iOS mechanics. It is the exact shape of your current web app, auth model, and which mobile workflows matter first.
+
+I put the working intake scaffold into `file 'HVAC Launch/Marketing OS App/iOS App Strategy.md'` so the PRD can be written directly there once you answer these.
+
+1. What exact web app repo and stack are we adapting right now?
+2. Is the current web app already using JSON APIs, or is logic still tied directly to web routes/views?
+3. Where does business logic live today: route handlers, services, controllers, or mixed everywhere?
+4. Which portal is the iOS app for first: client portal, internal portal, leads dashboard, admin portal, or a subset?
+5. What are the top 5-10 actions users must be able to take in v1 on mobile?
+6. Which features need full real-time behavior in-app, and which can just refresh normally?
+7. What exact events should trigger push notifications?
+8. Do notifications need deep links into specific screens and actions from the notification itself?
+9. What auth system exists today, and do you want mobile to share it or use a dedicated token-based mobile auth layer?
+10. Do you want the web app itself to move toward consuming the same API contract as iOS, or only expose mobile endpoints for now?
+11. Do you want v1 to be a focused mobile subset or near-parity with the web app?
+12. Is the iOS app expected to support multiple roles and multiple tenants per user?
+13. Do you need offline support, caching, background refresh, or just online-first behavior?
+14. Are you building this in SwiftUI by default?
+15. Do you already have Apple Developer setup, a bundle ID, APNs credentials, and dev/staging/prod environments planned?
+
+Answer those, and I can turn `file 'HVAC Launch/Marketing OS App/iOS App Strategy.md'` into the full PRD plus the two copy-paste build prompts.
