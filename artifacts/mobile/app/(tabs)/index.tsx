@@ -14,6 +14,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSocket } from "@/contexts/SocketContext";
+import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { StatCard } from "@/components/StatCard";
@@ -76,31 +77,36 @@ function getTierColor(tier: string): string {
 export default function HudScreen() {
   const { user, logout } = useAuth();
   const { connected, on, off } = useSocket();
+  const { tenants, selectedTenantId, setSelectedTenantId, effectiveTenantId, isAgency } = useTenant();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [stats, setStats] = useState<HudStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [timeframe, setTimeframe] = useState<HudTimeframe>("today");
+  const [tenantOpen, setTenantOpen] = useState(false);
   const isWeb = Platform.OS === "web";
 
   const fetchStats = useCallback(async () => {
     if (!user) return;
     try {
-      let url = "/api/leads/hud/stats";
+      const params = new URLSearchParams();
       const dates = getTimeframeDates(timeframe);
       if (dates) {
-        const params = new URLSearchParams();
         params.set("startDate", dates.startDate);
         params.set("endDate", dates.endDate);
-        url += `?${params.toString()}`;
       }
+      if (effectiveTenantId) {
+        params.set("tenantId", String(effectiveTenantId));
+      }
+      const qs = params.toString();
+      const url = `/api/leads/hud/stats${qs ? `?${qs}` : ""}`;
       const data = await apiFetch(url);
       setStats(data);
     } catch (err) {
       console.error("[HUD] Failed to fetch stats:", err);
     }
-  }, [apiFetch, user, timeframe]);
+  }, [apiFetch, user, timeframe, effectiveTenantId]);
 
   useEffect(() => {
     fetchStats();
@@ -175,6 +181,52 @@ export default function HudScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      {isAgency && tenants.length > 0 && (
+        <View style={[styles.tenantSelector, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.tenantHeader}>
+            <Feather name="briefcase" size={14} color={colors.mutedForeground} />
+            <Text style={[styles.tenantLabel, { color: colors.mutedForeground }]}>TENANT</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.tenantDropdown, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+            onPress={() => setTenantOpen(!tenantOpen)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.tenantValue, { color: colors.foreground }]} numberOfLines={1}>
+              {tenants.find(t => t.id === selectedTenantId)?.name || "Select tenant"}
+            </Text>
+            <Feather name={tenantOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {tenantOpen && (
+            <View style={[styles.tenantList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {tenants.map(t => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={[
+                    styles.tenantItem,
+                    t.id === selectedTenantId && { backgroundColor: colors.primary + "15" },
+                  ]}
+                  onPress={() => {
+                    setSelectedTenantId(t.id);
+                    setTenantOpen(false);
+                    if (Platform.OS !== "web") Haptics.selectionAsync();
+                  }}
+                >
+                  <Text style={[styles.tenantItemText, {
+                    color: t.id === selectedTenantId ? colors.primary : colors.foreground,
+                  }]}>
+                    {t.name}
+                  </Text>
+                  {t.id === selectedTenantId && (
+                    <Feather name="check" size={14} color={colors.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
 
       <View style={[styles.timeframeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
         {(["today", "7d", "30d", "90d"] as HudTimeframe[]).map(tf => (
@@ -297,4 +349,20 @@ const styles = StyleSheet.create({
   tierText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   statsGrid: { gap: 10 },
   statsRow: { flexDirection: "row", gap: 10 },
+  tenantSelector: { borderRadius: 10, borderWidth: 1, padding: 12, gap: 8 },
+  tenantHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
+  tenantLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },
+  tenantDropdown: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  tenantValue: { fontSize: 14, fontFamily: "Inter_500Medium", flex: 1 },
+  tenantList: { borderRadius: 8, borderWidth: 1, overflow: "hidden" },
+  tenantItem: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  tenantItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
 });

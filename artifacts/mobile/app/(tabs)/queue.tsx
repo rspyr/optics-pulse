@@ -8,6 +8,7 @@ import {
   RefreshControl,
   Platform,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -15,6 +16,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSocket } from "@/contexts/SocketContext";
+import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { LeadCard } from "@/components/LeadCard";
@@ -35,8 +37,10 @@ interface QueueLead {
   createdAt: string;
   callbackAt?: string | null;
   nextPassAt?: string | null;
+  passIntervalMinutes?: number | null;
   attemptCount?: number;
   assignedUserName?: string;
+  contactPreferences?: string[];
 }
 
 interface QueueData {
@@ -48,26 +52,18 @@ interface QueueData {
   total: number;
 }
 
-const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap }[] = [
-  { key: "new", label: "New", icon: "zap" },
-  { key: "reengagement", label: "Re-engage", icon: "refresh-cw" },
-  { key: "callbacks", label: "Callbacks", icon: "phone-incoming" },
-  { key: "old", label: "Old", icon: "clock" },
-  { key: "archive", label: "Archive", icon: "archive" },
+const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap; color: string }[] = [
+  { key: "new", label: "New", icon: "zap", color: "#EF4444" },
+  { key: "reengagement", label: "Re-engage", icon: "refresh-cw", color: "#8B5CF6" },
+  { key: "callbacks", label: "Callbacks", icon: "phone-incoming", color: "#F59E0B" },
+  { key: "old", label: "Old", icon: "clock", color: "#8B919E" },
+  { key: "archive", label: "Archive", icon: "archive", color: "#6B7280" },
 ];
-
-function getBadgeForTab(tab: Tab, lead: QueueLead): string | undefined {
-  if (tab === "new") return "NEW";
-  if (tab === "reengagement") return `Day ${lead.dayInSequence || 1}`;
-  if (tab === "callbacks") return "CALLBACK";
-  if (tab === "old") return "5+ DAYS";
-  if (tab === "archive") return "CLOSED";
-  return undefined;
-}
 
 export default function QueueScreen() {
   const { user } = useAuth();
   const { on, off } = useSocket();
+  const { effectiveTenantId, isAgency } = useTenant();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -80,9 +76,10 @@ export default function QueueScreen() {
   const fetchQueue = useCallback(async () => {
     if (!user) return;
     try {
+      const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
       const [queueData, archiveData] = await Promise.all([
-        apiFetch("/api/leads-hub/queue"),
-        apiFetch("/api/leads-hub/archive?limit=50"),
+        apiFetch(`/api/leads-hub/queue${tenantParam}`),
+        apiFetch(`/api/leads-hub/archive?limit=50${effectiveTenantId ? `&tenantId=${effectiveTenantId}` : ""}`),
       ]);
       setQueue({
         ...queueData,
@@ -93,9 +90,10 @@ export default function QueueScreen() {
     } finally {
       setLoading(false);
     }
-  }, [apiFetch, user]);
+  }, [apiFetch, user, effectiveTenantId]);
 
   useEffect(() => {
+    setLoading(true);
     fetchQueue();
   }, [fetchQueue]);
 
@@ -153,27 +151,33 @@ export default function QueueScreen() {
         </View>
       </View>
 
-      <View style={[styles.tabs, { borderBottomColor: colors.border }]}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={[styles.tabScroll, { borderBottomColor: colors.border }]}
+        contentContainerStyle={styles.tabScrollContent}
+      >
         {TABS.map(tab => {
           const isActive = activeTab === tab.key;
           const count = tabCounts[tab.key];
+          const tabColor = isActive ? tab.color : colors.mutedForeground;
           return (
             <TouchableOpacity
               key={tab.key}
-              style={[styles.tab, isActive && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
+              style={[styles.tab, isActive && { borderBottomColor: tab.color, borderBottomWidth: 2 }]}
               onPress={() => {
                 setActiveTab(tab.key);
                 if (Platform.OS !== "web") Haptics.selectionAsync();
               }}
               activeOpacity={0.7}
             >
-              <Feather name={tab.icon} size={14} color={isActive ? colors.primary : colors.mutedForeground} />
-              <Text style={[styles.tabLabel, { color: isActive ? colors.primary : colors.mutedForeground }]}>
+              <Feather name={tab.icon} size={13} color={tabColor} />
+              <Text style={[styles.tabLabel, { color: tabColor }]}>
                 {tab.label}
               </Text>
               {count > 0 && (
-                <View style={[styles.countBadge, { backgroundColor: isActive ? colors.primary : colors.secondary }]}>
-                  <Text style={[styles.countText, { color: isActive ? colors.primaryForeground : colors.mutedForeground }]}>
+                <View style={[styles.countBadge, { backgroundColor: isActive ? tab.color + "30" : colors.secondary }]}>
+                  <Text style={[styles.countText, { color: isActive ? tab.color : colors.mutedForeground }]}>
                     {count}
                   </Text>
                 </View>
@@ -181,7 +185,7 @@ export default function QueueScreen() {
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
 
       {loading ? (
         <View style={styles.centered}>
@@ -195,7 +199,6 @@ export default function QueueScreen() {
             <LeadCard
               lead={item}
               onPress={handleLeadPress}
-              showBadge={getBadgeForTab(activeTab, item)}
             />
           )}
           contentContainerStyle={[
@@ -229,17 +232,18 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontFamily: "Inter_700Bold" },
   totalBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   totalText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  tabs: { flexDirection: "row", paddingHorizontal: 8, borderBottomWidth: 1 },
+  tabScroll: { borderBottomWidth: 1, maxHeight: 44 },
+  tabScrollContent: { paddingHorizontal: 8, gap: 2 },
   tab: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 4,
+    gap: 5,
     paddingVertical: 10,
+    paddingHorizontal: 12,
     paddingBottom: 12,
   },
-  tabLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  tabLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   countBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, minWidth: 18, alignItems: "center" },
   countText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   listContent: { paddingHorizontal: 16, paddingTop: 12 },

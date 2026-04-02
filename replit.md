@@ -78,18 +78,22 @@ A native mobile app (`artifacts/mobile`) for sales reps/lead coordinators, mirro
 
 **Screens:**
 - **Login** (`app/login.tsx`): Email/password auth with Pulse logo and Rebel Red branding
-- **Dashboard** (`app/(tabs)/index.tsx`): HUD with date filters (Today/7D/30D/90D), live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback
-- **Lead Queue** (`app/(tabs)/queue.tsx`): Tabbed filtering (New, Re-engage, Callbacks, Old), pull-to-refresh, real-time updates
-- **Lead Detail** (`app/lead/[id].tsx`): Click-to-dial/SMS, action logging (call/text/VM), appointment booking, mark dead, activity history
+- **Dashboard** (`app/(tabs)/index.tsx`): HUD with date filters (Today/7D/30D/90D), live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback, tenant selector for agency users
+- **Lead Queue** (`app/(tabs)/queue.tsx`): Horizontally scrollable tabs (New, Re-engage, Callbacks, Old, Archive) with matching web colors, pull-to-refresh, real-time updates, tenant-scoped data
+- **Lead Detail** (`app/lead/[id].tsx`): Tabbed detail view (Actions, Details, Messages, History). Day badges (D1-D4, OLD, APPT, CB, DEAD) with web-matching colors. Contact flags (Text Only, Spanish, DNC). Callback scheduling. Podium chat integration with real-time Socket.IO message sync. Form fill display (appointment date/time, address, add-ons).
+- **Settings** (`app/(tabs)/settings.tsx`): Account info, password change, Podium connect/disconnect, sign out
 
 **Key Files:**
 - `contexts/AuthContext.tsx` — Auth state, SecureStore persistence, session cookie management
 - `contexts/SocketContext.tsx` — Socket.IO connection with cookie auth
+- `contexts/TenantContext.tsx` — Tenant switching for agency/super_admin users
 - `hooks/useApi.ts` — Authenticated API fetch hook
 - `hooks/usePushNotifications.ts` — Push notification registration with retry logic
+- `components/LeadCard.tsx` — Lead card with day badges, timer countdowns, contact flags matching web app
 - `constants/colors.ts` — Dark Pulse theme colors
 
 **Backend Push Infra:**
 - `push_tokens` table: `user_id`, `token`, `platform`, unique(user_id, token)
 - `POST/DELETE /api/push-tokens` — Registration endpoints
 - `api-server/src/services/push-notifications.ts` — Expo Push API service
+- `api-server/src/services/callback-scheduler.ts` — Polls every 60s for due callbacks, sends push notification to assigned CSR
