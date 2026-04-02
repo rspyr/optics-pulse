@@ -59,13 +59,12 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
-type QueueTab = "new" | "today" | "callbacks" | "reengagement" | "old" | "archive";
+type QueueTab = "new" | "callbacks" | "reengagement" | "old" | "archive";
 
 const QUEUE_TABS: { key: QueueTab; label: string; color: string }[] = [
   { key: "new", label: "New", color: "text-red-400" },
-  { key: "today", label: "Today", color: "text-blue-400" },
-  { key: "callbacks", label: "Callbacks", color: "text-amber-400" },
   { key: "reengagement", label: "Re-engage", color: "text-purple-400" },
+  { key: "callbacks", label: "Callbacks", color: "text-amber-400" },
   { key: "old", label: "Old Leads", color: "text-white/60" },
   { key: "archive", label: "Archive", color: "text-white/40" },
 ];
@@ -213,6 +212,8 @@ interface LeadData {
   nextPassAt?: string | null;
   passIntervalMinutes?: number | null;
   assignedAt?: string | null;
+  lastAttemptAt?: string | null;
+  attemptCount?: number;
 }
 
 interface HistoryEntry {
@@ -321,10 +322,10 @@ function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: numbe
 
 function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean, csrId?: number | null) {
   const [data, setData] = useState<{
-    newLeads: LeadData[]; today: LeadData[]; callbacks: LeadData[];
+    newLeads: LeadData[]; callbacks: LeadData[];
     reengagement: LeadData[]; oldLeads: LeadData[]; total: number;
     timezone?: string;
-  }>({ newLeads: [], today: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
+  }>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const shouldFetch = !isAgency || tenantId !== null;
 
@@ -570,6 +571,27 @@ function DayBadge({ hubStatus }: { hubStatus: string }) {
   );
 }
 
+function formatTimeAgo(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function ReengageBadge({ lastAttemptAt, attemptCount }: { lastAttemptAt?: string | null; attemptCount?: number }) {
+  if (!lastAttemptAt && !attemptCount) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border bg-purple-500/15 text-purple-400 border-purple-500/25">
+      {lastAttemptAt && formatTimeAgo(lastAttemptAt)}
+      {lastAttemptAt && attemptCount ? " · " : ""}
+      {attemptCount ? `${attemptCount} attempt${attemptCount !== 1 ? "s" : ""}` : ""}
+    </span>
+  );
+}
+
 function SourceTag({ source }: { source: string }) {
   const color = source.includes("Google") ? "bg-blue-500/15 text-blue-400 border-blue-500/20"
     : source.includes("Meta") || source.includes("Facebook") || source.includes("Instagram") ? "bg-indigo-500/15 text-indigo-400 border-indigo-500/20"
@@ -602,7 +624,7 @@ function CommissionTicker({ amount, onDone }: { amount: number; onDone: () => vo
   );
 }
 
-function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string>; timezone?: string }) {
+function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", showReengageBadge = false }: { lead: LeadData; onClick: () => void; funnelMap: Record<number, string>; timezone?: string; showReengageBadge?: boolean }) {
   return (
     <motion.div
       layout
@@ -620,6 +642,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York" }: {
             </h3>
             <DayBadge hubStatus={lead.hubStatus} />
             <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
+            {showReengageBadge && <ReengageBadge lastAttemptAt={lead.lastAttemptAt} attemptCount={lead.attemptCount} />}
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             <SourceTag source={lead.source} />
@@ -2061,7 +2084,7 @@ export default function Leads() {
   useEffect(() => { selectedLeadIdRef.current = selectedLead?.id ?? null; }, [selectedLead]);
   useEffect(() => {
     if (!selectedLeadIdRef.current) return;
-    const allLeads = [...queueData.newLeads, ...queueData.today, ...queueData.callbacks, ...queueData.reengagement, ...queueData.oldLeads];
+    const allLeads = [...queueData.newLeads, ...queueData.callbacks, ...queueData.reengagement, ...queueData.oldLeads];
     const updated = allLeads.find((l: LeadData) => l.id === selectedLeadIdRef.current);
     if (updated) setSelectedLead(updated);
   }, [queueData]);
@@ -2087,7 +2110,6 @@ export default function Leads() {
 
   const tabCounts: Record<QueueTab, number> = {
     new: queueData.newLeads.length,
-    today: queueData.today.length,
     callbacks: queueData.callbacks.length,
     reengagement: queueData.reengagement.length,
     old: queueData.oldLeads.length,
@@ -2097,7 +2119,6 @@ export default function Leads() {
   const getTabLeads = (): LeadData[] => {
     switch (activeTab) {
       case "new": return queueData.newLeads;
-      case "today": return queueData.today;
       case "callbacks": return queueData.callbacks;
       case "reengagement": return queueData.reengagement;
       case "old": return queueData.oldLeads;
@@ -2334,9 +2355,8 @@ export default function Leads() {
               <h3 className="font-display text-xl text-white mb-2">Queue Clear</h3>
               <p className="text-muted-foreground text-sm max-w-md mx-auto">
                 {activeTab === "new" ? "No new untouched leads right now." :
-                 activeTab === "today" ? "No leads updated today." :
                  activeTab === "callbacks" ? "No pending callbacks." :
-                 activeTab === "reengagement" ? "No re-engagement leads due." :
+                 activeTab === "reengagement" ? "No leads needing follow-up right now." :
                  "No old leads in queue."}
               </p>
             </PremiumCard>
@@ -2344,7 +2364,7 @@ export default function Leads() {
             <div className="space-y-2">
               <AnimatePresence mode="popLayout">
                 {tabLeads.map(lead => (
-                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} timezone={queueData.timezone || "America/New_York"} />
+                  <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} timezone={queueData.timezone || "America/New_York"} showReengageBadge={activeTab === "reengagement"} />
                 ))}
               </AnimatePresence>
             </div>
@@ -2363,16 +2383,12 @@ export default function Leads() {
                 <span className="text-white/60 font-mono">{queueData.newLeads.length}</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-blue-400">Today</span>
-                <span className="text-white/60 font-mono">{queueData.today.length}</span>
+                <span className="text-purple-400">Re-engage</span>
+                <span className="text-white/60 font-mono">{queueData.reengagement.length}</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-amber-400">Callbacks</span>
                 <span className="text-white/60 font-mono">{queueData.callbacks.length}</span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-purple-400">Re-engage</span>
-                <span className="text-white/60 font-mono">{queueData.reengagement.length}</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-white/50">Old</span>

@@ -56,9 +56,6 @@ const STAGES = [
   { value: "", label: "Any Stage" },
   { value: "new", label: "New Lead" },
   { value: "contacted", label: "Contacted" },
-  { value: "re-engage-3mo", label: "3 Month Re-engagement" },
-  { value: "re-engage-6mo", label: "6 Month Re-engagement" },
-  { value: "re-engage-9mo", label: "9 Month Re-engagement" },
 ];
 const DISPOSITIONS = [
   { value: "", label: "Any Disposition" },

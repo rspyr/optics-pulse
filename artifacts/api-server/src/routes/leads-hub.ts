@@ -4,7 +4,7 @@ import {
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
   tenantsTable,
 } from "@workspace/db";
-import { eq, and, sql, desc, asc, gte, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
+import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
@@ -62,7 +62,7 @@ function resolveTenantId(req: Request): number | null {
 
 router.get("/leads-hub/queue", async (req, res) => {
   const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.json({ newLeads: [], today: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 }); return; }
+  if (!tenantId) { res.json({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 }); return; }
 
   const tab = (req.query.tab as string) || "all";
   const sessionRole = (req.session as any)?.userRole as string | undefined;
@@ -74,22 +74,6 @@ router.get("/leads-hub/queue", async (req, res) => {
   const tz = tenant?.timezone || "America/New_York";
 
   const now = new Date();
-
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  });
-  const tzParts = fmt.formatToParts(now);
-  const g = (t: string) => parseInt(tzParts.find(p => p.type === t)?.value || "0");
-  const todayDateStr = `${g("year")}-${String(g("month")).padStart(2, "0")}-${String(g("day")).padStart(2, "0")}`;
-
-  const midnightWallUtc = Date.UTC(g("year"), g("month") - 1, g("day"), 0, 0, 0);
-  const approxMidnightUtc = new Date(midnightWallUtc);
-  const midParts = fmt.formatToParts(approxMidnightUtc);
-  const gm = (t: string) => parseInt(midParts.find(p => p.type === t)?.value || "0");
-  const wallAtMidnight = Date.UTC(gm("year"), gm("month") - 1, gm("day"), gm("hour") === 24 ? 0 : gm("hour"), gm("minute"), gm("second"));
-  const midnightOffset = wallAtMidnight - approxMidnightUtc.getTime();
-  const todayStartUtc = new Date(midnightWallUtc - midnightOffset);
 
   const visibilityFilter = or(isNull(leadsTable.visibleAfter), lte(leadsTable.visibleAfter, now));
   const baseConds = [eq(leadsTable.tenantId, tenantId), visibilityFilter];
@@ -118,14 +102,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       ))
       .orderBy(desc(leadsTable.createdAt)).limit(100) : [];
 
-    const todayLeads = (tab === "all" || tab === "today") ? await db.select().from(leadsTable)
-      .where(and(
-        ...baseConds,
-        inArray(leadsTable.hubStatus, activeStatuses),
-        hasRealAttempts,
-        gte(leadsTable.updatedAt, todayStartUtc),
-      ))
-      .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
+    const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
 
     const callbacks = (tab === "all" || tab === "callbacks") ? await db.select().from(leadsTable)
       .where(and(
@@ -139,17 +116,17 @@ router.get("/leads-hub/queue", async (req, res) => {
     const reengagement = (tab === "all" || tab === "reengagement") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
-        eq(leadsTable.hubStatus, "day_5_old"),
-        isNotNull(leadsTable.revisitDate),
-        lte(leadsTable.revisitDate, todayDateStr),
+        inArray(leadsTable.hubStatus, activeStatuses),
+        hasRealAttempts,
+        isNull(leadsTable.callbackAt),
+        gt(leadsTable.createdAt, fiveDaysAgo),
       ))
-      .orderBy(desc(leadsTable.revisitDate)).limit(100) : [];
+      .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
 
     const oldLeads = (tab === "all" || tab === "old") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
         eq(leadsTable.hubStatus, "day_5_old"),
-        or(isNull(leadsTable.revisitDate), sql`${leadsTable.revisitDate} > ${todayDateStr}`),
       ))
       .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
 
@@ -237,11 +214,35 @@ router.get("/leads-hub/queue", async (req, res) => {
       });
     }
 
+    const enrichedReengagement = enrichWithNextPass(reengagement);
+    type EnrichedLead = (typeof enrichedReengagement)[number];
+    type ReengageLead = EnrichedLead & { lastAttemptAt: string | null; attemptCount: number };
+    let reengagementWithMeta: ReengageLead[] = enrichedReengagement.map(l => ({ ...l, lastAttemptAt: null, attemptCount: 0 }));
+    if (reengagement.length > 0) {
+      const reengageIds = reengagement.map(l => l.id);
+      const attemptStats = await db
+        .select({
+          leadId: callAttemptsTable.leadId,
+          lastAttemptAt: sql<string>`MAX(${callAttemptsTable.createdAt})`,
+          attemptCount: sql<number>`COUNT(*)::int`,
+        })
+        .from(callAttemptsTable)
+        .where(and(
+          inArray(callAttemptsTable.leadId, reengageIds),
+          sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
+        ))
+        .groupBy(callAttemptsTable.leadId);
+      const statsMap = new Map(attemptStats.map(s => [s.leadId, s]));
+      reengagementWithMeta = enrichedReengagement.map(l => {
+        const stats = statsMap.get(l.id);
+        return { ...l, lastAttemptAt: stats?.lastAttemptAt || null, attemptCount: stats?.attemptCount || 0 };
+      });
+    }
+
     res.json({
       newLeads: enrichWithNextPass(newLeads),
-      today: enrichWithNextPass(todayLeads),
       callbacks: enrichWithNextPass(callbacks),
-      reengagement: enrichWithNextPass(reengagement),
+      reengagement: reengagementWithMeta,
       oldLeads: enrichWithNextPass(oldLeads),
       total: totalResult.count,
       timezone: tz,
@@ -296,7 +297,7 @@ router.post("/leads-hub/action", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
-  const { leadId, actionType, callResult, vmResult, textResult, deadReason, notes, callbackAt, revisitDate } = req.body;
+  const { leadId, actionType, callResult, vmResult, textResult, deadReason, notes, callbackAt } = req.body;
   if (!leadId || !actionType) { res.status(400).json({ error: "leadId and actionType are required" }); return; }
 
   const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
@@ -360,9 +361,6 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.callbackAt = new Date(callbackAt);
   }
 
-  if (revisitDate) {
-    updates.revisitDate = revisitDate;
-  }
 
   const shouldIncrementDay = (
     actionType === "call" && (callResult === "no_answer" || callResult === "left_voicemail" || callResult === "vm_full" || callResult === "vm_not_setup")
@@ -404,6 +402,16 @@ router.post("/leads-hub/action", async (req, res) => {
       ));
 
     if (unresponsiveCount >= UNRESPONSIVE_THRESHOLD) {
+      updates.hubStatus = "day_5_old";
+      updates.dayInSequence = 5;
+    }
+  }
+
+  const postStatus = (updates.hubStatus as string) || lead.hubStatus;
+  const skipAgeRule = ["appt_set", "appt_booked", "dead", "day_5_old"];
+  if (!skipAgeRule.includes(postStatus)) {
+    const leadAgeMs = Date.now() - new Date(lead.createdAt).getTime();
+    if (leadAgeMs >= 5 * 24 * 60 * 60 * 1000) {
       updates.hubStatus = "day_5_old";
       updates.dayInSequence = 5;
     }

@@ -19,9 +19,6 @@ const DEFAULT_SCRIPTS = [
   { type: "voicemail", name: "CallRail VM", sourceFilter: "CallRail", stageFilter: null, dispositionFilter: null, content: "Hi [NAME], [REP] here from [COMPANY], returning your call about [INTEREST]. Sorry I missed you — please give us a ring back and we'll take care of you. Talk soon!" },
   { type: "voicemail", name: "Default VM", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hi [NAME], this is [REP] with [COMPANY] calling about your [INTEREST] inquiry. We'd love to schedule a free estimate at your convenience. Please call us back when you get this. Thank you!" },
   { type: "email", name: "Follow-up Email", sourceFilter: null, stageFilter: null, dispositionFilter: null, content: "Hi [NAME],\n\nThank you for your interest in [INTEREST]. I'd love to help you schedule a free estimate at your convenience.\n\nWe have availability this week and our team is ready to assist. Simply reply to this email or call us to get started.\n\nBest regards,\n[REP]\n[COMPANY]" },
-  { type: "text", name: "3 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-3mo", dispositionFilter: null, content: "Hi [NAME], it's [REP] from [COMPANY]. It's been a few months since we last connected about [INTEREST]. We have some great seasonal specials running — would you like to hear about them?" },
-  { type: "text", name: "6 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-6mo", dispositionFilter: null, content: "Hey [NAME]! [REP] here from [COMPANY]. It's been about 6 months since your [INTEREST] inquiry. Just checking in — are you still looking for help? We'd love to get you taken care of!" },
-  { type: "text", name: "9 Month Re-engagement", sourceFilter: null, stageFilter: "re-engage-9mo", dispositionFilter: null, content: "Hi [NAME], this is [REP] from [COMPANY]. It's been a while since we chatted about [INTEREST]. I wanted to reach out one more time — we have some end-of-season deals that might interest you. Let me know!" },
   { type: "call", name: "Callback Requested", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME], this is [REP] from [COMPANY] calling you back as requested. I'd love to get you scheduled for [INTEREST]. Do you have a moment?" },
   { type: "text", name: "Callback Requested Text", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME]! This is [REP] from [COMPANY] — following up as you requested. Ready to schedule your [INTEREST] appointment? Reply YES and I'll get you set up!" },
   { type: "voicemail", name: "Callback Requested VM", sourceFilter: null, stageFilter: null, dispositionFilter: "callback_requested", content: "Hi [NAME], this is [REP] from [COMPANY] returning your call as you requested. We'd love to get you scheduled for [INTEREST]. Please call us back at your convenience!" },
@@ -118,7 +115,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
-  const VALID_TYPES = ["call", "voicemail", "text", "email", "objection", "closing", "follow-up", "re-engagement"];
+  const VALID_TYPES = ["call", "voicemail", "text", "email", "objection", "closing", "follow-up"];
   const { type, name, sourceFilter, stageFilter, dispositionFilter, content } = req.body;
   if (!type || !name || !content) {
     res.status(400).json({ error: "type, name, and content are required" });
