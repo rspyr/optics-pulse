@@ -151,7 +151,6 @@ export default function QueueScreen() {
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
 
   const [toastLead, setToastLead] = useState<QueueLead | null>(null);
-  const shownPushLeadIds = useRef(new Set<number>());
 
   useEffect(() => {
     if (!isManager || !effectiveTenantId) return;
@@ -202,7 +201,7 @@ export default function QueueScreen() {
       fetchQueue();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      if (data && data.id && AppState.currentState === "active" && !shownPushLeadIds.current.has(data.id)) {
+      if (data && data.id && AppState.currentState === "active") {
         setToastLead(data);
       }
     };

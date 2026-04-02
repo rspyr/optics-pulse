@@ -458,10 +458,10 @@ export default function LeadDetailScreen() {
                   blocksCall
                     ? { backgroundColor: "#EF444410", borderWidth: 1, borderColor: "#EF444430" }
                     : { backgroundColor: colors.emerald + "15" },
-                  (!lead.phone || actionStep !== null) && { opacity: 0.5 },
+                  (blocksCall || !lead.phone || actionStep !== null) && { opacity: 0.5 },
                 ]}
                 onPress={handleCall}
-                disabled={!lead.phone || actionStep !== null}
+                disabled={blocksCall || !lead.phone || actionStep !== null}
                 activeOpacity={0.7}
               >
                 <Feather name={blocksCall ? "slash" : "phone"} size={18} color={blocksCall ? "#EF4444" : colors.emerald} />
@@ -981,8 +981,8 @@ export default function LeadDetailScreen() {
                       style={[
                         styles.messageBubble,
                         msg.direction === "outbound"
-                          ? { backgroundColor: colors.primary + "15", alignSelf: "flex-end" as const }
-                          : { backgroundColor: colors.secondary, alignSelf: "flex-start" as const },
+                          ? { backgroundColor: colors.primary + "15", alignSelf: "flex-end" }
+                          : { backgroundColor: colors.secondary, alignSelf: "flex-start" },
                       ]}
                     >
                       {msg.channelType === "call" || msg.channelType === "phone_call" ? (
@@ -1112,7 +1112,7 @@ const styles = StyleSheet.create({
   outcomeBtn: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1 },
   outcomeBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   resultGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  resultGridItem: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, minWidth: "45%" as unknown as number },
+  resultGridItem: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1 },
   resultGridText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   cancelInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", minHeight: 80, textAlignVertical: "top" },
   backLink: { fontSize: 12, fontFamily: "Inter_500Medium", textAlign: "center", paddingTop: 4 },
@@ -1146,7 +1146,7 @@ const styles = StyleSheet.create({
   emptyMsgText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   emptyMsgSub: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center" },
   messagesList: { gap: 8 },
-  messageBubble: { maxWidth: "80%" as unknown as number, padding: 10, borderRadius: 12, gap: 4 },
+  messageBubble: { padding: 10, borderRadius: 12, gap: 4 },
   callEntry: { flexDirection: "row", alignItems: "center", gap: 6 },
   callEntryText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   msgBody: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20 },
