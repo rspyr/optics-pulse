@@ -11,11 +11,13 @@ import {
   ActivityIndicator,
   TextInput,
   KeyboardAvoidingView,
+  Modal,
 } from "react-native";
 import { useLocalSearchParams, router, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { useSocket } from "@/contexts/SocketContext";
@@ -181,7 +183,9 @@ export default function LeadDetailScreen() {
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
   const [apptBookedChannel, setApptBookedChannel] = useState<"call" | "text" | "voicemail_drop">("call");
-  const [callbackDate, setCallbackDate] = useState("");
+  const [callbackDate, setCallbackDate] = useState<Date>(new Date(Date.now() + 3600000));
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
   const [showTransfer, setShowTransfer] = useState(false);
@@ -257,7 +261,7 @@ export default function LeadDetailScreen() {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showFeedback("success", `Action logged — ${res.lead?.hubStatus || "updated"}`);
       setActionStep(null);
-      setCallbackDate("");
+      setCallbackDate(new Date(Date.now() + 3600000));
       setCancelReason("");
       fetchLead();
       fetchHistory();
@@ -534,37 +538,59 @@ export default function LeadDetailScreen() {
             </View>
           </View>
 
-          {showTransfer && (
-            <View style={[styles.transferCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.transferTitle, { color: colors.mutedForeground }]}>Transfer to another CSR:</Text>
-              <View style={styles.transferList}>
-                {csrs.filter(c => c.id !== lead.assignedCsrId).map(c => (
+          <Modal
+            visible={showTransfer}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowTransfer(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
+                <View style={styles.modalHandle} />
+                <Text style={[styles.modalTitle, { color: colors.foreground }]}>Transfer Lead</Text>
+                <Text style={[styles.transferTitle, { color: colors.mutedForeground }]}>Select a CSR to transfer this lead to:</Text>
+                <ScrollView style={styles.transferScrollList}>
+                  {csrs.filter(c => c.id !== lead.assignedCsrId).map(c => (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={[
+                        styles.transferItem,
+                        { backgroundColor: selectedCsr === c.id ? colors.primary + "20" : colors.secondary, borderColor: selectedCsr === c.id ? colors.primary + "40" : colors.border },
+                      ]}
+                      onPress={() => setSelectedCsr(c.id)}
+                    >
+                      <View style={styles.transferItemRow}>
+                        <View style={[styles.transferAvatar, { backgroundColor: colors.primary + "15" }]}>
+                          <Text style={[styles.transferAvatarText, { color: colors.primary }]}>{c.name.charAt(0)}</Text>
+                        </View>
+                        <Text style={[styles.transferItemText, { color: selectedCsr === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
+                      </View>
+                      {selectedCsr === c.id && <Feather name="check-circle" size={18} color={colors.primary} />}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <View style={styles.modalActions}>
                   <TouchableOpacity
-                    key={c.id}
-                    style={[
-                      styles.transferItem,
-                      { backgroundColor: selectedCsr === c.id ? colors.primary + "20" : colors.secondary, borderColor: selectedCsr === c.id ? colors.primary + "40" : colors.border },
-                    ]}
-                    onPress={() => setSelectedCsr(c.id)}
+                    style={[styles.modalCancelBtn, { borderColor: colors.border }]}
+                    onPress={() => { setShowTransfer(false); setSelectedCsr(null); }}
                   >
-                    <Text style={[styles.transferItemText, { color: selectedCsr === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
-                    {selectedCsr === c.id && <Feather name="check" size={14} color={colors.primary} />}
+                    <Text style={[styles.modalCancelText, { color: colors.mutedForeground }]}>Cancel</Text>
                   </TouchableOpacity>
-                ))}
+                  <TouchableOpacity
+                    style={[styles.transferConfirmBtn, { backgroundColor: colors.primary, opacity: !selectedCsr || actionLoading ? 0.5 : 1 }]}
+                    onPress={handleTransfer}
+                    disabled={!selectedCsr || actionLoading}
+                  >
+                    {actionLoading ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <Text style={styles.transferConfirmText}>Transfer</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-              <TouchableOpacity
-                style={[styles.transferConfirmBtn, { backgroundColor: colors.primary + "20", opacity: !selectedCsr || actionLoading ? 0.5 : 1 }]}
-                onPress={handleTransfer}
-                disabled={!selectedCsr || actionLoading}
-              >
-                {actionLoading ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <Text style={[styles.transferConfirmText, { color: colors.primary }]}>Transfer</Text>
-                )}
-              </TouchableOpacity>
             </View>
-          )}
+          </Modal>
 
           {feedback && (
             <View style={[
@@ -679,7 +705,7 @@ export default function LeadDetailScreen() {
                     if (r.value === "appointment_set") {
                       logAction({ actionType: "call", callResult: "spoke_with_customer", appointmentSet: true });
                     } else if (r.value === "call_back") {
-                      setCallbackDate("");
+                      setCallbackDate(new Date(Date.now() + 3600000));
                       setActionStep("call_callback");
                     } else if (r.value === "dead") {
                       setDeadFromFlow("call");
@@ -700,24 +726,63 @@ export default function LeadDetailScreen() {
           {actionStep === "call_callback" && (
             <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>When should we call back?</Text>
-              <TextInput
-                style={[styles.cancelInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                placeholder="YYYY-MM-DD HH:MM"
-                placeholderTextColor={colors.mutedForeground}
-                value={callbackDate}
-                onChangeText={setCallbackDate}
-              />
               <TouchableOpacity
-                style={[styles.outcomeBtn, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30", opacity: actionLoading || !callbackDate ? 0.5 : 1 }]}
+                style={[styles.datePickerBtn, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Feather name="calendar" size={16} color="#F59E0B" />
+                <Text style={[styles.datePickerText, { color: colors.foreground }]}>
+                  {callbackDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.datePickerBtn, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Feather name="clock" size={16} color="#F59E0B" />
+                <Text style={[styles.datePickerText, { color: colors.foreground }]}>
+                  {callbackDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                </Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={callbackDate}
+                  mode="date"
+                  minimumDate={new Date()}
+                  onChange={(_, date) => {
+                    setShowDatePicker(false);
+                    if (date) {
+                      const updated = new Date(callbackDate);
+                      updated.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                      setCallbackDate(updated);
+                    }
+                  }}
+                />
+              )}
+              {showTimePicker && (
+                <DateTimePicker
+                  value={callbackDate}
+                  mode="time"
+                  onChange={(_, date) => {
+                    setShowTimePicker(false);
+                    if (date) {
+                      const updated = new Date(callbackDate);
+                      updated.setHours(date.getHours(), date.getMinutes());
+                      setCallbackDate(updated);
+                    }
+                  }}
+                />
+              )}
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30", opacity: actionLoading ? 0.5 : 1 }]}
                 onPress={() => {
-                  const parsed = new Date(callbackDate);
-                  if (isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
-                    showFeedback("error", "Enter a valid future date/time");
+                  if (callbackDate.getTime() <= Date.now()) {
+                    showFeedback("error", "Please select a future date/time");
                     return;
                   }
-                  logAction({ actionType: "call", callResult: "spoke_with_customer", callbackAt: parsed.toISOString() });
+                  logAction({ actionType: "call", callResult: "spoke_with_customer", callbackAt: callbackDate.toISOString() });
                 }}
-                disabled={actionLoading || !callbackDate}
+                disabled={actionLoading}
               >
                 {actionLoading ? <ActivityIndicator size="small" color="#F59E0B" /> : <Text style={[styles.outcomeBtnText, { color: "#F59E0B" }]}>Log Callback</Text>}
               </TouchableOpacity>
@@ -1101,8 +1166,21 @@ const styles = StyleSheet.create({
   transferList: { gap: 6 },
   transferItem: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
   transferItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
-  transferConfirmBtn: { paddingVertical: 10, borderRadius: 8, alignItems: "center" },
-  transferConfirmText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  transferScrollList: { maxHeight: 300 },
+  transferItemRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  transferAvatar: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  transferAvatarText: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  transferConfirmBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center" },
+  transferConfirmText: { fontSize: 14, fontFamily: "Inter_700Bold", color: "#FFF" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
+  modalSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12, gap: 12 },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#888", alignSelf: "center", marginBottom: 4 },
+  modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
+  modalActions: { flexDirection: "row", gap: 10, marginTop: 4 },
+  modalCancelBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", borderWidth: 1 },
+  modalCancelText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  datePickerBtn: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1 },
+  datePickerText: { fontSize: 15, fontFamily: "Inter_500Medium" },
   feedbackBar: { marginHorizontal: 16, marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
   feedbackText: { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1 },
   actionCard: { marginHorizontal: 16, marginTop: 8, marginBottom: 12, padding: 16, borderRadius: 14, borderWidth: 1, gap: 12 },

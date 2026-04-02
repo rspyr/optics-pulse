@@ -17,6 +17,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { SocketProvider } from "@/contexts/SocketContext";
 import { TenantProvider } from "@/contexts/TenantContext";
+import { CsrFilterProvider } from "@/contexts/CsrFilterContext";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { useColors } from "@/hooks/useColors";
 
@@ -84,12 +85,14 @@ export default function RootLayout() {
           <AuthProvider>
             <SocketProvider>
               <TenantProvider>
-                <GestureHandlerRootView>
-                  <KeyboardProvider>
-                    <PushRegistrar />
-                    <RootLayoutNav />
-                  </KeyboardProvider>
-                </GestureHandlerRootView>
+                <CsrFilterProvider>
+                  <GestureHandlerRootView>
+                    <KeyboardProvider>
+                      <PushRegistrar />
+                      <RootLayoutNav />
+                    </KeyboardProvider>
+                  </GestureHandlerRootView>
+                </CsrFilterProvider>
               </TenantProvider>
             </SocketProvider>
           </AuthProvider>

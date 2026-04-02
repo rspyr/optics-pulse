@@ -17,6 +17,7 @@ import { useSocket } from "@/contexts/SocketContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
+import { useCsrFilter } from "@/contexts/CsrFilterContext";
 import { StatCard } from "@/components/StatCard";
 
 interface HudStats {
@@ -74,17 +75,11 @@ function getTierColor(tier: string): string {
   return "#8B919E";
 }
 
-const MANAGER_ROLES = ["client_admin", "agency_user", "super_admin"];
-
-interface CsrOption {
-  id: number;
-  name: string;
-}
-
 export default function HudScreen() {
   const { user, logout } = useAuth();
   const { connected, on, off } = useSocket();
   const { tenants, selectedTenantId, setSelectedTenantId, effectiveTenantId, isAgency } = useTenant();
+  const { csrList, selectedCsrId, setSelectedCsrId, isManager } = useCsrFilter();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -93,19 +88,7 @@ export default function HudScreen() {
   const [timeframe, setTimeframe] = useState<HudTimeframe>("today");
   const [tenantOpen, setTenantOpen] = useState(false);
   const isWeb = Platform.OS === "web";
-
-  const isManager = MANAGER_ROLES.includes(user?.role || "");
-  const [csrList, setCsrList] = useState<CsrOption[]>([]);
-  const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    if (!isManager || !effectiveTenantId) return;
-    const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
-    apiFetch(`/api/leads-hub/csrs${tenantParam}`)
-      .then(d => setCsrList(d.csrs || []))
-      .catch(() => {});
-  }, [effectiveTenantId, isManager]);
 
   const fetchStats = useCallback(async () => {
     if (!user) return;

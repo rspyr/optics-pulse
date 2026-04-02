@@ -21,6 +21,7 @@ import { useSocket } from "@/contexts/SocketContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
+import { useCsrFilter } from "@/contexts/CsrFilterContext";
 import { LeadCard } from "@/components/LeadCard";
 
 type Tab = "new" | "reengagement" | "callbacks" | "old" | "archive";
@@ -45,11 +46,6 @@ interface QueueLead {
   contactPreferences?: string[];
 }
 
-interface CsrOption {
-  id: number;
-  name: string;
-}
-
 interface QueueData {
   newLeads: QueueLead[];
   callbacks: QueueLead[];
@@ -66,8 +62,6 @@ const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap; colo
   { key: "old", label: "Old", icon: "clock", color: "#8B919E" },
   { key: "archive", label: "Archive", icon: "archive", color: "#6B7280" },
 ];
-
-const MANAGER_ROLES = ["client_admin", "agency_user", "super_admin"];
 
 const EMPTY_MESSAGES: Record<Tab, string> = {
   new: "No new untouched leads right now.",
@@ -136,6 +130,7 @@ export default function QueueScreen() {
   const { user } = useAuth();
   const { on, off } = useSocket();
   const { effectiveTenantId } = useTenant();
+  const { csrList, selectedCsrId, setSelectedCsrId, isManager } = useCsrFilter();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -144,21 +139,10 @@ export default function QueueScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
-
-  const isManager = MANAGER_ROLES.includes(user?.role || "");
-  const [csrList, setCsrList] = useState<CsrOption[]>([]);
-  const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
 
   const [toastLead, setToastLead] = useState<QueueLead | null>(null);
-
-  useEffect(() => {
-    if (!isManager || !effectiveTenantId) return;
-    const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
-    apiFetch(`/api/leads-hub/csrs${tenantParam}`)
-      .then(d => setCsrList(d.csrs || []))
-      .catch(() => {});
-  }, [effectiveTenantId, isManager]);
+  const recentToastIds = useRef(new Set<number>());
 
   const fetchQueue = useCallback(async () => {
     if (!user) return;
@@ -201,7 +185,9 @@ export default function QueueScreen() {
       fetchQueue();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      if (data && data.id && AppState.currentState === "active") {
+      if (data && data.id && AppState.currentState === "active" && !recentToastIds.current.has(data.id)) {
+        recentToastIds.current.add(data.id);
+        setTimeout(() => recentToastIds.current.delete(data.id), 120000);
         setToastLead(data);
       }
     };
