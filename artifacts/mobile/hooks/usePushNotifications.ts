@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
+import { router } from "expo-router";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApi } from "@/hooks/useApi";
 
@@ -60,9 +61,16 @@ export function usePushNotifications() {
       }
     })();
 
-    notificationListener.current = Notifications.addNotificationReceivedListener(() => {});
+    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
+      console.log("[Push] Notification received:", notification.request.content.title);
+    });
 
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(() => {});
+    responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (data?.leadId) {
+        router.push({ pathname: "/lead/[id]", params: { id: String(data.leadId) } });
+      }
+    });
 
     return () => {
       if (notificationListener.current) {

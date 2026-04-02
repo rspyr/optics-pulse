@@ -37,7 +37,7 @@ function formatSpeed(seconds: number): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
-function getTierColor(tier: string, colors: any): string {
+function getTierColor(tier: string, colors: ReturnType<typeof useColors>): string {
   if (tier === "gold") return "#FFD700";
   if (tier === "silver") return "#C0C0C0";
   if (tier === "bronze") return "#CD7F32";

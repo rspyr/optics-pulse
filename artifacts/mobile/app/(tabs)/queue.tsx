@@ -21,6 +21,27 @@ import { LeadCard } from "@/components/LeadCard";
 
 type Tab = "new" | "reengagement" | "callbacks" | "old";
 
+interface QueueLead {
+  id: number;
+  name: string;
+  phone?: string;
+  email?: string;
+  source?: string;
+  hubStatus?: string;
+  dayInSequence?: number;
+  createdAt?: string;
+  callbackAt?: string;
+  assignedUserName?: string;
+}
+
+interface QueueData {
+  newLeads: QueueLead[];
+  callbacks: QueueLead[];
+  reengagement: QueueLead[];
+  oldLeads: QueueLead[];
+  total: number;
+}
+
 const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap }[] = [
   { key: "new", label: "New", icon: "zap" },
   { key: "reengagement", label: "Re-engage", icon: "refresh-cw" },
@@ -28,7 +49,7 @@ const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap }[] =
   { key: "old", label: "Old", icon: "archive" },
 ];
 
-function getBadgeForTab(tab: Tab, lead: any): string | undefined {
+function getBadgeForTab(tab: Tab, lead: QueueLead): string | undefined {
   if (tab === "new") return "NEW";
   if (tab === "reengagement") return `Day ${lead.dayInSequence || 1}`;
   if (tab === "callbacks") return "CALLBACK";
@@ -43,7 +64,7 @@ export default function QueueScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>("new");
-  const [queue, setQueue] = useState<any>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
+  const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
@@ -84,11 +105,11 @@ export default function QueueScreen() {
     setRefreshing(false);
   };
 
-  const handleLeadPress = (lead: any) => {
+  const handleLeadPress = (lead: QueueLead) => {
     router.push({ pathname: "/lead/[id]", params: { id: String(lead.id), lead: JSON.stringify(lead) } });
   };
 
-  const getLeadsForTab = (): any[] => {
+  const getLeadsForTab = (): QueueLead[] => {
     switch (activeTab) {
       case "new": return queue.newLeads || [];
       case "reengagement": return queue.reengagement || [];

@@ -21,7 +21,8 @@ export function useApi() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "Request failed" }));
-      throw new Error((err as any).error || `HTTP ${res.status}`);
+      const errorBody = err as { error?: string };
+      throw new Error(errorBody.error || `HTTP ${res.status}`);
     }
     return res.json();
   }, [sessionCookie]);

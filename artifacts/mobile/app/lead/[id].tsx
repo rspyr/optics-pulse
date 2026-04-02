@@ -42,6 +42,22 @@ const DEAD_REASONS = [
   { key: "other", label: "Other" },
 ];
 
+interface LeadDetail {
+  id: number;
+  name: string;
+  phone?: string;
+  email?: string;
+  source?: string;
+  hubStatus?: string;
+  dayInSequence?: number;
+  createdAt?: string;
+  notes?: string;
+  assignedUserName?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+}
+
 interface HistoryItem {
   id: number;
   actionType: string;
@@ -58,7 +74,7 @@ export default function LeadDetailScreen() {
   const insets = useSafeAreaInsets();
   const isWeb = Platform.OS === "web";
 
-  const [lead, setLead] = useState<any>(() => {
+  const [lead, setLead] = useState<LeadDetail | null>(() => {
     if (params.lead) {
       try { return JSON.parse(params.lead); } catch { return null; }
     }
@@ -78,9 +94,9 @@ export default function LeadDetailScreen() {
       setFetchError(null);
       const data = await apiFetch(`/api/leads/${params.id}`);
       setLead(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[LeadDetail] Failed to fetch lead:", err);
-      setFetchError(err?.message || "Failed to load lead");
+      setFetchError(err instanceof Error ? err.message : "Failed to load lead");
     }
   }, [apiFetch, params.id]);
 
@@ -104,7 +120,7 @@ export default function LeadDetailScreen() {
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      const body: any = { leadId: Number(params.id), actionType, notes: notes || undefined };
+      const body: Record<string, unknown> = { leadId: Number(params.id), actionType, notes: notes || undefined };
       if (actionType === "call") body.callResult = result;
       else if (actionType === "text") body.textResult = result;
       else body.vmResult = "yes";
@@ -422,7 +438,7 @@ const styles = StyleSheet.create({
   actionTypeText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   notesInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", minHeight: 60, textAlignVertical: "top" },
   resultGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  resultBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, minWidth: "30%" as any },
+  resultBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, minWidth: 100 },
   resultBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   deadBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
   deadBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },

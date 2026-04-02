@@ -57,7 +57,7 @@ async function removeValue(key: string) {
 }
 
 function extractSetCookie(headers: Headers): string | null {
-  const raw = (headers as any).get?.("set-cookie");
+  const raw = headers.get("set-cookie");
   if (!raw) return null;
   const match = raw.match(/mos\.sid=[^;]+/);
   return match ? match[0] : null;
@@ -116,7 +116,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        return { success: false, error: (err as any).error || "Login failed" };
+        const errorBody = err as { error?: string };
+        return { success: false, error: errorBody.error || "Login failed" };
       }
 
       const cookie = extractSetCookie(res.headers);

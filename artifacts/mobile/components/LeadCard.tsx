@@ -36,7 +36,7 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
-function getUrgencyColor(lead: Lead, colors: any): string {
+function getUrgencyColor(lead: Lead, colors: ReturnType<typeof useColors>): string {
   if (!lead.hubStatus) return colors.mutedForeground;
   if (lead.hubStatus === "day_1") return colors.emerald;
   if (lead.hubStatus === "day_2") return colors.amber;
