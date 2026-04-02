@@ -223,7 +223,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       const attemptStats = await db
         .select({
           leadId: callAttemptsTable.leadId,
-          lastAttemptAt: sql<string>`MAX(${callAttemptsTable.createdAt})`,
+          lastAttemptAt: sql<string>`MAX(${callAttemptsTable.attemptedAt})`,
           attemptCount: sql<number>`COUNT(*)::int`,
         })
         .from(callAttemptsTable)
