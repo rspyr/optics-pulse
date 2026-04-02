@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  type LayoutChangeEvent,
+  Dimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -69,6 +71,8 @@ const EMPTY_MESSAGES: Record<Tab, string> = {
   archive: "No archived leads.",
 };
 
+const TAB_SCROLL_PADDING = 24;
+
 export default function QueueScreen() {
   const { user } = useAuth();
   const { on, off } = useSocket();
@@ -83,6 +87,31 @@ export default function QueueScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
+
+  const tabScrollRef = useRef<ScrollView>(null);
+  const tabLayouts = useRef<Record<string, { x: number; width: number }>>({});
+  const scrollViewWidth = useRef(Dimensions.get("window").width);
+
+  const handleTabLayout = useCallback((key: string, event: LayoutChangeEvent) => {
+    const { x, width } = event.nativeEvent.layout;
+    tabLayouts.current[key] = { x, width };
+  }, []);
+
+  const handleScrollViewLayout = useCallback((event: LayoutChangeEvent) => {
+    scrollViewWidth.current = event.nativeEvent.layout.width;
+  }, []);
+
+  const scrollTabIntoView = useCallback((tabKey: string) => {
+    const layout = tabLayouts.current[tabKey];
+    if (!layout || !tabScrollRef.current) return;
+
+    const viewWidth = scrollViewWidth.current;
+    const tabCenter = layout.x + layout.width / 2;
+    const scrollTarget = tabCenter - viewWidth / 2;
+    const clampedTarget = Math.max(0, scrollTarget);
+
+    tabScrollRef.current.scrollTo({ x: clampedTarget, animated: true });
+  }, []);
 
   const fetchQueue = useCallback(async () => {
     if (!user) return;
@@ -217,10 +246,12 @@ export default function QueueScreen() {
       )}
 
       <ScrollView
+        ref={tabScrollRef}
         horizontal
         showsHorizontalScrollIndicator={false}
         style={[styles.tabScroll, { borderBottomColor: colors.border }]}
         contentContainerStyle={styles.tabScrollContent}
+        onLayout={handleScrollViewLayout}
       >
         {TABS.map(tab => {
           const isActive = activeTab === tab.key;
@@ -230,8 +261,10 @@ export default function QueueScreen() {
             <TouchableOpacity
               key={tab.key}
               style={[styles.tab, isActive && { borderBottomColor: tab.color, borderBottomWidth: 2 }]}
+              onLayout={(e) => handleTabLayout(tab.key, e)}
               onPress={() => {
                 setActiveTab(tab.key);
+                scrollTabIntoView(tab.key);
                 if (Platform.OS !== "web") Haptics.selectionAsync();
               }}
               activeOpacity={0.7}

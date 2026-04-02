@@ -60,7 +60,19 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     path: "/api/socket.io",
   });
 
-  io.engine.use(sessionMiddleware);
+  io.engine.use((req: any, res: any, next: any) => {
+    const authHeader = req.headers?.authorization;
+    if (authHeader && typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.slice(7);
+      if (token && (!req.headers.cookie || !req.headers.cookie.includes("mos.sid="))) {
+        const cookieValue = "mos.sid=" + encodeURIComponent(token);
+        req.headers.cookie = req.headers.cookie
+          ? req.headers.cookie + "; " + cookieValue
+          : cookieValue;
+      }
+    }
+    (sessionMiddleware as any)(req, res, next);
+  });
 
   io.on("connection", (socket: Socket) => {
     const req = socket.request as { session?: { userId?: number; userRole?: string; tenantId?: number }; sessionID?: string };

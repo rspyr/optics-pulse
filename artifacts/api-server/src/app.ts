@@ -47,6 +47,20 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
+app.use((req, _res, next) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    if (token && !req.headers.cookie?.includes("mos.sid=")) {
+      const cookieValue = "mos.sid=" + encodeURIComponent(token);
+      req.headers.cookie = req.headers.cookie
+        ? req.headers.cookie + "; " + cookieValue
+        : cookieValue;
+    }
+  }
+  next();
+});
+
 export const sessionMiddleware = session({
   store: new PgStore({
     pool: pool as never,

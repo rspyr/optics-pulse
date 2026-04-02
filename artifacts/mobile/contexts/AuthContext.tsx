@@ -19,6 +19,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   sessionCookie: string | null;
+  bearerToken: string | null;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -27,6 +28,7 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => ({ success: false }),
   logout: async () => {},
   sessionCookie: null,
+  bearerToken: null,
 });
 
 export function useAuth() {
@@ -63,38 +65,59 @@ function extractSetCookie(headers: Headers): string | null {
   return match ? match[0] : null;
 }
 
+function extractBearerFromCookie(cookieStr: string): string | null {
+  const match = cookieStr.match(/^mos\.sid=(.+)$/);
+  if (match) {
+    return decodeURIComponent(match[1]);
+  }
+  return null;
+}
+
+function buildAuthHeaders(bearerToken: string | null, sessionCookie: string | null): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (Platform.OS !== "web" && bearerToken) {
+    headers["Authorization"] = `Bearer ${bearerToken}`;
+  } else if (sessionCookie) {
+    headers["Cookie"] = sessionCookie;
+  }
+  return headers;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionCookie, setSessionCookie] = useState<string | null>(null);
-
-  const buildHeaders = useCallback((extra?: Record<string, string>) => {
-    const h: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...extra,
-    };
-    if (sessionCookie) {
-      h["Cookie"] = sessionCookie;
-    }
-    return h;
-  }, [sessionCookie]);
+  const [bearerToken, setBearerToken] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
+        const storedToken = await getValue("pulse_bearer_token");
         const storedCookie = await getValue("pulse_session");
-        if (storedCookie) {
-          setSessionCookie(storedCookie);
+
+        if (storedToken || storedCookie) {
+          if (storedToken) setBearerToken(storedToken);
+          if (storedCookie) setSessionCookie(storedCookie);
+
+          const authHeaders: Record<string, string> = {};
+          if (Platform.OS !== "web" && storedToken) {
+            authHeaders["Authorization"] = `Bearer ${storedToken}`;
+          } else if (storedCookie) {
+            authHeaders["Cookie"] = storedCookie;
+          }
+
           const res = await fetch(`${API_BASE}/api/auth/me`, {
             credentials: "include",
-            headers: { Cookie: storedCookie },
+            headers: authHeaders,
           });
           if (res.ok) {
             const data = await res.json();
             setUser(data);
           } else {
             await removeValue("pulse_session");
+            await removeValue("pulse_bearer_token");
             setSessionCookie(null);
+            setBearerToken(null);
           }
         }
       } catch (err) {
@@ -122,10 +145,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const data = await res.json();
 
+      if (data.bearerToken) {
+        setBearerToken(data.bearerToken);
+        await storeValue("pulse_bearer_token", data.bearerToken);
+      }
+
       const cookie = data.sessionToken || extractSetCookie(res.headers);
       if (cookie) {
         setSessionCookie(cookie);
         await storeValue("pulse_session", cookie);
+
+        if (!data.bearerToken) {
+          const extracted = extractBearerFromCookie(cookie);
+          if (extracted) {
+            setBearerToken(extracted);
+            await storeValue("pulse_bearer_token", extracted);
+          }
+        }
       }
 
       setUser(data as AuthUser);
@@ -136,17 +172,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    const headers: Record<string, string> = {};
-    if (sessionCookie) headers["Cookie"] = sessionCookie;
+    const headers: Record<string, string> = buildAuthHeaders(bearerToken, sessionCookie);
 
     try {
-      const storedToken = await getValue("pulse_push_token");
-      if (storedToken) {
+      const storedPushToken = await getValue("pulse_push_token");
+      if (storedPushToken) {
         await fetch(`${API_BASE}/api/push-tokens`, {
           method: "DELETE",
           credentials: "include",
           headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify({ token: storedToken }),
+          body: JSON.stringify({ token: storedPushToken }),
         }).catch(() => {});
         await removeValue("pulse_push_token");
       }
@@ -161,11 +196,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
     setUser(null);
     setSessionCookie(null);
+    setBearerToken(null);
     await removeValue("pulse_session");
-  }, [sessionCookie]);
+    await removeValue("pulse_bearer_token");
+  }, [sessionCookie, bearerToken]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, sessionCookie }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, sessionCookie, bearerToken }}>
       {children}
     </AuthContext.Provider>
   );

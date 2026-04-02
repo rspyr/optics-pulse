@@ -7,10 +7,13 @@ import { requireAuth } from "../middleware/auth";
 
 const SESSION_SECRET = process.env.SESSION_SECRET || "mos-dev-secret-change-in-production";
 
-function buildSessionCookie(sessionId: string): string {
-  const signed = "s:" + sessionId + "." +
+function signSessionId(sessionId: string): string {
+  return "s:" + sessionId + "." +
     crypto.createHmac("sha256", SESSION_SECRET).update(sessionId).digest("base64").replace(/=+$/, "");
-  return "mos.sid=" + encodeURIComponent(signed);
+}
+
+function buildSessionCookie(sessionId: string): string {
+  return "mos.sid=" + encodeURIComponent(signSessionId(sessionId));
 }
 
 const router: IRouter = Router();
@@ -70,7 +73,8 @@ router.post("/auth/login", async (req, res) => {
       }
 
       const isMobile = /expo|react-native|okhttp/i.test(req.headers["user-agent"] || "");
-      const sessionToken = isMobile ? buildSessionCookie(req.sessionID) : undefined;
+      const signed = isMobile ? signSessionId(req.sessionID) : undefined;
+      const sessionToken = signed ? buildSessionCookie(req.sessionID) : undefined;
 
       res.json({
         id: user.id,
@@ -81,6 +85,7 @@ router.post("/auth/login", async (req, res) => {
         tenantName,
         leaderboardConfig,
         ...(sessionToken ? { sessionToken } : {}),
+        ...(signed ? { bearerToken: signed } : {}),
       });
     });
   } catch (error: unknown) {

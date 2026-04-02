@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import { Platform } from "react-native";
 import { useAuth } from "./AuthContext";
 
 const API_BASE = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
@@ -22,13 +23,14 @@ export function useSocket() {
 }
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
-  const { user, sessionCookie } = useAuth();
+  const { user, sessionCookie, bearerToken } = useAuth();
   const [connected, setConnected] = useState(false);
   const socketRef = useRef<any>(null);
   const listenersRef = useRef<Map<string, Set<SocketEventHandler>>>(new Map());
 
   useEffect(() => {
-    if (!user || !sessionCookie) {
+    const hasAuth = sessionCookie || bearerToken;
+    if (!user || !hasAuth) {
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -44,10 +46,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         const { io } = await import("socket.io-client");
         if (!isMounted) return;
 
+        const extraHeaders: Record<string, string> = {};
+        if (Platform.OS !== "web" && bearerToken) {
+          extraHeaders["Authorization"] = `Bearer ${bearerToken}`;
+        } else if (sessionCookie) {
+          extraHeaders["Cookie"] = sessionCookie;
+        }
+
         const socket = io(API_BASE, {
           path: "/api/socket.io",
           transports: ["websocket", "polling"],
-          extraHeaders: { Cookie: sessionCookie },
+          extraHeaders,
           withCredentials: true,
         });
 
@@ -86,7 +95,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         setConnected(false);
       }
     };
-  }, [user?.id, sessionCookie]);
+  }, [user?.id, sessionCookie, bearerToken]);
 
   const on = (event: string, handler: SocketEventHandler) => {
     if (!listenersRef.current.has(event)) {
