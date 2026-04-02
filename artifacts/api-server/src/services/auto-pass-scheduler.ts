@@ -16,9 +16,7 @@ function isStickyTerminalAtRest(
 ): boolean {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return false;
   if (assignedCsrId !== config.stickyCsrId) return false;
-  const endOfCycle = cascadePassCount >= activeOrderLength - 1;
-  const rotationArrival = cascadePassCount > 0;
-  return endOfCycle || rotationArrival;
+  return cascadePassCount >= activeOrderLength - 1;
 }
 
 function isStickyTerminalOnTransition(
@@ -225,9 +223,15 @@ async function fireAutoPass(leadId: number): Promise<void> {
   }
   if (!resolvedName) return;
 
-  const newPassCount = (config.allowPassBack && config.stickyAfterCascade)
+  let newPassCount = (config.allowPassBack && config.stickyAfterCascade)
     ? (lead.cascadePassCount ?? 0) + 1
     : (lead.cascadePassCount ?? 0);
+
+  const stickyResult = isStickyTerminalOnTransition(config, nextCsrId, newPassCount, lead.cascadePassCount ?? 0, activeOrder.length);
+
+  if (stickyResult.terminal && stickyResult.reason === 'rotation_arrival') {
+    newPassCount = Math.max(newPassCount, activeOrder.length - 1);
+  }
 
   const [updated] = await db.update(leadsTable)
     .set({
@@ -258,8 +262,6 @@ async function fireAutoPass(leadId: number): Promise<void> {
   if (updated) {
     emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   }
-
-  const stickyResult = isStickyTerminalOnTransition(config, nextCsrId, newPassCount, lead.cascadePassCount ?? 0, activeOrder.length);
 
   if (stickyResult.terminal) {
     console.log(`[auto-pass] Lead ${leadId}: arrived at sticky CSR ${nextCsrId} (terminal:${stickyResult.reason}) — no further timers`);
