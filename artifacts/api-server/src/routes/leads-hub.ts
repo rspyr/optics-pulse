@@ -589,19 +589,12 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
       updatedAt: new Date(),
       cascadePassCount: 0,
       visibleAfter: null,
+      manuallyTransferred: true,
     })
     .where(eq(leadsTable.id, leadId))
     .returning();
 
   cancelAutoPass(leadId);
-  const transferActiveStatuses = ["day_1", "day_2", "day_3", "day_4"];
-  const touched = await leadHasRealTouch(leadId);
-  if (!touched && transferActiveStatuses.includes(lead.hubStatus)) {
-    const config = await findRoutingConfigForLead(tenantId, lead.funnelId);
-    if (config) {
-      scheduleAutoPass(leadId, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
-    }
-  }
 
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated });
@@ -692,6 +685,7 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
         updatedAt: new Date(),
         cascadePassCount: 0,
         visibleAfter: null,
+        manuallyTransferred: true,
       })
       .where(and(
         eq(leadsTable.tenantId, tenantId),
@@ -702,24 +696,8 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
   const updatedLeads = await db.select().from(leadsTable)
     .where(inArray(leadsTable.id, leadIds));
 
-  const batchActiveStatuses = ["day_1", "day_2", "day_3", "day_4"];
-  const configCache = new Map<string, typeof routingConfigTable.$inferSelect | null>();
-
   for (const lead of updatedLeads) {
     cancelAutoPass(lead.id);
-    if (batchActiveStatuses.includes(lead.hubStatus)) {
-      const touched = await leadHasRealTouch(lead.id);
-      if (!touched) {
-        const cacheKey = `${tenantId}:${lead.funnelId ?? "null"}`;
-        if (!configCache.has(cacheKey)) {
-          configCache.set(cacheKey, await findRoutingConfigForLead(tenantId, lead.funnelId));
-        }
-        const config = configCache.get(cacheKey);
-        if (config) {
-          scheduleAutoPass(lead.id, (config.passIntervalMinutes ?? 1440) * 60 * 1000);
-        }
-      }
-    }
     emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
   }
 

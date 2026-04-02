@@ -105,9 +105,14 @@ async function fireAutoPass(leadId: number): Promise<void> {
     hubStatus: leadsTable.hubStatus,
     funnelId: leadsTable.funnelId,
     cascadePassCount: leadsTable.cascadePassCount,
+    manuallyTransferred: leadsTable.manuallyTransferred,
   }).from(leadsTable).where(eq(leadsTable.id, leadId));
 
   if (!lead || !lead.assignedCsrId) return;
+  if (lead.manuallyTransferred) {
+    console.log(`[auto-pass] Lead ${leadId}: manually transferred, skipping auto-pass`);
+    return;
+  }
   if (!AUTO_PASS_STATUSES.includes(lead.hubStatus)) return;
 
   const touched = await leadHasRealTouch(leadId);
@@ -262,6 +267,7 @@ export async function recoverTimers(): Promise<number> {
       eq(leadsTable.tenantId, config.tenantId),
       inArray(leadsTable.hubStatus, AUTO_PASS_STATUSES),
       isNotNull(leadsTable.assignedCsrId),
+      eq(leadsTable.manuallyTransferred, false),
     ];
 
     if (config.funnelTypeId !== null) {

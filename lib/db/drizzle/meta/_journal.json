@@ -155,6 +155,13 @@
       "when": 1775078400000,
       "tag": "0021_lead_visibility_delay",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1775164800000,
+      "tag": "0023_manually_transferred",
+      "breakpoints": true
     }
   ]
 }
