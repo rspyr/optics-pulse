@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency, formatPercentage, PLATFORM_COLORS } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
@@ -124,16 +125,17 @@ export default function Dashboard() {
           <p className="font-sub text-muted-foreground text-sm tracking-wide">SYSTEM OVERVIEW & ATTRIBUTION METRICS</p>
         </div>
         <div className="flex items-center gap-3">
-          <select
-            value={dateRange}
-            onChange={e => setDateRange(e.target.value as DateRange)}
-            className="bg-card border border-white/10 text-white text-sm rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            <option value="last7">Last 7 Days</option>
-            <option value="last30">Last 30 Days</option>
-            <option value="thisMonth">This Month</option>
-            <option value="lastMonth">Last Month</option>
-          </select>
+          <Select value={dateRange} onValueChange={v => setDateRange(v as DateRange)}>
+            <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-sm rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-primary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="last7">Last 7 Days</SelectItem>
+              <SelectItem value="last30">Last 30 Days</SelectItem>
+              <SelectItem value="thisMonth">This Month</SelectItem>
+              <SelectItem value="lastMonth">Last Month</SelectItem>
+            </SelectContent>
+          </Select>
           <button
             onClick={handleExportCSV}
             disabled={exporting}

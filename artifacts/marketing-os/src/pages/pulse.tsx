@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
@@ -779,48 +780,52 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             </span>
             <span className="text-[10px] text-amber-400 font-medium">Editing</span>
           </div>
-          <select
-            value={editForm.actionType}
-            onChange={e => setEditForm(f => ({ ...f, actionType: e.target.value, callResult: "", textResult: "", vmResult: "" }))}
-            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-          >
-            <option value="call">Call</option>
-            <option value="text">Text</option>
-            <option value="voicemail_drop">VM Drop</option>
-          </select>
+          <Select value={editForm.actionType} onValueChange={v => setEditForm(f => ({ ...f, actionType: v, callResult: "", textResult: "", vmResult: "" }))}>
+            <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="call">Call</SelectItem>
+              <SelectItem value="text">Text</SelectItem>
+              <SelectItem value="voicemail_drop">VM Drop</SelectItem>
+            </SelectContent>
+          </Select>
           {(() => {
             const m = editForm.actionType;
             const opts = m === "call" ? CALL_RESULTS : m === "text" ? TEXT_RESULTS : (m === "voicemail" || m === "voicemail_drop") ? VM_RESULTS : [];
             const val = m === "call" ? editForm.callResult : m === "text" ? editForm.textResult : editForm.vmResult;
             if (opts.length === 0) return null;
             return (
-              <select
-                value={val}
-                onChange={e => {
-                  if (m === "call") setEditForm(f => ({ ...f, callResult: e.target.value }));
-                  else if (m === "text") setEditForm(f => ({ ...f, textResult: e.target.value }));
-                  else setEditForm(f => ({ ...f, vmResult: e.target.value }));
-                }}
-                className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-              >
-                <option value="">Select outcome...</option>
-                {opts.map(r => (
-                  <option key={r.value} value={r.value}>{r.label}</option>
-                ))}
-              </select>
+              <Select value={val || "__none__"} onValueChange={v => {
+                const actualVal = v === "__none__" ? "" : v;
+                if (m === "call") setEditForm(f => ({ ...f, callResult: actualVal }));
+                else if (m === "text") setEditForm(f => ({ ...f, textResult: actualVal }));
+                else setEditForm(f => ({ ...f, vmResult: actualVal }));
+              }}>
+                <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select outcome...</SelectItem>
+                  {opts.map(r => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             );
           })()}
           {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
-            <select
-              value={editForm.deadReason}
-              onChange={e => setEditForm(f => ({ ...f, deadReason: e.target.value }))}
-              className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white [color-scheme:dark]"
-            >
-              <option value="">Dead reason (optional)...</option>
-              {DEAD_REASONS.map(r => (
-                <option key={r.value} value={r.value}>{r.label}</option>
-              ))}
-            </select>
+            <Select value={editForm.deadReason || "__none__"} onValueChange={v => setEditForm(f => ({ ...f, deadReason: v === "__none__" ? "" : v }))}>
+              <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Dead reason (optional)...</SelectItem>
+                {DEAD_REASONS.map(r => (
+                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           <input
             type="text"
@@ -1334,16 +1339,16 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
             <p className="text-xs text-white/40">Transfer to another CSR:</p>
             <div className="flex items-center gap-2">
-              <select
-                value={selectedCsr || ""}
-                onChange={e => setSelectedCsr(Number(e.target.value))}
-                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
-              >
-                <option value="">Select CSR...</option>
-                {csrs.filter(c => c.id !== lead.assignedCsrId).map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <Select value={selectedCsr ? String(selectedCsr) : ""} onValueChange={v => setSelectedCsr(Number(v))}>
+                <SelectTrigger className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white">
+                  <SelectValue placeholder="Select CSR..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {csrs.filter(c => c.id !== lead.assignedCsrId).map(c => (
+                    <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <button
                 onClick={handleTransfer}
                 disabled={!selectedCsr || actionLoading}
@@ -1896,24 +1901,26 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
             placeholder="Service type..."
           />
           {!isArchiveClientUser && (
-            <select
-              value={filters.csrId || ""}
-              onChange={e => updateFilter("csrId", e.target.value)}
-              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70"
-            >
-              <option value="">All CSRs</option>
-              {csrs.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-            </select>
+            <Select value={filters.csrId || "__all__"} onValueChange={v => updateFilter("csrId", v === "__all__" ? "" : v)}>
+              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70 h-auto">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All CSRs</SelectItem>
+                {csrs.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           )}
-          <select
-            value={filters.status || ""}
-            onChange={e => updateFilter("status", e.target.value)}
-            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70"
-          >
-            <option value="">All statuses</option>
-            <option value="appt_set">Appointment Set</option>
-            <option value="dead">Dead</option>
-          </select>
+          <Select value={filters.status || "__all__"} onValueChange={v => updateFilter("status", v === "__all__" ? "" : v)}>
+            <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white/70 h-auto">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All statuses</SelectItem>
+              <SelectItem value="appt_set">Appointment Set</SelectItem>
+              <SelectItem value="dead">Dead</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       )}
 
@@ -2238,13 +2245,14 @@ export default function Leads() {
         <PremiumCard className="p-4 mb-6">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <select
-              value={localTenantId ?? ""}
-              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
+              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </PremiumCard>
       )}
@@ -2254,14 +2262,15 @@ export default function Leads() {
           <div className="flex items-center gap-3">
             <Users className="w-4 h-4 text-white/40" />
             <label className="text-xs text-white/40 uppercase tracking-wider">CSR View</label>
-            <select
-              value={selectedCsrId ?? ""}
-              onChange={e => { const v = e.target.value; setSelectedCsrId(v ? parseInt(v) : null); }}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              <option value="">All CSRs</option>
-              {csrList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <Select value={selectedCsrId ? String(selectedCsrId) : "__all__"} onValueChange={v => { setSelectedCsrId(v === "__all__" ? null : parseInt(v)); }}>
+              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All CSRs</SelectItem>
+                {csrList.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
             {selectedCsrId && (
               <span className="text-xs text-primary/70 italic">
                 Viewing as {csrList.find(c => c.id === selectedCsrId)?.name}

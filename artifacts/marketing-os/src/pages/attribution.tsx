@@ -1,5 +1,6 @@
 import { useListAttributionEvents } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { format } from "date-fns";
 
@@ -52,15 +53,16 @@ export default function Attribution() {
         <PremiumCard className="p-4">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <select
-              value={localTenantId ?? ""}
-              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              {tenants.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
+              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map(t => (
+                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </PremiumCard>
       )}

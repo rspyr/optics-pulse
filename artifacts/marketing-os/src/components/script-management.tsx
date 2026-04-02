@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { PremiumCard } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   Phone, MessageSquare, Mail, Mic, Plus, Save, X, History,

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useListTrainingItems } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   BookOpen, ExternalLink, DollarSign, Search,
@@ -89,14 +90,15 @@ export default function TrainingResources() {
             className="w-full bg-card border border-white/10 rounded-lg pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
           />
         </div>
-        <select
-          value={categoryFilter}
-          onChange={e => setCategoryFilter(e.target.value)}
-          className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
-        >
-          <option value="">All Categories</option>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <Select value={categoryFilter || "__all__"} onValueChange={v => setCategoryFilter(v === "__all__" ? "" : v)}>
+          <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Categories</SelectItem>
+            {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <div className="flex items-center gap-1 bg-card border border-white/10 rounded-lg p-1">
           <button
             onClick={() => setTypeFilter("")}

@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
 import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, formatCurrency, PLATFORM_COLORS } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import {
@@ -451,15 +452,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
         <PremiumCard className="p-4">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <select
-              value={localTenantId ?? ""}
-              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setSelectedTenantId(v); }}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              {tenants.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
+              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map(t => (
+                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </PremiumCard>
       )}
@@ -506,15 +508,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
             </button>
           </div>
 
-          <select
-            value={comparisonMode}
-            onChange={e => setComparisonMode(e.target.value as ComparisonMode)}
-            className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            <option value="none">No Comparison</option>
-            <option value="previous">vs Previous Period</option>
-            <option value="benchmark">vs Agency Benchmark</option>
-          </select>
+          <Select value={comparisonMode} onValueChange={v => setComparisonMode(v as ComparisonMode)}>
+            <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No Comparison</SelectItem>
+              <SelectItem value="previous">vs Previous Period</SelectItem>
+              <SelectItem value="benchmark">vs Agency Benchmark</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </header>
       {trainingItems.length > 0 && (
@@ -575,33 +578,36 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
             </div>
           )}
         </div>
-        <select
-          value={effectiveSource}
-          onChange={e => { setFilterSource(e.target.value); setActiveNlFilter(prev => ({ ...prev, source: undefined })); }}
-          className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
-        >
-          <option value="">All Sources</option>
-          {uniqueSources.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select
-          value={effectiveLeadType}
-          onChange={e => { setFilterLeadType(e.target.value); setActiveNlFilter(prev => ({ ...prev, leadType: undefined })); }}
-          className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
-        >
-          <option value="">All Campaign Types</option>
-          {uniqueLeadTypes.map(t => {
-            const label = t === "paid" ? "Fit Funnel (Paid)" : t === "organic" ? "Quiz (Organic)" : t === "popup" ? "Pop-up" : t;
-            return <option key={t} value={t!}>{label}</option>;
-          })}
-        </select>
-        <select
-          value={effectiveSalesperson}
-          onChange={e => { setFilterSalesperson(e.target.value); setActiveNlFilter(prev => ({ ...prev, assignedTo: undefined })); }}
-          className="bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
-        >
-          <option value="">All Salespeople</option>
-          {uniqueSalespeople.map(s => <option key={s} value={s!}>{s}</option>)}
-        </select>
+        <Select value={effectiveSource || "__all__"} onValueChange={v => { setFilterSource(v === "__all__" ? "" : v); setActiveNlFilter(prev => ({ ...prev, source: undefined })); }}>
+          <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Sources</SelectItem>
+            {uniqueSources.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={effectiveLeadType || "__all__"} onValueChange={v => { setFilterLeadType(v === "__all__" ? "" : v); setActiveNlFilter(prev => ({ ...prev, leadType: undefined })); }}>
+          <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Campaign Types</SelectItem>
+            {uniqueLeadTypes.map(t => {
+              const label = t === "paid" ? "Fit Funnel (Paid)" : t === "organic" ? "Quiz (Organic)" : t === "popup" ? "Pop-up" : t;
+              return <SelectItem key={t} value={t!}>{label}</SelectItem>;
+            })}
+          </SelectContent>
+        </Select>
+        <Select value={effectiveSalesperson || "__all__"} onValueChange={v => { setFilterSalesperson(v === "__all__" ? "" : v); setActiveNlFilter(prev => ({ ...prev, assignedTo: undefined })); }}>
+          <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Salespeople</SelectItem>
+            {uniqueSalespeople.map(s => <SelectItem key={s} value={s!}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {hasActiveFilters && (
           <>
             <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors">
