@@ -20,47 +20,43 @@ export function usePushNotifications() {
   const { user } = useAuth();
   const { apiFetch } = useApi();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
-  const notificationListener = useRef<Notifications.EventSubscription>();
-  const responseListener = useRef<Notifications.EventSubscription>();
+  const notificationListener = useRef<ReturnType<typeof Notifications.addNotificationReceivedListener> | null>(null);
+  const responseListener = useRef<ReturnType<typeof Notifications.addNotificationResponseReceivedListener> | null>(null);
 
   useEffect(() => {
     if (!user) return;
 
     (async () => {
       try {
-        if (Platform.OS === "web") return;
+        if (Platform.OS === "android" || Platform.OS === "ios") {
+          const { status: existingStatus } = await Notifications.getPermissionsAsync();
+          let finalStatus = existingStatus;
 
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus;
+          if (existingStatus !== "granted") {
+            const { status } = await Notifications.requestPermissionsAsync();
+            finalStatus = status;
+          }
 
-        if (existingStatus !== "granted") {
-          const { status } = await Notifications.requestPermissionsAsync();
-          finalStatus = status;
-        }
+          if (finalStatus !== "granted") return;
 
-        if (finalStatus !== "granted") return;
+          const tokenData = await Notifications.getExpoPushTokenAsync();
+          const token = tokenData.data;
+          setExpoPushToken(token);
 
-        const tokenData = await Notifications.getExpoPushTokenAsync();
-        const token = tokenData.data;
-        setExpoPushToken(token);
-
-        if (Platform.OS !== "web") {
           await SecureStore.setItemAsync("pulse_push_token", token);
-        } else {
-          try { localStorage.setItem("pulse_push_token", token); } catch {}
-        }
 
-        let registered = false;
-        for (let attempt = 0; attempt < 3 && !registered; attempt++) {
-          try {
-            await apiFetch("/api/push-tokens", {
-              method: "POST",
-              body: JSON.stringify({ token, platform: Platform.OS }),
-            });
-            registered = true;
-          } catch (regErr) {
-            console.warn(`[Push] Registration attempt ${attempt + 1} failed:`, regErr);
-            if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+          let registered = false;
+          for (let attempt = 0; attempt < 3 && !registered; attempt++) {
+            try {
+              await apiFetch("/api/push-tokens", {
+                method: "POST",
+                body: JSON.stringify({ token, platform: Platform.OS }),
+              });
+              registered = true;
+            } catch (regErr) {
+              console.warn(`[Push] Registration attempt ${attempt + 1} failed:`, regErr);
+              if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+            }
           }
         }
       } catch (err) {
@@ -81,10 +77,10 @@ export function usePushNotifications() {
 
     return () => {
       if (notificationListener.current) {
-        Notifications.removeNotificationSubscription(notificationListener.current);
+        notificationListener.current.remove();
       }
       if (responseListener.current) {
-        Notifications.removeNotificationSubscription(responseListener.current);
+        responseListener.current.remove();
       }
     };
   }, [user?.id]);
