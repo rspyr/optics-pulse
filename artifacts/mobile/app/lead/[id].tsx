@@ -178,7 +178,7 @@ export default function LeadDetailScreen() {
   }, []);
 
   useEffect(() => {
-    const handler = (data: any) => {
+    const handler = (data: { leadId?: number; contactId?: string }) => {
       if (data?.leadId === Number(params.id)) {
         fetchMessages();
       }

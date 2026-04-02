@@ -61,8 +61,8 @@ export default function SettingsScreen() {
       setNewPassword("");
       setConfirmPassword("");
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err: any) {
-      setPasswordMsg({ type: "error", text: err.message || "Failed to change password" });
+    } catch (err) {
+      setPasswordMsg({ type: "error", text: err instanceof Error ? err.message : "Failed to change password" });
     } finally {
       setPasswordLoading(false);
     }
@@ -75,8 +75,8 @@ export default function SettingsScreen() {
       if (data.url) {
         await Linking.openURL(data.url);
       }
-    } catch (err: any) {
-      Alert.alert("Error", err.message || "Failed to connect Podium");
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to connect Podium");
     } finally {
       setPodiumLoading(false);
     }
@@ -88,8 +88,8 @@ export default function SettingsScreen() {
         await apiFetch("/api/oauth/podium/disconnect", { method: "POST" });
         if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert("Disconnected", "Podium has been disconnected successfully.");
-      } catch (err: any) {
-        Alert.alert("Error", err.message || "Failed to disconnect Podium");
+      } catch (err) {
+        Alert.alert("Error", err instanceof Error ? err.message : "Failed to disconnect Podium");
       }
     };
 
