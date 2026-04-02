@@ -150,20 +150,29 @@ async function fireAutoPass(leadId: number): Promise<void> {
   let nextCsrId: number;
 
   if (config.allowPassBack) {
+    const cascadePassCount = lead.cascadePassCount ?? 0;
+
     if (config.stickyAfterCascade && config.stickyCsrId
         && config.stickyCsrId === lead.assignedCsrId
-        && (lead.cascadePassCount ?? 0) > 0) {
-      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} (terminal) — no further passes`);
+        && cascadePassCount >= activeOrder.length - 1) {
+      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} after full cycle (terminal) — no further passes`);
       return;
     }
 
-    if (currentIdx === -1) {
+    if (config.stickyAfterCascade && config.stickyCsrId
+        && cascadePassCount >= activeOrder.length - 1) {
+      nextCsrId = config.stickyCsrId;
+      console.log(`[auto-pass] Lead ${leadId}: end-of-cycle redirect to sticky CSR ${config.stickyCsrId}`);
+    } else if (currentIdx === -1) {
       nextCsrId = activeOrder[0];
     } else {
       nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
     }
 
-    if (config.stickyAfterCascade && config.stickyCsrId && nextCsrId === config.stickyCsrId) {
+    if (config.stickyAfterCascade && config.stickyCsrId
+        && nextCsrId === config.stickyCsrId
+        && cascadePassCount > 0
+        && cascadePassCount < activeOrder.length - 1) {
       console.log(`[auto-pass] Lead ${leadId}: rotation reached sticky CSR ${config.stickyCsrId} — sticking`);
     }
   } else {
@@ -313,8 +322,7 @@ export async function recoverTimers(): Promise<number> {
       if (activeRecoverOrder.length >= 2
           && config.allowPassBack && config.stickyAfterCascade && config.stickyCsrId
           && config.stickyCsrId === lead.assignedCsrId
-          && ((lead.cascadePassCount ?? 0) > 0
-            || (lead.cascadePassCount ?? 0) >= activeRecoverOrder.length - 1)) {
+          && (lead.cascadePassCount ?? 0) >= activeRecoverOrder.length - 1) {
         continue;
       }
 
