@@ -62,7 +62,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           if (isMounted) setConnected(false);
         });
 
-        const events = ["new-lead", "lead-updated", "podium-message"];
+        const events = ["new-lead", "lead-updated", "podium-message", "hud-stats"];
         for (const event of events) {
           socket.on(event, (data: any) => {
             const handlers = listenersRef.current.get(event);

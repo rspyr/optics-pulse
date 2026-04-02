@@ -203,16 +203,19 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("new-lead", lead);
   }
-  import("./services/push-notifications").then(({ sendPushToTenantUsers }) => {
-    const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
-    const source = (lead.source as string) || "";
-    sendPushToTenantUsers(
-      tenantId,
-      "New Lead Assigned",
-      `${name}${source ? ` from ${source}` : ""}`,
-      { leadId: lead.id, type: "new-lead" },
-    ).catch(err => console.error("[Push] emitNewLead push error:", err));
-  }).catch(() => {});
+  const assignedUserId = lead.assignedUserId as number | undefined;
+  if (assignedUserId) {
+    import("./services/push-notifications").then(({ sendPushToUser }) => {
+      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
+      const source = (lead.source as string) || "";
+      sendPushToUser(
+        assignedUserId,
+        "New Lead Assigned",
+        `${name}${source ? ` from ${source}` : ""}`,
+        { leadId: lead.id, type: "new-lead" },
+      ).catch(err => console.error("[Push] emitNewLead push error:", err));
+    }).catch(() => {});
+  }
 }
 
 export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>) {
