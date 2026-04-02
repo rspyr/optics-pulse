@@ -11,6 +11,7 @@ import {
   ScrollView,
   type LayoutChangeEvent,
   Dimensions,
+  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -87,6 +88,10 @@ export default function QueueScreen() {
   const isWeb = Platform.OS === "web";
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
 
+  const [callbackNotification, setCallbackNotification] = useState<QueueLead | null>(null);
+  const notifiedCallbackKeysRef = useRef<Set<string>>(new Set());
+  const callbackBannerAnim = useRef(new Animated.Value(0)).current;
+
   const tabScrollRef = useRef<ScrollView>(null);
   const tabLayouts = useRef<Record<string, { x: number; width: number }>>({});
   const scrollViewWidth = useRef(Dimensions.get("window").width);
@@ -158,6 +163,45 @@ export default function QueueScreen() {
       off("lead-updated", handleUpdate);
     };
   }, [on, off, fetchQueue]);
+
+  useEffect(() => {
+    if (callbackNotification) return;
+    const callbacks = queue.callbacks || [];
+    const dueCallbacks = callbacks.filter(l => {
+      if (!l.callbackAt) return false;
+      const key = `${effectiveTenantId}:${l.id}:${l.callbackAt}`;
+      if (notifiedCallbackKeysRef.current.has(key)) return false;
+      return new Date(l.callbackAt).getTime() <= Date.now();
+    });
+    if (dueCallbacks.length > 0) {
+      const lead = dueCallbacks[0];
+      notifiedCallbackKeysRef.current.add(`${effectiveTenantId}:${lead.id}:${lead.callbackAt}`);
+      setCallbackNotification(lead);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    }
+  }, [queue.callbacks, callbackNotification, effectiveTenantId]);
+
+  useEffect(() => {
+    if (callbackNotification) {
+      Animated.spring(callbackBannerAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 10 }).start();
+    } else {
+      callbackBannerAnim.setValue(0);
+    }
+  }, [callbackNotification, callbackBannerAnim]);
+
+  const dismissCallbackBanner = useCallback(() => {
+    Animated.timing(callbackBannerAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+      setCallbackNotification(null);
+    });
+  }, [callbackBannerAnim]);
+
+  const handleCallbackBannerPress = useCallback(() => {
+    if (!callbackNotification) return;
+    setActiveTab("callbacks");
+    scrollTabIntoView("callbacks");
+    router.push({ pathname: "/lead/[id]", params: { id: String(callbackNotification.id), lead: JSON.stringify(callbackNotification) } });
+    dismissCallbackBanner();
+  }, [callbackNotification, dismissCallbackBanner, scrollTabIntoView]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -284,6 +328,24 @@ export default function QueueScreen() {
         })}
       </ScrollView>
 
+      {callbackNotification && (
+        <Animated.View style={[styles.callbackBanner, { backgroundColor: "#F59E0B", transform: [{ translateY: callbackBannerAnim.interpolate({ inputRange: [0, 1], outputRange: [-60, 0] }) }], opacity: callbackBannerAnim }]}>
+          <TouchableOpacity style={styles.callbackBannerContent} onPress={handleCallbackBannerPress} activeOpacity={0.8}>
+            <Feather name="phone-incoming" size={16} color="#000" />
+            <View style={styles.callbackBannerText}>
+              <Text style={styles.callbackBannerTitle}>Callback Due</Text>
+              <Text style={styles.callbackBannerName} numberOfLines={1}>
+                {[callbackNotification.firstName, callbackNotification.lastName].filter(Boolean).join(" ") || "Unknown"}
+                {callbackNotification.callbackAt ? ` — ${new Date(callbackNotification.callbackAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={dismissCallbackBanner} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Feather name="x" size={18} color="#000" />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -373,4 +435,9 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
   emptySubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 20 },
+  callbackBanner: { marginHorizontal: 16, marginTop: 8, borderRadius: 10, overflow: "hidden" },
+  callbackBannerContent: { flexDirection: "row", alignItems: "center", padding: 12, gap: 10 },
+  callbackBannerText: { flex: 1 },
+  callbackBannerTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#000" },
+  callbackBannerName: { fontSize: 12, fontFamily: "Inter_500Medium", color: "#000", opacity: 0.8 },
 });

@@ -109,9 +109,8 @@ router.get("/leads-hub/queue", async (req, res) => {
         ...baseConds,
         eq(leadsTable.hubStatus, "call_back"),
         isNotNull(leadsTable.callbackAt),
-        lte(leadsTable.callbackAt, now),
       ))
-      .orderBy(desc(leadsTable.callbackAt)).limit(100) : [];
+      .orderBy(asc(leadsTable.callbackAt)).limit(100) : [];
 
     const reengagement = (tab === "all" || tab === "reengagement") ? await db.select().from(leadsTable)
       .where(and(
@@ -474,7 +473,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     res.status(403).json({ error: "You can only edit your own actions" }); return;
   }
 
-  const { actionType, callResult, vmResult, textResult, deadReason, notes } = req.body;
+  const { actionType, callResult, vmResult, textResult, deadReason, notes, spokeResult, callbackAt, appointmentSet } = req.body;
 
   const validCallResults = ["no_answer", "left_voicemail", "vm_full", "vm_not_setup", "bad_number", "spoke_with_customer", "hung_up", "blocked", "out_of_service_area"];
   const validTextResults = ["yes", "not_able_to", "dead", "no_need", "reached_out"];
@@ -506,6 +505,30 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   if (outcome) updateFields.outcome = outcome;
 
   const [updated] = await db.update(callAttemptsTable).set(updateFields).where(eq(callAttemptsTable.id, attemptId)).returning();
+
+  const leadUpdates: Record<string, unknown> = { updatedAt: new Date() };
+  if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
+    leadUpdates.hubStatus = "call_back";
+    leadUpdates.callbackAt = new Date(callbackAt);
+    leadUpdates.status = "contacted";
+  } else if (callResult === "spoke_with_customer" && spokeResult === "appointment_set" && appointmentSet) {
+    leadUpdates.hubStatus = "appt_set";
+    leadUpdates.status = "booked";
+    leadUpdates.disposition = "booked";
+    leadUpdates.bookedByCsrId = userId;
+    leadUpdates.callbackAt = null;
+  } else if (deadReason) {
+    leadUpdates.hubStatus = "dead";
+    leadUpdates.status = "lost";
+    leadUpdates.deadReason = deadReason;
+    leadUpdates.callbackAt = null;
+  } else if (callbackAt === null && spokeResult !== "call_back") {
+    leadUpdates.callbackAt = null;
+  }
+
+  if (Object.keys(leadUpdates).length > 1) {
+    await db.update(leadsTable).set(leadUpdates).where(eq(leadsTable.id, attempt.leadId));
+  }
 
   res.json({ attempt: updated });
 });
