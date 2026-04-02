@@ -339,7 +339,7 @@ const styles = StyleSheet.create({
   csrItem: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   csrItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
   csrViewingAs: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" },
-  tabScroll: { borderBottomWidth: 1, maxHeight: 44 },
+  tabScroll: { borderBottomWidth: 1 },
   tabScrollContent: { paddingHorizontal: 8, gap: 2 },
   tab: {
     flexDirection: "row",

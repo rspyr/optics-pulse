@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Modal,
+  Dimensions,
+  LayoutChangeEvent,
 } from "react-native";
 import { useLocalSearchParams, router, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -191,6 +193,32 @@ export default function LeadDetailScreen() {
   const [showTransfer, setShowTransfer] = useState(false);
   const [csrs, setCsrs] = useState<CsrOption[]>([]);
   const [selectedCsr, setSelectedCsr] = useState<number | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const detailTabScrollRef = useRef<ScrollView>(null);
+  const detailTabLayouts = useRef<Record<string, { x: number; width: number }>>({});
+  const detailScrollViewWidth = useRef(Dimensions.get("window").width);
+
+  const handleDetailTabLayout = useCallback((key: string, event: LayoutChangeEvent) => {
+    const { x, width } = event.nativeEvent.layout;
+    detailTabLayouts.current[key] = { x, width };
+  }, []);
+
+  const handleDetailScrollViewLayout = useCallback((event: LayoutChangeEvent) => {
+    detailScrollViewWidth.current = event.nativeEvent.layout.width;
+  }, []);
+
+  const scrollDetailTabIntoView = useCallback((tabKey: string) => {
+    const layout = detailTabLayouts.current[tabKey];
+    if (!layout || !detailTabScrollRef.current) return;
+
+    const viewWidth = detailScrollViewWidth.current;
+    const tabCenter = layout.x + layout.width / 2;
+    const scrollTarget = tabCenter - viewWidth / 2;
+    const clampedTarget = Math.max(0, scrollTarget);
+
+    detailTabScrollRef.current.scrollTo({ x: clampedTarget, animated: true });
+  }, []);
 
   const contactPrefs = (lead?.contactPreferences || []) as string[];
   const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
@@ -205,18 +233,26 @@ export default function LeadDetailScreen() {
       setFetchError(null);
       const data = await apiFetch(`/api/leads/${params.id}${tenantQs}`);
       setLead(data);
+      return true;
     } catch (err) {
       console.error("[LeadDetail] Failed to fetch lead:", err);
       setFetchError(err instanceof Error ? err.message : "Failed to load lead");
+      return false;
     }
   }, [apiFetch, params.id, tenantQs]);
 
   const fetchHistory = useCallback(async () => {
     try {
+      setHistoryError(null);
       const data = await apiFetch(`/api/leads-hub/${params.id}/history${tenantQs}`);
       setHistory(data.attempts || []);
     } catch (err) {
-      console.error("[LeadDetail] Failed to fetch history:", err);
+      const msg = err instanceof Error ? err.message : "Failed to load history";
+      if (msg.includes("Lead not found") || msg.includes("404")) {
+        setHistoryError("Lead not found — history unavailable");
+      } else {
+        setHistoryError(msg);
+      }
     }
   }, [apiFetch, params.id, tenantQs]);
 
@@ -228,9 +264,14 @@ export default function LeadDetailScreen() {
   }, [apiFetch, params.id, tenantQs]);
 
   useEffect(() => {
-    if (!lead) fetchLead();
-    fetchHistory();
-    fetchMessages();
+    const init = async () => {
+      const hasLead = lead ? true : await fetchLead();
+      if (hasLead) {
+        fetchHistory();
+      }
+      fetchMessages();
+    };
+    init();
   }, []);
 
   useEffect(() => {
@@ -354,7 +395,7 @@ export default function LeadDetailScreen() {
           <>
             <Feather name="alert-circle" size={48} color={colors.red} />
             <Text style={{ color: colors.foreground, marginTop: 12, fontSize: 16 }}>{fetchError}</Text>
-            <TouchableOpacity onPress={fetchLead} style={{ marginTop: 16, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }}>
+            <TouchableOpacity onPress={async () => { const ok = await fetchLead(); if (ok) { fetchHistory(); fetchMessages(); } }} style={{ marginTop: 16, padding: 12, backgroundColor: colors.primary, borderRadius: 8 }}>
               <Text style={{ color: "#fff", fontWeight: "600" }}>Retry</Text>
             </TouchableOpacity>
           </>
@@ -881,10 +922,12 @@ export default function LeadDetailScreen() {
           )}
 
           <ScrollView
+            ref={detailTabScrollRef}
             horizontal
             showsHorizontalScrollIndicator={false}
             style={[styles.tabScroll, { borderBottomColor: colors.border }]}
             contentContainerStyle={styles.tabScrollContent}
+            onLayout={handleDetailScrollViewLayout}
           >
             {DETAIL_TABS.map(tab => {
               const isActive = activeTab === tab.key;
@@ -892,7 +935,12 @@ export default function LeadDetailScreen() {
                 <TouchableOpacity
                   key={tab.key}
                   style={[styles.detailTab, isActive && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
-                  onPress={() => setActiveTab(tab.key)}
+                  onLayout={(e) => handleDetailTabLayout(tab.key, e)}
+                  onPress={() => {
+                    setActiveTab(tab.key);
+                    scrollDetailTabIntoView(tab.key);
+                    if (Platform.OS !== "web") Haptics.selectionAsync();
+                  }}
                   activeOpacity={0.7}
                 >
                   <Feather name={tab.icon} size={14} color={isActive ? colors.primary : colors.mutedForeground} />
@@ -1094,7 +1142,14 @@ export default function LeadDetailScreen() {
 
           {activeTab === "history" && (
             <View style={styles.historyContainer}>
-              {history.length === 0 ? (
+              {historyError ? (
+                <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={styles.emptyMessages}>
+                    <Feather name="alert-circle" size={32} color={colors.destructive} />
+                    <Text style={[styles.emptyMsgText, { color: colors.destructive }]}>{historyError}</Text>
+                  </View>
+                </View>
+              ) : history.length === 0 ? (
                 <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={styles.emptyMessages}>
                     <Feather name="clock" size={32} color={colors.mutedForeground} />
