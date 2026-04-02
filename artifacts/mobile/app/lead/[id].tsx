@@ -159,6 +159,10 @@ interface TimelineEntry {
   textResult?: string;
   vmResult?: string;
   deadReason?: string;
+  spokeResult?: string;
+  callbackAt?: string;
+  appointmentDate?: string;
+  appointmentTime?: string;
   outcome?: string;
   notes?: string;
   csrName?: string;
@@ -207,7 +211,11 @@ export default function LeadDetailScreen() {
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
+  const [editForm, setEditForm] = useState({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", spokeResult: "", editCallbackDate: new Date(Date.now() + 3600000), editApptDate: new Date(Date.now() + 86400000), editApptTime: new Date(Date.now() + 86400000) });
+  const [showEditDatePicker, setShowEditDatePicker] = useState(false);
+  const [showEditTimePicker, setShowEditTimePicker] = useState(false);
+  const [showEditApptDatePicker, setShowEditApptDatePicker] = useState(false);
+  const [showEditApptTimePicker, setShowEditApptTimePicker] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [commConfig, setCommConfig] = useState<{ textPlatform: string }>({ textPlatform: "native" });
 
@@ -507,7 +515,15 @@ export default function LeadDetailScreen() {
       textResult: entry.textResult || "",
       vmResult: entry.vmResult || "",
       deadReason: entry.deadReason || "",
+      spokeResult: entry.spokeResult || "",
+      editCallbackDate: entry.callbackAt ? new Date(entry.callbackAt) : new Date(Date.now() + 3600000),
+      editApptDate: entry.appointmentDate ? new Date(entry.appointmentDate) : new Date(Date.now() + 86400000),
+      editApptTime: entry.appointmentTime ? (() => { const [h, m] = entry.appointmentTime!.split(":").map(Number); const d = new Date(); d.setHours(h || 9, m || 0, 0, 0); return d; })() : (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })(),
     });
+    setShowEditDatePicker(false);
+    setShowEditTimePicker(false);
+    setShowEditApptDatePicker(false);
+    setShowEditApptTimePicker(false);
   };
 
   const saveEdit = async (entry: TimelineEntry) => {
@@ -518,6 +534,35 @@ export default function LeadDetailScreen() {
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
       if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
+      if (editForm.callResult === "spoke_with_customer") {
+        if (!editForm.spokeResult) {
+          Alert.alert("Missing Info", "Please select a spoke result (Appointment Set, Callback Requested, or Dead Lead).");
+          setEditSaving(false);
+          return;
+        }
+        body.spokeResult = editForm.spokeResult;
+        body.callbackAt = null;
+        body.appointmentSet = null;
+        if (editForm.spokeResult === "call_back") {
+          if (editForm.editCallbackDate.getTime() <= Date.now()) {
+            Alert.alert("Invalid Date", "Please select a future callback date/time.");
+            setEditSaving(false);
+            return;
+          }
+          body.callbackAt = editForm.editCallbackDate.toISOString();
+        } else if (editForm.spokeResult === "appointment_set") {
+          body.appointmentSet = true;
+          body.appointmentDate = editForm.editApptDate.toISOString().split("T")[0];
+          body.appointmentTime = editForm.editApptTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+        } else if (editForm.spokeResult === "dead") {
+          if (!editForm.deadReason) {
+            Alert.alert("Missing Info", "Please select a dead reason.");
+            setEditSaving(false);
+            return;
+          }
+          body.deadReason = editForm.deadReason;
+        }
+      }
 
       await apiFetch(`/api/leads-hub/action/${entry.id}${tenantQs}`, {
         method: "PUT",
@@ -719,6 +764,12 @@ export default function LeadDetailScreen() {
                 <View style={styles.detailRow}>
                   <Feather name="target" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.detailText, { color: colors.foreground }]}>{lead.source}</Text>
+                </View>
+              )}
+              {lead.leadType && (
+                <View style={styles.detailRow}>
+                  <Feather name="filter" size={14} color="#8B5CF6" />
+                  <Text style={[styles.detailText, { color: colors.foreground }]}>{lead.leadType}</Text>
                 </View>
               )}
               {lead.interestType && (
@@ -1233,7 +1284,7 @@ export default function LeadDetailScreen() {
                                         backgroundColor: editForm.actionType === at.value ? colors.primary + "20" : colors.secondary,
                                         borderColor: editForm.actionType === at.value ? colors.primary + "40" : colors.border,
                                       }]}
-                                      onPress={() => setEditForm(f => ({ ...f, actionType: at.value, callResult: "", textResult: "", vmResult: "" }))}
+                                      onPress={() => setEditForm(f => ({ ...f, actionType: at.value, callResult: "", textResult: "", vmResult: "", spokeResult: "", deadReason: "" }))}
                                     >
                                       <Text style={{ fontSize: 12, color: editForm.actionType === at.value ? colors.primary : colors.foreground, fontFamily: "Inter_500Medium" }}>{at.label}</Text>
                                     </TouchableOpacity>
@@ -1254,7 +1305,7 @@ export default function LeadDetailScreen() {
                                             }]}
                                             onPress={() => {
                                               const m = editForm.actionType;
-                                              if (m === "call") setEditForm(f => ({ ...f, callResult: opt.value }));
+                                              if (m === "call") setEditForm(f => ({ ...f, callResult: opt.value, spokeResult: opt.value !== "spoke_with_customer" ? "" : f.spokeResult, deadReason: opt.value !== "spoke_with_customer" ? "" : f.deadReason }));
                                               else if (m === "text") setEditForm(f => ({ ...f, textResult: opt.value }));
                                               else setEditForm(f => ({ ...f, vmResult: opt.value }));
                                             }}
@@ -1266,7 +1317,128 @@ export default function LeadDetailScreen() {
                                     </View>
                                   </>
                                 )}
-                                {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
+                                {editForm.callResult === "spoke_with_customer" && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Spoke Result</Text>
+                                    <View style={styles.editPickerRow}>
+                                      {SPOKE_RESULTS.map(sr => (
+                                        <TouchableOpacity
+                                          key={sr.value}
+                                          style={[styles.editPickerItem, {
+                                            backgroundColor: editForm.spokeResult === sr.value ? sr.color + "20" : colors.secondary,
+                                            borderColor: editForm.spokeResult === sr.value ? sr.color + "40" : colors.border,
+                                          }]}
+                                          onPress={() => setEditForm(f => ({ ...f, spokeResult: sr.value, deadReason: sr.value !== "dead" ? "" : f.deadReason }))}
+                                        >
+                                          <Text style={{ fontSize: 12, color: editForm.spokeResult === sr.value ? sr.color : colors.foreground, fontFamily: "Inter_500Medium" }}>{sr.label}</Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
+                                  </>
+                                )}
+                                {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "call_back" && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Callback Date & Time</Text>
+                                    <TouchableOpacity
+                                      style={[styles.editPickerItem, { backgroundColor: colors.secondary, borderColor: colors.border, flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }]}
+                                      onPress={() => setShowEditDatePicker(true)}
+                                    >
+                                      <Feather name="calendar" size={14} color="#F59E0B" />
+                                      <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_500Medium" }}>
+                                        {editForm.editCallbackDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={[styles.editPickerItem, { backgroundColor: colors.secondary, borderColor: colors.border, flexDirection: "row", alignItems: "center", gap: 6 }]}
+                                      onPress={() => setShowEditTimePicker(true)}
+                                    >
+                                      <Feather name="clock" size={14} color="#F59E0B" />
+                                      <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_500Medium" }}>
+                                        {editForm.editCallbackDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    {showEditDatePicker && (
+                                      <DateTimePicker
+                                        value={editForm.editCallbackDate}
+                                        mode="date"
+                                        minimumDate={new Date()}
+                                        onChange={(_, date) => {
+                                          setShowEditDatePicker(false);
+                                          if (date) {
+                                            const updated = new Date(editForm.editCallbackDate);
+                                            updated.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                                            setEditForm(f => ({ ...f, editCallbackDate: updated }));
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                    {showEditTimePicker && (
+                                      <DateTimePicker
+                                        value={editForm.editCallbackDate}
+                                        mode="time"
+                                        onChange={(_, date) => {
+                                          setShowEditTimePicker(false);
+                                          if (date) {
+                                            const updated = new Date(editForm.editCallbackDate);
+                                            updated.setHours(date.getHours(), date.getMinutes());
+                                            setEditForm(f => ({ ...f, editCallbackDate: updated }));
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                  </>
+                                )}
+                                {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "appointment_set" && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Appointment Date & Time</Text>
+                                    <TouchableOpacity
+                                      style={[styles.editPickerItem, { backgroundColor: colors.secondary, borderColor: colors.border, flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }]}
+                                      onPress={() => setShowEditApptDatePicker(true)}
+                                    >
+                                      <Feather name="calendar" size={14} color="#10B981" />
+                                      <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_500Medium" }}>
+                                        {editForm.editApptDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={[styles.editPickerItem, { backgroundColor: colors.secondary, borderColor: colors.border, flexDirection: "row", alignItems: "center", gap: 6 }]}
+                                      onPress={() => setShowEditApptTimePicker(true)}
+                                    >
+                                      <Feather name="clock" size={14} color="#10B981" />
+                                      <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_500Medium" }}>
+                                        {editForm.editApptTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    {showEditApptDatePicker && (
+                                      <DateTimePicker
+                                        value={editForm.editApptDate}
+                                        mode="date"
+                                        minimumDate={new Date()}
+                                        onChange={(_, date) => {
+                                          setShowEditApptDatePicker(false);
+                                          if (date) {
+                                            const updated = new Date(editForm.editApptDate);
+                                            updated.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                                            setEditForm(f => ({ ...f, editApptDate: updated }));
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                    {showEditApptTimePicker && (
+                                      <DateTimePicker
+                                        value={editForm.editApptTime}
+                                        mode="time"
+                                        onChange={(_, date) => {
+                                          setShowEditApptTimePicker(false);
+                                          if (date) {
+                                            setEditForm(f => ({ ...f, editApptTime: date }));
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                  </>
+                                )}
+                                {((editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "dead") || editForm.textResult === "dead") && (
                                   <>
                                     <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Dead Reason</Text>
                                     <View style={styles.editPickerRow}>

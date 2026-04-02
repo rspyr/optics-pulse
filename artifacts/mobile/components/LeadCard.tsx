@@ -164,6 +164,12 @@ export function LeadCard({ lead, onPress }: LeadCardProps) {
               <Text style={[styles.sourceText, { color: colors.secondaryForeground }]}>{lead.source}</Text>
             </View>
           )}
+          {lead.leadType && (
+            <View style={[styles.leadTypeBadge, { backgroundColor: "#8B5CF620" }]}>
+              <Feather name="filter" size={10} color="#8B5CF6" />
+              <Text style={styles.leadTypeText}>{lead.leadType}</Text>
+            </View>
+          )}
           {lead.interestType && (
             <View style={styles.tag}>
               <Feather name="tag" size={11} color={colors.mutedForeground} />
@@ -232,6 +238,8 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 12, fontFamily: "Inter_400Regular" },
   sourceBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
   sourceText: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  leadTypeBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  leadTypeText: { fontSize: 11, fontFamily: "Inter_500Medium", color: "#8B5CF6" },
   bottomRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   flagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" },
   flagBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
