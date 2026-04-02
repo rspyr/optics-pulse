@@ -7,7 +7,6 @@ import {
   ChevronDown, Eye, RotateCcw, Trash2, Loader2, Check, AlertTriangle,
   Filter,
 } from "lucide-react";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
