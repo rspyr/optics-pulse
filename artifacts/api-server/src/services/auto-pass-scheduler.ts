@@ -228,7 +228,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
   const isStickyTerminal = config.allowPassBack
     && config.stickyAfterCascade && config.stickyCsrId
     && config.stickyCsrId === nextCsrId
-    && (lead.cascadePassCount ?? 0) > 0;
+    && newPassCount > 0;
 
   if (isStickyTerminal) {
     console.log(`[auto-pass] Lead ${leadId}: arrived at sticky CSR ${nextCsrId} (terminal) — no further timers`);
