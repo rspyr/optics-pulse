@@ -16,7 +16,9 @@ function isStickyTerminalAtRest(
 ): boolean {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return false;
   if (assignedCsrId !== config.stickyCsrId) return false;
-  return cascadePassCount >= activeOrderLength - 1;
+  const endOfCycle = cascadePassCount >= activeOrderLength - 1;
+  const rotationArrival = cascadePassCount > 0;
+  return endOfCycle || rotationArrival;
 }
 
 function isStickyTerminalOnTransition(
