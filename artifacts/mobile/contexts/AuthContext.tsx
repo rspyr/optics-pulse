@@ -136,11 +136,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    const headers: Record<string, string> = {};
+    if (sessionCookie) headers["Cookie"] = sessionCookie;
+
+    try {
+      const storedToken = await getValue("pulse_push_token");
+      if (storedToken) {
+        await fetch(`${API_BASE}/api/push-tokens`, {
+          method: "DELETE",
+          credentials: "include",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ token: storedToken }),
+        }).catch(() => {});
+        await removeValue("pulse_push_token");
+      }
+    } catch {}
+
     try {
       await fetch(`${API_BASE}/api/auth/logout`, {
         method: "POST",
         credentials: "include",
-        headers: sessionCookie ? { Cookie: sessionCookie } : {},
+        headers,
       });
     } catch {}
     setUser(null);

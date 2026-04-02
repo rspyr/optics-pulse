@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { useAuth } from "@/contexts/AuthContext";
@@ -42,6 +43,12 @@ export function usePushNotifications() {
         const tokenData = await Notifications.getExpoPushTokenAsync();
         const token = tokenData.data;
         setExpoPushToken(token);
+
+        if (Platform.OS !== "web") {
+          await SecureStore.setItemAsync("pulse_push_token", token);
+        } else {
+          try { localStorage.setItem("pulse_push_token", token); } catch {}
+        }
 
         let registered = false;
         for (let attempt = 0; attempt < 3 && !registered; attempt++) {

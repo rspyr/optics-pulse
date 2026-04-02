@@ -80,8 +80,14 @@ export default function QueueScreen() {
   const fetchQueue = useCallback(async () => {
     if (!user) return;
     try {
-      const data = await apiFetch("/api/leads-hub/queue");
-      setQueue(data);
+      const [queueData, archiveData] = await Promise.all([
+        apiFetch("/api/leads-hub/queue"),
+        apiFetch("/api/leads-hub/archive?limit=50"),
+      ]);
+      setQueue({
+        ...queueData,
+        archive: archiveData.leads || [],
+      });
     } catch (err) {
       console.error("[Queue] Failed to fetch:", err);
     } finally {
