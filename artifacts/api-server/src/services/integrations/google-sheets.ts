@@ -80,6 +80,7 @@ async function fetchConnectionSettings(): Promise<string> {
         throw new Error("Google Sheet not connected");
       }
 
+      lastFetchedAt = Date.now();
       scheduleProactiveRefresh();
       return accessToken;
     } catch (err) {
@@ -94,13 +95,21 @@ async function fetchConnectionSettings(): Promise<string> {
   throw lastError;
 }
 
+let lastFetchedAt = 0;
+
 async function getAccessToken() {
-  if (
-    connectionSettings &&
-    connectionSettings.settings.expires_at &&
-    new Date(connectionSettings.settings.expires_at).getTime() > Date.now() + REFRESH_BUFFER_MS
-  ) {
-    return connectionSettings.settings.access_token;
+  if (connectionSettings) {
+    const cachedToken = extractAccessToken(connectionSettings);
+    if (cachedToken) {
+      if (connectionSettings.settings.expires_at) {
+        const expiresAt = new Date(connectionSettings.settings.expires_at).getTime();
+        if (expiresAt > Date.now() + REFRESH_BUFFER_MS) {
+          return cachedToken;
+        }
+      } else if (Date.now() - lastFetchedAt < FALLBACK_REFRESH_MS) {
+        return cachedToken;
+      }
+    }
   }
 
   return fetchConnectionSettings();
