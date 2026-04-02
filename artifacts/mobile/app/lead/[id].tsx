@@ -1346,7 +1346,7 @@ export default function LeadDetailScreen() {
                 </View>
               ) : (
                 <View style={styles.messagesList}>
-                  {messages.map(msg => {
+                  {[...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(msg => {
                     const isCall = msg.channelType === "call" || msg.channelType === "phone_call";
                     if (isCall) {
                       const isExpanded = expandedCallIds.has(msg.id + 100000);
