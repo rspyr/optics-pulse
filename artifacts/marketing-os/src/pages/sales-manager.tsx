@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/components/auth-context";
 import {
   Users, Phone, MessageSquare, TrendingUp,
@@ -331,14 +338,18 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
             </button>
           ))}
         </div>
-        <select
-          value={funnelFilter ?? ""}
-          onChange={e => setFunnelFilter(e.target.value ? Number(e.target.value) : null)}
-          className="bg-white/5 border border-white/10 rounded-md px-3 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+        <Select
+          value={funnelFilter != null ? String(funnelFilter) : "__all__"}
+          onValueChange={v => setFunnelFilter(v === "__all__" ? null : Number(v))}
         >
-          <option value="">All Funnels</option>
-          {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
+          <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[120px]">
+            <SelectValue placeholder="All Funnels" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Funnels</SelectItem>
+            {funnels.map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <label className="flex items-center gap-1.5 text-xs text-white/40 cursor-pointer select-none ml-2">
           <input
             type="checkbox"
@@ -776,37 +787,45 @@ function TeamTab({ tenantId, funnels, timezone = "America/New_York", includePreB
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5 block">Source CSR</label>
-            <select
-              value={batchSourceId ?? ""}
-              onChange={e => {
-                const val = e.target.value ? Number(e.target.value) : null;
+            <Select
+              value={batchSourceId != null ? String(batchSourceId) : "__none__"}
+              onValueChange={v => {
+                const val = v === "__none__" ? null : Number(v);
                 setBatchSourceId(val);
                 setBatchResult(null);
                 if (val === batchTargetId) setBatchTargetId(null);
               }}
-              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50"
             >
-              <option value="" className="bg-[#1a1a2e]">Select source CSR...</option>
-              {csrs.map(c => (
-                <option key={c.id} value={c.id} className="bg-[#1a1a2e]">{c.name}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50 h-auto">
+                <SelectValue placeholder="Select source CSR..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select source CSR...</SelectItem>
+                {csrs.map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5 block">Target CSR</label>
-            <select
-              value={batchTargetId ?? ""}
-              onChange={e => {
-                setBatchTargetId(e.target.value ? Number(e.target.value) : null);
+            <Select
+              value={batchTargetId != null ? String(batchTargetId) : "__none__"}
+              onValueChange={v => {
+                setBatchTargetId(v === "__none__" ? null : Number(v));
                 setBatchResult(null);
               }}
-              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50"
             >
-              <option value="" className="bg-[#1a1a2e]">Select target CSR...</option>
-              {csrs.filter(c => c.id !== batchSourceId).map(c => (
-                <option key={c.id} value={c.id} className="bg-[#1a1a2e]">{c.name}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50 h-auto">
+                <SelectValue placeholder="Select target CSR..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select target CSR...</SelectItem>
+                {csrs.filter(c => c.id !== batchSourceId).map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -1030,14 +1049,18 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <select
-          value={selectedFunnelId ?? ""}
-          onChange={e => setSelectedFunnelId(e.target.value ? Number(e.target.value) : null)}
-          className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+        <Select
+          value={selectedFunnelId != null ? String(selectedFunnelId) : "__all__"}
+          onValueChange={v => setSelectedFunnelId(v === "__all__" ? null : Number(v))}
         >
-          <option value="">Default (All Funnels)</option>
-          {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
+          <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[180px]">
+            <SelectValue placeholder="Default (All Funnels)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">Default (All Funnels)</SelectItem>
+            {funnels.map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {isInherited && (
           <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-2 py-1">
             <Info className="w-3 h-3" />
@@ -1137,10 +1160,10 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                   }}
                   className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
                 />
-                <select
+                <Select
                   value={passUnit}
-                  onChange={e => {
-                    const newUnit = e.target.value as "minutes" | "hours";
+                  onValueChange={v => {
+                    const newUnit = v as "minutes" | "hours";
                     if (newUnit === "hours" && passUnit === "minutes") {
                       setPassInterval(Math.max(60, Math.round(passInterval / 60) * 60));
                     } else if (newUnit === "minutes" && passUnit === "hours") {
@@ -1148,11 +1171,15 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                     }
                     setPassUnit(newUnit);
                   }}
-                  className="bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
                 >
-                  <option value="minutes">Minutes</option>
-                  <option value="hours">Hours</option>
-                </select>
+                  <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="minutes">Minutes</SelectItem>
+                    <SelectItem value="hours">Hours</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <p className="text-[10px] text-white/20 mt-0.5">Auto-pass lead to next CSR after this period of inactivity</p>
             </div>
@@ -1207,16 +1234,20 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                 {stickyAfterCascade && (
                   <div>
                     <label className="text-[10px] text-white/30 uppercase tracking-wider">Assign To</label>
-                    <select
-                      value={stickyCsrId ?? ""}
-                      onChange={e => setStickyCsrId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    <Select
+                      value={stickyCsrId != null ? String(stickyCsrId) : "__none__"}
+                      onValueChange={v => setStickyCsrId(v === "__none__" ? null : Number(v))}
                     >
-                      <option value="">Select a CSR...</option>
-                      {csrs.map(csr => (
-                        <option key={csr.id} value={csr.id}>{csr.name}</option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                        <SelectValue placeholder="Select a CSR..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Select a CSR...</SelectItem>
+                        {csrs.map(csr => (
+                          <SelectItem key={csr.id} value={String(csr.id)}>{csr.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <p className="text-[10px] text-white/20 mt-0.5">Lead will be assigned to this CSR after cycling through all cascade positions</p>
                   </div>
                 )}
@@ -1700,16 +1731,20 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
 
           {availableFunnels.length > 0 && (
             <div className="flex items-center gap-2">
-              <select
-                value={newFunnel}
-                onChange={e => setNewFunnel(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+              <Select
+                value={newFunnel || "__none__"}
+                onValueChange={v => setNewFunnel(v === "__none__" ? "" : v)}
               >
-                <option value="">Add funnel override...</option>
-                {availableFunnels.map(fn => (
-                  <option key={fn} value={fn}>{fn}</option>
-                ))}
-              </select>
+                <SelectTrigger className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                  <SelectValue placeholder="Add funnel override..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Add funnel override...</SelectItem>
+                  {availableFunnels.map(fn => (
+                    <SelectItem key={fn} value={fn}>{fn}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <button
                 onClick={() => { if (newFunnel) { setOverrides(prev => ({ ...prev, [newFunnel]: defaultAmount })); setNewFunnel(""); } }}
                 disabled={!newFunnel}
@@ -2050,43 +2085,47 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                     )}
                   </div>
 
-                  <select
+                  <Select
                     value={field}
-                    onChange={e => setMapping(prev => ({ ...prev, [header]: e.target.value }))}
-                    className={cn(
-                      "bg-white/5 border rounded-md px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50",
-                      field === "__skip__" ? "border-white/5 text-white/30" : "border-white/10"
-                    )}
+                    onValueChange={v => setMapping(prev => ({ ...prev, [header]: v }))}
                   >
-                    {analysis?.internalFields ? (
-                      analysis.internalFields.map(f => (
-                        <option key={f.field} value={f.field}>{f.label}</option>
-                      ))
-                    ) : (
-                      <>
-                        <option value="firstName">First Name</option>
-                        <option value="lastName">Last Name</option>
-                        <option value="fullName">Full Name</option>
-                        <option value="phone">Phone</option>
-                        <option value="email">Email</option>
-                        <option value="source">Lead Source</option>
-                        <option value="serviceType">Service Type</option>
-                        <option value="__funnel__">Funnel</option>
-                        <option value="status">Status</option>
-                        <option value="notes">Notes</option>
-                        <option value="address">Address</option>
-                        <option value="city">City</option>
-                        <option value="state">State</option>
-                        <option value="zip">Zip Code</option>
-                        <option value="dateTime">Date/Time</option>
-                        <option value="appointmentBooked">Appointment Booked</option>
-                        <option value="appointmentDate">Appointment Date</option>
-                        <option value="appointmentTime">Appointment Time</option>
-                        <option value="addOns">Add-Ons</option>
-                        <option value="__skip__">Skip (Do Not Import)</option>
-                      </>
-                    )}
-                  </select>
+                    <SelectTrigger className={cn(
+                      "bg-white/5 border rounded-md px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[140px]",
+                      field === "__skip__" ? "border-white/5 text-white/30" : "border-white/10"
+                    )}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {analysis?.internalFields ? (
+                        analysis.internalFields.map(f => (
+                          <SelectItem key={f.field} value={f.field}>{f.label}</SelectItem>
+                        ))
+                      ) : (
+                        <>
+                          <SelectItem value="firstName">First Name</SelectItem>
+                          <SelectItem value="lastName">Last Name</SelectItem>
+                          <SelectItem value="fullName">Full Name</SelectItem>
+                          <SelectItem value="phone">Phone</SelectItem>
+                          <SelectItem value="email">Email</SelectItem>
+                          <SelectItem value="source">Lead Source</SelectItem>
+                          <SelectItem value="serviceType">Service Type</SelectItem>
+                          <SelectItem value="__funnel__">Funnel</SelectItem>
+                          <SelectItem value="status">Status</SelectItem>
+                          <SelectItem value="notes">Notes</SelectItem>
+                          <SelectItem value="address">Address</SelectItem>
+                          <SelectItem value="city">City</SelectItem>
+                          <SelectItem value="state">State</SelectItem>
+                          <SelectItem value="zip">Zip Code</SelectItem>
+                          <SelectItem value="dateTime">Date/Time</SelectItem>
+                          <SelectItem value="appointmentBooked">Appointment Booked</SelectItem>
+                          <SelectItem value="appointmentDate">Appointment Date</SelectItem>
+                          <SelectItem value="appointmentTime">Appointment Time</SelectItem>
+                          <SelectItem value="addOns">Add-Ons</SelectItem>
+                          <SelectItem value="__skip__">Skip (Do Not Import)</SelectItem>
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
               );
             })}
@@ -2173,22 +2212,25 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                     <div key={val} className="flex items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
                       <span className="text-[11px] text-white/70 font-mono flex-1 truncate">{val}</span>
                       <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90 flex-shrink-0" />
-                      <select
-                        value={funnelValueMap[val] ?? ""}
-                        onChange={e => {
-                          const v = e.target.value;
+                      <Select
+                        value={funnelValueMap[val] != null ? String(funnelValueMap[val]) : "__none__"}
+                        onValueChange={v => {
                           setFunnelValueMap(prev => {
-                            if (!v) { const next = { ...prev }; delete next[val]; return next; }
+                            if (v === "__none__") { const next = { ...prev }; delete next[val]; return next; }
                             return { ...prev, [val]: Number(v) };
                           });
                         }}
-                        className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
                       >
-                        <option value="">-- Select Funnel --</option>
-                        {funnels.map(f => (
-                          <option key={f.id} value={f.id}>{f.name}</option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px] h-auto">
+                          <SelectValue placeholder="-- Select Funnel --" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">-- Select Funnel --</SelectItem>
+                          {funnels.map(f => (
+                            <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   ))}
                 </div>
@@ -2500,14 +2542,18 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
           </div>
           <div>
             <label className="text-[10px] text-white/30 uppercase tracking-wider">Default Funnel (fallback)</label>
-            <select
-              value={newDefaultFunnel}
-              onChange={e => setNewDefaultFunnel(e.target.value ? Number(e.target.value) : "")}
-              className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            <Select
+              value={newDefaultFunnel ? String(newDefaultFunnel) : "__none__"}
+              onValueChange={v => setNewDefaultFunnel(v === "__none__" ? "" : Number(v))}
             >
-              <option value="">-- No default (require funnel routing) --</option>
-              {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
+              <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                <SelectValue placeholder="-- No default (require funnel routing) --" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">-- No default (require funnel routing) --</SelectItem>
+                {funnels.map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <button
             onClick={handleCreate}
@@ -2707,14 +2753,18 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                 </div>
                 <div>
                   <label className="text-[10px] text-white/30 uppercase tracking-wider">Default Funnel (fallback)</label>
-                  <select
-                    value={editDefaultFunnel}
-                    onChange={e => setEditDefaultFunnel(e.target.value ? Number(e.target.value) : "")}
-                    className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  <Select
+                    value={editDefaultFunnel ? String(editDefaultFunnel) : "__none__"}
+                    onValueChange={v => setEditDefaultFunnel(v === "__none__" ? "" : Number(v))}
                   >
-                    <option value="">-- No default (require funnel routing) --</option>
-                    {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                  </select>
+                    <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                      <SelectValue placeholder="-- No default (require funnel routing) --" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">-- No default (require funnel routing) --</SelectItem>
+                      {funnels.map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -3259,25 +3309,33 @@ function SpiffsAuditTab({ tenantId, funnels, timezone }: { tenantId: number | nu
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">CSR</label>
-            <select
-              value={filterCsrId}
-              onChange={e => setFilterCsrId(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+            <Select
+              value={filterCsrId || "__all__"}
+              onValueChange={v => setFilterCsrId(v === "__all__" ? "" : v)}
             >
-              <option value="">All CSRs</option>
-              {csrs.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+              <SelectTrigger className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px] h-auto w-auto">
+                <SelectValue placeholder="All CSRs" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All CSRs</SelectItem>
+                {csrs.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">Funnel</label>
-            <select
-              value={filterFunnelId}
-              onChange={e => setFilterFunnelId(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px]"
+            <Select
+              value={filterFunnelId || "__all__"}
+              onValueChange={v => setFilterFunnelId(v === "__all__" ? "" : v)}
             >
-              <option value="">All Funnels</option>
-              {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
+              <SelectTrigger className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px] h-auto w-auto">
+                <SelectValue placeholder="All Funnels" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Funnels</SelectItem>
+                {funnels.map(f => <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">Start Date</label>
@@ -3444,15 +3502,19 @@ export default function SalesManager() {
         <PremiumCard className="p-4">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <select
-              value={selectedTenantId ?? ""}
-              onChange={e => setSelectedTenantId(parseInt(e.target.value))}
-              className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            <Select
+              value={selectedTenantId != null ? String(selectedTenantId) : undefined}
+              onValueChange={v => setSelectedTenantId(parseInt(v))}
             >
-              {tenants.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+              <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[140px]">
+                <SelectValue placeholder="Select tenant..." />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map(t => (
+                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </PremiumCard>
       )}
