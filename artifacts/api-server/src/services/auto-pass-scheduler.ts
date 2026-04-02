@@ -8,6 +8,19 @@ const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"];
 
+function isStickyTerminalState(
+  config: { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null },
+  assignedCsrId: number,
+  cascadePassCount: number,
+  activeOrderLength: number,
+): boolean {
+  if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return false;
+  if (assignedCsrId !== config.stickyCsrId) return false;
+  const endOfCycle = cascadePassCount >= activeOrderLength - 1;
+  const rotationArrival = cascadePassCount > 0;
+  return endOfCycle || rotationArrival;
+}
+
 export function scheduleAutoPass(leadId: number, delayMs: number): void {
   cancelAutoPass(leadId);
   if (delayMs < 0) delayMs = 0;
@@ -152,10 +165,8 @@ async function fireAutoPass(leadId: number): Promise<void> {
   if (config.allowPassBack) {
     const cascadePassCount = lead.cascadePassCount ?? 0;
 
-    if (config.stickyAfterCascade && config.stickyCsrId
-        && config.stickyCsrId === lead.assignedCsrId
-        && cascadePassCount >= activeOrder.length - 1) {
-      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} after full cycle (terminal) — no further passes`);
+    if (isStickyTerminalState(config, lead.assignedCsrId, cascadePassCount, activeOrder.length)) {
+      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} (terminal) — no further passes`);
       return;
     }
 
@@ -234,14 +245,8 @@ async function fireAutoPass(leadId: number): Promise<void> {
     emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   }
 
-  const stickyEnabled = config.allowPassBack && config.stickyAfterCascade && config.stickyCsrId;
-  const endOfCycleTerminal = stickyEnabled
-    && newPassCount >= activeOrder.length - 1
-    && nextCsrId === config.stickyCsrId;
-  const rotationArrivalTerminal = stickyEnabled
-    && nextCsrId === config.stickyCsrId
-    && (lead.cascadePassCount ?? 0) > 0;
-  const isStickyTerminal = endOfCycleTerminal || rotationArrivalTerminal;
+  const isStickyTerminal = isStickyTerminalState(config, nextCsrId, newPassCount, activeOrder.length);
+  const endOfCycleTerminal = isStickyTerminal && newPassCount >= activeOrder.length - 1;
 
   if (isStickyTerminal) {
     const reason = endOfCycleTerminal ? 'end_of_cycle' : 'rotation_arrival';
@@ -320,9 +325,7 @@ export async function recoverTimers(): Promise<number> {
       if (timers.has(lead.id)) continue;
 
       if (activeRecoverOrder.length >= 2
-          && config.allowPassBack && config.stickyAfterCascade && config.stickyCsrId
-          && config.stickyCsrId === lead.assignedCsrId
-          && (lead.cascadePassCount ?? 0) >= activeRecoverOrder.length - 1) {
+          && isStickyTerminalState(config, lead.assignedCsrId!, lead.cascadePassCount ?? 0, activeRecoverOrder.length)) {
         continue;
       }
 
