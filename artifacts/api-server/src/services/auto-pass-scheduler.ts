@@ -150,18 +150,21 @@ async function fireAutoPass(leadId: number): Promise<void> {
   let nextCsrId: number;
 
   if (config.allowPassBack) {
-    if (config.stickyAfterCascade && config.stickyCsrId && (lead.cascadePassCount ?? 0) >= activeOrder.length - 1) {
-      if (config.stickyCsrId === lead.assignedCsrId) {
-        console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} (terminal) — no further passes`);
-        return;
-      }
-      nextCsrId = config.stickyCsrId;
+    if (config.stickyAfterCascade && config.stickyCsrId
+        && config.stickyCsrId === lead.assignedCsrId
+        && (lead.cascadePassCount ?? 0) > 0) {
+      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} (terminal) — no further passes`);
+      return;
+    }
+
+    if (currentIdx === -1) {
+      nextCsrId = activeOrder[0];
     } else {
-      if (currentIdx === -1) {
-        nextCsrId = activeOrder[0];
-      } else {
-        nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
-      }
+      nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+    }
+
+    if (config.stickyAfterCascade && config.stickyCsrId && nextCsrId === config.stickyCsrId) {
+      console.log(`[auto-pass] Lead ${leadId}: rotation reached sticky CSR ${config.stickyCsrId} — sticking`);
     }
   } else {
     if (currentIdx === -1) {
@@ -224,8 +227,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
 
   const isStickyTerminal = config.allowPassBack
     && config.stickyAfterCascade && config.stickyCsrId
-    && config.stickyCsrId === nextCsrId
-    && newPassCount >= activeOrder.length - 1;
+    && config.stickyCsrId === nextCsrId;
 
   if (isStickyTerminal) {
     console.log(`[auto-pass] Lead ${leadId}: arrived at sticky CSR ${nextCsrId} (terminal) — no further timers`);
@@ -304,8 +306,8 @@ export async function recoverTimers(): Promise<number> {
 
       if (activeRecoverOrder.length >= 2
           && config.allowPassBack && config.stickyAfterCascade && config.stickyCsrId
-          && (lead.cascadePassCount ?? 0) >= activeRecoverOrder.length - 1
-          && config.stickyCsrId === lead.assignedCsrId) {
+          && config.stickyCsrId === lead.assignedCsrId
+          && (lead.cascadePassCount ?? 0) > 0) {
         continue;
       }
 
