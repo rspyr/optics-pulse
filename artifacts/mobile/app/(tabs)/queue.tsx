@@ -71,7 +71,6 @@ const EMPTY_MESSAGES: Record<Tab, string> = {
   archive: "No archived leads.",
 };
 
-const TAB_SCROLL_PADDING = 24;
 
 export default function QueueScreen() {
   const { user } = useAuth();
