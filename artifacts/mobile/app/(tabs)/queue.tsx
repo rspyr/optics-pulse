@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  AppState,
+  Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -43,6 +45,11 @@ interface QueueLead {
   contactPreferences?: string[];
 }
 
+interface CsrOption {
+  id: number;
+  name: string;
+}
+
 interface QueueData {
   newLeads: QueueLead[];
   callbacks: QueueLead[];
@@ -60,10 +67,75 @@ const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap; colo
   { key: "archive", label: "Archive", icon: "archive", color: "#6B7280" },
 ];
 
+const MANAGER_ROLES = ["client_admin", "agency_user", "super_admin"];
+
+const EMPTY_MESSAGES: Record<Tab, string> = {
+  new: "No new untouched leads right now.",
+  reengagement: "No leads needing follow-up right now.",
+  callbacks: "No pending callbacks.",
+  old: "No old leads in queue.",
+  archive: "No archived leads.",
+};
+
+function NewLeadToast({ lead, onPress, onDismiss }: { lead: QueueLead; onPress: () => void; onDismiss: () => void }) {
+  const colors = useColors();
+  const slideAnim = useRef(new Animated.Value(-120)).current;
+  const progressAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 300 }).start();
+    Animated.timing(progressAnim, { toValue: 0, duration: 60000, useNativeDriver: false }).start();
+    const timer = setTimeout(onDismiss, 60000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+
+  return (
+    <Animated.View style={[toastStyles.container, { transform: [{ translateY: slideAnim }] }]}>
+      <TouchableOpacity
+        style={[toastStyles.card, { backgroundColor: "#7f1d1d", borderColor: "#F2050566" }]}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
+        <View style={toastStyles.topRow}>
+          <View style={toastStyles.pulseWrap}>
+            <View style={[toastStyles.pulseDot, { backgroundColor: "#F20505" }]} />
+          </View>
+          <Text style={toastStyles.toastTitle}>New Lead!</Text>
+          <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Feather name="x" size={16} color="rgba(255,255,255,0.4)" />
+          </TouchableOpacity>
+        </View>
+        <Text style={toastStyles.toastName}>{lead.firstName} {lead.lastName}</Text>
+        <View style={toastStyles.toastMeta}>
+          {lead.source && <Text style={toastStyles.toastSource}>{lead.source}</Text>}
+          {lead.phone && <Text style={toastStyles.toastPhone}>{lead.phone}</Text>}
+        </View>
+        <Animated.View style={[toastStyles.progressBar, { width: progressWidth }]} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+const toastStyles = StyleSheet.create({
+  container: { position: "absolute", top: 0, left: 16, right: 16, zIndex: 100 },
+  card: { borderRadius: 12, borderWidth: 1, padding: 14, overflow: "hidden" },
+  topRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
+  pulseWrap: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
+  pulseDot: { width: 10, height: 10, borderRadius: 5 },
+  toastTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_700Bold", color: "#F87171" },
+  toastName: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#FFFFFF" },
+  toastMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+  toastSource: { fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" },
+  toastPhone: { fontSize: 11, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.3)" },
+  progressBar: { position: "absolute", bottom: 0, left: 0, height: 2, backgroundColor: "rgba(242,5,5,0.6)" },
+});
+
 export default function QueueScreen() {
   const { user } = useAuth();
   const { on, off } = useSocket();
-  const { effectiveTenantId, isAgency } = useTenant();
+  const { effectiveTenantId } = useTenant();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -73,24 +145,52 @@ export default function QueueScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
 
+  const isManager = MANAGER_ROLES.includes(user?.role || "");
+  const [csrList, setCsrList] = useState<CsrOption[]>([]);
+  const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
+  const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
+
+  const [toastLead, setToastLead] = useState<QueueLead | null>(null);
+  const shownPushLeadIds = useRef(new Set<number>());
+
+  useEffect(() => {
+    if (!isManager || !effectiveTenantId) return;
+    const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
+    apiFetch(`/api/leads-hub/csrs${tenantParam}`)
+      .then(d => setCsrList(d.csrs || []))
+      .catch(() => {});
+  }, [effectiveTenantId, isManager]);
+
   const fetchQueue = useCallback(async () => {
     if (!user) return;
     try {
-      const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
-      const [queueData, archiveData] = await Promise.all([
-        apiFetch(`/api/leads-hub/queue${tenantParam}`),
-        apiFetch(`/api/leads-hub/archive?limit=50${effectiveTenantId ? `&tenantId=${effectiveTenantId}` : ""}`),
-      ]);
-      setQueue({
-        ...queueData,
-        archive: archiveData.leads || [],
-      });
+      const params = new URLSearchParams();
+      if (effectiveTenantId) params.set("tenantId", String(effectiveTenantId));
+      if (selectedCsrId) params.set("csrId", String(selectedCsrId));
+      const qs = params.toString();
+      const tenantParam = qs ? `?${qs}` : "";
+      const archiveQs = effectiveTenantId ? `tenantId=${effectiveTenantId}` : "";
+      const archiveParam = archiveQs ? `?limit=50&${archiveQs}` : "?limit=50";
+      if (selectedCsrId) {
+        const csrArchiveParam = archiveParam + `&csrId=${selectedCsrId}`;
+        const [queueData, archiveData] = await Promise.all([
+          apiFetch(`/api/leads-hub/queue${tenantParam}`),
+          apiFetch(`/api/leads-hub/archive${csrArchiveParam}`),
+        ]);
+        setQueue({ ...queueData, archive: archiveData.leads || [] });
+      } else {
+        const [queueData, archiveData] = await Promise.all([
+          apiFetch(`/api/leads-hub/queue${tenantParam}`),
+          apiFetch(`/api/leads-hub/archive${archiveParam}`),
+        ]);
+        setQueue({ ...queueData, archive: archiveData.leads || [] });
+      }
     } catch (err) {
       console.error("[Queue] Failed to fetch:", err);
     } finally {
       setLoading(false);
     }
-  }, [apiFetch, user, effectiveTenantId]);
+  }, [apiFetch, user, effectiveTenantId, selectedCsrId]);
 
   useEffect(() => {
     setLoading(true);
@@ -98,9 +198,13 @@ export default function QueueScreen() {
   }, [fetchQueue]);
 
   useEffect(() => {
-    const handleNewLead = () => {
+    const handleNewLead = (data: QueueLead) => {
       fetchQueue();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      if (data && data.id && AppState.currentState === "active" && !shownPushLeadIds.current.has(data.id)) {
+        setToastLead(data);
+      }
     };
     const handleUpdate = () => fetchQueue();
     on("new-lead", handleNewLead);
@@ -150,6 +254,51 @@ export default function QueueScreen() {
           <Text style={[styles.totalText, { color: colors.primary }]}>{queue.total} active</Text>
         </View>
       </View>
+
+      {isManager && csrList.length > 0 && (
+        <View style={[styles.csrSelector, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.csrHeader}>
+            <Feather name="users" size={14} color={colors.mutedForeground} />
+            <Text style={[styles.csrLabel, { color: colors.mutedForeground }]}>CSR VIEW</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.csrDropdown, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+            onPress={() => setCsrDropdownOpen(!csrDropdownOpen)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.csrValue, { color: colors.foreground }]} numberOfLines={1}>
+              {selectedCsrId ? csrList.find(c => c.id === selectedCsrId)?.name || "Select CSR" : "All CSRs"}
+            </Text>
+            <Feather name={csrDropdownOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {csrDropdownOpen && (
+            <View style={[styles.csrDropdownList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <TouchableOpacity
+                style={[styles.csrItem, !selectedCsrId && { backgroundColor: colors.primary + "15" }]}
+                onPress={() => { setSelectedCsrId(null); setCsrDropdownOpen(false); }}
+              >
+                <Text style={[styles.csrItemText, { color: !selectedCsrId ? colors.primary : colors.foreground }]}>All CSRs</Text>
+                {!selectedCsrId && <Feather name="check" size={14} color={colors.primary} />}
+              </TouchableOpacity>
+              {csrList.map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.csrItem, selectedCsrId === c.id && { backgroundColor: colors.primary + "15" }]}
+                  onPress={() => { setSelectedCsrId(c.id); setCsrDropdownOpen(false); if (Platform.OS !== "web") Haptics.selectionAsync(); }}
+                >
+                  <Text style={[styles.csrItemText, { color: selectedCsrId === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
+                  {selectedCsrId === c.id && <Feather name="check" size={14} color={colors.primary} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {selectedCsrId && (
+            <Text style={[styles.csrViewingAs, { color: colors.primary }]}>
+              Viewing as {csrList.find(c => c.id === selectedCsrId)?.name}
+            </Text>
+          )}
+        </View>
+      )}
 
       <ScrollView
         horizontal
@@ -208,19 +357,33 @@ export default function QueueScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           scrollEnabled={leads.length > 0}
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Feather name="inbox" size={40} color={colors.mutedForeground} />
-              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No leads here</Text>
+            <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.emptyIconWrap, { backgroundColor: "rgba(255,255,255,0.05)" }]}>
+                <Feather name="check" size={24} color="#10B981" />
+              </View>
+              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+                {activeTab === "archive" ? "No Archived Leads" : "Queue Clear"}
+              </Text>
               <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
-                {activeTab === "new" ? "New leads will appear when assigned to you" :
-                 activeTab === "callbacks" ? "No scheduled callbacks due right now" :
-                 activeTab === "reengagement" ? "No leads to re-engage at this time" :
-                 activeTab === "archive" ? "No archived leads" :
-                 "No old leads in queue"}
+                {EMPTY_MESSAGES[activeTab]}
               </Text>
             </View>
           }
         />
+      )}
+
+      {toastLead && (
+        <View style={{ position: "absolute", top: isWeb ? 67 + 56 : insets.top + 56, left: 0, right: 0, zIndex: 100 }}>
+          <NewLeadToast
+            lead={toastLead}
+            onPress={() => {
+              const id = toastLead.id;
+              setToastLead(null);
+              router.push({ pathname: "/lead/[id]", params: { id: String(id), lead: JSON.stringify(toastLead) } });
+            }}
+            onDismiss={() => setToastLead(null)}
+          />
+        </View>
       )}
     </View>
   );
@@ -232,6 +395,15 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontFamily: "Inter_700Bold" },
   totalBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   totalText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  csrSelector: { marginHorizontal: 16, marginBottom: 8, borderRadius: 10, borderWidth: 1, padding: 12, gap: 8 },
+  csrHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
+  csrLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },
+  csrDropdown: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
+  csrValue: { fontSize: 14, fontFamily: "Inter_500Medium", flex: 1 },
+  csrDropdownList: { borderRadius: 8, borderWidth: 1, overflow: "hidden" },
+  csrItem: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  csrItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  csrViewingAs: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" },
   tabScroll: { borderBottomWidth: 1, maxHeight: 44 },
   tabScrollContent: { paddingHorizontal: 8, gap: 2 },
   tab: {
@@ -248,7 +420,23 @@ const styles = StyleSheet.create({
   countText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   listContent: { paddingHorizontal: 16, paddingTop: 12 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  emptyState: { alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 8 },
-  emptyTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  emptySubtitle: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 40 },
+  emptyCard: {
+    marginTop: 40,
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    gap: 12,
+  },
+  emptyIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  emptyTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
+  emptySubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 20 },
 });

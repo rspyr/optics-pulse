@@ -20,30 +20,60 @@ import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { useSocket } from "@/contexts/SocketContext";
 import { useTenant } from "@/contexts/TenantContext";
+import { useAuth } from "@/contexts/AuthContext";
 
-type ActionType = "call" | "text" | "voicemail_drop";
+type ActionStep =
+  | null
+  | "call_done"
+  | "spoke_result"
+  | "call_callback"
+  | "dead_reason"
+  | "text_done"
+  | "vm_done"
+  | "appt_booked_flow"
+  | "appt_cancel_reason";
+
 type DetailTab = "actions" | "details" | "messages" | "history";
 
 const CALL_RESULTS = [
-  { key: "no_answer", label: "No Answer", icon: "phone-missed" as const },
-  { key: "left_voicemail", label: "Left VM", icon: "voicemail" as const },
-  { key: "spoke_with_customer", label: "Spoke", icon: "check-circle" as const },
-  { key: "bad_number", label: "Bad #", icon: "x-circle" as const },
-  { key: "hung_up", label: "Hung Up", icon: "phone-off" as const },
+  { value: "no_answer", label: "No Answer" },
+  { value: "left_voicemail", label: "Left Voicemail" },
+  { value: "vm_full", label: "VM Full" },
+  { value: "vm_not_setup", label: "VM Not Setup" },
+  { value: "hung_up", label: "Hung Up" },
+  { value: "spoke_with_customer", label: "Spoke with Customer" },
+];
+
+const SPOKE_RESULTS = [
+  { value: "appointment_set", label: "Appointment Set", color: "#10B981" },
+  { value: "call_back", label: "Callback Requested", color: "#F59E0B" },
+  { value: "dead", label: "Dead Lead", color: "#EF4444" },
 ];
 
 const TEXT_RESULTS = [
-  { key: "yes", label: "Replied", icon: "message-circle" as const },
-  { key: "reached_out", label: "Sent", icon: "send" as const },
-  { key: "not_able_to", label: "Unable", icon: "x-circle" as const },
+  { value: "yes", label: "Yes — Interested" },
+  { value: "reached_out", label: "Reached Out" },
+  { value: "not_able_to", label: "Not Able To" },
+  { value: "dead", label: "Dead Lead" },
+  { value: "no_need", label: "No Need to Log" },
+];
+
+const VM_RESULTS = [
+  { value: "yes", label: "VM Dropped" },
+  { value: "no", label: "No — Did Not Leave VM" },
+  { value: "bad_number", label: "Bad Number" },
+  { value: "vm_full", label: "VM Full" },
+  { value: "vm_not_setup", label: "VM Not Setup" },
+  { value: "spoke_with_customer", label: "Spoke with Customer" },
 ];
 
 const DEAD_REASONS = [
-  { key: "not_interested", label: "Not Interested" },
-  { key: "bad_contact", label: "Bad Contact Info" },
-  { key: "do_not_call", label: "Do Not Call" },
-  { key: "duplicate", label: "Duplicate" },
-  { key: "other", label: "Other" },
+  { value: "out_of_service_area", label: "Out of Service Area" },
+  { value: "do_not_call", label: "Do Not Call" },
+  { value: "not_interested", label: "Not Interested" },
+  { value: "too_expensive", label: "Too Expensive" },
+  { value: "no_response", label: "No Response" },
+  { value: "other", label: "Other" },
 ];
 
 const DAY_BADGE_CONFIG: Record<string, { label: string; color: string }> = {
@@ -58,11 +88,16 @@ const DAY_BADGE_CONFIG: Record<string, { label: string; color: string }> = {
   dead: { label: "DEAD", color: "#EF4444" },
 };
 
-const CONTACT_FLAGS: Record<string, { label: string; icon: keyof typeof Feather.glyphMap; color: string }> = {
-  text_only: { label: "Text Only", icon: "message-square", color: "#3B82F6" },
+const CONTACT_FLAG_CONFIG: Record<string, { label: string; icon: keyof typeof Feather.glyphMap; color: string; blocksCall?: boolean }> = {
+  text_only: { label: "Text Only", icon: "message-square", color: "#3B82F6", blocksCall: true },
   spanish_speaking: { label: "Spanish", icon: "globe", color: "#8B5CF6" },
-  do_not_call: { label: "DNC", icon: "phone-off", color: "#EF4444" },
+  do_not_call: { label: "DNC", icon: "phone-off", color: "#EF4444", blocksCall: true },
 };
+
+interface CsrOption {
+  id: number;
+  name: string;
+}
 
 interface LeadDetail {
   id: number;
@@ -73,11 +108,13 @@ interface LeadDetail {
   source?: string;
   leadType?: string;
   interestType?: string;
+  serviceType?: string;
   hubStatus?: string;
   dayInSequence?: number;
   createdAt?: string;
   notes?: string;
   assignedUserName?: string;
+  assignedCsrId?: number;
   address?: string;
   city?: string;
   state?: string;
@@ -121,8 +158,10 @@ export default function LeadDetailScreen() {
   const insets = useSafeAreaInsets();
   const { on, off } = useSocket();
   const { effectiveTenantId } = useTenant();
+  const { user } = useAuth();
   const isWeb = Platform.OS === "web";
   const tenantQs = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
+  const isManager = ["client_admin", "agency_user", "super_admin"].includes(user?.role || "");
 
   const [lead, setLead] = useState<LeadDetail | null>(() => {
     if (params.lead) {
@@ -132,16 +171,30 @@ export default function LeadDetailScreen() {
   });
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [messages, setMessages] = useState<PodiumMessage[]>([]);
-  const [actionType, setActionType] = useState<ActionType>("call");
-  const [submitting, setSubmitting] = useState(false);
-  const [notes, setNotes] = useState("");
-  const [showDeadMenu, setShowDeadMenu] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("actions");
-  const [callbackDate, setCallbackDate] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
-
   const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const [actionStep, setActionStep] = useState<ActionStep>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
+  const [apptBookedChannel, setApptBookedChannel] = useState<"call" | "text" | "voicemail_drop">("call");
+  const [callbackDate, setCallbackDate] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
+
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [csrs, setCsrs] = useState<CsrOption[]>([]);
+  const [selectedCsr, setSelectedCsr] = useState<number | null>(null);
+
+  const contactPrefs = (lead?.contactPreferences || []) as string[];
+  const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
+
+  const showFeedback = (type: "success" | "error", msg: string) => {
+    setFeedback({ type, msg });
+    setTimeout(() => setFeedback(null), 3000);
+  };
 
   const fetchLead = useCallback(async () => {
     try {
@@ -167,8 +220,7 @@ export default function LeadDetailScreen() {
     try {
       const data = await apiFetch(`/api/podium/conversations/${params.id}${tenantQs}`);
       setMessages(data.messages || []);
-    } catch {
-    }
+    } catch {}
   }, [apiFetch, params.id, tenantQs]);
 
   useEffect(() => {
@@ -178,7 +230,15 @@ export default function LeadDetailScreen() {
   }, []);
 
   useEffect(() => {
-    const handler = (data: { leadId?: number; contactId?: string }) => {
+    if (isManager && effectiveTenantId) {
+      apiFetch(`/api/leads-hub/csrs${tenantQs}`)
+        .then(d => setCsrs(d.csrs || []))
+        .catch(() => {});
+    }
+  }, [effectiveTenantId, tenantQs, isManager]);
+
+  useEffect(() => {
+    const handler = (data: { leadId?: number }) => {
       if (data?.leadId === Number(params.id)) {
         fetchMessages();
       }
@@ -187,99 +247,81 @@ export default function LeadDetailScreen() {
     return () => off("podium-message", handler);
   }, [on, off, params.id, fetchMessages]);
 
-  const submitAction = async (result: string) => {
-    if (submitting) return;
-    setSubmitting(true);
-    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
+  const logAction = async (body: Record<string, unknown>) => {
+    setActionLoading(true);
     try {
-      const body: Record<string, unknown> = { leadId: Number(params.id), actionType, notes: notes || undefined };
-      if (actionType === "call") body.callResult = result;
-      else if (actionType === "text") body.textResult = result;
-      else body.vmResult = "yes";
-
-      if (result === "spoke_with_customer") {
-        Alert.alert("Book Appointment?", "Did the customer book an appointment?", [
-          { text: "No", onPress: async () => {
-            await apiFetch("/api/leads-hub/action", { method: "POST", body: JSON.stringify(body) });
-            if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            fetchLead();
-            fetchHistory();
-            setNotes("");
-          }},
-          { text: "Yes", onPress: async () => {
-            body.appointmentSet = true;
-            await apiFetch("/api/leads-hub/action", { method: "POST", body: JSON.stringify(body) });
-            if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            fetchLead();
-            fetchHistory();
-            setNotes("");
-          }},
-        ]);
-        setSubmitting(false);
-        return;
-      }
-
-      await apiFetch("/api/leads-hub/action", { method: "POST", body: JSON.stringify(body) });
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      fetchLead();
-      fetchHistory();
-      setNotes("");
-    } catch (err) {
-      Alert.alert("Error", "Failed to log action");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const scheduleCallback = async () => {
-    if (!callbackDate) {
-      Alert.alert("Error", "Please enter a callback date/time");
-      return;
-    }
-    const parsed = new Date(callbackDate);
-    if (isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
-      Alert.alert("Error", "Please enter a valid future date and time (e.g. 2026-04-03 14:30)");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await apiFetch("/api/leads-hub/action", {
+      const res = await apiFetch("/api/leads-hub/action" + tenantQs, {
         method: "POST",
-        body: JSON.stringify({
-          leadId: Number(params.id),
-          actionType: "call",
-          callResult: "no_answer",
-          callbackAt: parsed.toISOString(),
-          notes: "Callback scheduled from mobile",
-        }),
+        body: JSON.stringify({ leadId: Number(params.id), ...body }),
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showFeedback("success", `Action logged — ${res.lead?.hubStatus || "updated"}`);
+      setActionStep(null);
       setCallbackDate("");
+      setCancelReason("");
       fetchLead();
       fetchHistory();
-      Alert.alert("Success", "Callback scheduled");
-    } catch {
-      Alert.alert("Error", "Failed to schedule callback");
+    } catch (err) {
+      showFeedback("error", err instanceof Error ? err.message : "Failed to log action");
     } finally {
-      setSubmitting(false);
+      setActionLoading(false);
     }
   };
 
-  const markDead = async (reason: string) => {
-    setSubmitting(true);
+  const handleCall = () => {
+    if (blocksCall) {
+      showFeedback("error", "This lead has a contact restriction that prevents calls");
+      return;
+    }
+    if (lead?.phone) Linking.openURL(`tel:${lead.phone.replace(/\D/g, "")}`);
+    if (lead?.hubStatus === "appt_booked") {
+      setApptBookedChannel("call");
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("call_done");
+    }
+  };
+
+  const handleText = () => {
+    if (lead?.phone) Linking.openURL(`sms:${lead.phone.replace(/\D/g, "")}`);
+    if (lead?.hubStatus === "appt_booked") {
+      setApptBookedChannel("text");
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("text_done");
+    }
+  };
+
+  const handleVmDrop = () => {
+    if (blocksCall) {
+      showFeedback("error", "This lead has a contact restriction that prevents calls");
+      return;
+    }
+    if (lead?.hubStatus === "appt_booked") {
+      setApptBookedChannel("voicemail_drop");
+      setActionStep("appt_booked_flow");
+    } else {
+      setActionStep("vm_done");
+    }
+  };
+
+  const handleTransfer = async () => {
+    if (!selectedCsr) return;
+    setActionLoading(true);
     try {
-      await apiFetch("/api/leads-hub/action", {
+      await apiFetch(`/api/leads-hub/${params.id}/transfer${tenantQs}`, {
         method: "POST",
-        body: JSON.stringify({ leadId: Number(params.id), actionType: "call", callResult: "no_answer", deadReason: reason }),
+        body: JSON.stringify({ targetCsrId: selectedCsr }),
       });
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showFeedback("success", "Lead transferred");
+      setShowTransfer(false);
+      setSelectedCsr(null);
       fetchLead();
-      setShowDeadMenu(false);
-    } catch {
-      Alert.alert("Error", "Failed to update lead");
+    } catch (err) {
+      showFeedback("error", err instanceof Error ? err.message : "Transfer failed");
     } finally {
-      setSubmitting(false);
+      setActionLoading(false);
     }
   };
 
@@ -287,7 +329,7 @@ export default function LeadDetailScreen() {
     if (!newMessage.trim() || sendingMsg) return;
     setSendingMsg(true);
     try {
-      await apiFetch("/api/podium/messages", {
+      await apiFetch("/api/podium/messages" + tenantQs, {
         method: "POST",
         body: JSON.stringify({ leadId: Number(params.id), message: newMessage.trim() }),
       });
@@ -299,14 +341,6 @@ export default function LeadDetailScreen() {
     } finally {
       setSendingMsg(false);
     }
-  };
-
-  const dialPhone = () => {
-    if (lead?.phone) Linking.openURL(`tel:${lead.phone.replace(/\D/g, "")}`);
-  };
-
-  const sendSMS = () => {
-    if (lead?.phone) Linking.openURL(`sms:${lead.phone.replace(/\D/g, "")}`);
   };
 
   if (!lead) {
@@ -329,9 +363,7 @@ export default function LeadDetailScreen() {
 
   const dayBadge = DAY_BADGE_CONFIG[lead.hubStatus || ""] || null;
   const statusColor = dayBadge?.color || colors.primary;
-  const results = actionType === "call" ? CALL_RESULTS : actionType === "text" ? TEXT_RESULTS : [];
   const isTerminal = lead.hubStatus === "appt_set" || lead.hubStatus === "dead";
-  const contactPrefs = lead.contactPreferences || [];
 
   const DETAIL_TABS: { key: DetailTab; label: string; icon: keyof typeof Feather.glyphMap; badge?: number }[] = [
     { key: "actions", label: "Actions", icon: "zap" },
@@ -374,18 +406,31 @@ export default function LeadDetailScreen() {
                     </View>
                   )}
                 </View>
+                {lead.dayInSequence != null && (
+                  <Text style={[styles.assignedText, { color: colors.mutedForeground }]}>
+                    Day {lead.dayInSequence}
+                  </Text>
+                )}
                 {lead.assignedUserName && (
                   <Text style={[styles.assignedText, { color: colors.mutedForeground }]}>
                     Assigned: {lead.assignedUserName}
                   </Text>
                 )}
               </View>
+              {isManager && (
+                <TouchableOpacity
+                  style={[styles.transferBtn, { backgroundColor: colors.secondary }]}
+                  onPress={() => setShowTransfer(!showTransfer)}
+                >
+                  <Feather name="user-plus" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              )}
             </View>
 
             {contactPrefs.length > 0 && (
               <View style={styles.flagsRow}>
                 {contactPrefs.map(pref => {
-                  const cfg = CONTACT_FLAGS[pref];
+                  const cfg = CONTACT_FLAG_CONFIG[pref];
                   if (!cfg) return null;
                   return (
                     <View key={pref} style={[styles.flagBadge, { backgroundColor: cfg.color + "20" }]}>
@@ -397,24 +442,69 @@ export default function LeadDetailScreen() {
               </View>
             )}
 
+            {blocksCall && (
+              <View style={[styles.blockedWarning, { backgroundColor: "#EF444410", borderColor: "#EF444430" }]}>
+                <Feather name="alert-circle" size={14} color="#EF4444" />
+                <Text style={styles.blockedWarningText}>
+                  This lead has a "Text Only" or "Do Not Call" flag. Calling is blocked.
+                </Text>
+              </View>
+            )}
+
             <View style={styles.contactActions}>
               <TouchableOpacity
-                style={[styles.contactBtn, { backgroundColor: colors.emerald + "15" }]}
-                onPress={dialPhone}
+                style={[
+                  styles.contactBtn,
+                  blocksCall
+                    ? { backgroundColor: "#EF444410", borderWidth: 1, borderColor: "#EF444430" }
+                    : { backgroundColor: colors.emerald + "15" },
+                  (!lead.phone || actionStep !== null) && { opacity: 0.5 },
+                ]}
+                onPress={handleCall}
+                disabled={!lead.phone || actionStep !== null}
                 activeOpacity={0.7}
               >
-                <Feather name="phone" size={20} color={colors.emerald} />
-                <Text style={[styles.contactBtnText, { color: colors.emerald }]}>Call</Text>
+                <Feather name={blocksCall ? "slash" : "phone"} size={18} color={blocksCall ? "#EF4444" : colors.emerald} />
+                <Text style={[styles.contactBtnText, { color: blocksCall ? "#EF4444" : colors.emerald }]}>CALL</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.contactBtn, { backgroundColor: colors.primary + "15" }]}
-                onPress={sendSMS}
+                style={[
+                  styles.contactBtn,
+                  { backgroundColor: "#3B82F615" },
+                  (!lead.phone || actionStep !== null) && { opacity: 0.5 },
+                ]}
+                onPress={handleText}
+                disabled={!lead.phone || actionStep !== null}
                 activeOpacity={0.7}
               >
-                <Feather name="message-square" size={20} color={colors.primary} />
-                <Text style={[styles.contactBtnText, { color: colors.primary }]}>Text</Text>
+                <Feather name="message-square" size={18} color="#3B82F6" />
+                <Text style={[styles.contactBtnText, { color: "#3B82F6" }]}>TEXT</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.contactBtn,
+                  blocksCall
+                    ? { backgroundColor: "#EF444410", borderWidth: 1, borderColor: "#EF444430" }
+                    : { backgroundColor: "#F9731615" },
+                  (actionStep !== null || blocksCall) && { opacity: 0.5 },
+                ]}
+                onPress={handleVmDrop}
+                disabled={actionStep !== null || blocksCall}
+                activeOpacity={0.7}
+              >
+                <Feather name={blocksCall ? "slash" : "voicemail"} size={18} color={blocksCall ? "#EF4444" : "#F97316"} />
+                <Text style={[styles.contactBtnText, { color: blocksCall ? "#EF4444" : "#F97316" }]}>VM</Text>
               </TouchableOpacity>
             </View>
+
+            {lead.callbackAt && (
+              <View style={[styles.callbackBanner, { backgroundColor: "#F59E0B15" }]}>
+                <Feather name="calendar" size={14} color="#F59E0B" />
+                <Text style={styles.callbackBannerText}>
+                  Callback: {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                </Text>
+              </View>
+            )}
 
             <View style={styles.detailRows}>
               {lead.phone && (
@@ -443,6 +533,287 @@ export default function LeadDetailScreen() {
               )}
             </View>
           </View>
+
+          {showTransfer && (
+            <View style={[styles.transferCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.transferTitle, { color: colors.mutedForeground }]}>Transfer to another CSR:</Text>
+              <View style={styles.transferList}>
+                {csrs.filter(c => c.id !== lead.assignedCsrId).map(c => (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[
+                      styles.transferItem,
+                      { backgroundColor: selectedCsr === c.id ? colors.primary + "20" : colors.secondary, borderColor: selectedCsr === c.id ? colors.primary + "40" : colors.border },
+                    ]}
+                    onPress={() => setSelectedCsr(c.id)}
+                  >
+                    <Text style={[styles.transferItemText, { color: selectedCsr === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
+                    {selectedCsr === c.id && <Feather name="check" size={14} color={colors.primary} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={[styles.transferConfirmBtn, { backgroundColor: colors.primary + "20", opacity: !selectedCsr || actionLoading ? 0.5 : 1 }]}
+                onPress={handleTransfer}
+                disabled={!selectedCsr || actionLoading}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={[styles.transferConfirmText, { color: colors.primary }]}>Transfer</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {feedback && (
+            <View style={[
+              styles.feedbackBar,
+              { backgroundColor: feedback.type === "success" ? "#10B98115" : "#EF444415", borderColor: feedback.type === "success" ? "#10B98130" : "#EF444430" },
+            ]}>
+              <Feather name={feedback.type === "success" ? "check-circle" : "x-circle"} size={16} color={feedback.type === "success" ? "#10B981" : "#EF4444"} />
+              <Text style={[styles.feedbackText, { color: feedback.type === "success" ? "#10B981" : "#EF4444" }]}>{feedback.msg}</Text>
+            </View>
+          )}
+
+          {actionStep === "appt_booked_flow" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.stepHeader}>
+                <Feather name="calendar" size={20} color="#8B5CF6" />
+                <Text style={[styles.stepTitle, { color: "#8B5CF6" }]}>PRE-BOOKED APPOINTMENT</Text>
+              </View>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>Confirm the appointment status after reaching the lead:</Text>
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#10B98115", borderColor: "#10B98125" }]}
+                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "confirmed" })}
+                disabled={actionLoading}
+              >
+                {actionLoading ? <ActivityIndicator size="small" color="#10B981" /> : <Feather name="check-circle" size={16} color="#10B981" />}
+                <Text style={[styles.outcomeBtnText, { color: "#10B981" }]}>Confirmed</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#F59E0B15", borderColor: "#F59E0B25" }]}
+                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "rescheduled" })}
+                disabled={actionLoading}
+              >
+                {actionLoading ? <ActivityIndicator size="small" color="#F59E0B" /> : <Feather name="calendar" size={16} color="#F59E0B" />}
+                <Text style={[styles.outcomeBtnText, { color: "#F59E0B" }]}>Rescheduled</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#EF444410", borderColor: "#EF444420" }]}
+                onPress={() => { setCancelReason(""); setActionStep("appt_cancel_reason"); }}
+                disabled={actionLoading}
+              >
+                <Feather name="x-circle" size={16} color="#EF4444" />
+                <Text style={[styles.outcomeBtnText, { color: "#EF4444" }]}>Canceled</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setActionStep(null)}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "appt_cancel_reason" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>Why was the appointment canceled?</Text>
+              <TextInput
+                style={[styles.cancelInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
+                placeholder="Enter reason for cancellation..."
+                placeholderTextColor={colors.mutedForeground}
+                value={cancelReason}
+                onChangeText={setCancelReason}
+                multiline
+              />
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#EF444420", borderColor: "#EF444430" }]}
+                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
+                disabled={actionLoading}
+              >
+                {actionLoading ? <ActivityIndicator size="small" color="#EF4444" /> : <Text style={[styles.outcomeBtnText, { color: "#EF4444" }]}>Confirm Cancellation</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setActionStep("appt_booked_flow")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "call_done" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.stepHeader}>
+                <Feather name="check-circle" size={20} color="#10B981" />
+                <Text style={[styles.stepTitle, { color: "#10B981" }]}>CALLED</Text>
+              </View>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>How'd it go?</Text>
+              <View style={styles.resultGrid}>
+                {CALL_RESULTS.map(r => (
+                  <TouchableOpacity
+                    key={r.value}
+                    style={[styles.resultGridItem, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                    onPress={() => {
+                      if (r.value === "spoke_with_customer") {
+                        setActionStep("spoke_result");
+                      } else {
+                        logAction({ actionType: "call", callResult: r.value });
+                      }
+                    }}
+                    disabled={actionLoading}
+                  >
+                    <Text style={[styles.resultGridText, { color: colors.foreground }]}>{r.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity onPress={() => setActionStep(null)}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "spoke_result" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>Spoke with customer — what happened?</Text>
+              {SPOKE_RESULTS.map(r => (
+                <TouchableOpacity
+                  key={r.value}
+                  style={[styles.outcomeBtn, { backgroundColor: r.color + "15", borderColor: r.color + "25" }]}
+                  onPress={() => {
+                    if (r.value === "appointment_set") {
+                      logAction({ actionType: "call", callResult: "spoke_with_customer", appointmentSet: true });
+                    } else if (r.value === "call_back") {
+                      setCallbackDate("");
+                      setActionStep("call_callback");
+                    } else if (r.value === "dead") {
+                      setDeadFromFlow("call");
+                      setActionStep("dead_reason");
+                    }
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={[styles.outcomeBtnText, { color: r.color }]}>{r.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity onPress={() => setActionStep("call_done")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "call_callback" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>When should we call back?</Text>
+              <TextInput
+                style={[styles.cancelInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
+                placeholder="YYYY-MM-DD HH:MM"
+                placeholderTextColor={colors.mutedForeground}
+                value={callbackDate}
+                onChangeText={setCallbackDate}
+              />
+              <TouchableOpacity
+                style={[styles.outcomeBtn, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30", opacity: actionLoading || !callbackDate ? 0.5 : 1 }]}
+                onPress={() => {
+                  const parsed = new Date(callbackDate);
+                  if (isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
+                    showFeedback("error", "Enter a valid future date/time");
+                    return;
+                  }
+                  logAction({ actionType: "call", callResult: "spoke_with_customer", callbackAt: parsed.toISOString() });
+                }}
+                disabled={actionLoading || !callbackDate}
+              >
+                {actionLoading ? <ActivityIndicator size="small" color="#F59E0B" /> : <Text style={[styles.outcomeBtnText, { color: "#F59E0B" }]}>Log Callback</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setActionStep("spoke_result")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "dead_reason" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>
+                {deadFromFlow === "call" ? "Why is this lead dead?" : "Why is this lead dead?"}
+              </Text>
+              {DEAD_REASONS.map(r => (
+                <TouchableOpacity
+                  key={r.value}
+                  style={[styles.resultGridItem, { backgroundColor: "#EF444410", borderColor: "#EF444420" }]}
+                  onPress={() => {
+                    if (deadFromFlow === "call") {
+                      logAction({ actionType: "call", callResult: "spoke_with_customer", deadReason: r.value });
+                    } else {
+                      logAction({ actionType: "text", textResult: "dead", deadReason: r.value });
+                    }
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={[styles.resultGridText, { color: "#EF4444" }]}>{r.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity onPress={() => setActionStep(deadFromFlow === "call" ? "spoke_result" : "text_done")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "text_done" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.stepHeader}>
+                <Feather name="check-circle" size={20} color="#3B82F6" />
+                <Text style={[styles.stepTitle, { color: "#3B82F6" }]}>TEXTED</Text>
+              </View>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>How'd it go?</Text>
+              {TEXT_RESULTS.map(r => (
+                <TouchableOpacity
+                  key={r.value}
+                  style={[styles.resultGridItem, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => {
+                    if (r.value === "no_need") {
+                      setActionStep(null);
+                    } else if (r.value === "dead") {
+                      setDeadFromFlow("text");
+                      setActionStep("dead_reason");
+                    } else {
+                      logAction({ actionType: "text", textResult: r.value });
+                    }
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={[styles.resultGridText, { color: r.value === "dead" ? "#EF4444" : colors.foreground }]}>{r.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity onPress={() => setActionStep(null)}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "vm_done" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.stepHeader}>
+                <Feather name="voicemail" size={20} color="#F97316" />
+                <Text style={[styles.stepTitle, { color: "#F97316" }]}>VOICEMAIL DROP</Text>
+              </View>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>What happened?</Text>
+              {VM_RESULTS.map(r => (
+                <TouchableOpacity
+                  key={r.value}
+                  style={[styles.resultGridItem, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => {
+                    if (r.value === "spoke_with_customer") {
+                      setActionStep("spoke_result");
+                    } else {
+                      logAction({ actionType: "voicemail_drop", vmResult: r.value });
+                    }
+                  }}
+                  disabled={actionLoading}
+                >
+                  <Text style={[styles.resultGridText, { color: colors.foreground }]}>{r.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity onPress={() => setActionStep(null)}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <ScrollView
             horizontal
@@ -475,107 +846,11 @@ export default function LeadDetailScreen() {
             })}
           </ScrollView>
 
-          {activeTab === "actions" && !isTerminal && (
+          {activeTab === "actions" && !isTerminal && actionStep === null && (
             <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Log Action</Text>
-
-              <View style={styles.actionTypeTabs}>
-                {(["call", "text", "voicemail_drop"] as ActionType[]).map(at => (
-                  <TouchableOpacity
-                    key={at}
-                    style={[
-                      styles.actionTypeTab,
-                      { backgroundColor: actionType === at ? colors.primary : colors.secondary },
-                    ]}
-                    onPress={() => setActionType(at)}
-                  >
-                    <Feather
-                      name={at === "call" ? "phone" : at === "text" ? "message-square" : "voicemail"}
-                      size={14}
-                      color={actionType === at ? colors.primaryForeground : colors.mutedForeground}
-                    />
-                    <Text style={[styles.actionTypeText, { color: actionType === at ? colors.primaryForeground : colors.mutedForeground }]}>
-                      {at === "call" ? "Call" : at === "text" ? "Text" : "VM Drop"}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <TextInput
-                style={[styles.notesInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                placeholder="Notes (optional)"
-                placeholderTextColor={colors.mutedForeground}
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-              />
-
-              {actionType === "voicemail_drop" ? (
-                <TouchableOpacity
-                  style={[styles.resultBtn, { backgroundColor: colors.primary }]}
-                  onPress={() => submitAction("yes")}
-                  disabled={submitting}
-                >
-                  <Feather name="voicemail" size={16} color={colors.primaryForeground} />
-                  <Text style={[styles.resultBtnText, { color: colors.primaryForeground }]}>Drop Voicemail</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.resultGrid}>
-                  {results.map(r => (
-                    <TouchableOpacity
-                      key={r.key}
-                      style={[styles.resultBtn, { backgroundColor: colors.secondary }]}
-                      onPress={() => submitAction(r.key)}
-                      disabled={submitting}
-                      activeOpacity={0.7}
-                    >
-                      <Feather name={r.icon} size={14} color={colors.foreground} />
-                      <Text style={[styles.resultBtnText, { color: colors.foreground }]}>{r.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-              <View style={[styles.callbackSection, { borderTopColor: colors.border }]}>
-                <Text style={[styles.callbackTitle, { color: colors.foreground }]}>Schedule Callback</Text>
-                <TextInput
-                  style={[styles.callbackInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder="YYYY-MM-DD HH:MM"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={callbackDate}
-                  onChangeText={setCallbackDate}
-                />
-                <TouchableOpacity
-                  style={[styles.callbackBtn, { backgroundColor: "#F59E0B" }]}
-                  onPress={scheduleCallback}
-                  disabled={submitting}
-                >
-                  <Feather name="clock" size={14} color="#FFF" />
-                  <Text style={styles.callbackBtnText}>Set Callback</Text>
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.deadBtn, { borderColor: colors.destructive }]}
-                onPress={() => setShowDeadMenu(!showDeadMenu)}
-              >
-                <Feather name="x-circle" size={14} color={colors.destructive} />
-                <Text style={[styles.deadBtnText, { color: colors.destructive }]}>Mark Dead</Text>
-              </TouchableOpacity>
-
-              {showDeadMenu && (
-                <View style={styles.deadReasons}>
-                  {DEAD_REASONS.map(r => (
-                    <TouchableOpacity
-                      key={r.key}
-                      style={[styles.deadReasonBtn, { backgroundColor: colors.destructive + "10" }]}
-                      onPress={() => markDead(r.key)}
-                    >
-                      <Text style={[styles.deadReasonText, { color: colors.destructive }]}>{r.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+                Tap CALL, TEXT, or VM above to log an action
+              </Text>
             </View>
           )}
 
@@ -706,8 +981,8 @@ export default function LeadDetailScreen() {
                       style={[
                         styles.messageBubble,
                         msg.direction === "outbound"
-                          ? { backgroundColor: colors.primary + "15", alignSelf: "flex-end" }
-                          : { backgroundColor: colors.secondary, alignSelf: "flex-start" },
+                          ? { backgroundColor: colors.primary + "15", alignSelf: "flex-end" as const }
+                          : { backgroundColor: colors.secondary, alignSelf: "flex-start" as const },
                       ]}
                     >
                       {msg.channelType === "call" || msg.channelType === "phone_call" ? (
@@ -807,15 +1082,41 @@ const styles = StyleSheet.create({
   dayBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
   dayBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   assignedText: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  transferBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   flagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   flagBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 5 },
   flagText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  blockedWarning: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  blockedWarningText: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#EF4444", flex: 1 },
   contactActions: { flexDirection: "row", gap: 10 },
   contactBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12, borderRadius: 10 },
-  contactBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  contactBtnText: { fontSize: 14, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  callbackBanner: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  callbackBannerText: { fontSize: 12, fontFamily: "Inter_500Medium", color: "#F59E0B" },
   detailRows: { gap: 8 },
   detailRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   detailText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  transferCard: { marginHorizontal: 16, marginTop: 8, padding: 16, borderRadius: 14, borderWidth: 1, gap: 10 },
+  transferTitle: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  transferList: { gap: 6 },
+  transferItem: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
+  transferItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  transferConfirmBtn: { paddingVertical: 10, borderRadius: 8, alignItems: "center" },
+  transferConfirmText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  feedbackBar: { marginHorizontal: 16, marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
+  feedbackText: { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1 },
+  actionCard: { marginHorizontal: 16, marginTop: 8, marginBottom: 12, padding: 16, borderRadius: 14, borderWidth: 1, gap: 12 },
+  stepHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  stepTitle: { fontSize: 14, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  stepSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  outcomeBtn: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1 },
+  outcomeBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  resultGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  resultGridItem: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, minWidth: "45%" as unknown as number },
+  resultGridText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  cancelInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", minHeight: 80, textAlignVertical: "top" },
+  backLink: { fontSize: 12, fontFamily: "Inter_500Medium", textAlign: "center", paddingTop: 4 },
+  sectionTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
   tabScroll: { borderBottomWidth: 1, marginHorizontal: 16, marginTop: 12, marginBottom: 4 },
   tabScrollContent: { gap: 2 },
   detailTab: {
@@ -829,25 +1130,6 @@ const styles = StyleSheet.create({
   detailTabLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   tabBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, minWidth: 18, alignItems: "center" },
   tabBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold" },
-  actionCard: { marginHorizontal: 16, marginTop: 8, marginBottom: 12, padding: 16, borderRadius: 14, borderWidth: 1, gap: 12 },
-  sectionTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  actionTypeTabs: { flexDirection: "row", gap: 8 },
-  actionTypeTab: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 10 },
-  actionTypeText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  notesInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", minHeight: 60, textAlignVertical: "top" },
-  resultGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  resultBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, minWidth: 100 },
-  resultBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  callbackSection: { borderTopWidth: 1, paddingTop: 12, gap: 8 },
-  callbackTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  callbackInput: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, fontFamily: "Inter_400Regular" },
-  callbackBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 8 },
-  callbackBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#FFF" },
-  deadBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
-  deadBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  deadReasons: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  deadReasonBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
-  deadReasonText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   terminalState: { alignItems: "center", gap: 8, paddingVertical: 20 },
   terminalText: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
   detailBlock: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10 },
@@ -864,7 +1146,7 @@ const styles = StyleSheet.create({
   emptyMsgText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   emptyMsgSub: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center" },
   messagesList: { gap: 8 },
-  messageBubble: { maxWidth: "80%", padding: 10, borderRadius: 12, gap: 4 },
+  messageBubble: { maxWidth: "80%" as unknown as number, padding: 10, borderRadius: 12, gap: 4 },
   callEntry: { flexDirection: "row", alignItems: "center", gap: 6 },
   callEntryText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   msgBody: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20 },

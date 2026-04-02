@@ -74,6 +74,13 @@ function getTierColor(tier: string): string {
   return "#8B919E";
 }
 
+const MANAGER_ROLES = ["client_admin", "agency_user", "super_admin"];
+
+interface CsrOption {
+  id: number;
+  name: string;
+}
+
 export default function HudScreen() {
   const { user, logout } = useAuth();
   const { connected, on, off } = useSocket();
@@ -87,6 +94,19 @@ export default function HudScreen() {
   const [tenantOpen, setTenantOpen] = useState(false);
   const isWeb = Platform.OS === "web";
 
+  const isManager = MANAGER_ROLES.includes(user?.role || "");
+  const [csrList, setCsrList] = useState<CsrOption[]>([]);
+  const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
+  const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isManager || !effectiveTenantId) return;
+    const tenantParam = effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
+    apiFetch(`/api/leads-hub/csrs${tenantParam}`)
+      .then(d => setCsrList(d.csrs || []))
+      .catch(() => {});
+  }, [effectiveTenantId, isManager]);
+
   const fetchStats = useCallback(async () => {
     if (!user) return;
     try {
@@ -99,6 +119,9 @@ export default function HudScreen() {
       if (effectiveTenantId) {
         params.set("tenantId", String(effectiveTenantId));
       }
+      if (selectedCsrId) {
+        params.set("csrId", String(selectedCsrId));
+      }
       const qs = params.toString();
       const url = `/api/leads/hud/stats${qs ? `?${qs}` : ""}`;
       const data = await apiFetch(url);
@@ -106,7 +129,7 @@ export default function HudScreen() {
     } catch (err) {
       console.error("[HUD] Failed to fetch stats:", err);
     }
-  }, [apiFetch, user, timeframe, effectiveTenantId]);
+  }, [apiFetch, user, timeframe, effectiveTenantId, selectedCsrId]);
 
   useEffect(() => {
     fetchStats();
@@ -224,6 +247,51 @@ export default function HudScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+          )}
+        </View>
+      )}
+
+      {isManager && csrList.length > 0 && (
+        <View style={[styles.csrSelector, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.csrHeader}>
+            <Feather name="users" size={14} color={colors.mutedForeground} />
+            <Text style={[styles.csrLabel, { color: colors.mutedForeground }]}>CSR VIEW</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.csrDropdown, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+            onPress={() => setCsrDropdownOpen(!csrDropdownOpen)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.csrValue, { color: colors.foreground }]} numberOfLines={1}>
+              {selectedCsrId ? csrList.find(c => c.id === selectedCsrId)?.name || "Select CSR" : "All CSRs"}
+            </Text>
+            <Feather name={csrDropdownOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {csrDropdownOpen && (
+            <View style={[styles.csrDropdownList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <TouchableOpacity
+                style={[styles.csrItem, !selectedCsrId && { backgroundColor: colors.primary + "15" }]}
+                onPress={() => { setSelectedCsrId(null); setCsrDropdownOpen(false); }}
+              >
+                <Text style={[styles.csrItemText, { color: !selectedCsrId ? colors.primary : colors.foreground }]}>All CSRs</Text>
+                {!selectedCsrId && <Feather name="check" size={14} color={colors.primary} />}
+              </TouchableOpacity>
+              {csrList.map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.csrItem, selectedCsrId === c.id && { backgroundColor: colors.primary + "15" }]}
+                  onPress={() => { setSelectedCsrId(c.id); setCsrDropdownOpen(false); if (Platform.OS !== "web") Haptics.selectionAsync(); }}
+                >
+                  <Text style={[styles.csrItemText, { color: selectedCsrId === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
+                  {selectedCsrId === c.id && <Feather name="check" size={14} color={colors.primary} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {selectedCsrId && (
+            <Text style={[styles.csrViewingAs, { color: colors.primary }]}>
+              Viewing as {csrList.find(c => c.id === selectedCsrId)?.name}
+            </Text>
           )}
         </View>
       )}
@@ -365,4 +433,13 @@ const styles = StyleSheet.create({
   tenantList: { borderRadius: 8, borderWidth: 1, overflow: "hidden" },
   tenantItem: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   tenantItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  csrSelector: { borderRadius: 10, borderWidth: 1, padding: 12, gap: 8 },
+  csrHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
+  csrLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },
+  csrDropdown: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
+  csrValue: { fontSize: 14, fontFamily: "Inter_500Medium", flex: 1 },
+  csrDropdownList: { borderRadius: 8, borderWidth: 1, overflow: "hidden" },
+  csrItem: { paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  csrItemText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  csrViewingAs: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" },
 });
