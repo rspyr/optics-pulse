@@ -10,16 +10,38 @@ interface ConnectionSettings {
 }
 
 let connectionSettings: ConnectionSettings | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
-async function getAccessToken() {
-  if (
-    connectionSettings &&
-    connectionSettings.settings.expires_at &&
-    new Date(connectionSettings.settings.expires_at).getTime() > Date.now()
-  ) {
-    return connectionSettings.settings.access_token;
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const FALLBACK_REFRESH_MS = 30 * 60 * 1000;
+const RETRY_DELAY_MS = 30 * 1000;
+const MAX_RETRIES = 3;
+
+function extractAccessToken(cs: ConnectionSettings | null): string | undefined {
+  return cs?.settings?.access_token || cs?.settings?.oauth?.credentials?.access_token;
+}
+
+function scheduleProactiveRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+
+  let delayMs = FALLBACK_REFRESH_MS;
+  if (connectionSettings?.settings?.expires_at) {
+    const expiresAt = new Date(connectionSettings.settings.expires_at).getTime();
+    delayMs = Math.max(expiresAt - Date.now() - REFRESH_BUFFER_MS, 10_000);
   }
 
+  refreshTimer = setTimeout(async () => {
+    try {
+      await fetchConnectionSettings();
+      console.log("[GoogleSheets] Proactively refreshed access token");
+    } catch (err) {
+      console.error("[GoogleSheets] Proactive refresh failed, will retry on next use:", err);
+      connectionSettings = null;
+    }
+  }, delayMs);
+}
+
+async function fetchConnectionSettings(): Promise<string> {
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? "repl " + process.env.REPL_IDENTITY
@@ -31,28 +53,57 @@ async function getAccessToken() {
     throw new Error("X-Replit-Token not found for repl/depl");
   }
 
-  const resp = await fetch(
-    "https://" +
-      hostname +
-      "/api/v2/connection?include_secrets=true&connector_names=google-sheet",
-    {
-      headers: {
-        Accept: "application/json",
-        "X-Replit-Token": xReplitToken,
-      },
-    },
-  );
-  const data = (await resp.json()) as { items?: ConnectionSettings[] };
-  connectionSettings = data.items?.[0] ?? null;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(
+        "https://" +
+          hostname +
+          "/api/v2/connection?include_secrets=true&connector_names=google-sheet",
+        {
+          headers: {
+            Accept: "application/json",
+            "X-Replit-Token": xReplitToken,
+          },
+        },
+      );
 
-  const accessToken =
-    connectionSettings?.settings?.access_token ||
-    connectionSettings?.settings?.oauth?.credentials?.access_token;
+      if (!resp.ok) {
+        throw new Error(`Connector API returned ${resp.status} ${resp.statusText}`);
+      }
 
-  if (!connectionSettings || !accessToken) {
-    throw new Error("Google Sheet not connected");
+      const data = (await resp.json()) as { items?: ConnectionSettings[] };
+      connectionSettings = data.items?.[0] ?? null;
+
+      const accessToken = extractAccessToken(connectionSettings);
+      if (!connectionSettings || !accessToken) {
+        throw new Error("Google Sheet not connected");
+      }
+
+      scheduleProactiveRefresh();
+      return accessToken;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
   }
-  return accessToken;
+
+  connectionSettings = null;
+  throw lastError;
+}
+
+async function getAccessToken() {
+  if (
+    connectionSettings &&
+    connectionSettings.settings.expires_at &&
+    new Date(connectionSettings.settings.expires_at).getTime() > Date.now() + REFRESH_BUFFER_MS
+  ) {
+    return connectionSettings.settings.access_token;
+  }
+
+  return fetchConnectionSettings();
 }
 
 export async function getUncachableGoogleSheetClient() {
