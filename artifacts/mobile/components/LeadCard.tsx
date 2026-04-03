@@ -26,6 +26,7 @@ interface LeadCardProps {
   lead: Lead;
   onPress: (lead: Lead) => void;
   showBadge?: string;
+  renderSourceOverride?: (lead: Lead) => React.ReactNode;
 }
 
 const DAY_BADGE_CONFIG: Record<string, { label: string; color: string }> = {
@@ -124,7 +125,7 @@ const timerStyles = StyleSheet.create({
   text: { fontSize: 10, fontFamily: "Inter_600SemiBold", fontVariant: ["tabular-nums"] },
 });
 
-export function LeadCard({ lead, onPress }: LeadCardProps) {
+export function LeadCard({ lead, onPress, renderSourceOverride }: LeadCardProps) {
   const colors = useColors();
   const dayBadge = DAY_BADGE_CONFIG[lead.hubStatus || ""] || null;
   const urgencyColor = dayBadge?.color || colors.mutedForeground;
@@ -159,10 +160,12 @@ export function LeadCard({ lead, onPress }: LeadCardProps) {
               <Text style={[styles.tagText, { color: colors.mutedForeground }]}>{formatPhone(lead.phone)}</Text>
             </View>
           )}
-          {lead.source && (
-            <View style={[styles.sourceBadge, { backgroundColor: colors.secondary + "40" }]}>
-              <Text style={[styles.sourceText, { color: colors.secondaryForeground }]}>{lead.source}</Text>
-            </View>
+          {(lead.source || renderSourceOverride) && (
+            renderSourceOverride ? renderSourceOverride(lead) : (
+              <View style={[styles.sourceBadge, { backgroundColor: colors.secondary + "40" }]}>
+                <Text style={[styles.sourceText, { color: colors.secondaryForeground }]}>{lead.source}</Text>
+              </View>
+            )
           )}
           {lead.leadType && (
             <View style={[styles.leadTypeBadge, { backgroundColor: "#8B5CF620" }]}>

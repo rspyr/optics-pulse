@@ -25,6 +25,7 @@ import { useColors } from "@/hooks/useColors";
 import { useSocket } from "@/contexts/SocketContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { EditableSourcePicker } from "@/components/EditableSourcePicker";
 
 type ActionStep =
   | null
@@ -760,10 +761,15 @@ export default function LeadDetailScreen() {
                   <Text style={[styles.detailText, { color: colors.foreground }]}>{lead.email}</Text>
                 </View>
               )}
-              {lead.source && (
+              {(lead.source || effectiveTenantId) && (
                 <View style={styles.detailRow}>
                   <Feather name="target" size={14} color={colors.mutedForeground} />
-                  <Text style={[styles.detailText, { color: colors.foreground }]}>{lead.source}</Text>
+                  <EditableSourcePicker
+                    leadId={lead.id}
+                    source={lead.source || "Unknown"}
+                    tenantId={effectiveTenantId}
+                    onSourceChanged={(newSource) => setLead(prev => prev ? { ...prev, source: newSource } : prev)}
+                  />
                 </View>
               )}
               {lead.leadType && (

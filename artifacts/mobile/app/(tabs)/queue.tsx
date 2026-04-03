@@ -24,6 +24,7 @@ import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { useCsrFilter } from "@/contexts/CsrFilterContext";
 import { LeadCard } from "@/components/LeadCard";
+import { EditableSourcePicker } from "@/components/EditableSourcePicker";
 
 type Tab = "new" | "reengagement" | "callbacks" | "old" | "archive";
 
@@ -358,6 +359,20 @@ export default function QueueScreen() {
             <LeadCard
               lead={item}
               onPress={handleLeadPress}
+              renderSourceOverride={activeTab === "archive" ? (lead) => (
+                <EditableSourcePicker
+                  leadId={lead.id}
+                  source={lead.source || "Unknown"}
+                  tenantId={effectiveTenantId}
+                  onSourceChanged={(newSource) => {
+                    setQueue(prev => ({
+                      ...prev,
+                      archive: prev.archive.map(l => l.id === lead.id ? { ...l, source: newSource } : l),
+                    }));
+                  }}
+                  compact
+                />
+              ) : undefined}
             />
           )}
           contentContainerStyle={[
