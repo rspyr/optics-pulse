@@ -1,4 +1,4 @@
-import { getValidPodiumToken, getPodiumConfig } from "./podium-auth";
+import { getValidPodiumToken, getPodiumConfig, isPodiumConnected } from "./podium-auth";
 import { db, leadsTable, usersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
@@ -185,6 +185,9 @@ export async function updateContact(userId: number, contactUid: string, name: st
 }
 
 export async function ensurePodiumContact(userId: number, tenantId: number, leadId: number): Promise<string | null> {
+  const connected = await isPodiumConnected(userId);
+  if (!connected) return null;
+
   const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) return null;
 

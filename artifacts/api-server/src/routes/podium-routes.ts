@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact } from "../services/integrations/podium-api";
+import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
 
 const router: IRouter = Router();
@@ -20,6 +21,13 @@ function resolveTenantId(req: { query?: Record<string, string>; body?: Record<st
 type PodiumMessageRow = typeof podiumMessagesTable.$inferSelect;
 
 async function syncPodiumMessagesForLead(userId: number, tenantId: number, leadId: number, phone: string): Promise<PodiumMessageRow[]> {
+  const connected = await isPodiumConnected(userId);
+  if (!connected) {
+    return db.select().from(podiumMessagesTable)
+      .where(and(eq(podiumMessagesTable.leadId, leadId), eq(podiumMessagesTable.tenantId, tenantId)))
+      .orderBy(desc(podiumMessagesTable.podiumCreatedAt));
+  }
+
   try {
     const contact = await searchContactByPhone(userId, phone);
     if (contact) {

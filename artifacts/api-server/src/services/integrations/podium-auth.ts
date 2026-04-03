@@ -14,6 +14,19 @@ export function getPodiumConfig(user: { podiumConfig: string | null }): Record<s
   try { return decryptConfig(user.podiumConfig); } catch { return {}; }
 }
 
+export async function isPodiumConnected(userId: number): Promise<boolean> {
+  const cached = tokenCache.get(userId);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return true;
+  }
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) return false;
+
+  const config = getPodiumConfig(user);
+  return !!config.podiumRefreshToken;
+}
+
 export async function getValidPodiumToken(userId: number): Promise<string> {
   const cached = tokenCache.get(userId);
   if (cached && cached.expiresAt > Date.now() + 60_000) {
