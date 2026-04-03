@@ -259,7 +259,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       lastName: row.lastName || "",
       phone: row.phone || null,
       email: row.email || null,
-      source: await normalizeSource(config.tenantId, row.source || funnelName || "Google Sheet"),
+      source: await normalizeSource(config.tenantId, row.source || "Unknown"),
       serviceType: row.serviceType || null,
       notes: row.notes || null,
       address: row.address || null,
@@ -359,6 +359,7 @@ function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<stri
   for (const row of rawRows) {
     const obj: Record<string, string> = {};
     const notesParts: string[] = [];
+    const sourceParts: string[] = [];
     for (let j = 0; j < headers.length; j++) {
       const headerKey = headers[j];
       const normalized = mapping[headerKey] || headerKey;
@@ -366,12 +367,18 @@ function mapRawRows(headers: string[], rawRows: string[][], mapping: Record<stri
         const val = (row[j] || "").trim();
         if (normalized === "__funnel__") {
           obj[headerKey] = val;
+        } else if (normalized === "source") {
+          if (val) sourceParts.push(val);
         } else if (normalized === "notes" || !LEAD_DB_FIELDS.has(normalized)) {
           if (val) notesParts.push(`${headerKey}: ${val}`);
         } else {
           obj[normalized] = val;
         }
       }
+    }
+
+    if (sourceParts.length > 0) {
+      obj.source = sourceParts[0];
     }
 
     if (notesParts.length > 0) {
