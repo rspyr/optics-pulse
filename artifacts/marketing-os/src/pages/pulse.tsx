@@ -1037,10 +1037,26 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             )}
           </div>
         </button>
-        {isExpanded && (entry.body as string) && (
+        {isExpanded && ((entry.body as string) || (entry.messageItems as unknown[] | undefined)?.length) && (
           <div className="mt-1 ml-3 pl-3 border-l border-cyan-500/10 py-1.5">
-            <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Transcript / Notes</p>
-            <p className="text-[11px] text-white/50 leading-relaxed whitespace-pre-wrap">{entry.body as string}</p>
+            {(entry.body as string) && (
+              <>
+                <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Transcript / Notes</p>
+                <p className="text-[11px] text-white/50 leading-relaxed whitespace-pre-wrap">{entry.body as string}</p>
+              </>
+            )}
+            {(entry.messageItems as unknown[] | undefined)?.length ? (
+              <div className={entry.body ? "mt-2" : ""}>
+                <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Message Details</p>
+                {(entry.messageItems as Array<Record<string, unknown>>).map((item, idx) => (
+                  <div key={idx} className="text-[10px] text-white/40 mb-0.5">
+                    {item.type === "text" && <span>{String(item.text || item.body || "")}</span>}
+                    {item.type === "image" && <span className="italic">[Image: {String(item.url || item.src || "attachment")}]</span>}
+                    {item.type !== "text" && item.type !== "image" && <span>{String(item.type || "item")}: {String(item.text || item.body || JSON.stringify(item))}</span>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
       </div>

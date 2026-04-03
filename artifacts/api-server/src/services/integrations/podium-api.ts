@@ -163,7 +163,21 @@ export async function getContactConversations(userId: number, phone: string): Pr
   try {
     const contact = await searchContactByPhone(userId, phone);
     if (contact?.conversations && contact.conversations.length > 0) {
-      return contact.conversations.map(c => ({ uid: c.uid, channelType: "sms" }));
+      const results: Array<{ uid: string; channelType: string }> = [];
+      for (const c of contact.conversations) {
+        try {
+          const convRes = await podiumFetch(userId, `/conversations/${c.uid}`);
+          if (convRes.ok) {
+            const convData = await convRes.json() as { data?: { channel?: { type?: string } } };
+            results.push({ uid: c.uid, channelType: convData.data?.channel?.type || "sms" });
+          } else {
+            results.push({ uid: c.uid, channelType: "sms" });
+          }
+        } catch {
+          results.push({ uid: c.uid, channelType: "sms" });
+        }
+      }
+      return results;
     }
 
     const locationUid = await getLocationUid(userId);
@@ -266,10 +280,17 @@ export async function createContact(userId: number, name: string, phone: string,
 export async function updateContact(userId: number, phone: string, name: string, email?: string): Promise<PodiumContact | null> {
   try {
     const cleanPhone = toE164(phone);
+    const locationUid = await getLocationUid(userId).catch(() => null);
 
-    const payload: Record<string, unknown> = { name };
+    const payload: Record<string, unknown> = {
+      name,
+      phoneNumber: cleanPhone,
+    };
     if (email) {
       payload.email = email;
+    }
+    if (locationUid) {
+      payload.locations = [{ uid: locationUid }];
     }
 
     const res = await podiumFetch(userId, `/contacts/${encodeURIComponent(cleanPhone)}`, {
@@ -343,12 +364,20 @@ export async function getConversationAssignees(userId: number, conversationUid: 
   }
 }
 
-export async function assignConversation(userId: number, conversationUid: string, assigneeUids: string[]): Promise<boolean> {
+export async function assignConversation(userId: number, conversationUid: string, assigneeUids: string[], options?: { keepAiAssignment?: boolean; name?: string }): Promise<boolean> {
   try {
+    const payload: Record<string, unknown> = { assigneeUids };
+    if (options?.keepAiAssignment !== undefined) {
+      payload.keepAiAssignment = options.keepAiAssignment;
+    }
+    if (options?.name) {
+      payload.name = options.name;
+    }
+
     const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assigneeUids }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const errText = await res.text();

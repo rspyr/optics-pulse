@@ -15,18 +15,16 @@ export function getPodiumConfig(user: { podiumConfig: string | null }): Record<s
 }
 
 export async function isPodiumConnected(userId: number): Promise<boolean> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
-  if (!user) return false;
-
-  const config = getPodiumConfig(user);
-  if (!config.podiumRefreshToken || !config.podiumLocationUid) return false;
-
   const cached = tokenCache.get(userId);
   if (cached && cached.expiresAt > Date.now() + 60_000) {
     return true;
   }
 
-  return true;
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) return false;
+
+  const config = getPodiumConfig(user);
+  return !!config.podiumRefreshToken;
 }
 
 export async function getValidPodiumToken(userId: number): Promise<string> {
