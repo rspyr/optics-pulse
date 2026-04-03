@@ -557,6 +557,17 @@ const migrations: Migration[] = [
       console.log(`[Migration] Backfilled lead_type on ${result.rows.length} lead(s) from funnel_types.name`);
     },
   },
+  {
+    id: "2026-04-03_add-podium-message-items",
+    description: "Add message_items jsonb column to podium_messages for Podium V4 items[] payload",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE podium_messages
+        ADD COLUMN IF NOT EXISTS message_items JSONB
+      `);
+      console.log("[Migration] Added message_items column to podium_messages");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

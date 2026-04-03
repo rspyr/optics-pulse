@@ -1,10 +1,11 @@
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { encryptConfig, decryptConfig } from "../../lib/encryption";
 
 interface TokenCache {
   accessToken: string;
   expiresAt: number;
+  hasLocation: boolean;
 }
 
 const tokenCache: Map<number, TokenCache> = new Map();
@@ -16,7 +17,7 @@ export function getPodiumConfig(user: { podiumConfig: string | null }): Record<s
 
 export async function isPodiumConnected(userId: number): Promise<boolean> {
   const cached = tokenCache.get(userId);
-  if (cached && cached.expiresAt > Date.now() + 60_000) {
+  if (cached && cached.expiresAt > Date.now() + 60_000 && cached.hasLocation) {
     return true;
   }
 
@@ -24,7 +25,20 @@ export async function isPodiumConnected(userId: number): Promise<boolean> {
   if (!user) return false;
 
   const config = getPodiumConfig(user);
-  return !!config.podiumRefreshToken;
+  if (!config.podiumRefreshToken) return false;
+
+  if (config.podiumLocationUid) return true;
+
+  if (user.tenantId) {
+    const [tenant] = await db.select({ apiConfig: tenantsTable.apiConfig })
+      .from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
+    if (tenant?.apiConfig && typeof tenant.apiConfig === "object") {
+      const tenantConfig = tenant.apiConfig as Record<string, unknown>;
+      if (tenantConfig.podiumLocationId) return true;
+    }
+  }
+
+  return false;
 }
 
 export async function getValidPodiumToken(userId: number): Promise<string> {
@@ -49,7 +63,7 @@ export async function getValidPodiumToken(userId: number): Promise<string> {
   const expiresAt = expiresAtStr ? new Date(expiresAtStr).getTime() : 0;
 
   if (accessToken && expiresAt > Date.now() + 60_000) {
-    tokenCache.set(userId, { accessToken, expiresAt });
+    tokenCache.set(userId, { accessToken, expiresAt, hasLocation: !!config.podiumLocationUid });
     return accessToken;
   }
 
@@ -102,6 +116,7 @@ export async function getValidPodiumToken(userId: number): Promise<string> {
   tokenCache.set(userId, {
     accessToken: tokenData.access_token,
     expiresAt: newExpiresAt,
+    hasLocation: !!config.podiumLocationUid,
   });
 
   console.log(`[Podium Auth] Token refreshed for user ${userId}`);
