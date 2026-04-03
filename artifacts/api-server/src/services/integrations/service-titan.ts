@@ -244,16 +244,19 @@ export function formatLocationAddress(address: { street: string; city: string; s
 export async function fetchCompletedJobs(
   config: STAuthConfig,
   modifiedAfter?: string,
+  onBatch?: (jobs: STJob[]) => Promise<void>,
 ): Promise<STJob[]> {
-  const BATCH_SIZE = 5;
-  const allJobs: STJob[] = [];
+  const PAGES_PER_BATCH = 5;
   let page = 1;
   const pageSize = 100;
   let hasMore = true;
   let batchJobs: STJob[] = [];
+  let totalFetched = 0;
+  let totalRevenue = 0;
+  const collectedJobs: STJob[] = [];
 
-  async function enrichAndFlushBatch(jobs: STJob[]) {
-    if (jobs.length === 0) return;
+  async function enrichBatch(jobs: STJob[]): Promise<STJob[]> {
+    if (jobs.length === 0) return jobs;
     const revenueJobs = jobs.filter((j) => j.total > 0);
     const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
     const locationIds = revenueJobs.map((j) => j.locationId).filter(Boolean);
@@ -281,7 +284,19 @@ export async function fetchCompletedJobs(
         job.location = locationMap.get(job.locationId);
       }
     }
-    allJobs.push(...jobs);
+    return jobs;
+  }
+
+  async function processBatch(jobs: STJob[]) {
+    const enriched = await enrichBatch(jobs);
+    totalFetched += enriched.length;
+    totalRevenue += enriched.filter((j) => j.total > 0).length;
+
+    if (onBatch) {
+      await onBatch(enriched);
+    } else {
+      collectedJobs.push(...enriched);
+    }
   }
 
   while (hasMore) {
@@ -298,9 +313,9 @@ export async function fetchCompletedJobs(
     batchJobs.push(...response.data);
     hasMore = response.hasMore;
 
-    if (page % BATCH_SIZE === 0 || !hasMore) {
-      console.log(`[ServiceTitan] Fetched page ${page}, enriching batch of ${batchJobs.length} jobs`);
-      await enrichAndFlushBatch(batchJobs);
+    if (page % PAGES_PER_BATCH === 0 || !hasMore) {
+      console.log(`[ServiceTitan] Fetched page ${page}, processing batch of ${batchJobs.length} jobs`);
+      await processBatch(batchJobs);
       batchJobs = [];
     }
     page++;
@@ -309,12 +324,11 @@ export async function fetchCompletedJobs(
   }
 
   if (batchJobs.length > 0) {
-    await enrichAndFlushBatch(batchJobs);
+    await processBatch(batchJobs);
   }
 
-  const revenueJobs = allJobs.filter((j) => j.total > 0);
-  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue`);
-  return allJobs;
+  console.log(`[ServiceTitan] ${totalFetched} total jobs, ${totalRevenue} with revenue`);
+  return collectedJobs;
 }
 
 function extractPhone(customer?: STCustomer): string | null {

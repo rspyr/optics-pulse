@@ -86,63 +86,66 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       appKey: config.serviceTitanAppKey,
     };
 
-    const stJobs = await fetchCompletedJobs(stConfig);
     let synced = 0;
 
-    for (const stJob of stJobs) {
-      const formatted = formatSTJobForSync(stJob);
-      const jobIdHash = hashStJobId(formatted.stJobId);
+    async function processJobBatch(stJobs: Array<{ id: number; number: string; customerId: number; locationId: number; jobStatus: string; summary: string; total: number; completedOn: string | null; customer?: any; location?: any; type?: any; businessUnit?: any; customFields?: any[] }>) {
+      for (const stJob of stJobs) {
+        const formatted = formatSTJobForSync(stJob);
+        const jobIdHash = hashStJobId(formatted.stJobId);
 
-      const [existingByHash] = await db.select().from(jobsTable)
-        .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobIdHash, jobIdHash)))
-        .limit(1);
-
-      const existing = existingByHash || await (async () => {
-        const [byRawId] = await db.select().from(jobsTable)
-          .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobId, formatted.stJobId)))
+        const [existingByHash] = await db.select().from(jobsTable)
+          .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobIdHash, jobIdHash)))
           .limit(1);
-        return byRawId;
-      })();
 
-      const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      if (existing) {
-        const wasPurged = existing.customerName === null && existing.stJobId === null;
-        if (wasPurged) {
-          await db.update(jobsTable)
-            .set({
-              revenue: formatted.revenue,
-              status: formatted.status,
-              completedAt: formatted.completedAt,
-              jobTypeName: formatted.jobTypeName || existing.jobTypeName,
-              businessUnit: formatted.businessUnit || existing.businessUnit,
-              updatedAt: new Date(),
-            })
-            .where(eq(jobsTable.id, existing.id));
+        const existing = existingByHash || await (async () => {
+          const [byRawId] = await db.select().from(jobsTable)
+            .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobId, formatted.stJobId)))
+            .limit(1);
+          return byRawId;
+        })();
+
+        const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        if (existing) {
+          const wasPurged = existing.customerName === null && existing.stJobId === null;
+          if (wasPurged) {
+            await db.update(jobsTable)
+              .set({
+                revenue: formatted.revenue,
+                status: formatted.status,
+                completedAt: formatted.completedAt,
+                jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+                businessUnit: formatted.businessUnit || existing.businessUnit,
+                updatedAt: new Date(),
+              })
+              .where(eq(jobsTable.id, existing.id));
+          } else {
+            await db.update(jobsTable)
+              .set({
+                revenue: formatted.revenue,
+                status: formatted.status,
+                completedAt: formatted.completedAt,
+                customerName: formatted.customerName,
+                customerPhone: formatted.customerPhone || existing.customerPhone,
+                customerEmail: formatted.customerEmail || existing.customerEmail,
+                serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+                stCustomerId: formatted.stCustomerId || existing.stCustomerId,
+                stLocationId: formatted.stLocationId || existing.stLocationId,
+                jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+                businessUnit: formatted.businessUnit || existing.businessUnit,
+                stJobIdHash: jobIdHash,
+                stDataExpiresAt,
+                updatedAt: new Date(),
+              })
+              .where(eq(jobsTable.id, existing.id));
+          }
         } else {
-          await db.update(jobsTable)
-            .set({
-              revenue: formatted.revenue,
-              status: formatted.status,
-              completedAt: formatted.completedAt,
-              customerName: formatted.customerName,
-              customerPhone: formatted.customerPhone || existing.customerPhone,
-              customerEmail: formatted.customerEmail || existing.customerEmail,
-              serviceAddress: formatted.serviceAddress || existing.serviceAddress,
-              stCustomerId: formatted.stCustomerId || existing.stCustomerId,
-              stLocationId: formatted.stLocationId || existing.stLocationId,
-              jobTypeName: formatted.jobTypeName || existing.jobTypeName,
-              businessUnit: formatted.businessUnit || existing.businessUnit,
-              stJobIdHash: jobIdHash,
-              stDataExpiresAt,
-              updatedAt: new Date(),
-            })
-            .where(eq(jobsTable.id, existing.id));
+          await db.insert(jobsTable).values({ tenantId, ...formatted, stJobIdHash: jobIdHash, stDataExpiresAt });
         }
-      } else {
-        await db.insert(jobsTable).values({ tenantId, ...formatted, stJobIdHash: jobIdHash, stDataExpiresAt });
+        synced++;
       }
-      synced++;
     }
+
+    await fetchCompletedJobs(stConfig, undefined, processJobBatch);
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId}`);

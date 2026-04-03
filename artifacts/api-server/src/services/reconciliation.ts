@@ -59,7 +59,6 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const ociPayloads: OciPayload[] = [];
   const allMatchedJobIds: number[] = [];
 
-  const BATCH_SIZE = 200;
   const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
   const baseConditions = [matchCondition, eq(jobsTable.status, "completed"), isNotNull(jobsTable.customerName)];
   if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));

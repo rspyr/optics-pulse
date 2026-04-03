@@ -187,8 +187,17 @@ export async function executeQueryPlan(
   let processed = results;
 
   if (groupByFields && plan.tables.length === 1) {
-    processed = applyGroupByAggregation(processed, groupByFields, aggregations);
-    summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")}`);
+    const sqlGrouped = await querySingleTableGrouped(
+      tenantId, plan.tables[0], plan, groupByFields, aggregations,
+      Math.min(plan.limit || 100, 500)
+    );
+    if (sqlGrouped) {
+      processed = sqlGrouped;
+      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")} (SQL)`);
+    } else {
+      processed = applyGroupByAggregation(processed, groupByFields, aggregations);
+      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")}`);
+    }
   }
 
   if (plan.orderBy && plan.orderBy.length > 0) {
@@ -302,6 +311,133 @@ function applyGroupByAggregation(
     result.push(aggregated);
   }
   return result;
+}
+
+const TABLE_COLUMN_MAP: Record<string, Record<string, { table: any; column: any; numeric?: boolean }>> = {
+  leads: {
+    status: { table: leadsTable, column: leadsTable.status },
+    source: { table: leadsTable, column: leadsTable.source },
+    leadType: { table: leadsTable, column: leadsTable.leadType },
+    assignedTo: { table: leadsTable, column: leadsTable.assignedTo },
+    disposition: { table: leadsTable, column: leadsTable.disposition },
+    id: { table: leadsTable, column: leadsTable.id, numeric: true },
+    tenantId: { table: leadsTable, column: leadsTable.tenantId, numeric: true },
+  },
+  jobs: {
+    status: { table: jobsTable, column: jobsTable.status },
+    jobType: { table: jobsTable, column: jobsTable.jobType },
+    matchLevel: { table: jobsTable, column: jobsTable.matchLevel },
+    revenue: { table: jobsTable, column: jobsTable.revenue, numeric: true },
+    id: { table: jobsTable, column: jobsTable.id, numeric: true },
+    tenantId: { table: jobsTable, column: jobsTable.tenantId, numeric: true },
+  },
+  reviews: {
+    sentiment: { table: reviewsTable, column: reviewsTable.sentiment },
+    platform: { table: reviewsTable, column: reviewsTable.platform },
+    rating: { table: reviewsTable, column: reviewsTable.rating, numeric: true },
+    id: { table: reviewsTable, column: reviewsTable.id, numeric: true },
+    tenantId: { table: reviewsTable, column: reviewsTable.tenantId, numeric: true },
+  },
+};
+
+async function querySingleTableGrouped(
+  tenantId: number,
+  table: string,
+  plan: QueryPlan,
+  groupByFields: string[],
+  aggregations: string[],
+  limit: number,
+): Promise<Record<string, unknown>[] | null> {
+  const colMap = TABLE_COLUMN_MAP[table];
+  if (!colMap) return null;
+
+  const validGroupCols = groupByFields.filter(f => colMap[f]);
+  if (validGroupCols.length === 0) return null;
+
+  const groupByCols = validGroupCols.map(f => colMap[f].column);
+
+  const selectFields: Record<string, any> = {};
+  for (const f of validGroupCols) {
+    selectFields[f] = colMap[f].column;
+  }
+
+  let hasAnyAgg = false;
+  for (const agg of aggregations) {
+    const match = agg.match(/^(count|sum|avg|min|max)\((.+)\)$/i);
+    if (match) {
+      const [, fn, col] = match;
+      const colDef = colMap[col];
+      if (colDef?.numeric) {
+        const key = `${fn}(${col})`;
+        switch (fn.toLowerCase()) {
+          case "count": selectFields[key] = sql`COUNT(${colDef.column})`; break;
+          case "sum": selectFields[key] = sql`COALESCE(SUM(${colDef.column}), 0)`; break;
+          case "avg": selectFields[key] = sql`COALESCE(AVG(${colDef.column}), 0)`; break;
+          case "min": selectFields[key] = sql`COALESCE(MIN(${colDef.column}), 0)`; break;
+          case "max": selectFields[key] = sql`COALESCE(MAX(${colDef.column}), 0)`; break;
+        }
+        hasAnyAgg = true;
+      }
+    } else if (agg.toLowerCase() === "count") {
+      selectFields["count"] = sql`COUNT(*)`;
+      hasAnyAgg = true;
+    }
+  }
+
+  if (!hasAnyAgg) {
+    selectFields["count"] = sql`COUNT(*)`;
+  }
+
+  let tableRef: any;
+  const conditions: SQL[] = [];
+
+  switch (table) {
+    case "leads":
+      tableRef = leadsTable;
+      conditions.push(eq(leadsTable.tenantId, tenantId));
+      conditions.push(...buildDateConditions(leadsTable.createdAt, plan));
+      break;
+    case "jobs":
+      tableRef = jobsTable;
+      conditions.push(eq(jobsTable.tenantId, tenantId));
+      conditions.push(...buildDateConditions(jobsTable.createdAt, plan));
+      break;
+    case "reviews":
+      tableRef = reviewsTable;
+      conditions.push(eq(reviewsTable.tenantId, tenantId));
+      conditions.push(...buildDateConditions(reviewsTable.reviewDate, plan, true));
+      break;
+    default:
+      return null;
+  }
+
+  const f = plan.filters || {};
+  if (table === "leads") {
+    if (f.source) conditions.push(eq(leadsTable.source, String(f.source)));
+    if (f.status) conditions.push(eq(leadsTable.status, String(f.status) as any));
+    if (f.leadType) conditions.push(eq(leadsTable.leadType, String(f.leadType)));
+  } else if (table === "jobs") {
+    if (f.status) conditions.push(eq(jobsTable.status, String(f.status) as any));
+    if (f.matchLevel) conditions.push(eq(jobsTable.matchLevel, String(f.matchLevel)));
+  } else if (table === "reviews") {
+    if (f.sentiment) conditions.push(eq(reviewsTable.sentiment, String(f.sentiment)));
+    if (f.platform) conditions.push(eq(reviewsTable.platform, String(f.platform)));
+  }
+
+  const rows = await db
+    .select(selectFields)
+    .from(tableRef)
+    .where(and(...conditions))
+    .groupBy(...groupByCols)
+    .limit(limit);
+
+  return rows.map(r => {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(r as Record<string, unknown>)) {
+      result[key] = typeof val === "bigint" ? Number(val) : val;
+    }
+    return result;
+  });
 }
 
 async function queryTable(
