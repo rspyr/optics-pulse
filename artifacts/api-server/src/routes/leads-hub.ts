@@ -9,6 +9,7 @@ import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch } from "../services/auto-pass-scheduler";
+import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -619,6 +620,8 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
 
   cancelAutoPass(leadId);
 
+  syncPodiumConversationAssignment(leadId, targetCsrId).catch(() => {});
+
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated });
 });
@@ -721,6 +724,7 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
 
   for (const lead of updatedLeads) {
     cancelAutoPass(lead.id);
+    syncPodiumConversationAssignment(lead.id, targetCsrId).catch(() => {});
     emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
   }
 

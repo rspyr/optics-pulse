@@ -3,6 +3,7 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, isNull, isNotNull, or, ne, sql } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
+import { syncPodiumConversationAssignment } from "./integrations/podium-api";
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -258,6 +259,8 @@ async function fireAutoPass(leadId: number): Promise<void> {
   });
 
   console.log(`[auto-pass] Lead ${leadId}: passed to ${resolvedName} (CSR ${nextCsrId})`);
+
+  syncPodiumConversationAssignment(leadId, nextCsrId).catch(() => {});
 
   if (updated) {
     emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);

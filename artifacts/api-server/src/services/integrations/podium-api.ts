@@ -307,6 +307,64 @@ export async function assignConversation(userId: number, conversationUid: string
   }
 }
 
+export async function syncPodiumConversationAssignment(leadId: number, targetCsrId: number): Promise<void> {
+  try {
+    const [targetUser] = await db.select({
+      id: usersTable.id,
+      podiumUserUid: usersTable.podiumUserUid,
+      tenantId: usersTable.tenantId,
+    }).from(usersTable).where(eq(usersTable.id, targetCsrId));
+
+    if (!targetUser?.podiumUserUid) {
+      console.log(`[Podium Sync] CSR ${targetCsrId} has no linked Podium account — skipping assignment for lead ${leadId}`);
+      return;
+    }
+
+    const { podiumMessagesTable } = await import("@workspace/db");
+    const { desc: descOrder } = await import("drizzle-orm");
+
+    const [latestMsg] = await db.select({ podiumConversationUid: podiumMessagesTable.podiumConversationUid })
+      .from(podiumMessagesTable)
+      .where(and(
+        eq(podiumMessagesTable.leadId, leadId),
+        eq(podiumMessagesTable.tenantId, targetUser.tenantId),
+      ))
+      .orderBy(descOrder(podiumMessagesTable.createdAt))
+      .limit(1);
+
+    if (!latestMsg?.podiumConversationUid) {
+      console.log(`[Podium Sync] No Podium conversation found for lead ${leadId} — skipping`);
+      return;
+    }
+
+    const connectedUsers = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.tenantId, targetUser.tenantId));
+
+    let apiUserId: number | null = null;
+    for (const u of connectedUsers) {
+      if (await isPodiumConnected(u.id)) {
+        apiUserId = u.id;
+        break;
+      }
+    }
+
+    if (!apiUserId) {
+      console.log(`[Podium Sync] No Podium-connected user in tenant ${targetUser.tenantId} — skipping assignment for lead ${leadId}`);
+      return;
+    }
+
+    const success = await assignConversation(apiUserId, latestMsg.podiumConversationUid, [targetUser.podiumUserUid]);
+    if (success) {
+      console.log(`[Podium Sync] Reassigned conversation ${latestMsg.podiumConversationUid} to Podium user ${targetUser.podiumUserUid} (CSR ${targetCsrId}) for lead ${leadId}`);
+    } else {
+      console.warn(`[Podium Sync] Failed to reassign conversation ${latestMsg.podiumConversationUid} for lead ${leadId}`);
+    }
+  } catch (err) {
+    console.error(`[Podium Sync] Error syncing assignment for lead ${leadId}:`, err);
+  }
+}
+
 export async function ensurePodiumContact(userId: number, tenantId: number, leadId: number): Promise<string | null> {
   const connected = await isPodiumConnected(userId);
   if (!connected) return null;

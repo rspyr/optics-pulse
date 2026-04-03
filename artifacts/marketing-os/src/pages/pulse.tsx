@@ -1067,26 +1067,13 @@ interface PodiumMsg {
   createdAt: string;
 }
 
-interface TeamMemberOption {
-  id: number;
-  name: string | null;
-  email: string | null;
-  podiumUserUid: string | null;
-}
-
-function PodiumChatPanel({ leadId, tenantId, timezone, onClose, currentUserId, isAdminRole = false }: { leadId: number; tenantId: number; timezone: string; onClose: () => void; currentUserId?: number; isAdminRole?: boolean }) {
+function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: number; tenantId: number; timezone: string; onClose: () => void }) {
   const [messages, setMessages] = useState<PodiumMsg[]>([]);
   const [loading, setLoading] = useState(true);
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [conversationUid, setConversationUid] = useState<string | null>(null);
-  const [assignees, setAssignees] = useState<{ uid: string; name?: string }[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMemberOption[]>([]);
-  const [assignTarget, setAssignTarget] = useState<string>("");
-  const [assigning, setAssigning] = useState(false);
-  const [assignFeedback, setAssignFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
-  const [showAssignPanel, setShowAssignPanel] = useState(false);
 
   const fetchMessages = useCallback(() => {
     fetch(`${API_BASE}/podium/conversations/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
@@ -1100,76 +1087,6 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose, currentUserId, i
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [leadId, tenantId]);
-
-  const fetchAssignees = useCallback(() => {
-    if (!conversationUid) return;
-    fetch(`${API_BASE}/podium/conversations/${conversationUid}/assignees?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setAssignees(d.assignees || []))
-      .catch(() => {});
-  }, [conversationUid, tenantId]);
-
-  const fetchTeamMembers = useCallback(() => {
-    fetch(`${API_BASE}/podium/users?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setTeamMembers(d.teamMembers || []))
-      .catch(() => {});
-  }, [tenantId]);
-
-  useEffect(() => { fetchAssignees(); }, [fetchAssignees]);
-  useEffect(() => { if (showAssignPanel) fetchTeamMembers(); }, [showAssignPanel, fetchTeamMembers]);
-
-  const handleAssign = async (targetUserId: number) => {
-    if (!conversationUid) return;
-    setAssigning(true);
-    try {
-      const res = await fetch(`${API_BASE}/podium/conversations/${conversationUid}/assign?tenantId=${tenantId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ targetUserId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setAssignFeedback({ type: "success", msg: data.assignedTo?.name ? `Assigned to ${data.assignedTo.name}` : "Assigned" });
-        fetchAssignees();
-        setShowAssignPanel(false);
-      } else {
-        setAssignFeedback({ type: "error", msg: data.error || "Assignment failed" });
-      }
-    } catch {
-      setAssignFeedback({ type: "error", msg: "Connection error" });
-    } finally {
-      setAssigning(false);
-      setTimeout(() => setAssignFeedback(null), 3000);
-    }
-  };
-
-  const handleUnassign = async () => {
-    if (!conversationUid) return;
-    setAssigning(true);
-    try {
-      const res = await fetch(`${API_BASE}/podium/conversations/${conversationUid}/assign?tenantId=${tenantId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ unassign: true }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setAssignFeedback({ type: "success", msg: "Unassigned" });
-        fetchAssignees();
-        setShowAssignPanel(false);
-      } else {
-        setAssignFeedback({ type: "error", msg: data.error || "Failed to unassign" });
-      }
-    } catch {
-      setAssignFeedback({ type: "error", msg: "Connection error" });
-    } finally {
-      setAssigning(false);
-      setTimeout(() => setAssignFeedback(null), 3000);
-    }
-  };
 
   useEffect(() => { fetchMessages(); }, [fetchMessages]);
 
@@ -1207,8 +1124,6 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose, currentUserId, i
     } catch {} finally { setSending(false); }
   };
 
-  const linkedMembers = teamMembers.filter(m => m.podiumUserUid);
-
   return (
     <PremiumCard className="p-4">
       <div className="flex items-center justify-between mb-3">
@@ -1218,107 +1133,11 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose, currentUserId, i
           <span className="text-[9px] text-white/20 px-1.5 py-0.5 rounded bg-white/5">via Podium</span>
         </div>
         <div className="flex items-center gap-1.5">
-          {conversationUid && (
-            <button
-              onClick={() => setShowAssignPanel(!showAssignPanel)}
-              className={cn(
-                "p-1 rounded hover:bg-white/10 transition-colors flex items-center gap-1",
-                showAssignPanel ? "text-blue-400 bg-blue-500/10" : "text-white/30 hover:text-white/60"
-              )}
-              title="Assign conversation"
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              {assignees.length > 0 && (
-                <span className="text-[9px] text-white/40 max-w-[80px] truncate">{assignees[0].name || "Assigned"}</span>
-              )}
-            </button>
-          )}
           <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
-
-      {assignFeedback && (
-        <div className={cn(
-          "text-xs px-2 py-1 rounded mb-2",
-          assignFeedback.type === "success" ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
-        )}>
-          {assignFeedback.msg}
-        </div>
-      )}
-
-      <AnimatePresence>
-        {showAssignPanel && conversationUid && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden mb-3"
-          >
-            <div className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium">Assign Conversation</span>
-                {assignees.length > 0 && (
-                  <span className="text-[10px] text-white/30">
-                    Currently: {assignees.map(a => a.name || a.uid).join(", ")}
-                  </span>
-                )}
-              </div>
-
-              {!isAdminRole && currentUserId ? (
-                assignees.length > 0 ? (
-                  <p className="text-xs text-white/40">This conversation is assigned. Only managers can reassign.</p>
-                ) : (
-                  <button
-                    onClick={() => handleAssign(currentUserId)}
-                    disabled={assigning}
-                    className="w-full text-xs px-3 py-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
-                  >
-                    {assigning ? <Loader2 className="w-3 h-3 animate-spin mx-auto" /> : "Claim This Conversation"}
-                  </button>
-                )
-              ) : (
-                <div className="space-y-2">
-                  <select
-                    value={assignTarget}
-                    onChange={e => setAssignTarget(e.target.value)}
-                    className="w-full text-xs bg-white/5 border border-white/10 rounded px-2 py-1.5 text-white focus:outline-none focus:border-blue-500/30"
-                  >
-                    <option value="" className="bg-gray-900">Select team member...</option>
-                    {linkedMembers.map(m => (
-                      <option key={m.id} value={String(m.id)} className="bg-gray-900">
-                        {m.name || m.email || `User #${m.id}`}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => assignTarget && handleAssign(Number(assignTarget))}
-                      disabled={!assignTarget || assigning}
-                      className="flex-1 text-xs px-3 py-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
-                    >
-                      {assigning ? <Loader2 className="w-3 h-3 animate-spin mx-auto" /> : "Assign"}
-                    </button>
-                    {assignees.length > 0 && isAdminRole && (
-                      <button
-                        onClick={handleUnassign}
-                        disabled={assigning}
-                        className="text-xs px-3 py-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
-                      >
-                        Unassign
-                      </button>
-                    )}
-                  </div>
-                  {teamMembers.length > 0 && linkedMembers.length === 0 && (
-                    <p className="text-[10px] text-amber-400/60">No team members are linked to Podium accounts yet. Link them in settings to enable assignment.</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       <div className="max-h-64 overflow-y-auto space-y-2 mb-3 pr-1">
         {loading && <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>}
@@ -1739,8 +1558,6 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
           leadId={lead.id}
           tenantId={tenantId}
           timezone={timezone}
-          currentUserId={currentUserId}
-          isAdminRole={isAdminRole}
           onClose={() => {
             setShowChatPanel(false);
             if (!actionStep) setActionStep("text_done");

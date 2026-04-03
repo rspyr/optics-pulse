@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers, getConversationAssignees, assignConversation } from "../services/integrations/podium-api";
+import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
 
@@ -305,86 +305,6 @@ router.post("/podium/users/link", async (req, res) => {
   } catch (err) {
     console.error("[Podium Routes] Error linking Podium user:", err);
     res.status(500).json({ error: "Failed to link Podium user" });
-  }
-});
-
-router.get("/podium/conversations/:conversationUid/assignees", async (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
-
-  const { conversationUid } = req.params;
-  if (!conversationUid) { res.status(400).json({ error: "conversationUid is required" }); return; }
-
-  try {
-    const assignees = await getConversationAssignees(userId, conversationUid);
-    res.json({ assignees });
-  } catch (err) {
-    console.error("[Podium Routes] Error fetching assignees:", err);
-    res.status(500).json({ error: "Failed to fetch assignees" });
-  }
-});
-
-router.patch("/podium/conversations/:conversationUid/assign", async (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
-
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
-
-  const role = (req.session as Record<string, unknown>)?.userRole as string;
-  const isManager = ["super_admin", "agency_user", "client_admin"].includes(role);
-
-  const { conversationUid } = req.params;
-  const { targetUserId, unassign } = req.body as { targetUserId?: number; unassign?: boolean };
-
-  if (!conversationUid) { res.status(400).json({ error: "conversationUid is required" }); return; }
-
-  try {
-    if (unassign) {
-      if (!isManager) {
-        res.status(403).json({ error: "Only managers can unassign conversations" });
-        return;
-      }
-      const success = await assignConversation(userId, conversationUid, []);
-      res.json({ success });
-      return;
-    }
-
-    if (!targetUserId) { res.status(400).json({ error: "targetUserId or unassign is required" }); return; }
-
-    if (!isManager && targetUserId !== userId) {
-      res.status(403).json({ error: "CSRs can only assign conversations to themselves" });
-      return;
-    }
-
-    if (!isManager) {
-      const currentAssignees = await getConversationAssignees(userId, conversationUid);
-      if (currentAssignees.length > 0) {
-        res.status(403).json({ error: "This conversation is already assigned. Only managers can reassign." });
-        return;
-      }
-    }
-
-    const [targetUser] = await db.select({
-      id: usersTable.id,
-      podiumUserUid: usersTable.podiumUserUid,
-      name: usersTable.name,
-    }).from(usersTable).where(and(
-      eq(usersTable.id, targetUserId),
-      eq(usersTable.tenantId, tenantId),
-    ));
-
-    if (!targetUser) { res.status(404).json({ error: "Target user not found" }); return; }
-    if (!targetUser.podiumUserUid) {
-      res.status(400).json({ error: "Target user is not linked to a Podium account. Link them first in settings." });
-      return;
-    }
-
-    const success = await assignConversation(userId, conversationUid, [targetUser.podiumUserUid]);
-    res.json({ success, assignedTo: { id: targetUser.id, name: targetUser.name, podiumUserUid: targetUser.podiumUserUid } });
-  } catch (err) {
-    console.error("[Podium Routes] Error assigning conversation:", err);
-    res.status(500).json({ error: "Failed to assign conversation" });
   }
 });
 
