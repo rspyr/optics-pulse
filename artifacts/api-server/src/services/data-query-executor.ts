@@ -146,34 +146,54 @@ export async function executeQueryPlan(
   const groupByFields = plan.groupBy && plan.groupBy.length > 0 ? plan.groupBy : null;
   const aggregations = plan.aggregations && plan.aggregations.length > 0 ? plan.aggregations : ["count"];
 
-  for (const table of plan.tables) {
-    let tableData = await queryTable(tenantId, table, plan);
-
-    if (tableData.length > MAX_ROWS) {
-      tableData = tableData.slice(0, MAX_ROWS);
+  let usedSqlGrouping = false;
+  if (groupByFields && plan.tables.length === 1) {
+    const sqlGrouped = await querySingleTableGrouped(
+      tenantId, plan.tables[0], plan, groupByFields, aggregations,
+      Math.min(plan.limit || 100, 500)
+    );
+    if (sqlGrouped) {
+      results.push(...sqlGrouped);
+      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")} (SQL)`);
+      usedSqlGrouping = true;
     }
+  }
 
-    if (groupByFields && plan.tables.length > 1) {
-      const sampleRow = tableData[0];
-      if (sampleRow) {
-        const hasGroupFields = groupByFields.some(col => col in sampleRow);
-        if (hasGroupFields) {
-          tableData = applyGroupByAggregation(tableData, groupByFields, aggregations);
-          summaryParts.push(`${table}: ${tableData.length} groups (by ${groupByFields.join(", ")})`);
+  if (!usedSqlGrouping) {
+    for (const table of plan.tables) {
+      let tableData = await queryTable(tenantId, table, plan);
+
+      if (tableData.length > MAX_ROWS) {
+        tableData = tableData.slice(0, MAX_ROWS);
+      }
+
+      if (groupByFields && plan.tables.length > 1) {
+        const sampleRow = tableData[0];
+        if (sampleRow) {
+          const hasGroupFields = groupByFields.some(col => col in sampleRow);
+          if (hasGroupFields) {
+            tableData = applyGroupByAggregation(tableData, groupByFields, aggregations);
+            summaryParts.push(`${table}: ${tableData.length} groups (by ${groupByFields.join(", ")})`);
+          } else {
+            summaryParts.push(`${table}: ${tableData.length} rows (no groupBy match)`);
+          }
         } else {
-          summaryParts.push(`${table}: ${tableData.length} rows (no groupBy match)`);
+          summaryParts.push(`${table}: 0 rows`);
         }
       } else {
-        summaryParts.push(`${table}: 0 rows`);
+        summaryParts.push(`${table}: ${tableData.length} rows`);
       }
-    } else {
-      summaryParts.push(`${table}: ${tableData.length} rows`);
+
+      for (const row of tableData) {
+        (row as Record<string, unknown>).__sourceTable = table;
+      }
+      results.push(...tableData);
     }
 
-    for (const row of tableData) {
-      (row as Record<string, unknown>).__sourceTable = table;
+    if (groupByFields && plan.tables.length === 1) {
+      results.splice(0, results.length, ...applyGroupByAggregation(results, groupByFields, aggregations));
+      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")}`);
     }
-    results.push(...tableData);
   }
 
   if (plan.computedMetrics && plan.computedMetrics.length > 0) {
@@ -185,20 +205,6 @@ export async function executeQueryPlan(
   }
 
   let processed = results;
-
-  if (groupByFields && plan.tables.length === 1) {
-    const sqlGrouped = await querySingleTableGrouped(
-      tenantId, plan.tables[0], plan, groupByFields, aggregations,
-      Math.min(plan.limit || 100, 500)
-    );
-    if (sqlGrouped) {
-      processed = sqlGrouped;
-      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")} (SQL)`);
-    } else {
-      processed = applyGroupByAggregation(processed, groupByFields, aggregations);
-      summaryParts.push(`grouped by ${groupByFields.join(", ")} with ${aggregations.join(", ")}`);
-    }
-  }
 
   if (plan.orderBy && plan.orderBy.length > 0) {
     processed = applyOrderBy(processed, plan.orderBy);
