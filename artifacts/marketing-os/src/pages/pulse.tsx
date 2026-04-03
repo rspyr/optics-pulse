@@ -675,7 +675,7 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
   const dropdown = dropdownPos ? createPortal(
     <div
       ref={dropdownRef}
-      className="fixed z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 max-h-[200px] overflow-y-auto"
+      className="fixed z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 max-h-[200px] overflow-y-auto w-fit"
       style={{ top: dropdownPos.top, left: dropdownPos.left }}
     >
       {canonicalSources.length === 0 ? (
