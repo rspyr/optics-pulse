@@ -357,26 +357,44 @@ function LeadsDrilldownPopout({
   useEffect(() => {
     if (!tenantId) return;
     setLoading(true);
-    const params = new URLSearchParams({
-      tenantId: String(tenantId),
-      startDate,
-      endDate,
-      limit: "500",
-    });
-    if (filter.type === "source" && filter.source) params.set("source", filter.source);
-    if (filter.type === "funnel" && filter.funnelId) params.set("funnelId", String(filter.funnelId));
+    let cancelled = false;
 
-    fetch(`${API_BASE}/leads?${params}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : { leads: [] })
-      .then(data => {
-        let filtered = data.leads || [];
-        if (!includePreBooked) {
-          filtered = filtered.filter((l: DrilldownLead & { preBooked?: boolean }) => !l.preBooked);
-        }
+    async function fetchAll() {
+      const allLeads: DrilldownLead[] = [];
+      const batchSize = 200;
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const params = new URLSearchParams({
+          tenantId: String(tenantId!),
+          startDate,
+          endDate,
+          limit: String(batchSize),
+          offset: String(offset),
+        });
+        if (filter.type === "source" && filter.source) params.set("source", filter.source);
+        if (filter.type === "funnel" && filter.funnelId) params.set("funnelId", String(filter.funnelId));
+
+        const res = await fetch(`${API_BASE}/leads?${params}`, { credentials: "include" });
+        if (!res.ok || cancelled) break;
+        const data = await res.json();
+        const batch = data.leads || [];
+        allLeads.push(...batch);
+        offset += batchSize;
+        hasMore = batch.length === batchSize;
+      }
+
+      if (!cancelled) {
+        const filtered = includePreBooked
+          ? allLeads
+          : allLeads.filter((l: DrilldownLead & { preBooked?: boolean }) => !l.preBooked);
         setLeads(filtered);
-      })
-      .catch(() => setLeads([]))
-      .finally(() => setLoading(false));
+      }
+    }
+
+    fetchAll().catch(() => { if (!cancelled) setLeads([]); }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [tenantId, filter, startDate, endDate, includePreBooked]);
 
   useEffect(() => {
@@ -411,11 +429,8 @@ function LeadsDrilldownPopout({
             </div>
           ) : leads.length === 0 ? (
             <p className="text-xs text-white/30 text-center py-10">No leads found</p>
-          ) : (<>
-            {leads.length >= 500 && (
-              <p className="text-[10px] text-amber-400/70 text-center py-1">Showing first 500 leads</p>
-            )}
-            {leads.map(lead => {
+          ) : (
+            leads.map(lead => {
               const funnelName = lead.funnelId
                 ? funnels.find(f => f.id === lead.funnelId)?.name || null
                 : null;
@@ -459,8 +474,8 @@ function LeadsDrilldownPopout({
                   </div>
                 </button>
               );
-            })}
-          </>)}
+            })
+          )}
         </div>
       </div>
     </div>,
