@@ -289,13 +289,14 @@ router.post("/oauth/podium/disconnect", requireAuth, async (req, res) => {
     try {
       const config = decryptConfig(user.podiumConfig);
       const webhookUid = config.podiumWebhookUid as string | undefined;
-      const accessToken = config.podiumAccessToken as string | undefined;
-      if (webhookUid && accessToken) {
+      if (webhookUid && config.podiumRefreshToken) {
         try {
+          const { getValidPodiumToken: getToken } = await import("../services/integrations/podium-auth");
+          const freshToken = await getToken(userId);
           const delRes = await fetch(`https://api.podium.com/v4/webhooks/${webhookUid}`, {
             method: "DELETE",
             headers: {
-              Authorization: `Bearer ${accessToken}`,
+              Authorization: `Bearer ${freshToken}`,
               Accept: "application/json",
             },
           });
@@ -305,7 +306,7 @@ router.post("/oauth/podium/disconnect", requireAuth, async (req, res) => {
             console.warn(`[Podium OAuth] Failed to delete webhook ${webhookUid}: ${delRes.status}`);
           }
         } catch (err) {
-          console.warn(`[Podium OAuth] Error deleting webhook:`, err);
+          console.warn(`[Podium OAuth] Error deleting webhook (token may be expired):`, err);
         }
       }
     } catch {}
