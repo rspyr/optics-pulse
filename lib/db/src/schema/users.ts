@@ -15,6 +15,7 @@ export const usersTable = pgTable("users", {
   tenantId: integer("tenant_id").references(() => tenantsTable.id),
   isActive: boolean("is_active").notNull().default(true),
   podiumConfig: text("podium_config"),
+  podiumUserUid: text("podium_user_uid"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

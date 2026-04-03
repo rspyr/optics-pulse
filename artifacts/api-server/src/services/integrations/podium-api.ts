@@ -239,6 +239,74 @@ export async function updateContact(userId: number, contactUid: string, name: st
   }
 }
 
+export interface PodiumUser {
+  uid: string;
+  email?: string;
+  name?: string;
+  role?: string;
+}
+
+export async function getPodiumUsers(userId: number): Promise<PodiumUser[]> {
+  try {
+    const res = await podiumFetch(userId, "/users");
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] getPodiumUsers failed (${res.status}): ${errText}`);
+      return [];
+    }
+    const data = await res.json() as { data?: Array<{ uid: string; email?: string; firstName?: string; lastName?: string; role?: string }> };
+    return (data.data || []).map(u => ({
+      uid: u.uid,
+      email: u.email,
+      name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email || u.uid,
+      role: u.role,
+    }));
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return [];
+    throw err;
+  }
+}
+
+export async function getConversationAssignees(userId: number, conversationUid: string): Promise<PodiumUser[]> {
+  try {
+    const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`);
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] getConversationAssignees failed (${res.status}): ${errText}`);
+      return [];
+    }
+    const data = await res.json() as { data?: Array<{ uid: string; email?: string; firstName?: string; lastName?: string; role?: string }> };
+    return (data.data || []).map(u => ({
+      uid: u.uid,
+      email: u.email,
+      name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email || u.uid,
+      role: u.role,
+    }));
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return [];
+    throw err;
+  }
+}
+
+export async function assignConversation(userId: number, conversationUid: string, assigneeUids: string[]): Promise<boolean> {
+  try {
+    const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigneeUids }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] assignConversation failed (${res.status}): ${errText}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return false;
+    throw err;
+  }
+}
+
 export async function ensurePodiumContact(userId: number, tenantId: number, leadId: number): Promise<string | null> {
   const connected = await isPodiumConnected(userId);
   if (!connected) return null;

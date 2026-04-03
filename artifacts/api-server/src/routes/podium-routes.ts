@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact } from "../services/integrations/podium-api";
+import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers, getConversationAssignees, assignConversation } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
 
@@ -74,7 +74,8 @@ router.get("/podium/conversations/:leadId", async (req, res) => {
 
   try {
     const messages = await syncPodiumMessagesForLead(userId, tenantId, leadId, lead.phone);
-    res.json({ messages });
+    const conversationUid = messages.length > 0 ? messages[0].podiumConversationUid : null;
+    res.json({ messages, conversationUid });
   } catch (err) {
     console.error("[Podium Routes] Error fetching conversations:", err);
     res.status(500).json({ error: "Failed to fetch Podium conversations" });
@@ -218,6 +219,165 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   res.json({ timeline });
+});
+
+router.get("/podium/users", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  try {
+    const podiumUsers = await getPodiumUsers(userId);
+
+    const teamMembers = await db.select({
+      id: usersTable.id,
+      name: usersTable.name,
+      email: usersTable.email,
+      podiumUserUid: usersTable.podiumUserUid,
+    }).from(usersTable).where(and(
+      eq(usersTable.tenantId, tenantId),
+      eq(usersTable.isActive, true),
+    ));
+
+    const linkedMap = new Map(
+      teamMembers
+        .filter(m => m.podiumUserUid)
+        .map(m => [m.podiumUserUid!, m])
+    );
+
+    const enriched = podiumUsers.map(pu => {
+      const linked = linkedMap.get(pu.uid);
+      return {
+        ...pu,
+        internalUserId: linked?.id ?? null,
+        internalUserName: linked?.name ?? null,
+      };
+    });
+
+    res.json({ podiumUsers: enriched, teamMembers });
+  } catch (err) {
+    console.error("[Podium Routes] Error fetching Podium users:", err);
+    res.status(500).json({ error: "Failed to fetch Podium users" });
+  }
+});
+
+router.post("/podium/users/link", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const role = (req.session as Record<string, unknown>)?.userRole as string;
+  if (!["super_admin", "agency_user", "client_admin"].includes(role)) {
+    res.status(403).json({ error: "Only managers can link Podium users" });
+    return;
+  }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const { internalUserId, podiumUserUid } = req.body as { internalUserId: number; podiumUserUid: string | null };
+  if (!internalUserId) { res.status(400).json({ error: "internalUserId is required" }); return; }
+
+  try {
+    const [targetUser] = await db.select().from(usersTable).where(and(
+      eq(usersTable.id, internalUserId),
+      eq(usersTable.tenantId, tenantId),
+    ));
+    if (!targetUser) { res.status(404).json({ error: "User not found" }); return; }
+
+    if (podiumUserUid) {
+      const [existing] = await db.select({ id: usersTable.id }).from(usersTable).where(and(
+        eq(usersTable.podiumUserUid, podiumUserUid),
+        eq(usersTable.tenantId, tenantId),
+      ));
+      if (existing && existing.id !== internalUserId) {
+        res.status(409).json({ error: "This Podium user is already linked to another team member" });
+        return;
+      }
+    }
+
+    await db.update(usersTable)
+      .set({ podiumUserUid: podiumUserUid || null, updatedAt: new Date() })
+      .where(eq(usersTable.id, internalUserId));
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[Podium Routes] Error linking Podium user:", err);
+    res.status(500).json({ error: "Failed to link Podium user" });
+  }
+});
+
+router.get("/podium/conversations/:conversationUid/assignees", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const { conversationUid } = req.params;
+  if (!conversationUid) { res.status(400).json({ error: "conversationUid is required" }); return; }
+
+  try {
+    const assignees = await getConversationAssignees(userId, conversationUid);
+    res.json({ assignees });
+  } catch (err) {
+    console.error("[Podium Routes] Error fetching assignees:", err);
+    res.status(500).json({ error: "Failed to fetch assignees" });
+  }
+});
+
+router.patch("/podium/conversations/:conversationUid/assign", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const role = (req.session as Record<string, unknown>)?.userRole as string;
+  const isManager = ["super_admin", "agency_user", "client_admin"].includes(role);
+
+  const { conversationUid } = req.params;
+  const { targetUserId, unassign } = req.body as { targetUserId?: number; unassign?: boolean };
+
+  if (!conversationUid) { res.status(400).json({ error: "conversationUid is required" }); return; }
+
+  try {
+    if (unassign) {
+      if (!isManager) {
+        res.status(403).json({ error: "Only managers can unassign conversations" });
+        return;
+      }
+      const success = await assignConversation(userId, conversationUid, []);
+      res.json({ success });
+      return;
+    }
+
+    if (!targetUserId) { res.status(400).json({ error: "targetUserId or unassign is required" }); return; }
+
+    if (!isManager && targetUserId !== userId) {
+      res.status(403).json({ error: "CSRs can only assign conversations to themselves" });
+      return;
+    }
+
+    const [targetUser] = await db.select({
+      id: usersTable.id,
+      podiumUserUid: usersTable.podiumUserUid,
+      name: usersTable.name,
+    }).from(usersTable).where(and(
+      eq(usersTable.id, targetUserId),
+      eq(usersTable.tenantId, tenantId),
+    ));
+
+    if (!targetUser) { res.status(404).json({ error: "Target user not found" }); return; }
+    if (!targetUser.podiumUserUid) {
+      res.status(400).json({ error: "Target user is not linked to a Podium account. Link them first in settings." });
+      return;
+    }
+
+    const success = await assignConversation(userId, conversationUid, [targetUser.podiumUserUid]);
+    res.json({ success, assignedTo: { id: targetUser.id, name: targetUser.name, podiumUserUid: targetUser.podiumUserUid } });
+  } catch (err) {
+    console.error("[Podium Routes] Error assigning conversation:", err);
+    res.status(500).json({ error: "Failed to assign conversation" });
+  }
 });
 
 export default router;

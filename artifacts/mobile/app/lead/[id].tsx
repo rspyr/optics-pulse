@@ -206,6 +206,12 @@ export default function LeadDetailScreen() {
   const [newMessage, setNewMessage] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [conversationUid, setConversationUid] = useState<string | null>(null);
+  const [convAssignees, setConvAssignees] = useState<{ uid: string; name?: string }[]>([]);
+  const [convTeamMembers, setConvTeamMembers] = useState<{ id: number; name: string | null; podiumUserUid: string | null }[]>([]);
+  const [showAssignPicker, setShowAssignPicker] = useState(false);
+  const [assigningConv, setAssigningConv] = useState(false);
+  const [assignFeedback, setAssignFeedback] = useState<string | null>(null);
 
   const [unifiedTimeline, setUnifiedTimeline] = useState<TimelineEntry[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(true);
@@ -312,8 +318,68 @@ export default function LeadDetailScreen() {
     try {
       const data = await apiFetch(`/api/podium/conversations/${params.id}${tenantQs}`);
       setMessages(data.messages || []);
+      if (data.conversationUid) setConversationUid(data.conversationUid);
     } catch {}
   }, [apiFetch, params.id, tenantQs]);
+
+  const fetchConvAssignees = useCallback(async () => {
+    if (!conversationUid) return;
+    try {
+      const data = await apiFetch(`/api/podium/conversations/${conversationUid}/assignees${tenantQs}`);
+      setConvAssignees(data.assignees || []);
+    } catch {}
+  }, [apiFetch, conversationUid, tenantQs]);
+
+  const fetchConvTeamMembers = useCallback(async () => {
+    try {
+      const data = await apiFetch(`/api/podium/users${tenantQs}`);
+      setConvTeamMembers((data.teamMembers || []).filter((m: { podiumUserUid: string | null }) => m.podiumUserUid));
+    } catch {}
+  }, [apiFetch, tenantQs]);
+
+  useEffect(() => { fetchConvAssignees(); }, [fetchConvAssignees]);
+  useEffect(() => { if (showAssignPicker) fetchConvTeamMembers(); }, [showAssignPicker, fetchConvTeamMembers]);
+
+  const handleConvAssign = async (targetUserId: number) => {
+    if (!conversationUid) return;
+    setAssigningConv(true);
+    try {
+      const data = await apiFetch(`/api/podium/conversations/${conversationUid}/assign${tenantQs}`, {
+        method: "PATCH",
+        body: JSON.stringify({ targetUserId }),
+      });
+      if (data.success) {
+        setAssignFeedback(data.assignedTo?.name ? `Assigned to ${data.assignedTo.name}` : "Assigned");
+        fetchConvAssignees();
+        setShowAssignPicker(false);
+      } else {
+        setAssignFeedback(data.error || "Assignment failed");
+      }
+    } catch (err) {
+      setAssignFeedback(err instanceof Error ? err.message : "Assignment failed");
+    } finally {
+      setAssigningConv(false);
+      setTimeout(() => setAssignFeedback(null), 3000);
+    }
+  };
+
+  const handleConvUnassign = async () => {
+    if (!conversationUid) return;
+    setAssigningConv(true);
+    try {
+      const data = await apiFetch(`/api/podium/conversations/${conversationUid}/assign${tenantQs}`, {
+        method: "PATCH",
+        body: JSON.stringify({ unassign: true }),
+      });
+      if (data.success) {
+        setAssignFeedback("Unassigned");
+        fetchConvAssignees();
+        setShowAssignPicker(false);
+      }
+    } catch {}
+    setAssigningConv(false);
+    setTimeout(() => setAssignFeedback(null), 3000);
+  };
 
   const fetchCommConfig = useCallback(async () => {
     try {
@@ -1527,7 +1593,79 @@ export default function LeadDetailScreen() {
               <View style={styles.messagesHeader}>
                 <Feather name="message-circle" size={18} color="#8B5CF6" />
                 <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Conversation</Text>
+                {conversationUid && (
+                  <TouchableOpacity
+                    style={{ marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: showAssignPicker ? "#3B82F615" : "transparent" }}
+                    onPress={() => setShowAssignPicker(!showAssignPicker)}
+                  >
+                    <Feather name="user-plus" size={14} color={showAssignPicker ? "#3B82F6" : colors.mutedForeground} />
+                    {convAssignees.length > 0 && (
+                      <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_400Regular" }} numberOfLines={1}>
+                        {convAssignees[0].name || "Assigned"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
+
+              {assignFeedback && (
+                <View style={{ backgroundColor: "#10B98115", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, marginBottom: 8 }}>
+                  <Text style={{ fontSize: 11, color: "#10B981", fontFamily: "Inter_500Medium" }}>{assignFeedback}</Text>
+                </View>
+              )}
+
+              {showAssignPicker && conversationUid && (
+                <View style={{ backgroundColor: colors.secondary, borderRadius: 8, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: colors.border }}>
+                  <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 6 }}>ASSIGN CONVERSATION</Text>
+                  {convAssignees.length > 0 && (
+                    <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_400Regular", marginBottom: 6 }}>
+                      Currently: {convAssignees.map(a => a.name || a.uid).join(", ")}
+                    </Text>
+                  )}
+
+                  {!isManager && user?.id ? (
+                    <TouchableOpacity
+                      style={{ backgroundColor: "#3B82F620", paddingVertical: 8, borderRadius: 6, alignItems: "center" }}
+                      onPress={() => handleConvAssign(user.id)}
+                      disabled={assigningConv}
+                    >
+                      {assigningConv ? (
+                        <ActivityIndicator size="small" color="#3B82F6" />
+                      ) : (
+                        <Text style={{ fontSize: 12, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>Claim This Conversation</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={{ gap: 6 }}>
+                      {convTeamMembers.map(m => (
+                        <TouchableOpacity
+                          key={m.id}
+                          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.background, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: colors.border }}
+                          onPress={() => handleConvAssign(m.id)}
+                          disabled={assigningConv}
+                        >
+                          <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_500Medium" }}>{m.name || `User #${m.id}`}</Text>
+                          <Feather name="arrow-right" size={12} color={colors.mutedForeground} />
+                        </TouchableOpacity>
+                      ))}
+                      {convAssignees.length > 0 && isManager && (
+                        <TouchableOpacity
+                          style={{ backgroundColor: "#EF444415", paddingVertical: 8, borderRadius: 6, alignItems: "center" }}
+                          onPress={handleConvUnassign}
+                          disabled={assigningConv}
+                        >
+                          <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_600SemiBold" }}>Unassign</Text>
+                        </TouchableOpacity>
+                      )}
+                      {convTeamMembers.length === 0 && (
+                        <Text style={{ fontSize: 11, color: "#F59E0B80", fontFamily: "Inter_400Regular" }}>
+                          No team members linked to Podium yet.
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
 
               {messages.length === 0 ? (
                 <View style={styles.emptyMessages}>

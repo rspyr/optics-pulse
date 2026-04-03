@@ -80,7 +80,7 @@ A native mobile app (`artifacts/mobile`) for sales reps/lead coordinators, mirro
 - **Login** (`app/login.tsx`): Email/password auth with Pulse logo and Rebel Red branding
 - **Dashboard** (`app/(tabs)/index.tsx`): HUD with date filters (Today/7D/30D/90D), live performance stats (Calls, Booked, Book Rate, Earned, Speed to Lead, New Leads), 10s polling + Socket.IO event refresh, haptic feedback, tenant selector for agency users
 - **Lead Queue** (`app/(tabs)/queue.tsx`): Horizontally scrollable tabs (New, Re-engage, Callbacks, Old, Archive) with matching web colors, pull-to-refresh, real-time updates, tenant-scoped data
-- **Lead Detail** (`app/lead/[id].tsx`): Tabbed detail view (Actions, Details, Messages, History). Day badges (D1-D4, OLD, APPT, CB, DEAD) with web-matching colors. Contact flags (Text Only, Spanish, DNC). Callback scheduling. Podium chat integration with real-time Socket.IO message sync. Form fill display (appointment date/time, address, add-ons).
+- **Lead Detail** (`app/lead/[id].tsx`): Tabbed detail view (Actions, Details, Messages, History). Day badges (D1-D4, OLD, APPT, CB, DEAD) with web-matching colors. Contact flags (Text Only, Spanish, DNC). Callback scheduling. Podium chat integration with real-time Socket.IO message sync. Podium conversation assignment (managers assign to any linked team member, CSRs claim for themselves). Form fill display (appointment date/time, address, add-ons).
 - **Settings** (`app/(tabs)/settings.tsx`): Account info, password change, Podium connect/disconnect, sign out
 
 **Key Files:**
