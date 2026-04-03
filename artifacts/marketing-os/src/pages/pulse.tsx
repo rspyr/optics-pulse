@@ -605,7 +605,7 @@ function SourceTag({ source }: { source: string }) {
   return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
 }
 
-function EditableSourceTag({ leadId, source, onSourceChanged }: { leadId: number; source: string; onSourceChanged: (newSource: string) => void }) {
+function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { leadId: number; source: string; onSourceChanged: (newSource: string) => void; tenantId?: number }) {
   const [editing, setEditing] = useState(false);
   const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -613,11 +613,12 @@ function EditableSourceTag({ leadId, source, onSourceChanged }: { leadId: number
 
   useEffect(() => {
     if (!editing) return;
-    fetch(`${API_BASE}/leads-hub/canonical-sources`, { credentials: "include" })
+    const qs = tenantId ? `?tenantId=${tenantId}` : "";
+    fetch(`${API_BASE}/leads-hub/canonical-sources${qs}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => setCanonicalSources(data.sources || []))
       .catch(() => {});
-  }, [editing]);
+  }, [editing, tenantId]);
 
   useEffect(() => {
     if (!editing) return;
@@ -1404,7 +1405,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => onUpdate()} />
+              <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => onUpdate()} tenantId={tenantId} />
               {lead.serviceType && (
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
               )}
@@ -2079,7 +2080,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
-                  <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => refetch()} />
+                  <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => refetch()} tenantId={tenantId} />
                 </div>
                 <div className="flex items-center gap-2">
                   {lead.assignedTo && <span className="text-[10px] text-white/25">{lead.assignedTo}</span>}
