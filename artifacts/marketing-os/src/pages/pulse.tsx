@@ -666,7 +666,7 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
       <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border ring-1 ring-primary/50", getSourceColor(source))}>
         {saving ? <Loader2 className="w-3 h-3 inline animate-spin" /> : source}
       </span>
-      <div className="absolute top-full left-0 mt-1 z-50 bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 min-w-[140px] max-h-[200px] overflow-y-auto">
+      <div className="absolute top-full left-0 mt-1 z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 min-w-[140px] max-h-[200px] overflow-y-auto">
         {canonicalSources.length === 0 ? (
           <div className="px-3 py-2 text-[10px] text-white/30">No sources configured</div>
         ) : (
