@@ -140,6 +140,7 @@ export async function executeQueryPlan(
   tenantId: number,
   plan: QueryPlan
 ): Promise<QueryExecutionResult> {
+  const MAX_ROWS = 5000;
   const results: Record<string, unknown>[] = [];
   const summaryParts: string[] = [];
   const groupByFields = plan.groupBy && plan.groupBy.length > 0 ? plan.groupBy : null;
@@ -147,6 +148,10 @@ export async function executeQueryPlan(
 
   for (const table of plan.tables) {
     let tableData = await queryTable(tenantId, table, plan);
+
+    if (tableData.length > MAX_ROWS) {
+      tableData = tableData.slice(0, MAX_ROWS);
+    }
 
     if (groupByFields && plan.tables.length > 1) {
       const sampleRow = tableData[0];
@@ -191,7 +196,7 @@ export async function executeQueryPlan(
   }
 
   const limitedResults = plan.limit
-    ? processed.slice(0, plan.limit)
+    ? processed.slice(0, Math.min(plan.limit, 500))
     : processed.slice(0, 100);
 
   for (const row of limitedResults) {

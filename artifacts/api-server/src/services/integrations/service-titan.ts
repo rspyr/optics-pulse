@@ -245,10 +245,44 @@ export async function fetchCompletedJobs(
   config: STAuthConfig,
   modifiedAfter?: string,
 ): Promise<STJob[]> {
+  const BATCH_SIZE = 5;
   const allJobs: STJob[] = [];
   let page = 1;
   const pageSize = 100;
   let hasMore = true;
+  let batchJobs: STJob[] = [];
+
+  async function enrichAndFlushBatch(jobs: STJob[]) {
+    if (jobs.length === 0) return;
+    const revenueJobs = jobs.filter((j) => j.total > 0);
+    const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
+    const locationIds = revenueJobs.map((j) => j.locationId).filter(Boolean);
+
+    const [customerMap, locationMap] = await Promise.all([
+      customerIds.length > 0
+        ? fetchCustomersByIds(config, customerIds).catch((err) => {
+            console.warn(`[ServiceTitan] Customer enrichment failed: ${(err as Error).message}`);
+            return new Map<number, STCustomer>();
+          })
+        : Promise.resolve(new Map<number, STCustomer>()),
+      locationIds.length > 0
+        ? fetchLocationsByIds(config, locationIds).catch((err) => {
+            console.warn(`[ServiceTitan] Location enrichment failed: ${(err as Error).message}`);
+            return new Map<number, STLocation>();
+          })
+        : Promise.resolve(new Map<number, STLocation>()),
+    ]);
+
+    for (const job of jobs) {
+      if (job.customerId && customerMap.has(job.customerId)) {
+        job.customer = customerMap.get(job.customerId);
+      }
+      if (job.locationId && locationMap.has(job.locationId)) {
+        job.location = locationMap.get(job.locationId);
+      }
+    }
+    allJobs.push(...jobs);
+  }
 
   while (hasMore) {
     const params = new URLSearchParams({
@@ -261,48 +295,25 @@ export async function fetchCompletedJobs(
     }
 
     const response = await stFetch<STJobsResponse>(config, `/jobs?${params.toString()}`);
-    allJobs.push(...response.data);
+    batchJobs.push(...response.data);
     hasMore = response.hasMore;
-    if (page % 10 === 0 || !hasMore) {
-      console.log(`[ServiceTitan] Fetched page ${page}, ${allJobs.length} jobs so far`);
+
+    if (page % BATCH_SIZE === 0 || !hasMore) {
+      console.log(`[ServiceTitan] Fetched page ${page}, enriching batch of ${batchJobs.length} jobs`);
+      await enrichAndFlushBatch(batchJobs);
+      batchJobs = [];
     }
     page++;
 
     if (page > 50) break;
   }
 
-  const revenueJobs = allJobs.filter((j) => j.total > 0);
-  const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
-  const locationIds = revenueJobs.map((j) => j.locationId).filter(Boolean);
-  const uniqueCustomerCount = new Set(customerIds).size;
-  const uniqueLocationCount = new Set(locationIds).size;
-  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue — ${uniqueCustomerCount} unique customers, ${uniqueLocationCount} unique locations`);
-
-  const [customerMap, locationMap] = await Promise.all([
-    customerIds.length > 0
-      ? fetchCustomersByIds(config, customerIds).catch((err) => {
-          console.warn(`[ServiceTitan] Customer enrichment failed: ${(err as Error).message}`);
-          return new Map<number, STCustomer>();
-        })
-      : Promise.resolve(new Map<number, STCustomer>()),
-    locationIds.length > 0
-      ? fetchLocationsByIds(config, locationIds).catch((err) => {
-          console.warn(`[ServiceTitan] Location enrichment failed: ${(err as Error).message}`);
-          return new Map<number, STLocation>();
-        })
-      : Promise.resolve(new Map<number, STLocation>()),
-  ]);
-
-  for (const job of allJobs) {
-    if (job.customerId && customerMap.has(job.customerId)) {
-      job.customer = customerMap.get(job.customerId);
-    }
-    if (job.locationId && locationMap.has(job.locationId)) {
-      job.location = locationMap.get(job.locationId);
-    }
+  if (batchJobs.length > 0) {
+    await enrichAndFlushBatch(batchJobs);
   }
 
-  console.log(`[ServiceTitan] Enriched ${customerMap.size} customers, ${locationMap.size} locations`);
+  const revenueJobs = allJobs.filter((j) => j.total > 0);
+  console.log(`[ServiceTitan] ${allJobs.length} total jobs, ${revenueJobs.length} with revenue`);
   return allJobs;
 }
 

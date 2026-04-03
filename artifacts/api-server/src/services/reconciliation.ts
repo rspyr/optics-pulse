@@ -59,10 +59,22 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const ociPayloads: OciPayload[] = [];
   const allMatchedJobIds: number[] = [];
 
+  const BATCH_SIZE = 200;
   const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
   const baseConditions = [matchCondition, eq(jobsTable.status, "completed"), isNotNull(jobsTable.customerName)];
   if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));
-  const unmatchedJobs = await db.select().from(jobsTable).where(and(...baseConditions));
+  const unmatchedJobs = await db.select({
+    id: jobsTable.id,
+    tenantId: jobsTable.tenantId,
+    customerName: jobsTable.customerName,
+    matchedGclid: jobsTable.matchedGclid,
+    serviceAddress: jobsTable.serviceAddress,
+    revenue: jobsTable.revenue,
+    completedAt: jobsTable.completedAt,
+    stJobId: jobsTable.stJobId,
+    status: jobsTable.status,
+    matchLevel: jobsTable.matchLevel,
+  }).from(jobsTable).where(and(...baseConditions));
 
   for (const job of unmatchedJobs) {
     let matched = false;
