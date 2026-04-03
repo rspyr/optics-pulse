@@ -105,7 +105,8 @@ Rules:
 - Use "__funnel__" only if the column categorizes leads into different marketing funnels/campaigns (not service types)
 - Confidence: 1.0 = exact/obvious match, 0.7-0.9 = likely match, 0.5-0.69 = uncertain, <0.5 = guess
 - If a column header is ambiguous, look at the sample data to determine the best mapping
-- Each internal field should only be mapped once (except __skip__)
+- Each internal field should only be mapped once (except __skip__ and "source")
+- IMPORTANT: Multiple columns CAN map to "source". If you see utm_source, utm_medium, utm_campaign, or similar UTM tracking columns, map ALL of them to "source". The system will use the first non-empty value as the lead source. This is critical for capturing source data when some UTM fields are empty.
 
 Respond with ONLY valid JSON. Example:
 {"First Name": {"field": "firstName", "confidence": 1.0}, "Ph #": {"field": "phone", "confidence": 0.9}}`;
@@ -202,8 +203,9 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
     return;
   }
 
+  const multiAllowed = new Set(["source"]);
   const fieldAssignments = Object.values(mapping).filter(f => f !== "__skip__" && f !== "notes" && f !== "__funnel__");
-  const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i);
+  const duplicates = fieldAssignments.filter((f, i) => fieldAssignments.indexOf(f) !== i && !multiAllowed.has(f));
   if (duplicates.length > 0) {
     res.status(400).json({ error: `Duplicate field assignment: "${[...new Set(duplicates)].join(", ")}" is mapped to multiple columns` });
     return;
@@ -433,7 +435,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         lastName: row.lastName || "",
         phone: row.phone || null,
         email: row.email || null,
-        source: await normalizeSource(config.tenantId, row.source || funnelName || "Google Sheet"),
+        source: await normalizeSource(config.tenantId, row.source || "Unknown"),
         serviceType: row.serviceType || null,
         notes: row.notes || null,
         address: row.address || null,

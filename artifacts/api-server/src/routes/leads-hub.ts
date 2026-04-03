@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
-  tenantsTable,
+  tenantsTable, leadSourceAliasesTable,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
@@ -987,6 +987,48 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
   } else {
     res.json(result);
   }
+});
+
+router.patch("/leads-hub/:leadId/source", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const leadId = parseInt(String(req.params.leadId));
+  const rawSource = typeof req.body?.source === "string" ? req.body.source.trim() : "";
+  if (!rawSource) {
+    res.status(400).json({ error: "source is required" });
+    return;
+  }
+  const source = rawSource;
+
+  const [lead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const normalizedSource = await normalizeSource(tenantId, source);
+
+  const [updated] = await db.update(leadsTable)
+    .set({ source: normalizedSource, updatedAt: new Date() })
+    .where(eq(leadsTable.id, leadId))
+    .returning();
+
+  emitLeadUpdated(tenantId, updated as unknown as Record<string, unknown>);
+  res.json(updated);
+});
+
+router.get("/leads-hub/canonical-sources", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.json({ sources: [] }); return; }
+
+  const rows = await db.select({ canonicalName: leadSourceAliasesTable.canonicalName })
+    .from(leadSourceAliasesTable)
+    .where(eq(leadSourceAliasesTable.tenantId, tenantId));
+
+  const uniqueNames = [...new Set(rows.map(r => r.canonicalName))].sort();
+  res.json({ sources: uniqueNames });
 });
 
 router.get("/leads-hub/stats", async (req, res) => {

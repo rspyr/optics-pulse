@@ -592,13 +592,99 @@ function ReengageBadge({ lastAttemptAt, attemptCount }: { lastAttemptAt?: string
   );
 }
 
+function getSourceColor(source: string): string {
+  if (source.includes("Google")) return "bg-blue-500/15 text-blue-400 border-blue-500/20";
+  if (source.includes("Meta") || source.includes("Facebook") || source.includes("Instagram")) return "bg-indigo-500/15 text-indigo-400 border-indigo-500/20";
+  if (source.includes("Direct Mail")) return "bg-amber-500/15 text-amber-400 border-amber-500/20";
+  if (source.includes("YouTube") || source.includes("TikTok")) return "bg-pink-500/15 text-pink-400 border-pink-500/20";
+  if (source === "Unknown") return "bg-orange-500/15 text-orange-400 border-orange-500/20";
+  return "bg-white/5 text-white/50 border-white/10";
+}
+
 function SourceTag({ source }: { source: string }) {
-  const color = source.includes("Google") ? "bg-blue-500/15 text-blue-400 border-blue-500/20"
-    : source.includes("Meta") || source.includes("Facebook") || source.includes("Instagram") ? "bg-indigo-500/15 text-indigo-400 border-indigo-500/20"
-    : source.includes("Direct Mail") ? "bg-amber-500/15 text-amber-400 border-amber-500/20"
-    : source.includes("YouTube") || source.includes("TikTok") ? "bg-pink-500/15 text-pink-400 border-pink-500/20"
-    : "bg-white/5 text-white/50 border-white/10";
-  return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", color)}>{source}</span>;
+  return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
+}
+
+function EditableSourceTag({ leadId, source, onSourceChanged }: { leadId: number; source: string; onSourceChanged: (newSource: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    fetch(`${API_BASE}/leads-hub/canonical-sources`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => setCanonicalSources(data.sources || []))
+      .catch(() => {});
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setEditing(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [editing]);
+
+  const handleSelect = async (newSource: string) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/${leadId}/source`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ source: newSource }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onSourceChanged(data.source);
+      }
+    } catch {}
+    setSaving(false);
+    setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border cursor-pointer hover:ring-1 hover:ring-white/20 transition-all", getSourceColor(source))}
+        title="Click to change source"
+      >
+        {source} <Pencil className="w-2.5 h-2.5 inline ml-0.5 opacity-50" />
+      </button>
+    );
+  }
+
+  return (
+    <div ref={dropdownRef} className="relative inline-block">
+      <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border ring-1 ring-primary/50", getSourceColor(source))}>
+        {saving ? <Loader2 className="w-3 h-3 inline animate-spin" /> : source}
+      </span>
+      <div className="absolute top-full left-0 mt-1 z-50 bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 min-w-[140px] max-h-[200px] overflow-y-auto">
+        {canonicalSources.length === 0 ? (
+          <div className="px-3 py-2 text-[10px] text-white/30">No sources configured</div>
+        ) : (
+          canonicalSources.map(s => (
+            <button
+              key={s}
+              onClick={(e) => { e.stopPropagation(); handleSelect(s); }}
+              className={cn(
+                "w-full text-left px-3 py-1.5 text-[11px] hover:bg-white/5 transition-colors",
+                s === source ? "text-primary font-medium" : "text-white/70"
+              )}
+            >
+              {s}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CommissionTicker({ amount, onDone }: { amount: number; onDone: () => void }) {
@@ -1318,7 +1404,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <SourceTag source={lead.source} />
+              <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => onUpdate()} />
               {lead.serviceType && (
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
               )}

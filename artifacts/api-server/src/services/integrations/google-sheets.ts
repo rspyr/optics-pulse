@@ -226,6 +226,8 @@ export async function readSheetRows(
     const obj: Record<string, string> = {};
     const notesParts: string[] = [];
 
+    const sourceParts: string[] = [];
+
     for (let j = 0; j < rawHeaders.length; j++) {
       const headerKey = rawHeaders[j];
       let normalized: string;
@@ -238,10 +240,16 @@ export async function readSheetRows(
         const val = (row[j] || "").trim();
         if (normalized === "notes") {
           if (val) notesParts.push(`${headerKey}: ${val}`);
+        } else if (normalized === "source") {
+          if (val) sourceParts.push(val);
         } else {
           obj[normalized] = val;
         }
       }
+    }
+
+    if (sourceParts.length > 0) {
+      obj.source = sourceParts[0];
     }
 
     if (notesParts.length > 0) {

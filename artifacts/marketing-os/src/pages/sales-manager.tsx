@@ -2056,6 +2056,8 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                 ?.map(row => row[header])
                 .filter(Boolean)
                 .slice(0, 3) || [];
+              const sourceColumnCount = Object.values(mapping).filter(f => f === "source").length;
+              const isMultiSource = field === "source" && sourceColumnCount > 1;
 
               return (
                 <div key={header} className={cn(
@@ -2085,47 +2087,54 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                     )}
                   </div>
 
-                  <Select
-                    value={field}
-                    onValueChange={v => setMapping(prev => ({ ...prev, [header]: v }))}
-                  >
-                    <SelectTrigger className={cn(
-                      "bg-white/5 border rounded-md px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[140px]",
-                      field === "__skip__" ? "border-white/5 text-white/30" : "border-white/10"
-                    )}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {analysis?.internalFields ? (
-                        analysis.internalFields.map(f => (
-                          <SelectItem key={f.field} value={f.field}>{f.label}</SelectItem>
-                        ))
-                      ) : (
-                        <>
-                          <SelectItem value="firstName">First Name</SelectItem>
-                          <SelectItem value="lastName">Last Name</SelectItem>
-                          <SelectItem value="fullName">Full Name</SelectItem>
-                          <SelectItem value="phone">Phone</SelectItem>
-                          <SelectItem value="email">Email</SelectItem>
-                          <SelectItem value="source">Lead Source</SelectItem>
-                          <SelectItem value="serviceType">Service Type</SelectItem>
-                          <SelectItem value="__funnel__">Funnel</SelectItem>
-                          <SelectItem value="status">Status</SelectItem>
-                          <SelectItem value="notes">Notes</SelectItem>
-                          <SelectItem value="address">Address</SelectItem>
-                          <SelectItem value="city">City</SelectItem>
-                          <SelectItem value="state">State</SelectItem>
-                          <SelectItem value="zip">Zip Code</SelectItem>
-                          <SelectItem value="dateTime">Date/Time</SelectItem>
-                          <SelectItem value="appointmentBooked">Appointment Booked</SelectItem>
-                          <SelectItem value="appointmentDate">Appointment Date</SelectItem>
-                          <SelectItem value="appointmentTime">Appointment Time</SelectItem>
-                          <SelectItem value="addOns">Add-Ons</SelectItem>
-                          <SelectItem value="__skip__">Skip (Do Not Import)</SelectItem>
-                        </>
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center gap-1.5">
+                    <Select
+                      value={field}
+                      onValueChange={v => setMapping(prev => ({ ...prev, [header]: v }))}
+                    >
+                      <SelectTrigger className={cn(
+                        "bg-white/5 border rounded-md px-2 py-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[140px]",
+                        field === "__skip__" ? "border-white/5 text-white/30" : "border-white/10"
+                      )}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {analysis?.internalFields ? (
+                          analysis.internalFields.map(f => (
+                            <SelectItem key={f.field} value={f.field}>{f.label}</SelectItem>
+                          ))
+                        ) : (
+                          <>
+                            <SelectItem value="firstName">First Name</SelectItem>
+                            <SelectItem value="lastName">Last Name</SelectItem>
+                            <SelectItem value="fullName">Full Name</SelectItem>
+                            <SelectItem value="phone">Phone</SelectItem>
+                            <SelectItem value="email">Email</SelectItem>
+                            <SelectItem value="source">Lead Source</SelectItem>
+                            <SelectItem value="serviceType">Service Type</SelectItem>
+                            <SelectItem value="__funnel__">Funnel</SelectItem>
+                            <SelectItem value="status">Status</SelectItem>
+                            <SelectItem value="notes">Notes</SelectItem>
+                            <SelectItem value="address">Address</SelectItem>
+                            <SelectItem value="city">City</SelectItem>
+                            <SelectItem value="state">State</SelectItem>
+                            <SelectItem value="zip">Zip Code</SelectItem>
+                            <SelectItem value="dateTime">Date/Time</SelectItem>
+                            <SelectItem value="appointmentBooked">Appointment Booked</SelectItem>
+                            <SelectItem value="appointmentDate">Appointment Date</SelectItem>
+                            <SelectItem value="appointmentTime">Appointment Time</SelectItem>
+                            <SelectItem value="addOns">Add-Ons</SelectItem>
+                            <SelectItem value="__skip__">Skip (Do Not Import)</SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    {isMultiSource && (
+                      <span className="text-[8px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded whitespace-nowrap">
+                        multi-source
+                      </span>
+                    )}
+                  </div>
                 </div>
               );
             })}
