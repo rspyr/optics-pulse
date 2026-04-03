@@ -29,7 +29,6 @@ export async function fetchPodiumReviews(
     headers: {
       Authorization: `Bearer ${config.apiToken}`,
       Accept: "application/json",
-      "podium-version": "2024-04-01",
     },
   });
 

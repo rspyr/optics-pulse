@@ -157,7 +157,6 @@ router.get("/oauth/podium/callback", async (req, res) => {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
           Accept: "application/json",
-          "podium-version": "2024-04-01",
         },
       });
       if (locResponse.ok) {
@@ -188,7 +187,6 @@ router.get("/oauth/podium/callback", async (req, res) => {
             Authorization: `Bearer ${tokenData.access_token}`,
             "Content-Type": "application/json",
             Accept: "application/json",
-            "podium-version": "2024-04-01",
           },
           body: JSON.stringify({
             url: webhookUrl,
