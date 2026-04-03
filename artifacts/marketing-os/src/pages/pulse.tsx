@@ -640,6 +640,8 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
     return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
   }
 
+  const allOptions = canonicalSources.includes(source) ? canonicalSources : [source, ...canonicalSources];
+
   return (
     <span onClick={(e) => e.stopPropagation()}>
       <Select value={source} onValueChange={handleSelect}>
@@ -648,7 +650,7 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
           <Pencil className="w-2.5 h-2.5 opacity-50" />
         </SelectTrigger>
         <SelectContent>
-          {canonicalSources.map(s => (
+          {allOptions.map(s => (
             <SelectItem key={s} value={s}>{s}</SelectItem>
           ))}
         </SelectContent>
