@@ -67,6 +67,8 @@ router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
 router.get("/oauth/podium/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
+  console.log(`[Podium OAuth] Callback received: hasCode=${!!code}, hasState=${!!state}, hasError=${!!error}, hasSessionState=${!!req.session?.podiumOAuthState}, hasUserId=${!!req.session?.userId}`);
+
   const userId = req.session?.userId;
   if (!userId) {
     res.redirect("/settings?podiumOAuth=error&message=not_authenticated");
@@ -84,7 +86,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
   }
 
   if (state !== req.session.podiumOAuthState) {
-    console.error(`[Podium OAuth] State mismatch for user ${userId}: expected=${req.session.podiumOAuthState || "(none)"}, received=${state}`);
+    console.error(`[Podium OAuth] State mismatch for user ${userId}: hasSessionState=${!!req.session.podiumOAuthState}, stateMatch=false`);
     res.redirect("/settings?podiumOAuth=error&message=invalid_state");
     return;
   }
