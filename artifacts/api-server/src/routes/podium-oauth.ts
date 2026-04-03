@@ -48,6 +48,19 @@ router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
 
   const authUrl = `${PODIUM_AUTH_URL}?${params.toString()}`;
   console.log(`[Podium OAuth] Authorize requested for user ${userId}, redirect_uri=${redirectUri}`);
+
+  await new Promise<void>((resolve, reject) => {
+    req.session.save((err) => {
+      if (err) {
+        console.error("[Podium OAuth] Failed to save session with OAuth state:", err);
+        reject(err);
+      } else {
+        console.log(`[Podium OAuth] Session saved with OAuth state for user ${userId}`);
+        resolve();
+      }
+    });
+  });
+
   res.json({ authUrl });
 });
 
@@ -71,6 +84,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
   }
 
   if (state !== req.session.podiumOAuthState) {
+    console.error(`[Podium OAuth] State mismatch for user ${userId}: expected=${req.session.podiumOAuthState || "(none)"}, received=${state}`);
     res.redirect("/settings?podiumOAuth=error&message=invalid_state");
     return;
   }
