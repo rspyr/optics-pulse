@@ -56,9 +56,11 @@ export interface PodiumConversationMessage {
 export async function searchContactByPhone(userId: number, phone: string): Promise<PodiumContact | null> {
   const cleanPhone = phone.replace(/[^0-9+]/g, "");
   try {
-    const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}`);
+    const locationUid = await getLocationUid(userId);
+    const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}&locationUid=${encodeURIComponent(locationUid)}`);
     if (!res.ok) {
-      console.error(`[Podium API] searchContactByPhone failed: ${res.status}`);
+      const errText = await res.text();
+      console.error(`[Podium API] searchContactByPhone failed (${res.status}): ${errText}`);
       return null;
     }
     const data = await res.json() as { data?: PodiumContact[] };
