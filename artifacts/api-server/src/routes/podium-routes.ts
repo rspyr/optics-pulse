@@ -43,6 +43,9 @@ async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Pr
     if (await isPodiumConnected(u.id)) return u.id;
   }
 
+  const agencyConnected = await isPodiumConnected(loggedInUserId);
+  if (agencyConnected) return loggedInUserId;
+
   return null;
 }
 
