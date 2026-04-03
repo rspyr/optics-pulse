@@ -2111,6 +2111,24 @@ export default function Leads() {
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
+  const deepLinkHandled = useRef(false);
+
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const leadIdParam = params.get("leadId");
+    if (leadIdParam && effectiveTenantId) {
+      deepLinkHandled.current = true;
+      fetch(`${API_BASE}/leads/${leadIdParam}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) setSelectedLead(data);
+        })
+        .catch(() => {});
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [effectiveTenantId]);
+
   const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [spiffEvent, setSpiffEvent] = useState<{ id: number; amount: number } | null>(null);

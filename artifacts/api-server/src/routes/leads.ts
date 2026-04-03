@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable } from "@workspace/db";
-import { eq, and, count, desc, sql, SQL, inArray } from "drizzle-orm";
+import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
 import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
@@ -61,12 +61,26 @@ router.get("/leads", async (req, res) => {
   const query = ListLeadsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  if (query.tenantId) conditions.push(eq(leadsTable.tenantId, query.tenantId));
+  const role = req.session.userRole;
+  const resolvedTenantId = (role === "super_admin" || role === "agency_user")
+    ? (query.tenantId ?? null)
+    : (req.session.tenantId ?? null);
+  if (resolvedTenantId) conditions.push(eq(leadsTable.tenantId, resolvedTenantId));
+
   if (query.status) {
     const status = query.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
     conditions.push(eq(leadsTable.status, status));
   }
   if (query.source) conditions.push(eq(leadsTable.source, query.source));
+  if (query.funnelId) conditions.push(eq(leadsTable.funnelId, query.funnelId));
+  if (query.startDate) {
+    const sd = new Date(query.startDate);
+    if (!isNaN(sd.getTime())) conditions.push(gte(leadsTable.createdAt, sd));
+  }
+  if (query.endDate) {
+    const ed = new Date(query.endDate);
+    if (!isNaN(ed.getTime())) conditions.push(lte(leadsTable.createdAt, ed));
+  }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   const limit = query.limit ?? 50;

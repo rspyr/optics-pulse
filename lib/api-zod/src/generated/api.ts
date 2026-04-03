@@ -215,6 +215,9 @@ export const ListLeadsQueryParams = zod.object({
     .enum(["new", "contacted", "booked", "sold", "lost", "cancelled"])
     .optional(),
   source: zod.coerce.string().optional(),
+  funnelId: zod.coerce.number().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
   limit: zod.coerce.number().default(listLeadsQueryLimitDefault),
   offset: zod.coerce.number().default(listLeadsQueryOffsetDefault),
 });

@@ -18,7 +18,9 @@ import {
   ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
   Shuffle, Pause, Play, Calendar, Save, Table2, Link2,
   Mic, GripVertical, Eye, Wand2, ShieldCheck, AlertCircle, Info,
+  X, ExternalLink,
 } from "lucide-react";
+import { useLocation } from "wouter";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import ScriptManagement from "@/components/script-management";
 
@@ -299,12 +301,180 @@ function useDateRange(preset: string): [string, string] {
   return range;
 }
 
+const HUB_STATUS_LABELS: Record<string, string> = {
+  day_1: "Day 1", day_2: "Day 2", day_3: "Day 3", day_4: "Day 4",
+  day_5_old: "Old", appt_set: "Appt Set", appt_booked: "Booked",
+  call_back: "Callback", dead: "Dead",
+};
+
+const HUB_STATUS_COLORS: Record<string, string> = {
+  day_1: "text-emerald-400", day_2: "text-blue-400", day_3: "text-amber-400",
+  day_4: "text-orange-400", day_5_old: "text-red-400",
+  appt_set: "text-emerald-400", appt_booked: "text-purple-400",
+  call_back: "text-amber-400", dead: "text-red-300",
+};
+
+interface DrilldownLead {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone?: string | null;
+  email?: string | null;
+  source: string;
+  hubStatus: string;
+  createdAt: string;
+  funnelId?: number | null;
+}
+
+interface DrilldownFilter {
+  type: "source" | "funnel";
+  source?: string;
+  funnelId?: number;
+  label: string;
+}
+
+function LeadsDrilldownPopout({
+  tenantId,
+  filter,
+  startDate,
+  endDate,
+  includePreBooked,
+  onClose,
+  funnels,
+}: {
+  tenantId: number | null;
+  filter: DrilldownFilter;
+  startDate: string;
+  endDate: string;
+  includePreBooked: boolean;
+  onClose: () => void;
+  funnels: FunnelType[];
+}) {
+  const [leads, setLeads] = useState<DrilldownLead[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!tenantId) return;
+    setLoading(true);
+    const params = new URLSearchParams({
+      tenantId: String(tenantId),
+      startDate,
+      endDate,
+      limit: "500",
+    });
+    if (filter.type === "source" && filter.source) params.set("source", filter.source);
+    if (filter.type === "funnel" && filter.funnelId) params.set("funnelId", String(filter.funnelId));
+
+    fetch(`${API_BASE}/leads?${params}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : { leads: [] })
+      .then(data => {
+        let filtered = data.leads || [];
+        if (!includePreBooked) {
+          filtered = filtered.filter((l: DrilldownLead & { preBooked?: boolean }) => !l.preBooked);
+        }
+        setLeads(filtered);
+      })
+      .catch(() => setLeads([]))
+      .finally(() => setLoading(false));
+  }, [tenantId, filter, startDate, endDate, includePreBooked]);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        className="relative w-full max-w-md h-full bg-[#0a0a0f] border-l border-white/10 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-white/10">
+          <div>
+            <h3 className="text-sm font-display text-white">{filter.label}</h3>
+            <p className="text-[10px] text-white/30 mt-0.5">
+              {leads.length} lead{leads.length !== 1 ? "s" : ""} found
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-white/10 transition-colors">
+            <X className="w-4 h-4 text-white/50" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-5 h-5 text-primary animate-spin" />
+            </div>
+          ) : leads.length === 0 ? (
+            <p className="text-xs text-white/30 text-center py-10">No leads found</p>
+          ) : (<>
+            {leads.length >= 500 && (
+              <p className="text-[10px] text-amber-400/70 text-center py-1">Showing first 500 leads</p>
+            )}
+            leads.map(lead => {
+              const funnelName = lead.funnelId
+                ? funnels.find(f => f.id === lead.funnelId)?.name || null
+                : null;
+              return (
+                <button
+                  key={lead.id}
+                  onClick={() => navigate(`/pulse?leadId=${lead.id}`)}
+                  className="w-full text-left p-3 rounded-lg bg-white/[0.03] border border-white/5 hover:bg-white/[0.07] hover:border-white/10 transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-white truncate">
+                        {lead.firstName} {lead.lastName}
+                      </p>
+                      {lead.phone && (
+                        <p className="text-[10px] text-white/40 font-mono mt-0.5">{lead.phone}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                      <span className={cn(
+                        "text-[10px] font-mono px-1.5 py-0.5 rounded",
+                        HUB_STATUS_COLORS[lead.hubStatus] || "text-white/40"
+                      )}>
+                        {HUB_STATUS_LABELS[lead.hubStatus] || lead.hubStatus}
+                      </span>
+                      <ExternalLink className="w-3 h-3 text-white/20 group-hover:text-white/50 transition-colors" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="text-[10px] text-white/25">{lead.source}</span>
+                    {funnelName && (
+                      <>
+                        <span className="text-[10px] text-white/15">·</span>
+                        <span className="text-[10px] text-white/25">{funnelName}</span>
+                      </>
+                    )}
+                    <span className="text-[10px] text-white/15">·</span>
+                    <span className="text-[10px] text-white/25">
+                      {new Date(lead.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    </span>
+                  </div>
+                </button>
+              );
+            })
+          </>)}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked }: { tenantId: number | null; funnels: FunnelType[]; includePreBooked: boolean; setIncludePreBooked: (v: boolean) => void }) {
   const [datePreset, setDatePreset] = useState("today");
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
   const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter, includePreBooked);
   const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
+  const [drilldownFilter, setDrilldownFilter] = useState<DrilldownFilter | null>(null);
 
   const overallBookingRate = allStats?.bookingRate ?? 0;
   const selectedFunnelRate = funnelFilter
@@ -379,7 +549,11 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
           ) : (
             <div className="space-y-2">
               {stats!.bySource.map(s => (
-                <div key={s.source} className="flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5">
+                <button
+                  key={s.source}
+                  onClick={() => setDrilldownFilter({ type: "source", source: s.source, label: `Leads from ${s.source}` })}
+                  className="w-full flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5 hover:bg-white/[0.06] hover:border-white/10 transition-all cursor-pointer text-left"
+                >
                   <span className="text-xs text-white/70">{s.source}</span>
                   <div className="flex items-center gap-4">
                     <div className="text-right">
@@ -398,7 +572,7 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
                       <p className="text-[9px] text-white/20 uppercase">rate</p>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -416,7 +590,11 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
               {stats!.byFunnel.map(f => {
                 const funnelName = funnels.find(ft => ft.id === f.funnelId)?.name || `Funnel #${f.funnelId}`;
                 return (
-                  <div key={f.funnelId} className="flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5">
+                  <button
+                    key={f.funnelId}
+                    onClick={() => setDrilldownFilter({ type: "funnel", funnelId: f.funnelId, label: `Leads from ${funnelName}` })}
+                    className="w-full flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5 hover:bg-white/[0.06] hover:border-white/10 transition-all cursor-pointer text-left"
+                  >
                     <span className="text-xs text-white/70">{funnelName}</span>
                     <div className="flex items-center gap-4">
                       <div className="text-right">
@@ -435,7 +613,7 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
                         <p className="text-[9px] text-white/20 uppercase">rate</p>
                       </div>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -502,6 +680,18 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
           </div>
         )}
       </PremiumCard>
+
+      {drilldownFilter && (
+        <LeadsDrilldownPopout
+          tenantId={tenantId}
+          filter={drilldownFilter}
+          startDate={startDate}
+          endDate={endDate}
+          includePreBooked={includePreBooked}
+          onClose={() => setDrilldownFilter(null)}
+          funnels={funnels}
+        />
+      )}
     </div>
   );
 }
