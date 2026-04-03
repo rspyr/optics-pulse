@@ -21,13 +21,19 @@ function resolveTenantId(req: { query?: Record<string, string>; body?: Record<st
 type PodiumMessageRow = typeof podiumMessagesTable.$inferSelect;
 
 async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Promise<number | null> {
-  const [loggedInUser] = await db.select({ id: usersTable.id, tenantId: usersTable.tenantId })
+  const [loggedInUser] = await db.select({ id: usersTable.id, tenantId: usersTable.tenantId, role: usersTable.role })
     .from(usersTable).where(eq(usersTable.id, loggedInUserId));
+  if (!loggedInUser) return null;
 
-  if (loggedInUser?.tenantId === tenantId) {
+  const isCrossTenant = loggedInUser.tenantId !== tenantId;
+  const isAgencyOrSuperAdmin = loggedInUser.role === "super_admin" || loggedInUser.role === "agency_user";
+
+  if (!isCrossTenant) {
     const connected = await isPodiumConnected(loggedInUserId);
-    if (connected) return loggedInUserId;
+    return connected ? loggedInUserId : null;
   }
+
+  if (!isAgencyOrSuperAdmin) return null;
 
   const tenantUsers = await db.select({ id: usersTable.id })
     .from(usersTable)
