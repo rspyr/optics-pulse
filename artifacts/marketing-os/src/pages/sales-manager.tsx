@@ -415,7 +415,7 @@ function LeadsDrilldownPopout({
             {leads.length >= 500 && (
               <p className="text-[10px] text-amber-400/70 text-center py-1">Showing first 500 leads</p>
             )}
-            leads.map(lead => {
+            {leads.map(lead => {
               const funnelName = lead.funnelId
                 ? funnels.find(f => f.id === lead.funnelId)?.name || null
                 : null;
@@ -459,7 +459,7 @@ function LeadsDrilldownPopout({
                   </div>
                 </button>
               );
-            })
+            })}
           </>)}
         </div>
       </div>
