@@ -176,7 +176,6 @@ router.get("/oauth/podium/callback", async (req, res) => {
     if (locationUid) {
       try {
         const webhookSecret = crypto.randomBytes(32).toString("hex");
-        config.podiumWebhookSecret = webhookSecret;
 
         const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
         const webhookUrl = domain
@@ -199,6 +198,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
           }),
         });
         if (whResponse.ok) {
+          config.podiumWebhookSecret = webhookSecret;
           console.log(`[Podium OAuth] Webhook registered at ${webhookUrl}`);
         } else {
           const whErr = await whResponse.text();
