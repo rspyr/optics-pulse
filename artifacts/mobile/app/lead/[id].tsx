@@ -1624,17 +1624,23 @@ export default function LeadDetailScreen() {
                   )}
 
                   {!isManager && user?.id ? (
-                    <TouchableOpacity
-                      style={{ backgroundColor: "#3B82F620", paddingVertical: 8, borderRadius: 6, alignItems: "center" }}
-                      onPress={() => handleConvAssign(user.id)}
-                      disabled={assigningConv}
-                    >
-                      {assigningConv ? (
-                        <ActivityIndicator size="small" color="#3B82F6" />
-                      ) : (
-                        <Text style={{ fontSize: 12, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>Claim This Conversation</Text>
-                      )}
-                    </TouchableOpacity>
+                    convAssignees.length > 0 ? (
+                      <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>
+                        This conversation is assigned. Only managers can reassign.
+                      </Text>
+                    ) : (
+                      <TouchableOpacity
+                        style={{ backgroundColor: "#3B82F620", paddingVertical: 8, borderRadius: 6, alignItems: "center" }}
+                        onPress={() => handleConvAssign(user.id)}
+                        disabled={assigningConv}
+                      >
+                        {assigningConv ? (
+                          <ActivityIndicator size="small" color="#3B82F6" />
+                        ) : (
+                          <Text style={{ fontSize: 12, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>Claim This Conversation</Text>
+                        )}
+                      </TouchableOpacity>
+                    )
                   ) : (
                     <View style={{ gap: 6 }}>
                       {convTeamMembers.map(m => (

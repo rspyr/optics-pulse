@@ -357,6 +357,14 @@ router.patch("/podium/conversations/:conversationUid/assign", async (req, res) =
       return;
     }
 
+    if (!isManager) {
+      const currentAssignees = await getConversationAssignees(userId, conversationUid);
+      if (currentAssignees.length > 0) {
+        res.status(403).json({ error: "This conversation is already assigned. Only managers can reassign." });
+        return;
+      }
+    }
+
     const [targetUser] = await db.select({
       id: usersTable.id,
       podiumUserUid: usersTable.podiumUserUid,

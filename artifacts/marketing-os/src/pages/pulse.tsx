@@ -1267,13 +1267,17 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose, currentUserId, i
               </div>
 
               {!isAdminRole && currentUserId ? (
-                <button
-                  onClick={() => handleAssign(currentUserId)}
-                  disabled={assigning}
-                  className="w-full text-xs px-3 py-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
-                >
-                  {assigning ? <Loader2 className="w-3 h-3 animate-spin mx-auto" /> : "Claim This Conversation"}
-                </button>
+                assignees.length > 0 ? (
+                  <p className="text-xs text-white/40">This conversation is assigned. Only managers can reassign.</p>
+                ) : (
+                  <button
+                    onClick={() => handleAssign(currentUserId)}
+                    disabled={assigning}
+                    className="w-full text-xs px-3 py-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
+                  >
+                    {assigning ? <Loader2 className="w-3 h-3 animate-spin mx-auto" /> : "Claim This Conversation"}
+                  </button>
+                )
               ) : (
                 <div className="space-y-2">
                   <select
