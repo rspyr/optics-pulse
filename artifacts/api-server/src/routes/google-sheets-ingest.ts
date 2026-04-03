@@ -445,6 +445,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         addOns: row.addOns || null,
         visibleAfter,
         funnelId: resolvedFunnelId,
+        leadType: funnelName || null,
         hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
         dayInSequence: 1,
         status: "new",

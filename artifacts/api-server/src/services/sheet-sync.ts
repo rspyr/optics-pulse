@@ -271,6 +271,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       addOns: row.addOns || null,
       visibleAfter,
       funnelId: resolvedFunnelId,
+      leadType: funnelName || null,
       hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
       dayInSequence: 1,
       status: "new",

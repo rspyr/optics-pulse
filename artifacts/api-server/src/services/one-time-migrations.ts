@@ -541,6 +541,22 @@ const migrations: Migration[] = [
       console.log("[Migration] Created push_tokens table");
     },
   },
+  {
+    id: "2026-04-03_backfill-lead-type-from-funnel",
+    description: "Backfill lead_type from funnel_types.name for leads ingested via Google Sheets that have funnel_id but missing lead_type",
+    run: async () => {
+      const result = await db.execute(sql`
+        UPDATE leads
+        SET lead_type = ft.name,
+            updated_at = NOW()
+        FROM funnel_types ft
+        WHERE leads.funnel_id = ft.id
+          AND (leads.lead_type IS NULL OR leads.lead_type = '')
+        RETURNING leads.id
+      `);
+      console.log(`[Migration] Backfilled lead_type on ${result.rows.length} lead(s) from funnel_types.name`);
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
