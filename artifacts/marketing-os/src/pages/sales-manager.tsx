@@ -2589,7 +2589,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                 <p className="text-sm text-white font-medium">{cfg.name}</p>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <Link2 className="w-3 h-3 text-emerald-400" />
-                  <span className="text-[10px] text-emerald-400/70 font-mono truncate max-w-[200px]">{cfg.googleSheetId}</span>
+                  <a href={`https://docs.google.com/spreadsheets/d/${cfg.googleSheetId}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-emerald-400/70 font-mono truncate max-w-[200px] hover:text-emerald-400 hover:underline transition-colors">{cfg.googleSheetId}</a>
                   <span className="text-[10px] text-white/30">tab: {cfg.googleSheetTab}</span>
                   {cfg.defaultFunnel && (
                     <span className="text-[10px] text-blue-400/70 bg-blue-500/10 px-1.5 py-0.5 rounded">
