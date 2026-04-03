@@ -157,7 +157,7 @@ function PodiumUserLinking({ tenantId }: { tenantId: number }) {
               })}
               {podiumUsers.length === 0 && teamMembers.length > 0 && (
                 <p className="text-xs text-amber-400/60 mt-2">
-                  No Podium users found. Your Podium OAuth connection may need the "read_users" scope — try reconnecting above.
+                  No Podium users found. A user within this tenant needs to connect their Podium account in their own Settings first, or reconnect with the "read_users" scope above.
                 </p>
               )}
             </div>

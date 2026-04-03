@@ -20,18 +20,38 @@ function resolveTenantId(req: { query?: Record<string, string>; body?: Record<st
 
 type PodiumMessageRow = typeof podiumMessagesTable.$inferSelect;
 
-async function syncPodiumMessagesForLead(userId: number, tenantId: number, leadId: number, phone: string): Promise<PodiumMessageRow[]> {
-  const connected = await isPodiumConnected(userId);
+async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Promise<number | null> {
+  const [loggedInUser] = await db.select({ id: usersTable.id, tenantId: usersTable.tenantId })
+    .from(usersTable).where(eq(usersTable.id, loggedInUserId));
+
+  if (loggedInUser?.tenantId === tenantId) {
+    const connected = await isPodiumConnected(loggedInUserId);
+    if (connected) return loggedInUserId;
+  }
+
+  const tenantUsers = await db.select({ id: usersTable.id })
+    .from(usersTable)
+    .where(and(eq(usersTable.tenantId, tenantId), eq(usersTable.isActive, true)));
+
+  for (const u of tenantUsers) {
+    if (await isPodiumConnected(u.id)) return u.id;
+  }
+
+  return null;
+}
+
+async function syncPodiumMessagesForLead(podiumUserId: number, tenantId: number, leadId: number, phone: string): Promise<PodiumMessageRow[]> {
+  const connected = await isPodiumConnected(podiumUserId);
   if (!connected) {
     return [];
   }
 
   try {
-    const contact = await searchContactByPhone(userId, phone);
+    const contact = await searchContactByPhone(podiumUserId, phone);
     if (contact) {
-      const conversations = await getContactConversations(userId, contact.uid);
+      const conversations = await getContactConversations(podiumUserId, contact.uid);
       for (const conv of conversations.slice(0, 5)) {
-        const msgs = await getConversationMessages(userId, conv.uid);
+        const msgs = await getConversationMessages(podiumUserId, conv.uid);
         for (const msg of msgs) {
           try {
             await db.insert(podiumMessagesTable).values({
@@ -72,8 +92,11 @@ router.get("/podium/conversations/:leadId", async (req, res) => {
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
   if (!lead.phone) { res.json({ messages: [] }); return; }
 
+  const podiumUserId = await resolvePodiumUserId(userId, tenantId);
+  if (!podiumUserId) { res.json({ messages: [], notConnected: true }); return; }
+
   try {
-    const messages = await syncPodiumMessagesForLead(userId, tenantId, leadId, lead.phone);
+    const messages = await syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone);
     const conversationUid = messages.length > 0 ? messages[0].podiumConversationUid : null;
     res.json({ messages, conversationUid });
   } catch (err) {
@@ -100,11 +123,14 @@ router.post("/podium/messages", async (req, res) => {
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
   if (!lead.phone) { res.status(400).json({ error: "Lead has no phone number" }); return; }
 
+  const podiumUserId = await resolvePodiumUserId(userId, tenantId);
+  if (!podiumUserId) { res.status(400).json({ error: "No Podium-connected user in this tenant. A team member needs to connect Podium in Settings first." }); return; }
+
   try {
-    await ensurePodiumContact(userId, tenantId, leadId);
+    await ensurePodiumContact(podiumUserId, tenantId, leadId);
 
     const fullName = `${lead.firstName} ${lead.lastName}`.trim();
-    const result = await sendMessage(userId, lead.phone, messageBody, fullName);
+    const result = await sendMessage(podiumUserId, lead.phone, messageBody, fullName);
 
     if (!result.success) {
       res.status(500).json({ error: "Failed to send message via Podium" });
@@ -145,8 +171,9 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  const podiumSyncPromise = lead.phone
-    ? syncPodiumMessagesForLead(userId, tenantId, leadId, lead.phone)
+  const podiumUserId = lead.phone ? await resolvePodiumUserId(userId, tenantId) : null;
+  const podiumSyncPromise = podiumUserId && lead.phone
+    ? syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone)
     : Promise.resolve([]);
 
   const [callAttempts, podiumMessages] = await Promise.all([
@@ -228,8 +255,10 @@ router.get("/podium/users", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
+  const podiumUserId = await resolvePodiumUserId(userId, tenantId);
+
   try {
-    const podiumUsers = await getPodiumUsers(userId);
+    const podiumUsers = podiumUserId ? await getPodiumUsers(podiumUserId) : [];
 
     const teamMembers = await db.select({
       id: usersTable.id,
@@ -256,7 +285,7 @@ router.get("/podium/users", async (req, res) => {
       };
     });
 
-    res.json({ podiumUsers: enriched, teamMembers });
+    res.json({ podiumUsers: enriched, teamMembers, notConnected: !podiumUserId });
   } catch (err) {
     console.error("[Podium Routes] Error fetching Podium users:", err);
     res.status(500).json({ error: "Failed to fetch Podium users" });
