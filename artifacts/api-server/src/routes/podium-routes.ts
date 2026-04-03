@@ -23,9 +23,7 @@ type PodiumMessageRow = typeof podiumMessagesTable.$inferSelect;
 async function syncPodiumMessagesForLead(userId: number, tenantId: number, leadId: number, phone: string): Promise<PodiumMessageRow[]> {
   const connected = await isPodiumConnected(userId);
   if (!connected) {
-    return db.select().from(podiumMessagesTable)
-      .where(and(eq(podiumMessagesTable.leadId, leadId), eq(podiumMessagesTable.tenantId, tenantId)))
-      .orderBy(desc(podiumMessagesTable.podiumCreatedAt));
+    return [];
   }
 
   try {

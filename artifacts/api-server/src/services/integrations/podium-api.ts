@@ -5,7 +5,15 @@ import { eq, and } from "drizzle-orm";
 const PODIUM_API = "https://api.podium.com/v4";
 const PODIUM_VERSION = "2024-04-01";
 
+class PodiumNotConnectedError extends Error {
+  constructor() { super("Podium is not connected for this user"); this.name = "PodiumNotConnectedError"; }
+}
+
 async function podiumFetch(userId: number, path: string, options: RequestInit = {}): Promise<Response> {
+  const connected = await isPodiumConnected(userId);
+  if (!connected) {
+    throw new PodiumNotConnectedError();
+  }
   const token = await getValidPodiumToken(userId);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -47,141 +55,171 @@ export interface PodiumConversationMessage {
 
 export async function searchContactByPhone(userId: number, phone: string): Promise<PodiumContact | null> {
   const cleanPhone = phone.replace(/[^0-9+]/g, "");
-  const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}`);
-  if (!res.ok) {
-    console.error(`[Podium API] searchContactByPhone failed: ${res.status}`);
-    return null;
+  try {
+    const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}`);
+    if (!res.ok) {
+      console.error(`[Podium API] searchContactByPhone failed: ${res.status}`);
+      return null;
+    }
+    const data = await res.json() as { data?: PodiumContact[] };
+    return data.data && data.data.length > 0 ? data.data[0] : null;
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return null;
+    throw err;
   }
-  const data = await res.json() as { data?: PodiumContact[] };
-  return data.data && data.data.length > 0 ? data.data[0] : null;
 }
 
 export async function getConversationMessages(userId: number, conversationUid: string): Promise<PodiumConversationMessage[]> {
-  const res = await podiumFetch(userId, `/conversations/${conversationUid}/messages`);
-  if (!res.ok) {
-    console.error(`[Podium API] getConversationMessages failed: ${res.status}`);
-    return [];
+  try {
+    const res = await podiumFetch(userId, `/conversations/${conversationUid}/messages`);
+    if (!res.ok) {
+      console.error(`[Podium API] getConversationMessages failed: ${res.status}`);
+      return [];
+    }
+    const data = await res.json() as { data?: PodiumConversationMessage[] };
+    return (data.data || []).map(m => ({
+      uid: m.uid,
+      body: m.body || "",
+      direction: m.direction || "outbound",
+      channelType: m.channelType || "sms",
+      senderName: m.senderName,
+      deliveryStatus: m.deliveryStatus,
+      createdAt: m.createdAt,
+      conversationUid,
+    }));
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return [];
+    throw err;
   }
-  const data = await res.json() as { data?: PodiumConversationMessage[] };
-  return (data.data || []).map(m => ({
-    uid: m.uid,
-    body: m.body || "",
-    direction: m.direction || "outbound",
-    channelType: m.channelType || "sms",
-    senderName: m.senderName,
-    deliveryStatus: m.deliveryStatus,
-    createdAt: m.createdAt,
-    conversationUid,
-  }));
 }
 
 export async function getContactConversations(userId: number, contactUid: string): Promise<Array<{ uid: string; channelType: string }>> {
-  const res = await podiumFetch(userId, `/contacts/${contactUid}/conversations`);
-  if (!res.ok) {
-    console.error(`[Podium API] getContactConversations failed: ${res.status}`);
-    return [];
+  try {
+    const res = await podiumFetch(userId, `/contacts/${contactUid}/conversations`);
+    if (!res.ok) {
+      console.error(`[Podium API] getContactConversations failed: ${res.status}`);
+      return [];
+    }
+    const data = await res.json() as { data?: Array<{ uid: string; channelType?: string }> };
+    return (data.data || []).map(c => ({ uid: c.uid, channelType: c.channelType || "sms" }));
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return [];
+    throw err;
   }
-  const data = await res.json() as { data?: Array<{ uid: string; channelType?: string }> };
-  return (data.data || []).map(c => ({ uid: c.uid, channelType: c.channelType || "sms" }));
 }
 
 export async function sendMessage(userId: number, phone: string, body: string, contactName?: string): Promise<{ success: boolean; messageUid?: string; conversationUid?: string }> {
-  const locationUid = await getLocationUid(userId);
-  const cleanPhone = phone.replace(/[^0-9+]/g, "");
+  try {
+    const locationUid = await getLocationUid(userId);
+    const cleanPhone = phone.replace(/[^0-9+]/g, "");
 
-  const payload: Record<string, unknown> = {
-    locationUid,
-    channelType: "phone",
-    message: body,
-    phoneNumber: cleanPhone,
-  };
-  if (contactName) {
-    payload.contactName = contactName;
+    const payload: Record<string, unknown> = {
+      locationUid,
+      channelType: "phone",
+      message: body,
+      phoneNumber: cleanPhone,
+    };
+    if (contactName) {
+      payload.contactName = contactName;
+    }
+
+    const res = await podiumFetch(userId, "/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] sendMessage failed (${res.status}): ${errText}`);
+      return { success: false };
+    }
+
+    const data = await res.json() as { data?: { uid?: string; messages?: Array<{ uid: string }> } };
+    return {
+      success: true,
+      conversationUid: data.data?.uid,
+      messageUid: data.data?.messages?.[0]?.uid,
+    };
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return { success: false };
+    throw err;
   }
-
-  const res = await podiumFetch(userId, "/conversations", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Podium API] sendMessage failed (${res.status}): ${errText}`);
-    return { success: false };
-  }
-
-  const data = await res.json() as { data?: { uid?: string; messages?: Array<{ uid: string }> } };
-  return {
-    success: true,
-    conversationUid: data.data?.uid,
-    messageUid: data.data?.messages?.[0]?.uid,
-  };
 }
 
 export async function createContact(userId: number, name: string, phone: string, email?: string): Promise<PodiumContact | null> {
-  const locationUid = await getLocationUid(userId);
-  const cleanPhone = phone.replace(/[^0-9+]/g, "");
+  try {
+    const locationUid = await getLocationUid(userId);
+    const cleanPhone = phone.replace(/[^0-9+]/g, "");
 
-  const nameParts = name.split(" ");
-  const firstName = nameParts[0] || "";
-  const lastName = nameParts.slice(1).join(" ") || "";
+    const nameParts = name.split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
 
-  const payload: Record<string, unknown> = {
-    locationUid,
-    firstName,
-    lastName,
-    phoneNumbers: [{ number: cleanPhone, type: "cell" }],
-  };
-  if (email) {
-    payload.emails = [{ address: email, type: "personal" }];
+    const payload: Record<string, unknown> = {
+      locationUid,
+      firstName,
+      lastName,
+      phoneNumbers: [{ number: cleanPhone, type: "cell" }],
+    };
+    if (email) {
+      payload.emails = [{ address: email, type: "personal" }];
+    }
+
+    const res = await podiumFetch(userId, "/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] createContact failed (${res.status}): ${errText}`);
+      return null;
+    }
+
+    const data = await res.json() as { data?: PodiumContact };
+    return data.data || null;
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return null;
+    throw err;
   }
-
-  const res = await podiumFetch(userId, "/contacts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Podium API] createContact failed (${res.status}): ${errText}`);
-    return null;
-  }
-
-  const data = await res.json() as { data?: PodiumContact };
-  return data.data || null;
 }
 
 export async function updateContact(userId: number, contactUid: string, name: string, phone: string, email?: string): Promise<PodiumContact | null> {
-  const nameParts = name.split(" ");
-  const firstName = nameParts[0] || "";
-  const lastName = nameParts.slice(1).join(" ") || "";
-  const cleanPhone = phone.replace(/[^0-9+]/g, "");
+  try {
+    const nameParts = name.split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+    const cleanPhone = phone.replace(/[^0-9+]/g, "");
 
-  const payload: Record<string, unknown> = {
-    firstName,
-    lastName,
-    phoneNumbers: [{ number: cleanPhone, type: "cell" }],
-  };
-  if (email) {
-    payload.emails = [{ address: email, type: "personal" }];
+    const payload: Record<string, unknown> = {
+      firstName,
+      lastName,
+      phoneNumbers: [{ number: cleanPhone, type: "cell" }],
+    };
+    if (email) {
+      payload.emails = [{ address: email, type: "personal" }];
+    }
+
+    const res = await podiumFetch(userId, `/contacts/${contactUid}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Podium API] updateContact failed (${res.status}): ${errText}`);
+      return null;
+    }
+
+    const data = await res.json() as { data?: PodiumContact };
+    return data.data || null;
+  } catch (err) {
+    if (err instanceof PodiumNotConnectedError) return null;
+    throw err;
   }
-
-  const res = await podiumFetch(userId, `/contacts/${contactUid}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Podium API] updateContact failed (${res.status}): ${errText}`);
-    return null;
-  }
-
-  const data = await res.json() as { data?: PodiumContact };
-  return data.data || null;
 }
 
 export async function ensurePodiumContact(userId: number, tenantId: number, leadId: number): Promise<string | null> {
