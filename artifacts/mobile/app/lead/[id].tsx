@@ -354,6 +354,16 @@ export default function LeadDetailScreen() {
     return () => off("podium-message", handler);
   }, [on, off, params.id, fetchMessages, fetchTimeline]);
 
+  useEffect(() => {
+    const handler = (data: Record<string, unknown>) => {
+      if (data?.id === Number(params.id)) {
+        setLead(prev => prev ? { ...prev, ...data } as typeof prev : prev);
+      }
+    };
+    on("lead-updated", handler);
+    return () => off("lead-updated", handler);
+  }, [on, off, params.id]);
+
   const logAction = async (body: Record<string, unknown>) => {
     setActionLoading(true);
     try {
