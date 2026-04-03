@@ -329,7 +329,7 @@ export async function syncPodiumConversationAssignment(leadId: number, targetCsr
         eq(podiumMessagesTable.leadId, leadId),
         eq(podiumMessagesTable.tenantId, targetUser.tenantId),
       ))
-      .orderBy(descOrder(podiumMessagesTable.createdAt))
+      .orderBy(descOrder(podiumMessagesTable.podiumCreatedAt), descOrder(podiumMessagesTable.createdAt))
       .limit(1);
 
     if (!latestMsg?.podiumConversationUid) {
