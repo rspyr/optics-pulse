@@ -3,7 +3,7 @@ import { db, leadsTable, usersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
 const PODIUM_API = "https://api.podium.com/v4";
-const PODIUM_VERSION = "2024-04-01";
+const PODIUM_VERSION = "2024-04-22";
 
 class PodiumNotConnectedError extends Error {
   constructor() { super("Podium is not connected for this user"); this.name = "PodiumNotConnectedError"; }
