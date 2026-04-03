@@ -607,41 +607,19 @@ function SourceTag({ source }: { source: string }) {
 }
 
 function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { leadId: number; source: string; onSourceChanged: (newSource: string) => void; tenantId?: number }) {
-  const [editing, setEditing] = useState(false);
   const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLElement>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
-    if (!editing) return;
     const qs = tenantId ? `?tenantId=${tenantId}` : "";
     fetch(`${API_BASE}/leads-hub/canonical-sources${qs}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => setCanonicalSources(data.sources || []))
       .catch(() => {});
-  }, [editing, tenantId]);
-
-  useEffect(() => {
-    if (editing && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setDropdownPos({ top: rect.bottom + 4, left: rect.left });
-    }
-  }, [editing]);
-
-  useEffect(() => {
-    if (!editing) return;
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setEditing(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [editing]);
+  }, [tenantId]);
 
   const handleSelect = async (newSource: string) => {
+    if (newSource === source) return;
     setSaving(true);
     try {
       const res = await fetch(`${API_BASE}/leads-hub/${leadId}/source`, {
@@ -656,54 +634,25 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
       }
     } catch {}
     setSaving(false);
-    setEditing(false);
   };
 
-  if (!editing) {
-    return (
-      <button
-        ref={triggerRef}
-        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
-        className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border cursor-pointer hover:ring-1 hover:ring-white/20 transition-all", getSourceColor(source))}
-        title="Click to change source"
-      >
-        {source} <Pencil className="w-2.5 h-2.5 inline ml-0.5 opacity-50" />
-      </button>
-    );
+  if (canonicalSources.length === 0) {
+    return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
   }
 
-  const dropdown = dropdownPos ? createPortal(
-    <div
-      ref={dropdownRef}
-      className="fixed z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 max-h-[200px] overflow-y-auto w-fit"
-      style={{ top: dropdownPos.top, left: dropdownPos.left }}
-    >
-      {canonicalSources.length === 0 ? (
-        <div className="px-3 py-2 text-[10px] text-white/30">No sources configured</div>
-      ) : (
-        canonicalSources.map(s => (
-          <button
-            key={s}
-            onClick={(e) => { e.stopPropagation(); handleSelect(s); }}
-            className={cn(
-              "w-full text-left px-3 py-1.5 text-[11px] whitespace-nowrap hover:bg-white/5 transition-colors",
-              s === source ? "text-primary font-medium" : "text-white/70"
-            )}
-          >
-            {s}
-          </button>
-        ))
-      )}
-    </div>,
-    document.body
-  ) : null;
-
   return (
-    <span className="inline-block">
-      <span ref={triggerRef} className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border ring-1 ring-primary/50", getSourceColor(source))}>
-        {saving ? <Loader2 className="w-3 h-3 inline animate-spin" /> : source}
-      </span>
-      {dropdown}
+    <span onClick={(e) => e.stopPropagation()}>
+      <Select value={source} onValueChange={handleSelect}>
+        <SelectTrigger className={cn("w-auto h-auto px-1.5 py-0.5 rounded text-[9px] font-medium border cursor-pointer hover:ring-1 hover:ring-white/20 transition-all gap-1 [&>svg]:hidden", getSourceColor(source))}>
+          {saving ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <SelectValue />}
+          <Pencil className="w-2.5 h-2.5 opacity-50" />
+        </SelectTrigger>
+        <SelectContent>
+          {canonicalSources.map(s => (
+            <SelectItem key={s} value={s}>{s}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </span>
   );
 }
