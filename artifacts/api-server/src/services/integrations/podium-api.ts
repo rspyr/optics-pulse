@@ -3,7 +3,6 @@ import { db, leadsTable, usersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
 const PODIUM_API = "https://api.podium.com/v4";
-const PODIUM_VERSION = "2021.4.1";
 
 class PodiumNotConnectedError extends Error {
   constructor() { super("Podium is not connected for this user"); this.name = "PodiumNotConnectedError"; }
@@ -32,7 +31,6 @@ async function podiumFetch(userId: number, path: string, options: RequestInit = 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
-    "podium-version": PODIUM_VERSION,
     ...(options.headers as Record<string, string> || {}),
   };
   return fetch(`${PODIUM_API}${path}`, { ...options, headers });
