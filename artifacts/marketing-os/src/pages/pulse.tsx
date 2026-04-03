@@ -1217,8 +1217,8 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
@@ -1391,7 +1391,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   return (
     <div className="space-y-4">
       <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 transition-colors mb-2">
-        <ChevronDown className="w-3 h-3 rotate-90" /> Back to queue
+        <ChevronDown className="w-3 h-3 rotate-90" /> {isArchived ? "Back to archive" : "Back to queue"}
       </button>
 
       <PremiumCard className="p-5">
@@ -1434,17 +1434,19 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowTransfer(!showTransfer)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/30 hover:text-white/50 hover:bg-white/5 transition-colors"
-            >
-              <UserPlus className="w-3 h-3" /> Transfer
-            </button>
-          </div>
+          {!isArchived && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowTransfer(!showTransfer)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-white/30 hover:text-white/50 hover:bg-white/5 transition-colors"
+              >
+                <UserPlus className="w-3 h-3" /> Transfer
+              </button>
+            </div>
+          )}
         </div>
 
-        {showTransfer && (
+        {!isArchived && showTransfer && (
           <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
             <p className="text-xs text-white/40">Transfer to another CSR:</p>
             <div className="flex items-center gap-2">
@@ -1526,47 +1528,49 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         </PremiumCard>
       )}
 
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleCall}
-          disabled={!lead.phone || actionStep !== null}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
-            blocksCall
-              ? "bg-red-500/10 border border-red-500/20 text-red-400 cursor-not-allowed"
-              : "bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25",
-            (!lead.phone || actionStep !== null) && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          {blocksCall ? <Ban className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
-          CALL
-        </button>
-        <button
-          onClick={handleText}
-          disabled={!lead.phone || actionStep !== null}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/25 text-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-all",
-            (!lead.phone || actionStep !== null) && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          <MessageSquare className="w-4 h-4" /> TEXT
-        </button>
-        <button
-          onClick={handleVmDrop}
-          disabled={actionStep !== null || actionLoading || blocksCall}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
-            blocksCall
-              ? "bg-red-500/10 border border-red-500/20 text-red-400 cursor-not-allowed"
-              : "bg-orange-500/15 border border-orange-500/25 text-orange-400 hover:bg-orange-500/25",
-            (actionStep !== null || actionLoading || blocksCall) && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          {blocksCall ? <Ban className="w-4 h-4" /> : <Mic className="w-4 h-4" />} VM DROP
-        </button>
-      </div>
+      {!isArchived && (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCall}
+            disabled={!lead.phone || actionStep !== null}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+              blocksCall
+                ? "bg-red-500/10 border border-red-500/20 text-red-400 cursor-not-allowed"
+                : "bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25",
+              (!lead.phone || actionStep !== null) && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {blocksCall ? <Ban className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+            CALL
+          </button>
+          <button
+            onClick={handleText}
+            disabled={!lead.phone || actionStep !== null}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-500/15 border border-blue-500/25 text-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-all",
+              (!lead.phone || actionStep !== null) && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <MessageSquare className="w-4 h-4" /> TEXT
+          </button>
+          <button
+            onClick={handleVmDrop}
+            disabled={actionStep !== null || actionLoading || blocksCall}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+              blocksCall
+                ? "bg-red-500/10 border border-red-500/20 text-red-400 cursor-not-allowed"
+                : "bg-orange-500/15 border border-orange-500/25 text-orange-400 hover:bg-orange-500/25",
+              (actionStep !== null || actionLoading || blocksCall) && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {blocksCall ? <Ban className="w-4 h-4" /> : <Mic className="w-4 h-4" />} VM DROP
+          </button>
+        </div>
+      )}
 
-      {blocksCall && (
+      {!isArchived && blocksCall && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20">
           <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-red-400">This lead has a "Text Only" or "Do Not Call" flag. Calling is blocked.</p>
@@ -1952,9 +1956,10 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
   const { user } = useAuth();
   const isArchiveClientUser = user?.role === "client_user";
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const { data, loading } = useArchive(tenantId, filters);
+  const { data, loading, refetch } = useArchive(tenantId, filters);
   const [showFilters, setShowFilters] = useState(false);
   const [csrs, setCsrs] = useState<CsrOption[]>([]);
+  const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/leads-hub/csrs?tenantId=${tenantId}`, { credentials: "include" })
@@ -1970,6 +1975,32 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
       return next;
     });
   };
+
+  useEffect(() => {
+    if (!selectedLead) return;
+    const updated = data.leads.find(l => l.id === selectedLead.id);
+    if (updated && (updated.source !== selectedLead.source || updated.hubStatus !== selectedLead.hubStatus || updated.assignedTo !== selectedLead.assignedTo)) {
+      setSelectedLead(updated);
+    }
+  }, [data.leads]);
+
+  const isAdmin = !!user && ["super_admin", "agency_user", "client_admin"].includes(user.role || "");
+
+  if (selectedLead) {
+    return (
+      <LeadDetailView
+        lead={selectedLead}
+        tenantId={tenantId}
+        onBack={() => setSelectedLead(null)}
+        onUpdate={() => { refetch(); }}
+        timezone={timezone}
+        canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
+        currentUserId={user?.id}
+        isAdminRole={isAdmin}
+        isArchived
+      />
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -2043,12 +2074,12 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
       ) : (
         <div className="space-y-2">
           {data.leads.map(lead => (
-            <div key={lead.id} className="rounded-lg border border-white/5 p-3 bg-card/40">
+            <div key={lead.id} onClick={() => setSelectedLead(lead)} className="rounded-lg border border-white/5 p-3 bg-card/40 cursor-pointer hover:bg-card/60 hover:border-white/10 transition-colors">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
-                  <SourceTag source={lead.source} />
+                  <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => refetch()} />
                 </div>
                 <div className="flex items-center gap-2">
                   {lead.assignedTo && <span className="text-[10px] text-white/25">{lead.assignedTo}</span>}
