@@ -291,7 +291,7 @@ export async function getConversationAssignees(userId: number, conversationUid: 
 export async function assignConversation(userId: number, conversationUid: string, assigneeUids: string[]): Promise<boolean> {
   try {
     const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ assigneeUids }),
     });

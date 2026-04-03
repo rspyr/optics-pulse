@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
@@ -9,6 +9,164 @@ const API = import.meta.env.VITE_API_URL || "";
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
 interface TenantOption { id: number; name: string; }
+
+interface PodiumUserEntry {
+  uid: string;
+  name?: string;
+  email?: string;
+  internalUserId: number | null;
+  internalUserName: string | null;
+}
+
+interface TeamMemberEntry {
+  id: number;
+  name: string | null;
+  email: string | null;
+  podiumUserUid: string | null;
+}
+
+function PodiumUserLinking({ tenantId }: { tenantId: number }) {
+  const [podiumUsers, setPodiumUsers] = useState<PodiumUserEntry[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMemberEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [linkingId, setLinkingId] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    fetch(`${API}/api/podium/users?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        setPodiumUsers(d.podiumUsers || []);
+        setTeamMembers(d.teamMembers || []);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  useEffect(() => { if (expanded) fetchData(); }, [expanded, fetchData]);
+
+  const handleLink = async (internalUserId: number, podiumUserUid: string | null) => {
+    setLinkingId(internalUserId);
+    try {
+      const res = await fetch(`${API}/api/podium/users/link?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ internalUserId, podiumUserUid }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFeedback({ type: "success", msg: podiumUserUid ? "Linked successfully" : "Unlinked" });
+        fetchData();
+      } else {
+        setFeedback({ type: "error", msg: data.error || "Failed to link" });
+      }
+    } catch {
+      setFeedback({ type: "error", msg: "Connection error" });
+    } finally {
+      setLinkingId(null);
+      setTimeout(() => setFeedback(null), 3000);
+    }
+  };
+
+  const linkedUids = new Set(teamMembers.filter(m => m.podiumUserUid).map(m => m.podiumUserUid));
+
+  return (
+    <PremiumCard>
+      <button
+        onClick={() => setExpanded(o => !o)}
+        className="w-full flex items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <Users className="w-5 h-5 text-cyan-400" />
+          <h3 className="text-xl font-display text-white">Podium User Mapping</h3>
+        </div>
+        <ChevronDown className={cn("w-5 h-5 text-gray-400 transition-transform duration-200", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Link your team members to their Podium accounts to enable conversation assignment.
+          </p>
+
+          {feedback && (
+            <div className={cn(
+              "px-3 py-2 rounded-lg text-sm flex items-center gap-2",
+              feedback.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+            )}>
+              {feedback.type === "success" ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+              {feedback.msg}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="py-6 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
+          ) : (
+            <div className="space-y-2">
+              {teamMembers.length === 0 && (
+                <p className="text-sm text-white/30 text-center py-4">No team members found for this tenant.</p>
+              )}
+              {teamMembers.map(member => {
+                const linkedPodiumUser = podiumUsers.find(pu => pu.uid === member.podiumUserUid);
+                const isLinking = linkingId === member.id;
+                return (
+                  <div key={member.id} className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg px-4 py-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white truncate">{member.name || member.email || `User #${member.id}`}</p>
+                      {member.email && member.name && (
+                        <p className="text-xs text-white/30 truncate">{member.email}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {member.podiumUserUid ? (
+                        <>
+                          <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 rounded text-emerald-400">
+                            <Link2 className="w-3 h-3" />
+                            <span className="text-xs">{linkedPodiumUser?.name || linkedPodiumUser?.email || member.podiumUserUid}</span>
+                          </div>
+                          <button
+                            onClick={() => handleLink(member.id, null)}
+                            disabled={isLinking}
+                            className="p-1.5 rounded hover:bg-red-500/10 text-white/30 hover:text-red-400 transition-colors disabled:opacity-50"
+                            title="Unlink"
+                          >
+                            {isLinking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unlink className="w-3.5 h-3.5" />}
+                          </button>
+                        </>
+                      ) : (
+                        <select
+                          onChange={e => { if (e.target.value) handleLink(member.id, e.target.value); }}
+                          disabled={isLinking}
+                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-1.5 text-white focus:outline-none focus:border-cyan-500/30 disabled:opacity-50 max-w-[180px]"
+                          defaultValue=""
+                        >
+                          <option value="" className="bg-gray-900">Link to Podium user...</option>
+                          {podiumUsers.filter(pu => !linkedUids.has(pu.uid)).map(pu => (
+                            <option key={pu.uid} value={pu.uid} className="bg-gray-900">
+                              {pu.name || pu.email || pu.uid}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {podiumUsers.length === 0 && teamMembers.length > 0 && (
+                <p className="text-xs text-amber-400/60 mt-2">
+                  No Podium users found. Your Podium OAuth connection may need the "read_users" scope — try reconnecting above.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </PremiumCard>
+  );
+}
 
 export default function Settings() {
   const { user, isAgency, selectedTenantId, setSelectedTenantId, effectiveTenantId } = useAuth();
@@ -424,6 +582,10 @@ export default function Settings() {
           </button>
         )}
       </PremiumCard>
+
+      {!isClientUser && tenantId && podiumStatus?.connected && (
+        <PodiumUserLinking tenantId={tenantId} />
+      )}
 
       {!isClientUser && tenantId && <PremiumCard>
         <button
