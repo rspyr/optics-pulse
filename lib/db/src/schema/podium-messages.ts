@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { leadsTable } from "./leads";
 
@@ -13,6 +13,7 @@ export const podiumMessagesTable = pgTable("podium_messages", {
   channelType: text("channel_type").notNull().default("sms"),
   senderName: text("sender_name"),
   deliveryStatus: text("delivery_status"),
+  messageItems: jsonb("message_items"),
   podiumCreatedAt: timestamp("podium_created_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [

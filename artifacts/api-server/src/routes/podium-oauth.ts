@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
@@ -172,7 +172,25 @@ router.get("/oauth/podium/callback", async (req, res) => {
       console.warn("[Podium OAuth] Failed to fetch locations:", err);
     }
 
-    if (locationUid) {
+    if (locationUid && user.tenantId) {
+      try {
+        const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
+        if (tenant) {
+          const tenantApiConfig = (tenant.apiConfig && typeof tenant.apiConfig === "object"
+            ? tenant.apiConfig
+            : {}) as Record<string, unknown>;
+          if (!tenantApiConfig.podiumLocationId) {
+            tenantApiConfig.podiumLocationId = locationUid;
+            await db.update(tenantsTable)
+              .set({ apiConfig: tenantApiConfig, updatedAt: new Date() })
+              .where(eq(tenantsTable.id, user.tenantId));
+            console.log(`[Podium OAuth] Propagated location UID to tenant ${user.tenantId}`);
+          }
+        }
+      } catch (err) {
+        console.warn("[Podium OAuth] Failed to propagate location to tenant:", err);
+      }
+
       try {
         const webhookSecret = crypto.randomBytes(32).toString("hex");
 
@@ -196,8 +214,12 @@ router.get("/oauth/podium/callback", async (req, res) => {
           }),
         });
         if (whResponse.ok) {
+          const whData = await whResponse.json() as { data?: { uid?: string } };
           config.podiumWebhookSecret = webhookSecret;
-          console.log(`[Podium OAuth] Webhook registered at ${webhookUrl}`);
+          if (whData.data?.uid) {
+            config.podiumWebhookUid = whData.data.uid;
+          }
+          console.log(`[Podium OAuth] Webhook registered at ${webhookUrl} (uid: ${whData.data?.uid || "unknown"})`);
         } else {
           const whErr = await whResponse.text();
           console.warn(`[Podium OAuth] Webhook registration failed: ${whErr}`);
@@ -261,6 +283,32 @@ router.post("/oauth/podium/disconnect", requireAuth, async (req, res) => {
   if (!user) {
     res.status(404).json({ error: "User not found" });
     return;
+  }
+
+  if (user.podiumConfig && typeof user.podiumConfig === "string") {
+    try {
+      const config = decryptConfig(user.podiumConfig);
+      const webhookUid = config.podiumWebhookUid as string | undefined;
+      const accessToken = config.podiumAccessToken as string | undefined;
+      if (webhookUid && accessToken) {
+        try {
+          const delRes = await fetch(`https://api.podium.com/v4/webhooks/${webhookUid}`, {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          });
+          if (delRes.ok) {
+            console.log(`[Podium OAuth] Deleted webhook ${webhookUid} for user ${userId}`);
+          } else {
+            console.warn(`[Podium OAuth] Failed to delete webhook ${webhookUid}: ${delRes.status}`);
+          }
+        } catch (err) {
+          console.warn(`[Podium OAuth] Error deleting webhook:`, err);
+        }
+      }
+    } catch {}
   }
 
   await db.update(usersTable)

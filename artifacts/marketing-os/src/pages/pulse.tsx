@@ -15,7 +15,7 @@ import {
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
-  Pencil, Timer, Send, ArrowDown
+  Pencil, Timer, Send, ArrowDown, ExternalLink
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -755,6 +755,9 @@ interface TimelineEntry {
   channelType?: string;
   senderName?: string;
   deliveryStatus?: string;
+  podiumDeepLink?: string;
+  podiumConversationUid?: string;
+  messageItems?: unknown[];
   [key: string]: unknown;
 }
 
@@ -979,6 +982,18 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           {entry.deliveryStatus === "failed" && (
             <span className="text-[8px] text-red-400">Failed</span>
           )}
+          {entry.podiumDeepLink && (
+            <a
+              href={entry.podiumDeepLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="inline-flex items-center gap-0.5 text-[8px] text-blue-400/50 hover:text-blue-400 transition-colors"
+            >
+              <ExternalLink className="w-2.5 h-2.5" />
+              Podium
+            </a>
+          )}
         </div>
       </div>
     </div>
@@ -1007,6 +1022,18 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             <span className="text-[8px] px-1 rounded bg-cyan-500/10 text-cyan-400/60">Podium Call</span>
             {entry.deliveryStatus === "failed" && (
               <span className="text-[8px] text-red-400">Failed</span>
+            )}
+            {entry.podiumDeepLink && (
+              <a
+                href={entry.podiumDeepLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                className="inline-flex items-center gap-0.5 text-[8px] text-cyan-400/50 hover:text-cyan-400 transition-colors"
+              >
+                <ExternalLink className="w-2.5 h-2.5" />
+                Podium
+              </a>
             )}
           </div>
         </button>

@@ -1,17 +1,17 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { searchContactByPhone, getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
+import { getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
 
 const router: IRouter = Router();
 
-function resolveTenantId(req: { query?: Record<string, string>; body?: Record<string, unknown>; session?: Record<string, unknown> }): number | null {
+function resolveTenantId(req: { query?: Record<string, unknown>; body?: unknown; session?: unknown }): number | null {
   const session = req.session as Record<string, unknown> | undefined;
   const role = session?.userRole as string | undefined;
   if (role === "super_admin" || role === "agency_user") {
-    const queryTid = req.query?.tenantId;
+    const queryTid = (req.query as Record<string, string> | undefined)?.tenantId;
     const bodyTid = (req.body as Record<string, unknown>)?.tenantId;
     return queryTid ? Number(queryTid) : bodyTid ? Number(bodyTid) : (session?.tenantId as number) ?? null;
   }
@@ -30,10 +30,8 @@ async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Pr
 
   if (!isCrossTenant) {
     const connected = await isPodiumConnected(loggedInUserId);
-    return connected ? loggedInUserId : null;
+    if (connected) return loggedInUserId;
   }
-
-  if (!isAgencyOrSuperAdmin) return null;
 
   const tenantUsers = await db.select({ id: usersTable.id })
     .from(usersTable)
@@ -43,8 +41,10 @@ async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Pr
     if (await isPodiumConnected(u.id)) return u.id;
   }
 
-  const agencyConnected = await isPodiumConnected(loggedInUserId);
-  if (agencyConnected) return loggedInUserId;
+  if (isCrossTenant && isAgencyOrSuperAdmin) {
+    const agencyConnected = await isPodiumConnected(loggedInUserId);
+    if (agencyConnected) return loggedInUserId;
+  }
 
   return null;
 }
@@ -56,27 +56,25 @@ async function syncPodiumMessagesForLead(podiumUserId: number, tenantId: number,
   }
 
   try {
-    const contact = await searchContactByPhone(podiumUserId, phone);
-    if (contact) {
-      const conversations = await getContactConversations(podiumUserId, contact.uid);
-      for (const conv of conversations.slice(0, 5)) {
-        const msgs = await getConversationMessages(podiumUserId, conv.uid);
-        for (const msg of msgs) {
-          try {
-            await db.insert(podiumMessagesTable).values({
-              tenantId,
-              leadId,
-              podiumConversationUid: conv.uid,
-              podiumMessageUid: msg.uid,
-              direction: msg.direction === "inbound" ? "inbound" : "outbound",
-              body: msg.body,
-              channelType: msg.channelType || conv.channelType,
-              senderName: msg.senderName || null,
-              deliveryStatus: msg.deliveryStatus || "delivered",
-              podiumCreatedAt: msg.createdAt ? new Date(msg.createdAt) : new Date(),
-            }).onConflictDoNothing();
-          } catch {}
-        }
+    const conversations = await getContactConversations(podiumUserId, phone);
+    for (const conv of conversations.slice(0, 5)) {
+      const msgs = await getConversationMessages(podiumUserId, conv.uid);
+      for (const msg of msgs) {
+        try {
+          await db.insert(podiumMessagesTable).values({
+            tenantId,
+            leadId,
+            podiumConversationUid: conv.uid,
+            podiumMessageUid: msg.uid,
+            direction: msg.direction === "inbound" ? "inbound" : "outbound",
+            body: msg.body,
+            channelType: msg.channelType || conv.channelType,
+            senderName: msg.senderName || null,
+            deliveryStatus: msg.deliveryStatus || "delivered",
+            messageItems: msg.items || null,
+            podiumCreatedAt: msg.createdAt ? new Date(msg.createdAt) : new Date(),
+          }).onConflictDoNothing();
+        } catch {}
       }
     }
   } catch (err) {
@@ -87,6 +85,8 @@ async function syncPodiumMessagesForLead(podiumUserId: number, tenantId: number,
     .where(and(eq(podiumMessagesTable.tenantId, tenantId), eq(podiumMessagesTable.leadId, leadId)))
     .orderBy(desc(podiumMessagesTable.podiumCreatedAt));
 }
+
+const PODIUM_INBOX_BASE = "https://app.podium.com/inbox/redirect-messages";
 
 router.get("/podium/conversations/:leadId", async (req, res) => {
   const userId = req.session?.userId;
@@ -107,7 +107,8 @@ router.get("/podium/conversations/:leadId", async (req, res) => {
   try {
     const messages = await syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone);
     const conversationUid = messages.length > 0 ? messages[0].podiumConversationUid : null;
-    res.json({ messages, conversationUid });
+    const podiumDeepLink = conversationUid ? `${PODIUM_INBOX_BASE}/${conversationUid}` : null;
+    res.json({ messages, conversationUid, podiumDeepLink });
   } catch (err) {
     console.error("[Podium Routes] Error fetching conversations:", err);
     res.status(500).json({ error: "Failed to fetch Podium conversations" });
@@ -225,18 +226,20 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   const timeline: TimelineEntry[] = [];
 
   for (const ca of callAttempts) {
+    const { id: caId, attemptedAt, ...caRest } = ca;
     timeline.push({
       type: "pulse_action",
       source: "pulse",
-      timestamp: ca.attemptedAt.toISOString(),
-      id: ca.id,
-      ...ca,
+      timestamp: attemptedAt.toISOString(),
+      id: caId,
+      ...caRest,
       csrName: userMap[ca.userId] || "Unknown",
     });
   }
 
   for (const pm of podiumMessages) {
-    const isPodiumCall = pm.channelType === "call" || pm.channelType === "phone_call";
+    const isPodiumCall = pm.channelType === "phone" || pm.channelType === "car_wars" || pm.channelType === "call" || pm.channelType === "phone_call";
+    const podiumDeepLink = pm.podiumConversationUid ? `${PODIUM_INBOX_BASE}/${pm.podiumConversationUid}` : null;
     timeline.push({
       type: isPodiumCall ? "podium_call" : "podium_text",
       source: "podium",
@@ -249,6 +252,8 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
       deliveryStatus: pm.deliveryStatus,
       podiumMessageUid: pm.podiumMessageUid,
       podiumConversationUid: pm.podiumConversationUid,
+      podiumDeepLink,
+      messageItems: pm.messageItems,
     });
   }
 
@@ -305,7 +310,7 @@ router.post("/podium/users/link", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
-  const role = (req.session as Record<string, unknown>)?.userRole as string;
+  const role = (req.session as unknown as Record<string, unknown>)?.userRole as string;
   if (!["super_admin", "agency_user", "client_admin"].includes(role)) {
     res.status(403).json({ error: "Only managers can link Podium users" });
     return;

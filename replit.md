@@ -38,6 +38,7 @@ The frontend employs React, Vite, TailwindCSS v4, Wouter, and TanStack React Que
 - **Client Alerts:** Per-tenant configurable alert thresholds with custom email recipients.
 - **Chat Analytics (Ask Your Data):** AI-powered natural language data querying using Gemini AI, generating structured JSON query plans and streaming OpenUI Lang markup with visualizations.
 - **Client Portal:** A dashboard providing clients with KPIs, financial transparency, and chat analytics.
+- **Podium Integration:** OAuth2-connected Podium V4 API integration for two-way SMS/call conversation sync. Per-user OAuth credentials stored encrypted in `podiumConfig` on users table. Webhook-driven real-time message ingestion with HMAC signature verification. Conversation history (texts + calls) displayed in lead detail Interaction Timeline with "View in Podium" deep links. Supports contact auto-creation/linking, conversation assignment sync, and multi-user tenant resolution (any connected user's token can serve API requests). Key files: `podium-api.ts`, `podium-auth.ts`, `podium-oauth.ts`, `podium-routes.ts`, webhooks handler, `podium_messages` DB table.
 
 **System Design Choices:**
 - **Modularity:** Monorepo structure with pnpm workspaces for code reuse and separation.
@@ -51,6 +52,7 @@ The frontend employs React, Vite, TailwindCSS v4, Wouter, and TanStack React Que
 - **Google Sheets API:** Integrated via Replit Connectors for lead ingestion.
 - **Google Ads API:** Used for campaign performance queries, Offline Conversion Import (OCI), and Enhanced Conversions uploads.
 - **Meta Marketing API:** Used for fetching campaign insights and server-side event uploads via Conversions API (CAPI).
+- **Podium V4 API:** OAuth2 integration for two-way SMS/call messaging, contact management, and conversation sync. Endpoints: `/v4/contacts`, `/v4/messages`, `/v4/conversations`, `/v4/locations`, `/v4/users`, `/v4/webhooks`.
 - **PostgreSQL:** Primary database for the application.
 - **Express:** Web framework for the API server.
 - **React:** Frontend library for user interfaces.

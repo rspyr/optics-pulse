@@ -70,9 +70,12 @@ router.post("/webhooks/ingest", async (req, res) => {
     if (source === "callrail") eventType = "call";
     else if (source === "manual") eventType = "click";
 
-    const externalId = source === "callrail" && data.externalId
-      ? `callrail:${data.externalId}`
-      : data.externalId || null;
+    const rawExternalId = (req.body as Record<string, unknown>).data
+      ? ((req.body as Record<string, unknown>).data as Record<string, unknown>).externalId as string | undefined
+      : undefined;
+    const externalId = source === "callrail" && rawExternalId
+      ? `callrail:${rawExternalId}`
+      : rawExternalId || null;
 
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
@@ -171,7 +174,9 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
     const podiumSignature = req.headers["x-podium-signature"] as string | undefined;
     const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody;
     const body = req.body as Record<string, unknown>;
-    const eventType = body.eventType as string || body.event_type as string || "";
+
+    const metadata = body.metadata as Record<string, unknown> | undefined;
+    const eventType = String(metadata?.eventType || body.eventType || body.event_type || "");
     const data = (body.data || body) as Record<string, unknown>;
 
     const validEvents = ["message.sent", "message.received", "message.failed"];
@@ -180,20 +185,22 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
       return;
     }
 
-    const messageUid = String(data.uid || data.messageUid || "");
-    const conversationUid = String(data.conversationUid || data.conversation_uid || "");
-    const messageBody = String(data.body || data.text || "");
-    const direction = eventType === "message.received" ? "inbound" : "outbound";
-    const channelType = String(data.channelType || data.channel_type || "sms");
-    const senderName = String(data.senderName || data.sender_name || "");
-    const deliveryStatus = eventType === "message.failed" ? "failed" : (String(data.deliveryStatus || data.delivery_status || "delivered"));
-    const podiumCreatedAt = data.createdAt ? new Date(String(data.createdAt)) : new Date();
-
     const conversation = data.conversation as Record<string, unknown> | undefined;
     const channel = conversation?.channel as Record<string, unknown> | undefined;
-    const phoneIdentifier = String(channel?.identifier || data.phoneNumber || data.phone_number || "");
+    const location = data.location as Record<string, unknown> | undefined;
+    const contact = data.contact as Record<string, unknown> | undefined;
 
-    const locationUid = String(data.locationUid || data.location_uid || conversation?.locationUid || "");
+    const messageUid = String(data.uid || data.messageUid || "");
+    const conversationUid = String(conversation?.uid || data.conversationUid || data.conversation_uid || "");
+    const messageBody = String(data.body || data.text || "");
+    const direction = eventType === "message.received" ? "inbound" : "outbound";
+    const channelType = String(channel?.type || data.channelType || data.channel_type || "sms");
+    const senderName = String(contact?.name || data.senderName || data.sender_name || "");
+    const deliveryStatus = eventType === "message.failed" ? "failed" : (String(data.deliveryStatus || data.delivery_status || "delivered"));
+    const podiumCreatedAt = data.createdAt ? new Date(String(data.createdAt)) : new Date();
+    const phoneIdentifier = String(channel?.identifier || data.phoneNumber || data.phone_number || "");
+    const locationUid = String(location?.uid || data.locationUid || data.location_uid || "");
+    const messageItems = data.items as unknown[] | undefined;
 
     if (!messageUid || !conversationUid) {
       res.json({ success: false, message: "Missing message or conversation UID" });
@@ -287,6 +294,7 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
       channelType,
       senderName,
       deliveryStatus,
+      messageItems: messageItems || null,
       podiumCreatedAt,
     }).returning();
 

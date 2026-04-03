@@ -1,6 +1,7 @@
 import { getValidPodiumToken, getPodiumConfig, isPodiumConnected } from "./podium-auth";
-import { db, leadsTable, usersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, leadsTable, usersTable, tenantsTable, podiumMessagesTable } from "@workspace/db";
+import { eq, and, desc as descOrder, sql } from "drizzle-orm";
+import { decryptConfig, encryptConfig } from "../../lib/encryption";
 
 const PODIUM_API = "https://api.podium.com/v4";
 
@@ -39,19 +40,67 @@ async function podiumFetch(userId: number, path: string, options: RequestInit = 
 async function getLocationUid(userId: number): Promise<string> {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) throw new Error("User not found");
+
   const config = getPodiumConfig(user);
-  const uid = config.podiumLocationUid as string;
-  if (!uid) throw new Error("Podium location not configured for this user");
-  return uid;
+  const userLocationUid = config.podiumLocationUid as string | undefined;
+  if (userLocationUid) return userLocationUid;
+
+  if (user.tenantId) {
+    const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
+    if (tenant?.apiConfig && typeof tenant.apiConfig === "object") {
+      const tenantConfig = tenant.apiConfig as Record<string, unknown>;
+      const tenantLocationId = tenantConfig.podiumLocationId as string | undefined;
+      if (tenantLocationId) {
+        config.podiumLocationUid = tenantLocationId;
+        await db.update(usersTable)
+          .set({ podiumConfig: encryptConfig(config) as unknown as string, updatedAt: new Date() })
+          .where(eq(usersTable.id, userId));
+        return tenantLocationId;
+      }
+    }
+  }
+
+  try {
+    const token = await getValidPodiumToken(userId);
+    const locResponse = await fetch(`${PODIUM_API}/locations?limit=1`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    });
+    if (locResponse.ok) {
+      const locData = await locResponse.json() as { data?: Array<{ uid: string; name?: string }> };
+      if (locData.data && locData.data.length > 0) {
+        const fetchedUid = locData.data[0].uid;
+        config.podiumLocationUid = fetchedUid;
+        config.podiumLocationName = locData.data[0].name || "Unknown Location";
+        await db.update(usersTable)
+          .set({ podiumConfig: encryptConfig(config) as unknown as string, updatedAt: new Date() })
+          .where(eq(usersTable.id, userId));
+        console.log(`[Podium API] Resolved location UID via live fetch: ${fetchedUid}`);
+        return fetchedUid;
+      }
+    }
+  } catch (err) {
+    console.warn("[Podium API] Live location fetch failed:", err);
+  }
+
+  throw new Error("Podium location not configured for this user");
+}
+
+export interface PodiumContactChannel {
+  label?: string;
+  type: string;
+  identifier: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PodiumContact {
   uid: string;
   name?: string;
-  firstName?: string;
-  lastName?: string;
-  phoneNumbers?: Array<{ number: string; type?: string }>;
-  emails?: Array<{ address: string; type?: string }>;
+  phoneNumbers?: string[];
+  emails?: string[];
+  channels?: PodiumContactChannel[];
+  conversations?: Array<{ uid: string }>;
+  locations?: Array<{ uid: string }>;
 }
 
 export interface PodiumConversationMessage {
@@ -63,20 +112,21 @@ export interface PodiumConversationMessage {
   deliveryStatus?: string;
   createdAt: string;
   conversationUid: string;
+  items?: unknown[];
 }
 
 export async function searchContactByPhone(userId: number, phone: string): Promise<PodiumContact | null> {
   const cleanPhone = toE164(phone);
   try {
-    const locationUid = await getLocationUid(userId);
-    const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}&locationUid=${encodeURIComponent(locationUid)}`);
+    const res = await podiumFetch(userId, `/contacts/${encodeURIComponent(cleanPhone)}`);
     if (!res.ok) {
+      if (res.status === 404) return null;
       const errText = await res.text();
       console.error(`[Podium API] searchContactByPhone failed (${res.status}): ${errText}`);
       return null;
     }
-    const data = await res.json() as { data?: PodiumContact[] };
-    return data.data && data.data.length > 0 ? data.data[0] : null;
+    const data = await res.json() as { data?: PodiumContact };
+    return data.data || null;
   } catch (err) {
     if (err instanceof PodiumNotConnectedError) return null;
     throw err;
@@ -91,16 +141,17 @@ export async function getConversationMessages(userId: number, conversationUid: s
       console.error(`[Podium API] getConversationMessages failed (${res.status}): ${errText}`);
       return [];
     }
-    const data = await res.json() as { data?: PodiumConversationMessage[] };
-    return (data.data || []).map(m => ({
-      uid: m.uid,
-      body: m.body || "",
-      direction: m.direction || "outbound",
-      channelType: m.channelType || "sms",
-      senderName: m.senderName,
-      deliveryStatus: m.deliveryStatus,
-      createdAt: m.createdAt,
+    const rawData = await res.json() as { data?: Array<Record<string, unknown>> };
+    return (rawData.data || []).map(m => ({
+      uid: String(m.uid || ""),
+      body: String(m.body || ""),
+      direction: String(m.sourceType || m.direction || "outbound"),
+      channelType: String(((m.conversation as Record<string, unknown>)?.channel as Record<string, unknown> | undefined)?.type || m.channelType || "sms"),
+      senderName: m.senderName as string | undefined,
+      deliveryStatus: m.deliveryStatus as string | undefined,
+      createdAt: String(m.createdAt || ""),
       conversationUid,
+      items: m.items as unknown[] | undefined,
     }));
   } catch (err) {
     if (err instanceof PodiumNotConnectedError) return [];
@@ -108,16 +159,29 @@ export async function getConversationMessages(userId: number, conversationUid: s
   }
 }
 
-export async function getContactConversations(userId: number, contactUid: string): Promise<Array<{ uid: string; channelType: string }>> {
+export async function getContactConversations(userId: number, phone: string): Promise<Array<{ uid: string; channelType: string }>> {
   try {
-    const res = await podiumFetch(userId, `/contacts/${contactUid}/conversations`);
+    const contact = await searchContactByPhone(userId, phone);
+    if (contact?.conversations && contact.conversations.length > 0) {
+      return contact.conversations.map(c => ({ uid: c.uid, channelType: "sms" }));
+    }
+
+    const locationUid = await getLocationUid(userId);
+    const res = await podiumFetch(userId, `/conversations?locationUid=${encodeURIComponent(locationUid)}&limit=100`);
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[Podium API] getContactConversations failed (${res.status}): ${errText}`);
       return [];
     }
-    const data = await res.json() as { data?: Array<{ uid: string; channelType?: string }> };
-    return (data.data || []).map(c => ({ uid: c.uid, channelType: c.channelType || "sms" }));
+    const data = await res.json() as { data?: Array<{ uid: string; channel?: { type?: string; identifier?: string } }> };
+    const cleanPhone = toE164(phone);
+    const phoneSuffix = cleanPhone.replace(/^\+1?/, "");
+    return (data.data || [])
+      .filter(c => {
+        const id = c.channel?.identifier || "";
+        return id.includes(phoneSuffix) || id === cleanPhone;
+      })
+      .map(c => ({ uid: c.uid, channelType: c.channel?.type || "sms" }));
   } catch (err) {
     if (err instanceof PodiumNotConnectedError) return [];
     throw err;
@@ -130,15 +194,18 @@ export async function sendMessage(userId: number, phone: string, body: string, c
     const cleanPhone = toE164(phone);
 
     const payload: Record<string, unknown> = {
-      locationUid,
-      channelIdentifier: cleanPhone,
       body,
+      channel: {
+        type: "sms",
+        identifier: cleanPhone,
+      },
+      locationUid,
     };
     if (contactName) {
-      payload.customerName = contactName;
+      payload.contactName = contactName;
     }
 
-    const res = await podiumFetch(userId, "/conversations", {
+    const res = await podiumFetch(userId, "/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -150,11 +217,11 @@ export async function sendMessage(userId: number, phone: string, body: string, c
       return { success: false };
     }
 
-    const data = await res.json() as { data?: { uid?: string; messages?: Array<{ uid: string }> } };
+    const data = await res.json() as { data?: { uid?: string; conversationUid?: string; conversation?: { uid?: string } } };
     return {
       success: true,
-      conversationUid: data.data?.uid,
-      messageUid: data.data?.messages?.[0]?.uid,
+      messageUid: data.data?.uid,
+      conversationUid: data.data?.conversationUid || data.data?.conversation?.uid,
     };
   } catch (err) {
     if (err instanceof PodiumNotConnectedError) return { success: false };
@@ -167,18 +234,13 @@ export async function createContact(userId: number, name: string, phone: string,
     const locationUid = await getLocationUid(userId);
     const cleanPhone = toE164(phone);
 
-    const nameParts = name.split(" ");
-    const firstName = nameParts[0] || "";
-    const lastName = nameParts.slice(1).join(" ") || "";
-
     const payload: Record<string, unknown> = {
-      locationUid,
-      firstName,
-      lastName,
-      phoneNumbers: [{ number: cleanPhone, numberType: "mobile" }],
+      name,
+      phoneNumber: cleanPhone,
+      locations: [{ uid: locationUid }],
     };
     if (email) {
-      payload.emailAddresses = [{ address: email, addressType: "personal" }];
+      payload.email = email;
     }
 
     const res = await podiumFetch(userId, "/contacts", {
@@ -201,23 +263,16 @@ export async function createContact(userId: number, name: string, phone: string,
   }
 }
 
-export async function updateContact(userId: number, contactUid: string, name: string, phone: string, email?: string): Promise<PodiumContact | null> {
+export async function updateContact(userId: number, phone: string, name: string, email?: string): Promise<PodiumContact | null> {
   try {
-    const nameParts = name.split(" ");
-    const firstName = nameParts[0] || "";
-    const lastName = nameParts.slice(1).join(" ") || "";
     const cleanPhone = toE164(phone);
 
-    const payload: Record<string, unknown> = {
-      firstName,
-      lastName,
-      phoneNumbers: [{ number: cleanPhone, numberType: "mobile" }],
-    };
+    const payload: Record<string, unknown> = { name };
     if (email) {
-      payload.emailAddresses = [{ address: email, addressType: "personal" }];
+      payload.email = email;
     }
 
-    const res = await podiumFetch(userId, `/contacts/${contactUid}`, {
+    const res = await podiumFetch(userId, `/contacts/${encodeURIComponent(cleanPhone)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -246,7 +301,7 @@ export interface PodiumUser {
 
 export async function getPodiumUsers(userId: number): Promise<PodiumUser[]> {
   try {
-    const res = await podiumFetch(userId, "/users");
+    const res = await podiumFetch(userId, "/users?limit=100&includeAgents=false");
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[Podium API] getPodiumUsers failed (${res.status}): ${errText}`);
@@ -267,19 +322,21 @@ export async function getPodiumUsers(userId: number): Promise<PodiumUser[]> {
 
 export async function getConversationAssignees(userId: number, conversationUid: string): Promise<PodiumUser[]> {
   try {
-    const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`);
+    const res = await podiumFetch(userId, `/conversations/${conversationUid}`);
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[Podium API] getConversationAssignees failed (${res.status}): ${errText}`);
       return [];
     }
-    const data = await res.json() as { data?: Array<{ uid: string; email?: string; firstName?: string; lastName?: string; role?: string }> };
-    return (data.data || []).map(u => ({
-      uid: u.uid,
-      email: u.email,
-      name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email || u.uid,
-      role: u.role,
-    }));
+    const data = await res.json() as { data?: { assignedUserId?: string; assignedUser?: { uid?: string; name?: string } } };
+    const conv = data.data;
+    if (!conv) return [];
+    const assignedUid = conv.assignedUserId || conv.assignedUser?.uid;
+    if (!assignedUid) return [];
+    return [{
+      uid: assignedUid,
+      name: conv.assignedUser?.name || undefined,
+    }];
   } catch (err) {
     if (err instanceof PodiumNotConnectedError) return [];
     throw err;
@@ -289,7 +346,7 @@ export async function getConversationAssignees(userId: number, conversationUid: 
 export async function assignConversation(userId: number, conversationUid: string, assigneeUids: string[]): Promise<boolean> {
   try {
     const res = await podiumFetch(userId, `/conversations/${conversationUid}/assignees`, {
-      method: "PATCH",
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ assigneeUids }),
     });
@@ -318,13 +375,15 @@ export async function syncPodiumConversationAssignment(leadId: number, targetCsr
       return;
     }
 
-    const { podiumMessagesTable } = await import("@workspace/db");
-    const { desc: descOrder } = await import("drizzle-orm");
+    if (!targetUser.tenantId) {
+      console.log(`[Podium Sync] CSR ${targetCsrId} has no tenant — skipping assignment for lead ${leadId}`);
+      return;
+    }
 
     const [latestMsg] = await db.select({ podiumConversationUid: podiumMessagesTable.podiumConversationUid })
       .from(podiumMessagesTable)
       .where(and(
-        eq(podiumMessagesTable.leadId, leadId),
+        sql`${podiumMessagesTable.leadId} = ${leadId}`,
         eq(podiumMessagesTable.tenantId, targetUser.tenantId),
       ))
       .orderBy(descOrder(podiumMessagesTable.podiumCreatedAt), descOrder(podiumMessagesTable.createdAt))
@@ -385,10 +444,10 @@ export async function ensurePodiumContact(userId: number, tenantId: number, lead
       .set({ podiumContactUid: existing.uid, updatedAt: new Date() })
       .where(eq(leadsTable.id, leadId));
 
-    const existingName = `${existing.firstName || ""} ${existing.lastName || ""}`.trim();
-    if (existingName !== fullName || (lead.email && !existing.emails?.some(e => e.address === lead.email))) {
+    const existingName = (existing.name || "").trim();
+    if (existingName !== fullName || (lead.email && !existing.emails?.includes(lead.email))) {
       try {
-        await updateContact(userId, existing.uid, fullName, lead.phone, lead.email || undefined);
+        await updateContact(userId, lead.phone, fullName, lead.email || undefined);
       } catch (err) {
         console.warn(`[Podium] Failed to update contact for lead ${leadId}:`, err);
       }
