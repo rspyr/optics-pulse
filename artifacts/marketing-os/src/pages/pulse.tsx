@@ -626,7 +626,7 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ source: newSource }),
+        body: JSON.stringify({ source: newSource, tenantId }),
       });
       if (res.ok) {
         const data = await res.json();
