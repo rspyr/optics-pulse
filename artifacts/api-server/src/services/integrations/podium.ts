@@ -18,7 +18,8 @@ export async function fetchPodiumReviews(
   config: PodiumConfig,
   sinceDate?: string,
 ): Promise<PodiumReview[]> {
-  const url = new URL(`https://api.podium.com/v4/locations/${config.locationId}/reviews`);
+  const url = new URL("https://api.podium.com/v4/reviews");
+  url.searchParams.set("locationUid", config.locationId);
   if (sinceDate) {
     url.searchParams.set("startDate", sinceDate);
   }
@@ -28,6 +29,7 @@ export async function fetchPodiumReviews(
     headers: {
       Authorization: `Bearer ${config.apiToken}`,
       Accept: "application/json",
+      "podium-version": "2024-04-01",
     },
   });
 

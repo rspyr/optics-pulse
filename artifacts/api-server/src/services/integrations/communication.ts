@@ -116,11 +116,11 @@ export async function initiateText(
   if (config.textPlatform === "podium" && messageBody) {
     try {
       const { ensurePodiumContact, sendMessage } = await import("./podium-api");
-      await ensurePodiumContact(tenantId, leadId);
+      await ensurePodiumContact(userId, tenantId, leadId);
 
       const fullName = `${lead.firstName} ${lead.lastName}`.trim();
       const customerPhone = lead.phone.replace(/[^0-9+]/g, "");
-      const sendResult = await sendMessage(tenantId, customerPhone, messageBody, fullName);
+      const sendResult = await sendMessage(userId, customerPhone, messageBody, fullName);
 
       await db.insert(callAttemptsTable).values({
         leadId,

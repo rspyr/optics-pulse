@@ -175,14 +175,13 @@ router.get("/oauth/podium/callback", async (req, res) => {
 
     if (locationUid) {
       try {
-        const webhookVerifyToken = crypto.randomBytes(32).toString("hex");
-        config.podiumWebhookVerifyToken = webhookVerifyToken;
+        const webhookSecret = crypto.randomBytes(32).toString("hex");
+        config.podiumWebhookSecret = webhookSecret;
 
         const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-        const baseUrl = domain
+        const webhookUrl = domain
           ? `https://${domain}/api/webhooks/podium`
           : "http://localhost:8080/api/webhooks/podium";
-        const webhookUrl = `${baseUrl}?verify=${webhookVerifyToken}`;
 
         const whResponse = await fetch("https://api.podium.com/v4/webhooks", {
           method: "POST",
@@ -194,6 +193,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
           },
           body: JSON.stringify({
             url: webhookUrl,
+            secret: webhookSecret,
             locationUid,
             eventTypes: ["message.sent", "message.received", "message.failed"],
           }),

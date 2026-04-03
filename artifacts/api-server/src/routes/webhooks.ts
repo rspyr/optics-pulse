@@ -160,9 +160,16 @@ router.post("/webhooks/ghl", async (_req, res) => {
   res.json({ success: false, message: "GHL integration is currently paused" });
 });
 
+function verifyPodiumSignature(rawBody: Buffer | string, signature: string, secret: string): boolean {
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  if (signature.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
 router.post("/webhooks/podium", async (req, res): Promise<void> => {
   try {
-    const verifyToken = req.query.verify as string | undefined;
+    const podiumSignature = req.headers["x-podium-signature"] as string | undefined;
+    const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody;
     const body = req.body as Record<string, unknown>;
     const eventType = body.eventType as string || body.event_type as string || "";
     const data = (body.data || body) as Record<string, unknown>;
@@ -204,7 +211,18 @@ router.post("/webhooks/podium", async (req, res): Promise<void> => {
         try {
           const config = decryptConfig(user.podiumConfig);
           if (config.podiumLocationUid === locationUid) {
-            if (config.podiumWebhookVerifyToken) {
+            if (config.podiumWebhookSecret) {
+              if (!podiumSignature || !rawBody) {
+                console.warn(`[Podium Webhook] Missing signature or raw body for HMAC-configured user ${user.id}`);
+                continue;
+              }
+              const sig = podiumSignature.startsWith("sha256=") ? podiumSignature.slice(7) : podiumSignature;
+              if (!verifyPodiumSignature(rawBody, sig, config.podiumWebhookSecret as string)) {
+                console.warn(`[Podium Webhook] HMAC signature mismatch for user ${user.id}`);
+                continue;
+              }
+            } else if (config.podiumWebhookVerifyToken) {
+              const verifyToken = req.query.verify as string | undefined;
               if (!verifyToken || verifyToken !== config.podiumWebhookVerifyToken) {
                 console.warn(`[Podium Webhook] Verify token missing or mismatch for user ${user.id}`);
                 continue;

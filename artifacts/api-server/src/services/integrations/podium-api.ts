@@ -9,6 +9,20 @@ class PodiumNotConnectedError extends Error {
   constructor() { super("Podium is not connected for this user"); this.name = "PodiumNotConnectedError"; }
 }
 
+export function toE164(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, "");
+  if (phone.startsWith("+") && digits.length >= 11) {
+    return `+${digits}`;
+  }
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+  return `+${digits}`;
+}
+
 async function podiumFetch(userId: number, path: string, options: RequestInit = {}): Promise<Response> {
   const connected = await isPodiumConnected(userId);
   if (!connected) {
@@ -54,7 +68,7 @@ export interface PodiumConversationMessage {
 }
 
 export async function searchContactByPhone(userId: number, phone: string): Promise<PodiumContact | null> {
-  const cleanPhone = phone.replace(/[^0-9+]/g, "");
+  const cleanPhone = toE164(phone);
   try {
     const locationUid = await getLocationUid(userId);
     const res = await podiumFetch(userId, `/contacts?phoneNumber=${encodeURIComponent(cleanPhone)}&locationUid=${encodeURIComponent(locationUid)}`);
@@ -75,7 +89,8 @@ export async function getConversationMessages(userId: number, conversationUid: s
   try {
     const res = await podiumFetch(userId, `/conversations/${conversationUid}/messages`);
     if (!res.ok) {
-      console.error(`[Podium API] getConversationMessages failed: ${res.status}`);
+      const errText = await res.text();
+      console.error(`[Podium API] getConversationMessages failed (${res.status}): ${errText}`);
       return [];
     }
     const data = await res.json() as { data?: PodiumConversationMessage[] };
@@ -99,7 +114,8 @@ export async function getContactConversations(userId: number, contactUid: string
   try {
     const res = await podiumFetch(userId, `/contacts/${contactUid}/conversations`);
     if (!res.ok) {
-      console.error(`[Podium API] getContactConversations failed: ${res.status}`);
+      const errText = await res.text();
+      console.error(`[Podium API] getContactConversations failed (${res.status}): ${errText}`);
       return [];
     }
     const data = await res.json() as { data?: Array<{ uid: string; channelType?: string }> };
@@ -113,16 +129,15 @@ export async function getContactConversations(userId: number, contactUid: string
 export async function sendMessage(userId: number, phone: string, body: string, contactName?: string): Promise<{ success: boolean; messageUid?: string; conversationUid?: string }> {
   try {
     const locationUid = await getLocationUid(userId);
-    const cleanPhone = phone.replace(/[^0-9+]/g, "");
+    const cleanPhone = toE164(phone);
 
     const payload: Record<string, unknown> = {
       locationUid,
-      channelType: "phone",
-      message: body,
-      phoneNumber: cleanPhone,
+      channelIdentifier: cleanPhone,
+      body,
     };
     if (contactName) {
-      payload.contactName = contactName;
+      payload.customerName = contactName;
     }
 
     const res = await podiumFetch(userId, "/conversations", {
@@ -152,7 +167,7 @@ export async function sendMessage(userId: number, phone: string, body: string, c
 export async function createContact(userId: number, name: string, phone: string, email?: string): Promise<PodiumContact | null> {
   try {
     const locationUid = await getLocationUid(userId);
-    const cleanPhone = phone.replace(/[^0-9+]/g, "");
+    const cleanPhone = toE164(phone);
 
     const nameParts = name.split(" ");
     const firstName = nameParts[0] || "";
@@ -162,10 +177,10 @@ export async function createContact(userId: number, name: string, phone: string,
       locationUid,
       firstName,
       lastName,
-      phoneNumbers: [{ number: cleanPhone, type: "cell" }],
+      phoneNumbers: [{ number: cleanPhone, numberType: "mobile" }],
     };
     if (email) {
-      payload.emails = [{ address: email, type: "personal" }];
+      payload.emailAddresses = [{ address: email, addressType: "personal" }];
     }
 
     const res = await podiumFetch(userId, "/contacts", {
@@ -193,19 +208,19 @@ export async function updateContact(userId: number, contactUid: string, name: st
     const nameParts = name.split(" ");
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
-    const cleanPhone = phone.replace(/[^0-9+]/g, "");
+    const cleanPhone = toE164(phone);
 
     const payload: Record<string, unknown> = {
       firstName,
       lastName,
-      phoneNumbers: [{ number: cleanPhone, type: "cell" }],
+      phoneNumbers: [{ number: cleanPhone, numberType: "mobile" }],
     };
     if (email) {
-      payload.emails = [{ address: email, type: "personal" }];
+      payload.emailAddresses = [{ address: email, addressType: "personal" }];
     }
 
     const res = await podiumFetch(userId, `/contacts/${contactUid}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
