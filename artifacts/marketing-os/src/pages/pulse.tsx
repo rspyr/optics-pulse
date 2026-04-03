@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -610,6 +611,8 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
   const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     if (!editing) return;
@@ -619,6 +622,13 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
       .then(data => setCanonicalSources(data.sources || []))
       .catch(() => {});
   }, [editing, tenantId]);
+
+  useEffect(() => {
+    if (editing && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownPos({ top: rect.bottom + 4, left: rect.left });
+    }
+  }, [editing]);
 
   useEffect(() => {
     if (!editing) return;
@@ -652,6 +662,7 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
   if (!editing) {
     return (
       <button
+        ref={triggerRef}
         onClick={(e) => { e.stopPropagation(); setEditing(true); }}
         className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border cursor-pointer hover:ring-1 hover:ring-white/20 transition-all", getSourceColor(source))}
         title="Click to change source"
@@ -661,30 +672,39 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
     );
   }
 
+  const dropdown = dropdownPos ? createPortal(
+    <div
+      ref={dropdownRef}
+      className="fixed z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 min-w-[140px] max-h-[200px] overflow-y-auto"
+      style={{ top: dropdownPos.top, left: dropdownPos.left }}
+    >
+      {canonicalSources.length === 0 ? (
+        <div className="px-3 py-2 text-[10px] text-white/30">No sources configured</div>
+      ) : (
+        canonicalSources.map(s => (
+          <button
+            key={s}
+            onClick={(e) => { e.stopPropagation(); handleSelect(s); }}
+            className={cn(
+              "w-full text-left px-3 py-1.5 text-[11px] hover:bg-white/5 transition-colors",
+              s === source ? "text-primary font-medium" : "text-white/70"
+            )}
+          >
+            {s}
+          </button>
+        ))
+      )}
+    </div>,
+    document.body
+  ) : null;
+
   return (
-    <div ref={dropdownRef} className="relative inline-block">
-      <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border ring-1 ring-primary/50", getSourceColor(source))}>
+    <span className="inline-block">
+      <span ref={triggerRef} className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border ring-1 ring-primary/50", getSourceColor(source))}>
         {saving ? <Loader2 className="w-3 h-3 inline animate-spin" /> : source}
       </span>
-      <div className="absolute top-full left-0 mt-1 z-[9999] bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl py-1 min-w-[140px] max-h-[200px] overflow-y-auto">
-        {canonicalSources.length === 0 ? (
-          <div className="px-3 py-2 text-[10px] text-white/30">No sources configured</div>
-        ) : (
-          canonicalSources.map(s => (
-            <button
-              key={s}
-              onClick={(e) => { e.stopPropagation(); handleSelect(s); }}
-              className={cn(
-                "w-full text-left px-3 py-1.5 text-[11px] hover:bg-white/5 transition-colors",
-                s === source ? "text-primary font-medium" : "text-white/70"
-              )}
-            >
-              {s}
-            </button>
-          ))
-        )}
-      </div>
-    </div>
+      {dropdown}
+    </span>
   );
 }
 
