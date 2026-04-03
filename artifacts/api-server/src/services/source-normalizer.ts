@@ -34,10 +34,11 @@ async function getAliasMap(tenantId: number): Promise<Map<string, string>> {
 }
 
 export async function normalizeSource(tenantId: number, rawSource: string): Promise<string> {
-  if (!rawSource) return rawSource;
   const map = await getAliasMap(tenantId);
-  const key = rawSource.toLowerCase().trim();
-  return map.get(key) ?? rawSource;
+  const key = (rawSource || "").toLowerCase().trim();
+  const matched = map.get(key);
+  if (matched) return matched;
+  return key ? rawSource : "Unknown";
 }
 
 export function invalidateSourceCache(tenantId: number): void {
@@ -54,4 +55,5 @@ export const DEFAULT_SOURCE_ALIASES: { canonicalName: string; aliases: string[] 
   { canonicalName: "Direct Mail", aliases: ["direct_mail", "dm", "mailer", "postcard", "mail"] },
   { canonicalName: "Email", aliases: ["email", "email_campaign", "email_marketing"] },
   { canonicalName: "Referral", aliases: ["referral", "ref", "referred", "word_of_mouth"] },
+  { canonicalName: "Unknown", aliases: ["unknown", ""] },
 ];

@@ -277,4 +277,43 @@ router.post("/lead-source-aliases/backfill", async (req, res) => {
   res.json({ totalLeads: leads.length, updated });
 });
 
+router.post("/lead-source-aliases/ensure-unknown", async (req, res) => {
+  const role = (req.session as Record<string, unknown>)?.userRole as string | undefined;
+  if (role !== "super_admin") {
+    res.status(403).json({ error: "Access denied. Requires super_admin role." });
+    return;
+  }
+
+  const { tenantsTable } = await import("@workspace/db");
+  const allTenantRows = await db.select({ id: tenantsTable.id }).from(tenantsTable);
+
+  let created = 0;
+  let skipped = 0;
+
+  for (const row of allTenantRows) {
+    for (const alias of ["unknown", ""]) {
+      const existing = await db.select().from(leadSourceAliasesTable)
+        .where(and(
+          eq(leadSourceAliasesTable.tenantId, row.id),
+          eq(leadSourceAliasesTable.alias, alias)
+        ));
+
+      if (existing.length > 0) {
+        skipped++;
+        continue;
+      }
+
+      await db.insert(leadSourceAliasesTable).values({
+        tenantId: row.id,
+        canonicalName: "Unknown",
+        alias,
+      });
+      created++;
+    }
+    invalidateSourceCache(row.id);
+  }
+
+  res.json({ tenants: allTenantRows.length, created, skipped });
+});
+
 export default router;
