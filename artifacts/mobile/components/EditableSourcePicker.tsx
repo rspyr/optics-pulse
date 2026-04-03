@@ -36,12 +36,21 @@ export function EditableSourcePicker({ leadId, source, tenantId, onSourceChanged
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
+  const fetchCanonicalSources = React.useCallback(() => {
     const qs = tenantId ? `?tenantId=${tenantId}` : "";
     apiFetch(`/api/leads-hub/canonical-sources${qs}`)
       .then((data: { sources?: string[] }) => setCanonicalSources(data.sources || []))
       .catch(() => {});
-  }, [tenantId]);
+  }, [apiFetch, tenantId]);
+
+  useEffect(() => {
+    fetchCanonicalSources();
+  }, [fetchCanonicalSources]);
+
+  const handleOpen = () => {
+    fetchCanonicalSources();
+    setOpen(true);
+  };
 
   const handleSelect = async (newSource: string) => {
     setOpen(false);
@@ -64,8 +73,8 @@ export function EditableSourcePicker({ leadId, source, tenantId, onSourceChanged
   return (
     <>
       <TouchableOpacity
-        onPress={() => { if (hasOptions) setOpen(true); }}
-        activeOpacity={hasOptions ? 0.7 : 1}
+        onPress={() => handleOpen()}
+        activeOpacity={0.7}
         style={[
           styles.badge,
           { backgroundColor: sourceColors.bg, borderColor: sourceColors.border },
