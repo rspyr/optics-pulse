@@ -373,8 +373,8 @@ function LeadsDrilldownPopout({
           limit: String(batchSize),
           offset: String(offset),
         });
-        if (filter.type === "source" && filter.source) params.set("source", filter.source);
-        if (filter.type === "funnel" && filter.funnelId) params.set("funnelId", String(filter.funnelId));
+        if (filter.source) params.set("source", filter.source);
+        if (filter.funnelId) params.set("funnelId", String(filter.funnelId));
 
         const res = await fetch(`${API_BASE}/leads?${params}`, { credentials: "include" });
         if (!res.ok || cancelled) break;
@@ -566,7 +566,7 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
               {stats!.bySource.map(s => (
                 <button
                   key={s.source}
-                  onClick={() => setDrilldownFilter({ type: "source", source: s.source, label: `Leads from ${s.source}` })}
+                  onClick={() => setDrilldownFilter({ type: "source", source: s.source, funnelId: funnelFilter ?? undefined, label: `Leads from ${s.source}` })}
                   className="w-full flex items-center justify-between p-2 rounded bg-white/[0.02] border border-white/5 hover:bg-white/[0.06] hover:border-white/10 transition-all cursor-pointer text-left"
                 >
                   <span className="text-xs text-white/70">{s.source}</span>
