@@ -313,32 +313,87 @@ function applyGroupByAggregation(
   return result;
 }
 
-const TABLE_COLUMN_MAP: Record<string, Record<string, { table: any; column: any; numeric?: boolean }>> = {
+interface ColumnDef {
+  column: Column;
+  numeric?: boolean;
+}
+
+const TABLE_COLUMN_MAP: Record<string, Record<string, ColumnDef>> = {
   leads: {
-    status: { table: leadsTable, column: leadsTable.status },
-    source: { table: leadsTable, column: leadsTable.source },
-    leadType: { table: leadsTable, column: leadsTable.leadType },
-    assignedTo: { table: leadsTable, column: leadsTable.assignedTo },
-    disposition: { table: leadsTable, column: leadsTable.disposition },
-    id: { table: leadsTable, column: leadsTable.id, numeric: true },
-    tenantId: { table: leadsTable, column: leadsTable.tenantId, numeric: true },
+    status: { column: leadsTable.status },
+    source: { column: leadsTable.source },
+    leadType: { column: leadsTable.leadType },
+    assignedTo: { column: leadsTable.assignedTo },
+    disposition: { column: leadsTable.disposition },
+    id: { column: leadsTable.id, numeric: true },
+    tenantId: { column: leadsTable.tenantId, numeric: true },
   },
   jobs: {
-    status: { table: jobsTable, column: jobsTable.status },
-    jobType: { table: jobsTable, column: jobsTable.jobType },
-    matchLevel: { table: jobsTable, column: jobsTable.matchLevel },
-    revenue: { table: jobsTable, column: jobsTable.revenue, numeric: true },
-    id: { table: jobsTable, column: jobsTable.id, numeric: true },
-    tenantId: { table: jobsTable, column: jobsTable.tenantId, numeric: true },
+    status: { column: jobsTable.status },
+    jobType: { column: jobsTable.jobType },
+    matchLevel: { column: jobsTable.matchLevel },
+    revenue: { column: jobsTable.revenue, numeric: true },
+    id: { column: jobsTable.id, numeric: true },
+    tenantId: { column: jobsTable.tenantId, numeric: true },
   },
   reviews: {
-    sentiment: { table: reviewsTable, column: reviewsTable.sentiment },
-    platform: { table: reviewsTable, column: reviewsTable.platform },
-    rating: { table: reviewsTable, column: reviewsTable.rating, numeric: true },
-    id: { table: reviewsTable, column: reviewsTable.id, numeric: true },
-    tenantId: { table: reviewsTable, column: reviewsTable.tenantId, numeric: true },
+    sentiment: { column: reviewsTable.sentiment },
+    platform: { column: reviewsTable.platform },
+    rating: { column: reviewsTable.rating, numeric: true },
+    id: { column: reviewsTable.id, numeric: true },
+    tenantId: { column: reviewsTable.tenantId, numeric: true },
   },
 };
+
+function buildAggSelectFields(
+  validGroupCols: string[],
+  aggregations: string[],
+  colMap: Record<string, ColumnDef>,
+): Record<string, SQL> {
+  const selectFields: Record<string, SQL> = {};
+  for (const f of validGroupCols) {
+    selectFields[f] = sql`${colMap[f].column}`;
+  }
+
+  let hasAggregation = false;
+  for (const agg of aggregations) {
+    const match = agg.match(/^(count|sum|avg|min|max)\((.+)\)$/i);
+    if (match) {
+      const [, fn, col] = match;
+      const colDef = colMap[col];
+      if (colDef?.numeric) {
+        const key = `${fn}(${col})`;
+        switch (fn.toLowerCase()) {
+          case "count": selectFields[key] = sql`COUNT(${colDef.column})`; break;
+          case "sum": selectFields[key] = sql`COALESCE(SUM(${colDef.column}), 0)`; break;
+          case "avg": selectFields[key] = sql`COALESCE(AVG(${colDef.column}), 0)`; break;
+          case "min": selectFields[key] = sql`COALESCE(MIN(${colDef.column}), 0)`; break;
+          case "max": selectFields[key] = sql`COALESCE(MAX(${colDef.column}), 0)`; break;
+        }
+        hasAggregation = true;
+      }
+    } else if (agg.toLowerCase() === "count") {
+      selectFields["count"] = sql`COUNT(*)`;
+      hasAggregation = true;
+    }
+  }
+
+  if (!hasAggregation) {
+    selectFields["count"] = sql`COUNT(*)`;
+  }
+
+  return selectFields;
+}
+
+function formatGroupedRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map(r => {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(r)) {
+      result[key] = typeof val === "bigint" ? Number(val) : val;
+    }
+    return result;
+  });
+}
 
 async function querySingleTableGrouped(
   tenantId: number,
@@ -354,90 +409,40 @@ async function querySingleTableGrouped(
   const validGroupCols = groupByFields.filter(f => colMap[f]);
   if (validGroupCols.length === 0) return null;
 
-  const groupByCols = validGroupCols.map(f => colMap[f].column);
-
-  const selectFields: Record<string, any> = {};
-  for (const f of validGroupCols) {
-    selectFields[f] = colMap[f].column;
-  }
-
-  let hasAnyAgg = false;
-  for (const agg of aggregations) {
-    const match = agg.match(/^(count|sum|avg|min|max)\((.+)\)$/i);
-    if (match) {
-      const [, fn, col] = match;
-      const colDef = colMap[col];
-      if (colDef?.numeric) {
-        const key = `${fn}(${col})`;
-        switch (fn.toLowerCase()) {
-          case "count": selectFields[key] = sql`COUNT(${colDef.column})`; break;
-          case "sum": selectFields[key] = sql`COALESCE(SUM(${colDef.column}), 0)`; break;
-          case "avg": selectFields[key] = sql`COALESCE(AVG(${colDef.column}), 0)`; break;
-          case "min": selectFields[key] = sql`COALESCE(MIN(${colDef.column}), 0)`; break;
-          case "max": selectFields[key] = sql`COALESCE(MAX(${colDef.column}), 0)`; break;
-        }
-        hasAnyAgg = true;
-      }
-    } else if (agg.toLowerCase() === "count") {
-      selectFields["count"] = sql`COUNT(*)`;
-      hasAnyAgg = true;
-    }
-  }
-
-  if (!hasAnyAgg) {
-    selectFields["count"] = sql`COUNT(*)`;
-  }
-
-  let tableRef: any;
-  const conditions: SQL[] = [];
-
-  switch (table) {
-    case "leads":
-      tableRef = leadsTable;
-      conditions.push(eq(leadsTable.tenantId, tenantId));
-      conditions.push(...buildDateConditions(leadsTable.createdAt, plan));
-      break;
-    case "jobs":
-      tableRef = jobsTable;
-      conditions.push(eq(jobsTable.tenantId, tenantId));
-      conditions.push(...buildDateConditions(jobsTable.createdAt, plan));
-      break;
-    case "reviews":
-      tableRef = reviewsTable;
-      conditions.push(eq(reviewsTable.tenantId, tenantId));
-      conditions.push(...buildDateConditions(reviewsTable.reviewDate, plan, true));
-      break;
-    default:
-      return null;
-  }
+  const groupBySql = validGroupCols.map(f => sql`${colMap[f].column}`);
+  const selectFields = buildAggSelectFields(validGroupCols, aggregations, colMap);
 
   const f = plan.filters || {};
+
   if (table === "leads") {
+    const conditions: SQL[] = [eq(leadsTable.tenantId, tenantId)];
+    conditions.push(...buildDateConditions(leadsTable.createdAt, plan));
     if (f.source) conditions.push(eq(leadsTable.source, String(f.source)));
-    if (f.status) conditions.push(eq(leadsTable.status, String(f.status) as any));
+    if (f.status) conditions.push(eq(leadsTable.status, String(f.status) as typeof leadsTable.status.enumValues[number]));
     if (f.leadType) conditions.push(eq(leadsTable.leadType, String(f.leadType)));
-  } else if (table === "jobs") {
-    if (f.status) conditions.push(eq(jobsTable.status, String(f.status) as any));
-    if (f.matchLevel) conditions.push(eq(jobsTable.matchLevel, String(f.matchLevel)));
-  } else if (table === "reviews") {
-    if (f.sentiment) conditions.push(eq(reviewsTable.sentiment, String(f.sentiment)));
-    if (f.platform) conditions.push(eq(reviewsTable.platform, String(f.platform)));
+    const rows = await db.select(selectFields).from(leadsTable).where(and(...conditions)).groupBy(...groupBySql).limit(limit);
+    return formatGroupedRows(rows as Record<string, unknown>[]);
   }
 
-  const rows = await db
-    .select(selectFields)
-    .from(tableRef)
-    .where(and(...conditions))
-    .groupBy(...groupByCols)
-    .limit(limit);
+  if (table === "jobs") {
+    const conditions: SQL[] = [eq(jobsTable.tenantId, tenantId)];
+    conditions.push(...buildDateConditions(jobsTable.createdAt, plan));
+    if (f.status) conditions.push(eq(jobsTable.status, String(f.status) as typeof jobsTable.status.enumValues[number]));
+    if (f.matchLevel) conditions.push(eq(jobsTable.matchLevel, String(f.matchLevel)));
+    const rows = await db.select(selectFields).from(jobsTable).where(and(...conditions)).groupBy(...groupBySql).limit(limit);
+    return formatGroupedRows(rows as Record<string, unknown>[]);
+  }
 
-  return rows.map(r => {
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(r as Record<string, unknown>)) {
-      result[key] = typeof val === "bigint" ? Number(val) : val;
-    }
-    return result;
-  });
+  if (table === "reviews") {
+    const conditions: SQL[] = [eq(reviewsTable.tenantId, tenantId)];
+    conditions.push(...buildDateConditions(reviewsTable.reviewDate, plan, true));
+    if (f.sentiment) conditions.push(eq(reviewsTable.sentiment, String(f.sentiment)));
+    if (f.platform) conditions.push(eq(reviewsTable.platform, String(f.platform)));
+    const rows = await db.select(selectFields).from(reviewsTable).where(and(...conditions)).groupBy(...groupBySql).limit(limit);
+    return formatGroupedRows(rows as Record<string, unknown>[]);
+  }
+
+  return null;
 }
 
 async function queryTable(

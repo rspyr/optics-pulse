@@ -45,7 +45,7 @@ interface STBusinessUnit {
   name: string;
 }
 
-interface STJob {
+export interface STJob {
   id: number;
   number: string;
   customerId: number;

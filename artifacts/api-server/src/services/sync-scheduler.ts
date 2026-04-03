@@ -1,7 +1,7 @@
 import { db, tenantsTable, jobsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress } from "./integrations/service-titan";
+import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, type STJob } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -88,7 +88,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
     let synced = 0;
 
-    async function processJobBatch(stJobs: Array<{ id: number; number: string; customerId: number; locationId: number; jobStatus: string; summary: string; total: number; completedOn: string | null; customer?: any; location?: any; type?: any; businessUnit?: any; customFields?: any[] }>) {
+    async function processJobBatch(stJobs: STJob[]) {
       for (const stJob of stJobs) {
         const formatted = formatSTJobForSync(stJob);
         const jobIdHash = hashStJobId(formatted.stJobId);
