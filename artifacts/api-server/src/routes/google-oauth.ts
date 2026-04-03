@@ -12,7 +12,7 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPES = "https://www.googleapis.com/auth/adwords";
 
 function getRedirectUri(): string {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
   if (domain) {
     return `https://${domain}/api/oauth/google-ads/callback`;
   }

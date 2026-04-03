@@ -13,7 +13,7 @@ const META_EXCHANGE_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
 const SCOPES = "ads_read,ads_management,pages_show_list,pages_read_engagement,business_management";
 
 function getRedirectUri(): string {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
   if (domain) {
     return `https://${domain}/api/oauth/meta/callback`;
   }

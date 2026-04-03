@@ -13,7 +13,7 @@ const PODIUM_TOKEN_URL = "https://api.podium.com/oauth/token";
 const SCOPES = "read_messages write_messages read_contacts write_contacts read_locations";
 
 function getRedirectUri(): string {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
   if (domain) {
     return `https://${domain}/api/oauth/podium/callback`;
   }
@@ -162,7 +162,7 @@ router.get("/oauth/podium/callback", async (req, res) => {
         const webhookVerifyToken = crypto.randomBytes(32).toString("hex");
         config.podiumWebhookVerifyToken = webhookVerifyToken;
 
-        const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+        const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
         const baseUrl = domain
           ? `https://${domain}/api/webhooks/podium`
           : "http://localhost:8080/api/webhooks/podium";
