@@ -136,13 +136,44 @@ export interface SheetRow {
   [key: string]: string;
 }
 
+function isAuthError(err: unknown): boolean {
+  if (err && typeof err === "object") {
+    const status = (err as { code?: number; status?: number }).code ?? (err as { code?: number; status?: number }).status;
+    if (status === 401) return true;
+    const message = String((err as { message?: string }).message || "");
+    if (/invalid credentials/i.test(message)) return true;
+  }
+  return false;
+}
+
+function clearCachedToken() {
+  connectionSettings = null;
+  lastFetchedAt = 0;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+  console.log("[GoogleSheets] Cleared cached token due to auth error");
+}
+
 export async function readRawSheetData(
   spreadsheetId: string,
   tabName: string,
 ): Promise<{ headers: string[]; rawRows: string[][] }> {
-  const client = await getUncachableGoogleSheetClient();
   const range = `${tabName}!A:Z`;
-  const response = await client.spreadsheets.values.get({ spreadsheetId, range });
+
+  let client = await getUncachableGoogleSheetClient();
+  let response;
+  try {
+    response = await client.spreadsheets.values.get({ spreadsheetId, range });
+  } catch (err) {
+    if (!isAuthError(err)) throw err;
+    console.warn("[GoogleSheets] Auth error on Sheets API call, clearing token and retrying once:", (err as Error).message);
+    clearCachedToken();
+    client = await getUncachableGoogleSheetClient();
+    response = await client.spreadsheets.values.get({ spreadsheetId, range });
+  }
+
   const values = response.data.values;
   if (!values || values.length === 0) {
     return { headers: [], rawRows: [] };
