@@ -58,6 +58,8 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
       credentials: true,
     },
     path: "/api/socket.io",
+    pingTimeout: 30000,
+    pingInterval: 25000,
   });
 
   io.engine.use((req: any, res: any, next: any) => {
@@ -128,15 +130,18 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
         return;
       }
 
+      const room = `tenant-${tenantId}`;
+      if (socket.rooms.has(room)) return;
+
       if (role === "super_admin" || role === "agency_user") {
-        socket.join(`tenant-${tenantId}`);
+        socket.join(room);
       } else if (session.tenantId === tenantId) {
-        socket.join(`tenant-${tenantId}`);
+        socket.join(room);
       } else {
         socket.emit("error", { message: "Access denied to this tenant" });
         return;
       }
-      console.log(`[Socket.IO] ${socket.id} joined tenant-${tenantId}`);
+      console.log(`[Socket.IO] ${socket.id} joined ${room}`);
     });
 
     socket.on("disconnect", () => {
@@ -214,6 +219,7 @@ export function startLoginSessionExpiryJob(): void {
 export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("new-lead", lead);
+    console.log(`[Socket.IO] Emitted new-lead for tenant-${tenantId} (lead ${lead.id})`);
   }
   const assignedCsrId = (lead.assignedCsrId ?? lead.assignedUserId) as number | undefined;
   if (assignedCsrId) {
@@ -226,13 +232,16 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
         `${name}${source ? ` from ${source}` : ""}`,
         { leadId: lead.id, type: "new-lead" },
       ).catch(err => console.error("[Push] emitNewLead push error:", err));
-    }).catch(() => {});
+    }).catch(err => console.error("[Push] Failed to load push-notifications module:", err));
+  } else {
+    console.log(`[Socket.IO] Lead ${lead.id} has no assignedCsrId, skipping push notification`);
   }
 }
 
 export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("lead-updated", lead);
+    console.log(`[Socket.IO] Emitted lead-updated for tenant-${tenantId} (lead ${lead.id})`);
   }
 }
 

@@ -52,7 +52,12 @@ export async function sendPushToUser(
 ): Promise<void> {
   try {
     const tokens = await db.select().from(pushTokensTable).where(eq(pushTokensTable.userId, userId));
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+      console.log(`[Push] No tokens registered for user ${userId}, skipping`);
+      return;
+    }
+
+    console.log(`[Push] Sending "${title}" to user ${userId} (${tokens.length} token(s))`);
 
     const messages: ExpoPushMessage[] = tokens.map(t => ({
       to: t.token,
@@ -64,16 +69,25 @@ export async function sendPushToUser(
 
     const tickets = await sendExpoPush(messages);
 
+    let okCount = 0;
+    let errCount = 0;
     for (let i = 0; i < tickets.length; i++) {
       const ticket = tickets[i];
-      if (ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered") {
-        const tokenToRemove = tokens[i]?.token;
-        if (tokenToRemove) {
-          await db.delete(pushTokensTable).where(eq(pushTokensTable.token, tokenToRemove));
-          console.log(`[Push] Removed invalid token for user ${userId}`);
+      if (ticket.status === "ok") {
+        okCount++;
+      } else if (ticket.status === "error") {
+        errCount++;
+        console.error(`[Push] Ticket error for user ${userId}: ${ticket.details?.error ?? ticket.message ?? "unknown"}`);
+        if (ticket.details?.error === "DeviceNotRegistered") {
+          const tokenToRemove = tokens[i]?.token;
+          if (tokenToRemove) {
+            await db.delete(pushTokensTable).where(eq(pushTokensTable.token, tokenToRemove));
+            console.log(`[Push] Removed invalid token for user ${userId}`);
+          }
         }
       }
     }
+    console.log(`[Push] Delivery result for user ${userId}: ${okCount} ok, ${errCount} error(s)`);
   } catch (err) {
     console.error(`[Push] Error sending to user ${userId}:`, err);
   }
