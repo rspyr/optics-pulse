@@ -139,6 +139,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         if (socketRef.current && !socketRef.current.connected) {
           socketRef.current.connect();
         }
+        emitReconnect();
       }
 
       if (nextState === "background" && Platform.OS !== "web") {

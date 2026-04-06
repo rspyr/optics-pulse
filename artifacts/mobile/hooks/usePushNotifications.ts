@@ -60,9 +60,9 @@ export function usePushNotifications() {
           return;
         }
 
-        const rawProjectId =
-          Constants?.expoConfig?.extra?.eas?.projectId ??
-          (Constants as any)?.easConfig?.projectId;
+        const easProjectId = Constants.easConfig?.projectId;
+        const extraProjectId = Constants.expoConfig?.extra?.eas?.projectId;
+        const rawProjectId = extraProjectId ?? easProjectId;
 
         const projectId =
           rawProjectId && rawProjectId !== "YOUR_EAS_PROJECT_ID"

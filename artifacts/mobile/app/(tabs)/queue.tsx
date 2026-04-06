@@ -154,6 +154,16 @@ export default function QueueScreen() {
     fetchQueue();
   }, [fetchQueue]);
 
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedFetchQueue = useCallback(() => {
+    if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+    refetchTimerRef.current = setTimeout(() => { fetchQueue(); }, 500);
+  }, [fetchQueue]);
+
+  useEffect(() => {
+    return () => { if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current); };
+  }, []);
+
   useEffect(() => {
     const handleNewLead = (data: any) => {
       if (data && data.id) {
@@ -163,9 +173,9 @@ export default function QueueScreen() {
           total: prev.total + 1,
         }));
       }
-      fetchQueue();
+      debouncedFetchQueue();
     };
-    const handleUpdate = () => fetchQueue();
+    const handleUpdate = () => debouncedFetchQueue();
     const handleReconnect = () => fetchQueue();
     on("new-lead", handleNewLead);
     on("lead-updated", handleUpdate);
@@ -175,7 +185,7 @@ export default function QueueScreen() {
       off("lead-updated", handleUpdate);
       off("_reconnect", handleReconnect);
     };
-  }, [on, off, fetchQueue]);
+  }, [on, off, fetchQueue, debouncedFetchQueue]);
 
   useEffect(() => {
     if (callbackNotification) return;

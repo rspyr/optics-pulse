@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -120,15 +120,25 @@ export default function HudScreen() {
     return () => clearInterval(interval);
   }, [fetchStats]);
 
+  const statsRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedFetchStats = useCallback(() => {
+    if (statsRefetchTimerRef.current) clearTimeout(statsRefetchTimerRef.current);
+    statsRefetchTimerRef.current = setTimeout(() => { fetchStats(); }, 500);
+  }, [fetchStats]);
+
+  useEffect(() => {
+    return () => { if (statsRefetchTimerRef.current) clearTimeout(statsRefetchTimerRef.current); };
+  }, []);
+
   useEffect(() => {
     const handler = () => {
-      fetchStats();
+      debouncedFetchStats();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     };
     const newLeadHandler = () => {
       setStats(prev => prev ? { ...prev, newLeadsToday: prev.newLeadsToday + 1 } : prev);
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      fetchStats();
+      debouncedFetchStats();
     };
     const statsHandler = (data: HudStats) => {
       setStats(data);
@@ -146,7 +156,7 @@ export default function HudScreen() {
       off("hud-stats", statsHandler);
       off("_reconnect", handleReconnect);
     };
-  }, [on, off, fetchStats]);
+  }, [on, off, fetchStats, debouncedFetchStats]);
 
   const onRefresh = async () => {
     setRefreshing(true);
