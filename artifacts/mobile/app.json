@@ -14,9 +14,12 @@
       "backgroundColor": "#0F172A"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.pulse.mobile"
     },
-    "android": {},
+    "android": {
+      "package": "com.pulse.mobile"
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
@@ -28,8 +31,14 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-notifications"
     ],
+    "extra": {
+      "eas": {
+        "projectId": "YOUR_EAS_PROJECT_ID"
+      }
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

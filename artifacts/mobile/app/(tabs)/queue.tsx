@@ -155,13 +155,25 @@ export default function QueueScreen() {
   }, [fetchQueue]);
 
   useEffect(() => {
-    const handleNewLead = () => { fetchQueue(); };
+    const handleNewLead = (data: any) => {
+      if (data && data.id) {
+        setQueue(prev => ({
+          ...prev,
+          newLeads: [data as QueueLead, ...(prev.newLeads || []).filter(l => l.id !== data.id)],
+          total: prev.total + 1,
+        }));
+      }
+      fetchQueue();
+    };
     const handleUpdate = () => fetchQueue();
+    const handleReconnect = () => fetchQueue();
     on("new-lead", handleNewLead);
     on("lead-updated", handleUpdate);
+    on("_reconnect", handleReconnect);
     return () => {
       off("new-lead", handleNewLead);
       off("lead-updated", handleUpdate);
+      off("_reconnect", handleReconnect);
     };
   }, [on, off, fetchQueue]);
 

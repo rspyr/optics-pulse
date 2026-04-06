@@ -125,16 +125,26 @@ export default function HudScreen() {
       fetchStats();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     };
+    const newLeadHandler = () => {
+      setStats(prev => prev ? { ...prev, newLeadsToday: prev.newLeadsToday + 1 } : prev);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      fetchStats();
+    };
     const statsHandler = (data: HudStats) => {
       setStats(data);
     };
+    const handleReconnect = () => {
+      fetchStats();
+    };
     on("lead-updated", handler);
-    on("new-lead", handler);
+    on("new-lead", newLeadHandler);
     on("hud-stats", statsHandler);
+    on("_reconnect", handleReconnect);
     return () => {
       off("lead-updated", handler);
-      off("new-lead", handler);
+      off("new-lead", newLeadHandler);
       off("hud-stats", statsHandler);
+      off("_reconnect", handleReconnect);
     };
   }, [on, off, fetchStats]);
 

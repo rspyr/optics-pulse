@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import * as Notifications from "expo-notifications";
+import * as Device from "expo-device";
+import Constants from "expo-constants";
 import { router } from "expo-router";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApi } from "@/hooks/useApi";
@@ -28,35 +30,64 @@ export function usePushNotifications() {
 
     (async () => {
       try {
-        if (Platform.OS === "android" || Platform.OS === "ios") {
-          const { status: existingStatus } = await Notifications.getPermissionsAsync();
-          let finalStatus = existingStatus;
+        if (Platform.OS !== "android" && Platform.OS !== "ios") return;
 
-          if (existingStatus !== "granted") {
-            const { status } = await Notifications.requestPermissionsAsync();
-            finalStatus = status;
-          }
+        if (!Device.isDevice) {
+          console.log("[Push] Skipping registration — not a physical device");
+          return;
+        }
 
-          if (finalStatus !== "granted") return;
+        if (Platform.OS === "android") {
+          await Notifications.setNotificationChannelAsync("default", {
+            name: "Default",
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: "#F20505",
+            sound: "default",
+          });
+        }
 
-          const tokenData = await Notifications.getExpoPushTokenAsync();
-          const token = tokenData.data;
-          setExpoPushToken(token);
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
 
-          await SecureStore.setItemAsync("pulse_push_token", token);
+        if (existingStatus !== "granted") {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
 
-          let registered = false;
-          for (let attempt = 0; attempt < 3 && !registered; attempt++) {
-            try {
-              await apiFetch("/api/push-tokens", {
-                method: "POST",
-                body: JSON.stringify({ token, platform: Platform.OS }),
-              });
-              registered = true;
-            } catch (regErr) {
-              console.warn(`[Push] Registration attempt ${attempt + 1} failed:`, regErr);
-              if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-            }
+        if (finalStatus !== "granted") {
+          console.log("[Push] Permission not granted");
+          return;
+        }
+
+        const rawProjectId =
+          Constants?.expoConfig?.extra?.eas?.projectId ??
+          (Constants as any)?.easConfig?.projectId;
+
+        const projectId =
+          rawProjectId && rawProjectId !== "YOUR_EAS_PROJECT_ID"
+            ? rawProjectId
+            : undefined;
+
+        const tokenData = await Notifications.getExpoPushTokenAsync(
+          projectId ? { projectId } : undefined
+        );
+        const token = tokenData.data;
+        setExpoPushToken(token);
+
+        await SecureStore.setItemAsync("pulse_push_token", token);
+
+        let registered = false;
+        for (let attempt = 0; attempt < 3 && !registered; attempt++) {
+          try {
+            await apiFetch("/api/push-tokens", {
+              method: "POST",
+              body: JSON.stringify({ token, platform: Platform.OS }),
+            });
+            registered = true;
+          } catch (regErr) {
+            console.warn(`[Push] Registration attempt ${attempt + 1} failed:`, regErr);
+            if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
           }
         }
       } catch (err) {
