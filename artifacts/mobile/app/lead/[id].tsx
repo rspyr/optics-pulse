@@ -36,7 +36,8 @@ type ActionStep =
   | "text_done"
   | "vm_done"
   | "appt_booked_flow"
-  | "appt_cancel_reason";
+  | "appt_cancel_reason"
+  | "dead_reason_custom";
 
 type DetailTab = "history" | "conversation";
 
@@ -79,6 +80,7 @@ const DEAD_REASONS = [
   { value: "too_expensive", label: "Too Expensive" },
   { value: "no_response", label: "No Response" },
   { value: "other", label: "Other" },
+  { value: "custom", label: "Custom Note" },
 ];
 
 const DAY_BADGE_CONFIG: Record<string, { label: string; color: string }> = {
@@ -129,6 +131,7 @@ interface LeadDetail {
   appointmentTime?: string;
   addOns?: string;
   contactPreferences?: string[];
+  deadReason?: string;
 }
 
 interface HistoryItem {
@@ -229,6 +232,8 @@ export default function LeadDetailScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [customDeadNote, setCustomDeadNote] = useState("");
+  const [editCustomDeadNote, setEditCustomDeadNote] = useState("");
 
   const [showTransfer, setShowTransfer] = useState(false);
   const [csrs, setCsrs] = useState<CsrOption[]>([]);
@@ -523,13 +528,16 @@ export default function LeadDetailScreen() {
 
   const startEdit = (entry: TimelineEntry) => {
     setEditingId(entry.id);
+    const dr = entry.deadReason || "";
+    const isExistingCustom = dr && !DEAD_REASONS.some(d => d.value === dr && d.value !== "custom");
+    setEditCustomDeadNote(isExistingCustom ? dr : "");
     setEditForm({
       actionType: entry.actionType || entry.method || "",
       notes: entry.notes || "",
       callResult: entry.callResult || "",
       textResult: entry.textResult || "",
       vmResult: entry.vmResult || "",
-      deadReason: entry.deadReason || "",
+      deadReason: isExistingCustom ? "custom" : dr,
       spokeResult: entry.spokeResult || "",
       editCallbackDate: entry.callbackAt ? new Date(entry.callbackAt) : new Date(Date.now() + 3600000),
       editApptDate: entry.appointmentDate ? new Date(entry.appointmentDate) : new Date(Date.now() + 86400000),
@@ -544,7 +552,13 @@ export default function LeadDetailScreen() {
   const saveEdit = async (entry: TimelineEntry) => {
     setEditSaving(true);
     try {
-      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: editForm.deadReason || null };
+      const resolvedDeadReason = (() => {
+        if (!editForm.deadReason) return null;
+        const isCustomDead = editForm.deadReason === "custom" || !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom");
+        if (isCustomDead) return editCustomDeadNote.trim() || (editForm.deadReason !== "custom" ? editForm.deadReason : null);
+        return editForm.deadReason;
+      })();
+      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: resolvedDeadReason };
       const method = editForm.actionType || entry.actionType || entry.method;
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
@@ -570,12 +584,22 @@ export default function LeadDetailScreen() {
           body.appointmentDate = editForm.editApptDate.toISOString().split("T")[0];
           body.appointmentTime = editForm.editApptTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
         } else if (editForm.spokeResult === "dead") {
-          if (!editForm.deadReason) {
+          const isCustomDead = editForm.deadReason === "custom" || (editForm.deadReason && !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom"));
+          if (isCustomDead) {
+            const customText = editCustomDeadNote.trim() || (editForm.deadReason !== "custom" ? editForm.deadReason : "");
+            if (!customText) {
+              Alert.alert("Missing Info", "Please enter a custom dead reason.");
+              setEditSaving(false);
+              return;
+            }
+            body.deadReason = customText;
+          } else if (!editForm.deadReason) {
             Alert.alert("Missing Info", "Please select a dead reason.");
             setEditSaving(false);
             return;
+          } else {
+            body.deadReason = editForm.deadReason;
           }
-          body.deadReason = editForm.deadReason;
         }
       }
 
@@ -796,6 +820,12 @@ export default function LeadDetailScreen() {
                 <View style={styles.detailRow}>
                   <Feather name="tag" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.detailText, { color: colors.foreground }]}>{lead.interestType}</Text>
+                </View>
+              )}
+              {lead.deadReason && (
+                <View style={styles.detailRow}>
+                  <Feather name="x-circle" size={14} color="#EF4444" />
+                  <Text style={[styles.detailText, { color: "#EF4444", opacity: 0.7 }]}>Reason: {lead.deadReason.replace(/_/g, " ")}</Text>
                 </View>
               )}
             </View>
@@ -1065,6 +1095,11 @@ export default function LeadDetailScreen() {
                   key={r.value}
                   style={[styles.resultGridItem, { backgroundColor: "#EF444410", borderColor: "#EF444420" }]}
                   onPress={() => {
+                    if (r.value === "custom") {
+                      setCustomDeadNote("");
+                      setActionStep("dead_reason_custom");
+                      return;
+                    }
                     if (deadFromFlow === "call") {
                       logAction({ actionType: "call", callResult: "spoke_with_customer", deadReason: r.value });
                     } else {
@@ -1077,6 +1112,40 @@ export default function LeadDetailScreen() {
                 </TouchableOpacity>
               ))}
               <TouchableOpacity onPress={() => setActionStep(deadFromFlow === "call" ? "spoke_result" : "text_done")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {actionStep === "dead_reason_custom" && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>
+                Enter custom dead reason:
+              </Text>
+              <TextInput
+                style={{ backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border, borderWidth: 1, borderRadius: 8, padding: 10, fontSize: 14, fontFamily: "Inter_400Regular", minHeight: 60, textAlignVertical: "top", marginBottom: 8 }}
+                placeholder="Type your reason..."
+                placeholderTextColor={colors.mutedForeground}
+                value={customDeadNote}
+                onChangeText={setCustomDeadNote}
+                multiline
+                autoFocus
+              />
+              <TouchableOpacity
+                style={[styles.resultGridItem, { backgroundColor: customDeadNote.trim() ? "#EF444420" : "#EF444410", borderColor: "#EF444420", opacity: customDeadNote.trim() ? 1 : 0.5 }]}
+                onPress={() => {
+                  if (!customDeadNote.trim()) return;
+                  if (deadFromFlow === "call") {
+                    logAction({ actionType: "call", callResult: "spoke_with_customer", deadReason: customDeadNote.trim() });
+                  } else {
+                    logAction({ actionType: "text", textResult: "dead", deadReason: customDeadNote.trim() });
+                  }
+                }}
+                disabled={actionLoading || !customDeadNote.trim()}
+              >
+                <Text style={[styles.resultGridText, { color: "#EF4444" }]}>Submit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setActionStep("dead_reason")}>
                 <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
               </TouchableOpacity>
             </View>
@@ -1283,6 +1352,7 @@ export default function LeadDetailScreen() {
                                     </TouchableOpacity>
                                   )}
                                 </View>
+                                {entry.deadReason && <Text style={{ fontSize: 11, color: "#EF4444", fontFamily: "Inter_400Regular", opacity: 0.7, marginTop: 2 }}>Reason: {entry.deadReason.replace(/_/g, " ")}</Text>}
                                 {entry.notes && <Text style={[styles.historyNotes, { color: colors.foreground + "60" }]}>{entry.notes}</Text>}
                               </View>
                             )}
@@ -1462,19 +1532,40 @@ export default function LeadDetailScreen() {
                                   <>
                                     <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Dead Reason</Text>
                                     <View style={styles.editPickerRow}>
-                                      {DEAD_REASONS.map(dr => (
-                                        <TouchableOpacity
-                                          key={dr.value}
-                                          style={[styles.editPickerItem, {
-                                            backgroundColor: editForm.deadReason === dr.value ? "#EF444420" : colors.secondary,
-                                            borderColor: editForm.deadReason === dr.value ? "#EF444440" : colors.border,
-                                          }]}
-                                          onPress={() => setEditForm(f => ({ ...f, deadReason: dr.value }))}
-                                        >
-                                          <Text style={{ fontSize: 12, color: editForm.deadReason === dr.value ? "#EF4444" : colors.foreground, fontFamily: "Inter_500Medium" }}>{dr.label}</Text>
-                                        </TouchableOpacity>
-                                      ))}
+                                      {DEAD_REASONS.map(dr => {
+                                        const isCustomSelected = editForm.deadReason === "custom" || (editForm.deadReason && !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom"));
+                                        const isSelected = dr.value === "custom" ? isCustomSelected : editForm.deadReason === dr.value;
+                                        return (
+                                          <TouchableOpacity
+                                            key={dr.value}
+                                            style={[styles.editPickerItem, {
+                                              backgroundColor: isSelected ? "#EF444420" : colors.secondary,
+                                              borderColor: isSelected ? "#EF444440" : colors.border,
+                                            }]}
+                                            onPress={() => {
+                                              if (dr.value === "custom") {
+                                                setEditForm(f => ({ ...f, deadReason: "custom" }));
+                                                setEditCustomDeadNote("");
+                                              } else {
+                                                setEditForm(f => ({ ...f, deadReason: dr.value }));
+                                                setEditCustomDeadNote("");
+                                              }
+                                            }}
+                                          >
+                                            <Text style={{ fontSize: 12, color: isSelected ? "#EF4444" : colors.foreground, fontFamily: "Inter_500Medium" }}>{dr.label}</Text>
+                                          </TouchableOpacity>
+                                        );
+                                      })}
                                     </View>
+                                    {(editForm.deadReason === "custom" || (editForm.deadReason && !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom"))) && (
+                                      <TextInput
+                                        style={{ backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border, borderWidth: 1, borderRadius: 8, padding: 8, fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 4 }}
+                                        placeholder="Type custom reason..."
+                                        placeholderTextColor={colors.mutedForeground}
+                                        value={editCustomDeadNote || (editForm.deadReason !== "custom" ? editForm.deadReason : "")}
+                                        onChangeText={t => { setEditCustomDeadNote(t); }}
+                                      />
+                                    )}
                                   </>
                                 )}
                                 <TextInput

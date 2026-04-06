@@ -115,6 +115,7 @@ const DEAD_REASONS = [
   { value: "too_expensive", label: "Too Expensive" },
   { value: "no_response", label: "No Response" },
   { value: "other", label: "Other" },
+  { value: "custom", label: "Custom Note" },
 ];
 
 const TEXT_RESULTS = [
@@ -767,6 +768,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
+  const [editCustomDeadNote, setEditCustomDeadNote] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
 
@@ -793,20 +795,34 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
 
   const startEdit = (entry: HistoryEntry) => {
     setEditingId(entry.id);
+    const dr = entry.deadReason || "";
+    const isExistingCustom = dr && !DEAD_REASONS.some(d => d.value === dr && d.value !== "custom");
+    setEditCustomDeadNote(isExistingCustom ? dr : "");
     setEditForm({
       actionType: entry.actionType || entry.method || "",
       notes: entry.notes || "",
       callResult: entry.callResult || "",
       textResult: entry.textResult || "",
       vmResult: entry.vmResult || "",
-      deadReason: entry.deadReason || "",
+      deadReason: isExistingCustom ? "custom" : dr,
     });
   };
 
   const saveEdit = async (entry: HistoryEntry) => {
     setEditSaving(true);
     try {
-      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: editForm.deadReason || null };
+      const resolvedDeadReason = (() => {
+        if (!editForm.deadReason) return null;
+        const isCustomDead = editForm.deadReason === "custom" || !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom");
+        if (isCustomDead) return editCustomDeadNote.trim() || (editForm.deadReason !== "custom" ? editForm.deadReason : null);
+        return editForm.deadReason;
+      })();
+      if ((editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && editForm.deadReason && !resolvedDeadReason) {
+        alert("Please enter a custom dead reason.");
+        setEditSaving(false);
+        return;
+      }
+      const body: Record<string, unknown> = { notes: editForm.notes, actionType: editForm.actionType, deadReason: resolvedDeadReason };
       const method = editForm.actionType || entry.actionType || entry.method;
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
@@ -899,17 +915,28 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             );
           })()}
           {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
-            <Select value={editForm.deadReason || "__none__"} onValueChange={v => setEditForm(f => ({ ...f, deadReason: v === "__none__" ? "" : v }))}>
-              <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Dead reason (optional)...</SelectItem>
-                {DEAD_REASONS.map(r => (
-                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <>
+              <Select value={editForm.deadReason || "__none__"} onValueChange={v => { setEditForm(f => ({ ...f, deadReason: v === "__none__" ? "" : v })); if (v === "custom") setEditCustomDeadNote(""); }}>
+                <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Dead reason (optional)...</SelectItem>
+                  {DEAD_REASONS.map(r => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(editForm.deadReason === "custom" || (editForm.deadReason && !DEAD_REASONS.some(d => d.value === editForm.deadReason && d.value !== "custom"))) && (
+                <input
+                  type="text"
+                  value={editCustomDeadNote || (editForm.deadReason !== "custom" ? editForm.deadReason : "")}
+                  onChange={e => setEditCustomDeadNote(e.target.value)}
+                  placeholder="Type custom reason..."
+                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white placeholder:text-white/20 mt-1"
+                />
+              )}
+            </>
           )}
           <input
             type="text"
@@ -954,6 +981,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             </button>
           )}
         </div>
+        {(entry as unknown as HistoryEntry).deadReason && <p className="text-[10px] text-red-400/60 mt-0.5">Reason: {((entry as unknown as HistoryEntry).deadReason || "").replace(/_/g, " ")}</p>}
         {(entry as unknown as HistoryEntry).notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{(entry as unknown as HistoryEntry).notes}</p>}
       </>
     );
@@ -1239,7 +1267,8 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
 function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false }: {
   lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean;
 }) {
-  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
+  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "dead_reason_custom" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
+  const [customDeadNote, setCustomDeadNote] = useState("");
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
   const [apptBookedChannel, setApptBookedChannel] = useState<"call" | "text" | "voicemail_drop">("call");
@@ -1451,6 +1480,9 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <p className="text-xs text-amber-400/70 mt-1 flex items-center gap-1">
                 <Calendar className="w-3 h-3" /> Callback: {formatDateTimeInTz(lead.callbackAt, timezone)}
               </p>
+            )}
+            {lead.deadReason && (
+              <p className="text-[10px] text-red-400/60 mt-1">Reason: {lead.deadReason.replace(/_/g, " ")}</p>
             )}
           </div>
           {!isArchived && (
@@ -1763,11 +1795,18 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                 {DEAD_REASONS.map(r => (
                   <button
                     key={r.value}
-                    onClick={() => logAction(
-                      deadFromFlow === "call"
-                        ? { actionType: "call", callResult: selectedCallResult, deadReason: r.value }
-                        : { actionType: "text", textResult: "dead", deadReason: r.value }
-                    )}
+                    onClick={() => {
+                      if (r.value === "custom") {
+                        setCustomDeadNote("");
+                        setActionStep("dead_reason_custom");
+                        return;
+                      }
+                      logAction(
+                        deadFromFlow === "call"
+                          ? { actionType: "call", callResult: selectedCallResult, deadReason: r.value }
+                          : { actionType: "text", textResult: "dead", deadReason: r.value }
+                      );
+                    }}
                     disabled={actionLoading}
                     className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300 hover:bg-red-500/20 transition-colors text-left"
                   >
@@ -1776,6 +1815,42 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                 ))}
               </div>
               <button onClick={() => setActionStep(deadFromFlow === "call" ? "spoke_result" : "text_done")} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
+            </PremiumCard>
+          </motion.div>
+        )}
+
+        {actionStep === "dead_reason_custom" && (
+          <motion.div
+            key="dead-reason-custom"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+          >
+            <PremiumCard className="p-4">
+              <p className="text-sm text-white/60 mb-3">Enter custom dead reason:</p>
+              <input
+                type="text"
+                value={customDeadNote}
+                onChange={e => setCustomDeadNote(e.target.value)}
+                placeholder="Type your reason..."
+                autoFocus
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-white/20 mb-2"
+              />
+              <button
+                onClick={() => {
+                  if (!customDeadNote.trim()) return;
+                  logAction(
+                    deadFromFlow === "call"
+                      ? { actionType: "call", callResult: selectedCallResult, deadReason: customDeadNote.trim() }
+                      : { actionType: "text", textResult: "dead", deadReason: customDeadNote.trim() }
+                  );
+                }}
+                disabled={actionLoading || !customDeadNote.trim()}
+                className="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+              >
+                Submit
+              </button>
+              <button onClick={() => setActionStep("dead_reason")} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
             </PremiumCard>
           </motion.div>
         )}
