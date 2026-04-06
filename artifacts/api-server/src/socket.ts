@@ -115,7 +115,8 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     if (role === "super_admin" || role === "agency_user") {
       db.select({ id: tenantsTable.id }).from(tenantsTable).then(tenants => {
         for (const t of tenants) {
-          socket.join(`tenant-${t.id}`);
+          const room = `tenant-${t.id}`;
+          if (!socket.rooms.has(room)) socket.join(room);
         }
         console.log(`[Socket.IO] ${socket.id} auto-joined ${tenants.length} tenant rooms (agency)`);
       }).catch(err => console.error("[Socket.IO] Error auto-joining tenant rooms:", err));
