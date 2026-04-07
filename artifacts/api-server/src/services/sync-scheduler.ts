@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, sql, desc } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, type STJob, type STInvoice } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
@@ -470,6 +470,19 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
     return { synced: 0, error: "ServiceTitan not configured" };
   }
 
+  const [lastSuccessfulSync] = await db.select({ completedAt: integrationSyncLogsTable.completedAt })
+    .from(integrationSyncLogsTable)
+    .where(and(
+      eq(integrationSyncLogsTable.tenantId, tenantId),
+      eq(integrationSyncLogsTable.integration, "service_titan"),
+      eq(integrationSyncLogsTable.syncType, "invoices"),
+      eq(integrationSyncLogsTable.status, "completed"),
+    ))
+    .orderBy(desc(integrationSyncLogsTable.completedAt))
+    .limit(1);
+
+  const modifiedOnOrAfter = lastSuccessfulSync?.completedAt ?? undefined;
+
   const syncLog = await logSync(tenantId, "service_titan", "invoices", new Date());
 
   try {
@@ -547,7 +560,7 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
       }
     }
 
-    await fetchInvoices(stConfig, undefined, processInvoiceBatch);
+    await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch);
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan invoices: synced ${synced} invoices for tenant ${tenantId}`);
