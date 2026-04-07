@@ -1148,13 +1148,16 @@ router.get("/leads-hub/stats", async (req, res) => {
 
   const bySource: Record<string, { total: number; appointments: number }> = {};
   const byFunnel: Record<number, { total: number; appointments: number }> = {};
+  const byFunnelNonPB: Record<number, number> = {};
   const byCsr: Record<number, { total: number; appointments: number }> = {};
   const byCsrByFunnel: Record<string, { csrId: number; funnelId: number; total: number; appointments: number }> = {};
   const leadFunnelMap: Record<number, number> = {};
+  const preBookedLeadIds = new Set<number>(leads.filter(l => l.preBooked).map(l => l.id));
 
   const isAppt = (status: string) => status === "appt_set" || status === "appt_booked";
 
   for (const l of filteredLeads) {
+
     if (!bySource[l.source]) bySource[l.source] = { total: 0, appointments: 0 };
     bySource[l.source].total++;
     if (isAppt(l.hubStatus)) bySource[l.source].appointments++;
@@ -1164,6 +1167,9 @@ router.get("/leads-hub/stats", async (req, res) => {
       byFunnel[l.funnelId].total++;
       if (isAppt(l.hubStatus)) byFunnel[l.funnelId].appointments++;
       leadFunnelMap[l.id] = l.funnelId;
+      if (!l.preBooked) {
+        byFunnelNonPB[l.funnelId] = (byFunnelNonPB[l.funnelId] || 0) + 1;
+      }
     }
 
     if (l.assignedCsrId) {
@@ -1228,15 +1234,17 @@ router.get("/leads-hub/stats", async (req, res) => {
   let allLeadFunnelMap: Record<number, number> = { ...leadFunnelMap };
   const missingLeadIds = allTouchedLeadIds.filter(id => !(id in allLeadFunnelMap));
   if (missingLeadIds.length > 0) {
-    const extraLeads = await db.select({ id: leadsTable.id, funnelId: leadsTable.funnelId })
+    const extraLeads = await db.select({ id: leadsTable.id, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
       .from(leadsTable)
       .where(inArray(leadsTable.id, missingLeadIds));
     for (const l of extraLeads) {
       if (l.funnelId) allLeadFunnelMap[l.id] = l.funnelId;
+      if (l.preBooked) preBookedLeadIds.add(l.id);
     }
   }
 
   const callsByFunnel: Record<number, { calls: number; texts: number; vms: number }> = {};
+  const callsByFunnelNonPB: Record<number, { calls: number; texts: number; vms: number }> = {};
   for (const r of callsByFunnelRaw) {
     const fId = allLeadFunnelMap[r.leadId];
     if (!fId) continue;
@@ -1244,6 +1252,12 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (r.actionType === "call") callsByFunnel[fId].calls += r.count;
     if (r.actionType === "text") callsByFunnel[fId].texts += r.count;
     if (r.actionType === "voicemail_drop") callsByFunnel[fId].vms += r.count;
+    if (!preBookedLeadIds.has(r.leadId)) {
+      if (!callsByFunnelNonPB[fId]) callsByFunnelNonPB[fId] = { calls: 0, texts: 0, vms: 0 };
+      if (r.actionType === "call") callsByFunnelNonPB[fId].calls += r.count;
+      if (r.actionType === "text") callsByFunnelNonPB[fId].texts += r.count;
+      if (r.actionType === "voicemail_drop") callsByFunnelNonPB[fId].vms += r.count;
+    }
   }
 
   let totalCalls = 0, totalTexts = 0, totalVms = 0;
@@ -1266,12 +1280,20 @@ router.get("/leads-hub/stats", async (req, res) => {
       ...data,
       bookingRate: data.total > 0 ? Math.round((data.appointments / data.total) * 100) : 0,
     })),
-    byFunnel: Object.entries(byFunnel).map(([funnelId, data]) => ({
-      funnelId: Number(funnelId),
-      ...data,
-      bookingRate: data.total > 0 ? Math.round((data.appointments / data.total) * 100) : 0,
-      ...(callsByFunnel[Number(funnelId)] || { calls: 0, texts: 0, vms: 0 }),
-    })),
+    byFunnel: Object.entries(byFunnel).map(([funnelId, data]) => {
+      const fId = Number(funnelId);
+      const nonPBTp = callsByFunnelNonPB[fId] || { calls: 0, texts: 0, vms: 0 };
+      return {
+        funnelId: fId,
+        ...data,
+        bookingRate: data.total > 0 ? Math.round((data.appointments / data.total) * 100) : 0,
+        ...(callsByFunnel[fId] || { calls: 0, texts: 0, vms: 0 }),
+        nonPBTotal: byFunnelNonPB[fId] || 0,
+        nonPBCalls: nonPBTp.calls,
+        nonPBTexts: nonPBTp.texts,
+        nonPBVms: nonPBTp.vms,
+      };
+    }),
     byCsr: Object.entries(byCsr).map(([csrId, data]) => ({
       csrId: Number(csrId),
       ...data,

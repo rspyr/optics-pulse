@@ -57,7 +57,7 @@ interface StatsData {
   appointments: number;
   bookingRate: number;
   bySource: { source: string; total: number; appointments: number; bookingRate: number }[];
-  byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
+  byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number; nonPBTotal: number; nonPBCalls: number; nonPBTexts: number; nonPBVms: number }[];
   byCsr: { csrId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
   byCsrByFunnel: { csrId: number; funnelId: number; total: number; appointments: number; bookingRate: number }[];
 }
@@ -733,7 +733,7 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
                         <p className="text-[9px] text-white/20 uppercase">appts</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-xs font-mono text-blue-400">{f.total > 0 ? ((f.calls + f.texts + f.vms) / f.total).toFixed(1) : "0"}</p>
+                        <p className="text-xs font-mono text-blue-400">{f.nonPBTotal > 0 ? ((f.nonPBCalls + f.nonPBTexts + f.nonPBVms) / f.nonPBTotal).toFixed(1) : "0"}</p>
                         <p className="text-[9px] text-white/20 uppercase">tp/lead</p>
                       </div>
                       <div className="text-right min-w-[40px]">
