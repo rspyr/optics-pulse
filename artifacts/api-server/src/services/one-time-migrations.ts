@@ -609,12 +609,12 @@ const migrations: Migration[] = [
 
       if (mismatchedRows.length > 0) {
         const ids = mismatchedRows.map(r => r.id);
-        await db.execute(sql`
-          UPDATE leads
-          SET assigned_csr_id = booked_by_csr_id,
-              updated_at = NOW()
-          WHERE id = ANY(${ids})
-        `);
+        await db.update(leadsTable)
+          .set({
+            assignedCsrId: sql`booked_by_csr_id`,
+            updatedAt: new Date(),
+          })
+          .where(inArray(leadsTable.id, ids));
         console.log(`[Migration] Realigned assigned_csr_id on ${mismatchedRows.length} booked lead(s) to match booked_by_csr_id`);
         for (const row of mismatchedRows) {
           console.log(`[Migration]   Lead ${row.id}: assigned_csr_id ${row.old_assigned} -> ${row.booked_by_csr_id}`);
