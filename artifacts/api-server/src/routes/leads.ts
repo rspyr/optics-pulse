@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, callAttemptsTable } from "@workspace/db";
+import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
@@ -278,6 +278,206 @@ router.get("/leads/comm-config", async (req, res) => {
       callStatusMessage: "Using native phone dialer",
       textStatusMessage: "Using native SMS app",
     });
+  }
+});
+
+router.get("/leads/search", async (req, res) => {
+  const role = req.session.userRole;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : undefined;
+  const resolvedTenantId = (role === "super_admin" || role === "agency_user")
+    ? (queryTenantId ?? req.session.tenantId ?? null)
+    : (req.session.tenantId ?? null);
+
+  if (!resolvedTenantId) {
+    res.json({ leads: [], total: 0 });
+    return;
+  }
+
+  const q = ((req.query.q as string) || "").trim();
+  const funnelId = req.query.funnelId ? Number(req.query.funnelId) : null;
+  const dateType = (req.query.dateType as string) === "lastTouchpoint" ? "lastTouchpoint" : "created";
+  const startDate = req.query.startDate ? new Date(req.query.startDate as string) : null;
+  const endDate = req.query.endDate ? new Date(req.query.endDate as string) : null;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+  if (!q && !funnelId && !startDate && !endDate) {
+    res.json({ leads: [], total: 0 });
+    return;
+  }
+
+  try {
+    const conditions: SQL[] = [eq(leadsTable.tenantId, resolvedTenantId)];
+
+    if (funnelId) {
+      conditions.push(eq(leadsTable.funnelId, funnelId));
+    }
+
+    const digitsOnly = q.replace(/\D/g, "");
+    const isPhoneSearch = digitsOnly.length >= 4 && digitsOnly.length <= 15;
+
+    let relevanceExpr: SQL;
+    if (q) {
+      const fuzzyConditions: SQL[] = [];
+
+      fuzzyConditions.push(
+        sql`(${leadsTable.firstName} % ${q} OR ${leadsTable.lastName} % ${q} OR (${leadsTable.firstName} || ' ' || ${leadsTable.lastName}) % ${q})`
+      );
+
+      fuzzyConditions.push(
+        sql`(${leadsTable.email} IS NOT NULL AND ${leadsTable.email} % ${q})`
+      );
+
+      if (isPhoneSearch) {
+        fuzzyConditions.push(
+          sql`(${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%')`
+        );
+      }
+
+      fuzzyConditions.push(
+        sql`(LOWER(${leadsTable.firstName}) LIKE LOWER(${`%${q}%`}) OR LOWER(${leadsTable.lastName}) LIKE LOWER(${`%${q}%`}))`
+      );
+
+      fuzzyConditions.push(
+        sql`(${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}))`
+      );
+
+      conditions.push(sql`(${sql.join(fuzzyConditions, sql` OR `)})`);
+
+      relevanceExpr = sql`(
+        GREATEST(
+          COALESCE(similarity(${leadsTable.firstName}, ${q}), 0),
+          COALESCE(similarity(${leadsTable.lastName}, ${q}), 0),
+          COALESCE(similarity(${leadsTable.firstName} || ' ' || ${leadsTable.lastName}, ${q}), 0),
+          COALESCE(similarity(${leadsTable.email}, ${q}), 0),
+          CASE WHEN ${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
+          CASE WHEN LOWER(${leadsTable.firstName}) LIKE LOWER(${`%${q}%`}) OR LOWER(${leadsTable.lastName}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
+          CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END
+        )
+      )`;
+    } else {
+      relevanceExpr = sql`1`;
+    }
+
+    if (dateType === "created") {
+      if (startDate && !isNaN(startDate.getTime())) {
+        conditions.push(gte(leadsTable.createdAt, startDate));
+      }
+      if (endDate && !isNaN(endDate.getTime())) {
+        conditions.push(lte(leadsTable.createdAt, endDate));
+      }
+    }
+
+    const where = and(...conditions);
+
+    if (dateType === "lastTouchpoint" && (startDate || endDate)) {
+      const lastTouchpointExpr = sql`GREATEST(
+        COALESCE((SELECT MAX(ca.attempted_at) FROM call_attempts ca WHERE ca.lead_id = ${leadsTable.id}), '1970-01-01'::timestamp),
+        COALESCE((SELECT MAX(COALESCE(pm.podium_created_at, pm.created_at)) FROM podium_messages pm WHERE pm.lead_id = ${leadsTable.id}), '1970-01-01'::timestamp)
+      )`;
+
+      const touchpointConds: SQL[] = [...conditions];
+      if (startDate && !isNaN(startDate.getTime())) {
+        touchpointConds.push(sql`${lastTouchpointExpr} >= ${startDate}`);
+      }
+      if (endDate && !isNaN(endDate.getTime())) {
+        touchpointConds.push(sql`${lastTouchpointExpr} <= ${endDate}`);
+      }
+      const tpWhere = and(...touchpointConds);
+
+      const orderExpr = q ? desc(sql`relevance`) : desc(sql`last_touchpoint`);
+
+      const [leads, [totalResult]] = await Promise.all([
+        db
+          .select({
+            id: leadsTable.id,
+            tenantId: leadsTable.tenantId,
+            firstName: leadsTable.firstName,
+            lastName: leadsTable.lastName,
+            phone: leadsTable.phone,
+            email: leadsTable.email,
+            source: leadsTable.source,
+            leadType: leadsTable.leadType,
+            interestType: leadsTable.interestType,
+            status: leadsTable.status,
+            hubStatus: leadsTable.hubStatus,
+            dayInSequence: leadsTable.dayInSequence,
+            contactPreferences: leadsTable.contactPreferences,
+            serviceType: leadsTable.serviceType,
+            funnelId: leadsTable.funnelId,
+            assignedCsrId: leadsTable.assignedCsrId,
+            callbackAt: leadsTable.callbackAt,
+            deadReason: leadsTable.deadReason,
+            disposition: leadsTable.disposition,
+            notes: leadsTable.notes,
+            address: leadsTable.address,
+            city: leadsTable.city,
+            state: leadsTable.state,
+            zip: leadsTable.zip,
+            appointmentDate: leadsTable.appointmentDate,
+            appointmentTime: leadsTable.appointmentTime,
+            createdAt: leadsTable.createdAt,
+            updatedAt: leadsTable.updatedAt,
+            relevance: relevanceExpr.as("relevance"),
+            lastTouchpoint: lastTouchpointExpr.as("last_touchpoint"),
+          })
+          .from(leadsTable)
+          .where(tpWhere)
+          .orderBy(orderExpr, desc(leadsTable.createdAt))
+          .limit(limit)
+          .offset(offset),
+        db.select({ count: count() }).from(leadsTable).where(tpWhere),
+      ]);
+
+      res.json({ leads, total: totalResult.count });
+      return;
+    }
+
+    const [leads, [totalResult]] = await Promise.all([
+      db
+        .select({
+          id: leadsTable.id,
+          tenantId: leadsTable.tenantId,
+          firstName: leadsTable.firstName,
+          lastName: leadsTable.lastName,
+          phone: leadsTable.phone,
+          email: leadsTable.email,
+          source: leadsTable.source,
+          leadType: leadsTable.leadType,
+          interestType: leadsTable.interestType,
+          status: leadsTable.status,
+          hubStatus: leadsTable.hubStatus,
+          dayInSequence: leadsTable.dayInSequence,
+          contactPreferences: leadsTable.contactPreferences,
+          serviceType: leadsTable.serviceType,
+          funnelId: leadsTable.funnelId,
+          assignedCsrId: leadsTable.assignedCsrId,
+          callbackAt: leadsTable.callbackAt,
+          deadReason: leadsTable.deadReason,
+          disposition: leadsTable.disposition,
+          notes: leadsTable.notes,
+          address: leadsTable.address,
+          city: leadsTable.city,
+          state: leadsTable.state,
+          zip: leadsTable.zip,
+          appointmentDate: leadsTable.appointmentDate,
+          appointmentTime: leadsTable.appointmentTime,
+          createdAt: leadsTable.createdAt,
+          updatedAt: leadsTable.updatedAt,
+          relevance: relevanceExpr.as("relevance"),
+        })
+        .from(leadsTable)
+        .where(where)
+        .orderBy(q ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: count() }).from(leadsTable).where(where),
+    ]);
+
+    res.json({ leads, total: totalResult.count });
+  } catch (err) {
+    console.error("[LeadSearch] Error:", err);
+    res.status(500).json({ error: "Search failed" });
   }
 });
 

@@ -12,6 +12,7 @@ import {
   type LayoutChangeEvent,
   Dimensions,
   Animated,
+  TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -88,6 +89,82 @@ export default function QueueScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchActive, setSearchActive] = useState(false);
+  const [searchResults, setSearchResults] = useState<{ leads: QueueLead[]; total: number }>({ leads: [], total: 0 });
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [searchFunnelId, setSearchFunnelId] = useState<number | null>(null);
+  const [searchDateType, setSearchDateType] = useState<"created" | "lastTouchpoint">("created");
+  const [searchStartDate, setSearchStartDate] = useState("");
+  const [searchEndDate, setSearchEndDate] = useState("");
+  const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [funnelDropdownOpen, setFunnelDropdownOpen] = useState(false);
+  const [dateTypeDropdownOpen, setDateTypeDropdownOpen] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!effectiveTenantId) return;
+    apiFetch(`/api/funnel-types?tenantId=${effectiveTenantId}`)
+      .then((data: any) => { if (Array.isArray(data)) setFunnelTypes(data); })
+      .catch(() => {});
+  }, [effectiveTenantId, apiFetch]);
+
+  const doSearch = useCallback(async (q: string, fId: number | null, dType: string, sDate: string, eDate: string) => {
+    if (!effectiveTenantId) return;
+    const hasQ = q.trim().length > 0;
+    const hasDate = sDate || eDate;
+    const hasFunnel = fId !== null;
+    if (!hasQ && !hasDate && !hasFunnel) {
+      setSearchResults({ leads: [], total: 0 });
+      setSearchActive(false);
+      return;
+    }
+    setSearchLoading(true);
+    setSearchActive(true);
+    try {
+      const params = new URLSearchParams({ tenantId: String(effectiveTenantId) });
+      if (q.trim()) params.set("q", q.trim());
+      if (fId) params.set("funnelId", String(fId));
+      if (sDate) params.set("startDate", new Date(sDate).toISOString());
+      if (eDate) {
+        const ed = new Date(eDate);
+        ed.setHours(23, 59, 59, 999);
+        params.set("endDate", ed.toISOString());
+      }
+      if (dType === "lastTouchpoint") params.set("dateType", "lastTouchpoint");
+      const data = await apiFetch(`/api/leads/search?${params}`);
+      setSearchResults(data);
+    } catch {} finally { setSearchLoading(false); }
+  }, [effectiveTenantId, apiFetch]);
+
+  const handleSearchChange = useCallback((text: string) => {
+    setSearchQuery(text);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      doSearch(text, searchFunnelId, searchDateType, searchStartDate, searchEndDate);
+    }, 350);
+  }, [doSearch, searchFunnelId, searchDateType, searchStartDate, searchEndDate]);
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery("");
+    setSearchActive(false);
+    setSearchResults({ leads: [], total: 0 });
+    setSearchFunnelId(null);
+    setSearchStartDate("");
+    setSearchEndDate("");
+    setShowFilters(false);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    clearSearch();
+  }, [effectiveTenantId]);
+
+  useEffect(() => {
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
+  }, []);
 
   const [callbackNotification, setCallbackNotification] = useState<QueueLead | null>(null);
   const notifiedCallbackKeysRef = useRef<Set<string>>(new Set());
@@ -266,6 +343,132 @@ export default function QueueScreen() {
         </View>
       </View>
 
+      <View style={[styles.searchContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={styles.searchRow}>
+          <View style={[styles.searchInputWrap, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.mutedForeground} />
+            <TextInput
+              style={[styles.searchInput, { color: colors.foreground }]}
+              placeholder="Search by name, phone, email..."
+              placeholderTextColor={colors.mutedForeground}
+              value={searchQuery}
+              onChangeText={handleSearchChange}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {(searchQuery.length > 0 || searchActive) && (
+              <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Feather name="x" size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            style={[styles.filterButton, { backgroundColor: showFilters || searchFunnelId || searchStartDate || searchEndDate ? colors.primary + "20" : colors.secondary, borderColor: showFilters || searchFunnelId || searchStartDate || searchEndDate ? colors.primary : colors.border }]}
+            onPress={() => setShowFilters(!showFilters)}
+            activeOpacity={0.7}
+          >
+            <Feather name="sliders" size={16} color={showFilters || searchFunnelId || searchStartDate || searchEndDate ? colors.primary : colors.mutedForeground} />
+          </TouchableOpacity>
+        </View>
+
+        {showFilters && (
+          <View style={styles.filtersArea}>
+            <View style={styles.filterRow}>
+              <View style={styles.filterCol}>
+                <Text style={[styles.filterLabel, { color: colors.mutedForeground }]}>FUNNEL</Text>
+                <TouchableOpacity
+                  style={[styles.filterDropdown, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => { setFunnelDropdownOpen(!funnelDropdownOpen); setDateTypeDropdownOpen(false); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.filterDropdownText, { color: colors.foreground }]} numberOfLines={1}>
+                    {searchFunnelId ? funnelTypes.find(f => f.id === searchFunnelId)?.name || "Select" : "All"}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                {funnelDropdownOpen && (
+                  <View style={[styles.filterDropdownList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <TouchableOpacity
+                      style={[styles.filterDropdownItem, !searchFunnelId && { backgroundColor: colors.primary + "15" }]}
+                      onPress={() => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); setSearchFunnelId(null); setFunnelDropdownOpen(false); doSearch(searchQuery, null, searchDateType, searchStartDate, searchEndDate); }}
+                    >
+                      <Text style={[styles.filterDropdownItemText, { color: !searchFunnelId ? colors.primary : colors.foreground }]}>All Funnels</Text>
+                    </TouchableOpacity>
+                    {funnelTypes.map(f => (
+                      <TouchableOpacity
+                        key={f.id}
+                        style={[styles.filterDropdownItem, searchFunnelId === f.id && { backgroundColor: colors.primary + "15" }]}
+                        onPress={() => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); setSearchFunnelId(f.id); setFunnelDropdownOpen(false); doSearch(searchQuery, f.id, searchDateType, searchStartDate, searchEndDate); }}
+                      >
+                        <Text style={[styles.filterDropdownItemText, { color: searchFunnelId === f.id ? colors.primary : colors.foreground }]}>{f.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.filterCol}>
+                <Text style={[styles.filterLabel, { color: colors.mutedForeground }]}>DATE TYPE</Text>
+                <TouchableOpacity
+                  style={[styles.filterDropdown, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => { setDateTypeDropdownOpen(!dateTypeDropdownOpen); setFunnelDropdownOpen(false); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.filterDropdownText, { color: colors.foreground }]} numberOfLines={1}>
+                    {searchDateType === "created" ? "Date Entered" : "Last Touch"}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                {dateTypeDropdownOpen && (
+                  <View style={[styles.filterDropdownList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <TouchableOpacity
+                      style={[styles.filterDropdownItem, searchDateType === "created" && { backgroundColor: colors.primary + "15" }]}
+                      onPress={() => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); setSearchDateType("created"); setDateTypeDropdownOpen(false); doSearch(searchQuery, searchFunnelId, "created", searchStartDate, searchEndDate); }}
+                    >
+                      <Text style={[styles.filterDropdownItemText, { color: searchDateType === "created" ? colors.primary : colors.foreground }]}>Date Entered</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.filterDropdownItem, searchDateType === "lastTouchpoint" && { backgroundColor: colors.primary + "15" }]}
+                      onPress={() => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); setSearchDateType("lastTouchpoint"); setDateTypeDropdownOpen(false); doSearch(searchQuery, searchFunnelId, "lastTouchpoint", searchStartDate, searchEndDate); }}
+                    >
+                      <Text style={[styles.filterDropdownItemText, { color: searchDateType === "lastTouchpoint" ? colors.primary : colors.foreground }]}>Last Touchpoint</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.filterRow}>
+              <View style={styles.filterCol}>
+                <Text style={[styles.filterLabel, { color: colors.mutedForeground }]}>FROM</Text>
+                <TextInput
+                  style={[styles.dateInput, { color: colors.foreground, backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={searchStartDate}
+                  onChangeText={v => { setSearchStartDate(v); if (v.match(/^\d{4}-\d{2}-\d{2}$/) || v === "") doSearch(searchQuery, searchFunnelId, searchDateType, v, searchEndDate); }}
+                  keyboardType="default"
+                  maxLength={10}
+                />
+              </View>
+              <View style={styles.filterCol}>
+                <Text style={[styles.filterLabel, { color: colors.mutedForeground }]}>TO</Text>
+                <TextInput
+                  style={[styles.dateInput, { color: colors.foreground, backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={searchEndDate}
+                  onChangeText={v => { setSearchEndDate(v); if (v.match(/^\d{4}-\d{2}-\d{2}$/) || v === "") doSearch(searchQuery, searchFunnelId, searchDateType, searchStartDate, v); }}
+                  keyboardType="default"
+                  maxLength={10}
+                />
+              </View>
+            </View>
+          </View>
+        )}
+      </View>
+
       {isManager && csrList.length > 0 && (
         <View style={[styles.csrSelector, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.csrHeader}>
@@ -311,47 +514,49 @@ export default function QueueScreen() {
         </View>
       )}
 
-      <ScrollView
-        ref={tabScrollRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={[styles.tabScroll, { borderBottomColor: colors.border }]}
-        contentContainerStyle={styles.tabScrollContent}
-        onLayout={handleScrollViewLayout}
-      >
-        {TABS.map(tab => {
-          const isActive = activeTab === tab.key;
-          const count = tabCounts[tab.key];
-          const tabColor = isActive ? tab.color : colors.mutedForeground;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.tab, isActive && { borderBottomColor: tab.color, borderBottomWidth: 2 }]}
-              onLayout={(e) => handleTabLayout(tab.key, e)}
-              onPress={() => {
-                setActiveTab(tab.key);
-                scrollTabIntoView(tab.key);
-                if (Platform.OS !== "web") Haptics.selectionAsync();
-              }}
-              activeOpacity={0.7}
-            >
-              <Feather name={tab.icon} size={13} color={tabColor} />
-              <Text style={[styles.tabLabel, { color: tabColor }]}>
-                {tab.label}
-              </Text>
-              {count > 0 && (
-                <View style={[styles.countBadge, { backgroundColor: isActive ? tab.color + "30" : colors.secondary }]}>
-                  <Text style={[styles.countText, { color: isActive ? tab.color : colors.mutedForeground }]}>
-                    {count}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {!searchActive && (
+        <ScrollView
+          ref={tabScrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={[styles.tabScroll, { borderBottomColor: colors.border }]}
+          contentContainerStyle={styles.tabScrollContent}
+          onLayout={handleScrollViewLayout}
+        >
+          {TABS.map(tab => {
+            const isActive = activeTab === tab.key;
+            const count = tabCounts[tab.key];
+            const tabColor = isActive ? tab.color : colors.mutedForeground;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                style={[styles.tab, isActive && { borderBottomColor: tab.color, borderBottomWidth: 2 }]}
+                onLayout={(e) => handleTabLayout(tab.key, e)}
+                onPress={() => {
+                  setActiveTab(tab.key);
+                  scrollTabIntoView(tab.key);
+                  if (Platform.OS !== "web") Haptics.selectionAsync();
+                }}
+                activeOpacity={0.7}
+              >
+                <Feather name={tab.icon} size={13} color={tabColor} />
+                <Text style={[styles.tabLabel, { color: tabColor }]}>
+                  {tab.label}
+                </Text>
+                {count > 0 && (
+                  <View style={[styles.countBadge, { backgroundColor: isActive ? tab.color + "30" : colors.secondary }]}>
+                    <Text style={[styles.countText, { color: isActive ? tab.color : colors.mutedForeground }]}>
+                      {count}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
 
-      {callbackNotification && (
+      {!searchActive && callbackNotification && (
         <Animated.View style={[styles.callbackBanner, { backgroundColor: "#F59E0B", transform: [{ translateY: callbackBannerAnim.interpolate({ inputRange: [0, 1], outputRange: [-60, 0] }) }], opacity: callbackBannerAnim }]}>
           <TouchableOpacity style={styles.callbackBannerContent} onPress={handleCallbackBannerPress} activeOpacity={0.8}>
             <Feather name="phone-incoming" size={16} color="#000" />
@@ -369,7 +574,46 @@ export default function QueueScreen() {
         </Animated.View>
       )}
 
-      {loading ? (
+      {searchActive ? (
+        searchLoading ? (
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={searchResults.leads}
+            keyExtractor={(item) => String(item.id)}
+            renderItem={({ item }) => (
+              <LeadCard lead={item} onPress={handleLeadPress} />
+            )}
+            contentContainerStyle={[
+              styles.listContent,
+              { paddingBottom: isWeb ? 34 + 90 : insets.bottom + 90 },
+            ]}
+            ListHeaderComponent={
+              <View style={styles.searchResultsHeader}>
+                <Text style={[styles.searchResultsCount, { color: colors.mutedForeground }]}>
+                  {searchResults.total} result{searchResults.total !== 1 ? "s" : ""}
+                </Text>
+                <TouchableOpacity onPress={clearSearch}>
+                  <Text style={[styles.backToQueue, { color: colors.primary }]}>Back to queue</Text>
+                </TouchableOpacity>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[styles.emptyIconWrap, { backgroundColor: "rgba(255,255,255,0.05)" }]}>
+                  <Feather name="search" size={24} color={colors.mutedForeground} />
+                </View>
+                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No Results</Text>
+                <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
+                  No leads match your search. Try a different name, phone, or adjust filters.
+                </Text>
+              </View>
+            }
+          />
+        )
+      ) : loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -477,4 +721,22 @@ const styles = StyleSheet.create({
   callbackBannerText: { flex: 1 },
   callbackBannerTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#000" },
   callbackBannerName: { fontSize: 12, fontFamily: "Inter_500Medium", color: "#000", opacity: 0.8 },
+  searchContainer: { marginHorizontal: 16, marginBottom: 8, gap: 8 },
+  searchRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  searchInputWrap: { flex: 1, flexDirection: "row", alignItems: "center", borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, gap: 8, height: 42 },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingVertical: 0 },
+  filterButton: { width: 42, height: 42, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  filtersArea: { gap: 8 },
+  filterRow: { flexDirection: "row", gap: 8 },
+  filterCol: { flex: 1, gap: 4 },
+  filterLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },
+  filterDropdown: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  filterDropdownText: { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1 },
+  filterDropdownList: { borderRadius: 8, borderWidth: 1, overflow: "hidden", marginTop: 2 },
+  filterDropdownItem: { paddingHorizontal: 12, paddingVertical: 10 },
+  filterDropdownItemText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  dateInput: { borderRadius: 8, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13, fontFamily: "Inter_400Regular" },
+  searchResultsHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  searchResultsCount: { fontSize: 12, fontFamily: "Inter_500Medium" },
+  backToQueue: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
 });

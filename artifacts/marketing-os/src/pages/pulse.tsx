@@ -15,7 +15,7 @@ import {
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
-  Pencil, Timer, Send, ArrowDown, ExternalLink
+  Pencil, Timer, Send, ArrowDown, ExternalLink, Search
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -554,6 +554,81 @@ function useFunnelTypes(tenantId?: number | null) {
     })();
   }, [tenantId]);
   return funnelMap;
+}
+
+type DateTypeFilter = "created" | "lastTouchpoint";
+
+interface SearchFilters {
+  q: string;
+  funnelId: number | null;
+  dateType: DateTypeFilter;
+  startDate: string;
+  endDate: string;
+}
+
+function useLeadSearch(tenantId?: number | null) {
+  const [filters, setFilters] = useState<SearchFilters>({ q: "", funnelId: null, dateType: "created", startDate: "", endDate: "" });
+  const [results, setResults] = useState<{ leads: LeadData[]; total: number }>({ leads: [], total: 0 });
+  const [searching, setSearching] = useState(false);
+  const [searchActive, setSearchActive] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const doSearch = useCallback(async (f: SearchFilters) => {
+    if (!tenantId) return;
+    const hasQuery = f.q.trim().length > 0;
+    const hasDate = f.startDate || f.endDate;
+    const hasFunnel = f.funnelId !== null;
+    if (!hasQuery && !hasDate && !hasFunnel) {
+      setResults({ leads: [], total: 0 });
+      setSearchActive(false);
+      return;
+    }
+    setSearching(true);
+    setSearchActive(true);
+    try {
+      const params = new URLSearchParams({ tenantId: String(tenantId) });
+      if (f.q.trim()) params.set("q", f.q.trim());
+      if (f.funnelId) params.set("funnelId", String(f.funnelId));
+      if (f.startDate) params.set("startDate", new Date(f.startDate).toISOString());
+      if (f.endDate) {
+        const ed = new Date(f.endDate);
+        ed.setHours(23, 59, 59, 999);
+        params.set("endDate", ed.toISOString());
+      }
+      if (f.dateType === "lastTouchpoint") params.set("dateType", "lastTouchpoint");
+      const res = await fetch(`${API_BASE}/leads/search?${params}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setResults(data);
+      }
+    } catch {} finally { setSearching(false); }
+  }, [tenantId]);
+
+  const updateFilters = useCallback((partial: Partial<SearchFilters>) => {
+    setFilters(prev => {
+      const next = { ...prev, ...partial };
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (partial.q !== undefined) {
+        debounceRef.current = setTimeout(() => doSearch(next), 300);
+      } else {
+        doSearch(next);
+      }
+      return next;
+    });
+  }, [doSearch]);
+
+  const clearSearch = useCallback(() => {
+    setFilters({ q: "", funnelId: null, dateType: "created", startDate: "", endDate: "" });
+    setResults({ leads: [], total: 0 });
+    setSearchActive(false);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, []);
+
+  return { filters, updateFilters, results, searching, searchActive, clearSearch };
 }
 
 function FunnelBadge({ funnelId, funnelMap }: { funnelId?: number | null; funnelMap: Record<number, string> }) {
@@ -2234,6 +2309,16 @@ export default function Leads() {
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
   const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
   const funnelMap = useFunnelTypes(effectiveTenantId);
+  const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
+  const [showSearchFilters, setShowSearchFilters] = useState(false);
+  const prevTenantRef = useRef(effectiveTenantId);
+  useEffect(() => {
+    if (prevTenantRef.current !== effectiveTenantId) {
+      clearSearch();
+      setShowSearchFilters(false);
+      prevTenantRef.current = effectiveTenantId;
+    }
+  }, [effectiveTenantId, clearSearch]);
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
   const deepLinkHandled = useRef(false);
@@ -2530,8 +2615,130 @@ export default function Leads() {
         </PremiumCard>
       )}
 
+      <div className="mb-4">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
+            <input
+              type="text"
+              value={searchFilters.q}
+              onChange={e => updateSearchFilters({ q: e.target.value })}
+              placeholder="Search leads by name, phone, email..."
+              className="w-full bg-card/60 border border-white/10 rounded-xl pl-10 pr-10 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/30 transition-all"
+            />
+            {(searchFilters.q || searchActive) && (
+              <button onClick={clearSearch} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowSearchFilters(!showSearchFilters)}
+            className={cn(
+              "p-2.5 rounded-xl border transition-all shrink-0",
+              showSearchFilters || searchFilters.funnelId || searchFilters.startDate || searchFilters.endDate
+                ? "bg-primary/10 border-primary/30 text-primary"
+                : "bg-card/60 border-white/10 text-white/30 hover:text-white/60"
+            )}
+            title="Filters"
+          >
+            <Filter className="w-4 h-4" />
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {showSearchFilters && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="flex flex-wrap items-end gap-3 mt-3 p-3 rounded-xl bg-card/40 border border-white/5">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-white/40 uppercase tracking-wider">Funnel</label>
+                  <Select
+                    value={searchFilters.funnelId ? String(searchFilters.funnelId) : "__all__"}
+                    onValueChange={v => updateSearchFilters({ funnelId: v === "__all__" ? null : parseInt(v) })}
+                  >
+                    <SelectTrigger className="w-[160px] bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white">
+                      <SelectValue placeholder="All Funnels" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Funnels</SelectItem>
+                      {Object.entries(funnelMap).map(([id, name]) => (
+                        <SelectItem key={id} value={id}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-white/40 uppercase tracking-wider">Date Type</label>
+                  <Select value={searchFilters.dateType} onValueChange={v => updateSearchFilters({ dateType: v as DateTypeFilter })}>
+                    <SelectTrigger className="w-[160px] bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="created">Date Entered</SelectItem>
+                      <SelectItem value="lastTouchpoint">Last Touchpoint</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-white/40 uppercase tracking-wider">From</label>
+                  <input
+                    type="date"
+                    value={searchFilters.startDate}
+                    onChange={e => updateSearchFilters({ startDate: e.target.value })}
+                    className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white [color-scheme:dark]"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-white/40 uppercase tracking-wider">To</label>
+                  <input
+                    type="date"
+                    value={searchFilters.endDate}
+                    onChange={e => updateSearchFilters({ endDate: e.target.value })}
+                    className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white [color-scheme:dark]"
+                  />
+                </div>
+
+                {(searchFilters.funnelId || searchFilters.startDate || searchFilters.endDate) && (
+                  <button
+                    onClick={() => updateSearchFilters({ funnelId: null, startDate: "", endDate: "" })}
+                    className="text-xs text-white/40 hover:text-white/70 transition-colors px-2 py-1.5"
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       <div className="flex gap-6">
         <div className="flex-1 min-w-0">
+          {selectedLead && effectiveTenantId ? (
+            <LeadDetailView
+              lead={selectedLead}
+              tenantId={effectiveTenantId}
+              onBack={() => setSelectedLead(null)}
+              onUpdate={() => { refetch(); refetchStats(); }}
+              onSpiffEarned={handleSpiffEarned}
+              timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
+              funnelMap={funnelMap}
+              canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
+              currentUserId={user?.id}
+              isAdminRole={isAdmin}
+            />
+          ) : (
+          <>
+          {!searchActive && (
           <div className="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
             {QUEUE_TABS.map(tab => (
               <button
@@ -2556,22 +2763,42 @@ export default function Leads() {
               </button>
             ))}
           </div>
+          )}
 
-          {activeTab === "archive" ? (
+          {searchActive ? (
+            searching ? (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              </div>
+            ) : searchResults.leads.length === 0 ? (
+              <PremiumCard className="py-16 text-center">
+                <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mx-auto mb-4">
+                  <Search className="w-6 h-6 text-white/30" />
+                </div>
+                <h3 className="font-display text-xl text-white mb-2">No Results</h3>
+                <p className="text-muted-foreground text-sm max-w-md mx-auto">
+                  No leads match your search. Try a different name, phone number, or adjust filters.
+                </p>
+              </PremiumCard>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-white/40">{searchResults.total} result{searchResults.total !== 1 ? "s" : ""}</span>
+                  <button onClick={clearSearch} className="text-xs text-white/40 hover:text-white/70 transition-colors flex items-center gap-1">
+                    <X className="w-3 h-3" /> Back to queue
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  <AnimatePresence mode="popLayout">
+                    {searchResults.leads.map((lead: LeadData) => (
+                      <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} funnelMap={funnelMap} timezone={queueData.timezone || "America/New_York"} />
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </div>
+            )
+          ) : activeTab === "archive" ? (
             effectiveTenantId ? <ArchiveView tenantId={effectiveTenantId} timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"} /> : <p className="text-sm text-white/30">Select a tenant</p>
-          ) : selectedLead && effectiveTenantId ? (
-            <LeadDetailView
-              lead={selectedLead}
-              tenantId={effectiveTenantId}
-              onBack={() => setSelectedLead(null)}
-              onUpdate={() => { refetch(); refetchStats(); }}
-              onSpiffEarned={handleSpiffEarned}
-              timezone={queueData.timezone || tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York"}
-              funnelMap={funnelMap}
-              canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
-              currentUserId={user?.id}
-              isAdminRole={isAdmin}
-            />
           ) : loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -2597,6 +2824,8 @@ export default function Leads() {
                 ))}
               </AnimatePresence>
             </div>
+          )}
+          </>
           )}
         </div>
 
