@@ -33,7 +33,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const spendWhere = spendConditions.length > 0 ? and(...spendConditions) : undefined;
 
   const closeRateConditions: SQL[] = [];
-  closeRateConditions.push(sql`${leadsTable.status} IN ('booked', 'sold')`);
+  closeRateConditions.push(sql`(${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`);
   if (tenantId) closeRateConditions.push(eq(leadsTable.tenantId, tenantId));
   if (startDate) closeRateConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
   if (endDate) closeRateConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
@@ -41,7 +41,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const [leadStats, jobStats, platformSpendResult, closeRateStats] = await Promise.all([
     db.select({
       totalLeads: count(),
-      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
+      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`,
       soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
     }).from(leadsTable).where(leadWhere),
     db.select({
@@ -254,7 +254,7 @@ router.get("/dashboard/benchmarks", async (req, res) => {
   }
 
   const closeRateConditions: SQL[] = [
-    sql`${leadsTable.status} IN ('booked', 'sold')`,
+    sql`(${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`,
     inArray(leadsTable.tenantId,
       db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isActive, true))
     ),
@@ -265,7 +265,7 @@ router.get("/dashboard/benchmarks", async (req, res) => {
   const [leadStats, jobStats, spendResult, closeRateStats] = await Promise.all([
     db.select({
       totalLeads: count(),
-      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
+      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`,
       soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
     }).from(leadsTable).where(and(...leadConditions)),
     db.select({
@@ -325,7 +325,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
     db.select({
       tenantId: leadsTable.tenantId,
       totalLeads: count(),
-      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
+      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`,
       soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
     }).from(leadsTable)
       .where(inArray(leadsTable.tenantId, tenantIds))
@@ -359,7 +359,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
       ))
       .where(and(
         inArray(leadsTable.tenantId, tenantIds),
-        sql`${leadsTable.status} IN ('booked', 'sold')`,
+        sql`(${leadsTable.status} IN ('booked', 'sold') OR ${leadsTable.hubStatus} = 'appt_booked')`,
       ))
       .groupBy(leadsTable.tenantId),
   ]);

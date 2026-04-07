@@ -110,7 +110,8 @@ export default function Dashboard() {
     { label: "Ad Spend", value: formatCurrency(overview.totalSpend), icon: Activity },
     { label: "ROAS", value: `${overview.roas.toFixed(2)}x`, icon: Target },
     { label: "Total Leads", value: overview.totalLeads.toString(), icon: Users },
-    { label: "Close Rate", value: `${overview.closeRate}%`, icon: Target, sub: `${overview.invoicedJobCount} invoiced / ${overview.bookedLeads} booked` },
+    { label: "Booking Rate", value: `${overview.bookingRate}%`, icon: Users, sub: `Leads → Appointments · ${overview.bookedLeads} booked / ${overview.totalLeads} leads` },
+    { label: "Close Rate", value: `${overview.closeRate}%`, icon: Target, sub: `Appointments → Invoiced Jobs · ${overview.invoicedJobCount} invoiced / ${overview.bookedLeads} booked` },
   ];
 
   const displayChartData = chartData && Array.isArray(chartData) && chartData.length > 0
