@@ -12,10 +12,13 @@ export interface DashboardOverview {
   googleSpend: number;
   metaSpend: number;
   totalRevenue: number;
+  paidRevenue: number;
+  unpaidRevenue: number;
   roas: number;
   totalLeads: number;
   bookedLeads: number;
   soldLeads: number;
+  invoicedJobCount: number;
   bookingRate: number;
   closeRate: number;
   avgSaleValue: number;

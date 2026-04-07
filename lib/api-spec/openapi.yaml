@@ -1504,6 +1504,10 @@ components:
           type: number
         totalRevenue:
           type: number
+        paidRevenue:
+          type: number
+        unpaidRevenue:
+          type: number
         roas:
           type: number
         totalLeads:
@@ -1511,6 +1515,8 @@ components:
         bookedLeads:
           type: integer
         soldLeads:
+          type: integer
+        invoicedJobCount:
           type: integer
         bookingRate:
           type: number
@@ -1533,6 +1539,10 @@ components:
               type: number
             totalRevenue:
               type: number
+            paidRevenue:
+              type: number
+            unpaidRevenue:
+              type: number
             roas:
               type: number
             totalLeads:
@@ -1540,6 +1550,8 @@ components:
             bookedLeads:
               type: integer
             soldLeads:
+              type: integer
+            invoicedJobCount:
               type: integer
             bookingRate:
               type: number
@@ -1552,7 +1564,7 @@ components:
             attributionMatchRate:
               type: number
           nullable: true
-      required: [totalSpend, googleSpend, metaSpend, totalRevenue, roas, totalLeads, bookedLeads, soldLeads, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
+      required: [totalSpend, googleSpend, metaSpend, totalRevenue, paidRevenue, unpaidRevenue, roas, totalLeads, bookedLeads, soldLeads, invoicedJobCount, bookingRate, closeRate, avgSaleValue, cpl, attributionMatchRate]
 
     SpendRevenueDataPoint:
       type: object

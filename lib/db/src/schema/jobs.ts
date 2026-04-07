@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -25,6 +25,14 @@ export const jobsTable = pgTable("jobs", {
   matchLevel: text("match_level"),
   completedAt: timestamp("completed_at"),
   stDataExpiresAt: timestamp("st_data_expires_at"),
+  hasInvoice: boolean("has_invoice").default(false),
+  invoiceTotal: real("invoice_total"),
+  invoiceRebateAmount: real("invoice_rebate_amount").default(0),
+  invoicePaidAmount: real("invoice_paid_amount"),
+  invoiceBalance: real("invoice_balance"),
+  stInvoiceId: text("st_invoice_id"),
+  invoiceDate: timestamp("invoice_date"),
+  invoicePaidOn: timestamp("invoice_paid_on"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

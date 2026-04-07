@@ -106,11 +106,11 @@ export default function Dashboard() {
   }
 
   const metrics = [
-    { label: "Total Revenue", value: formatCurrency(overview.totalRevenue), icon: DollarSign },
+    { label: "Total Revenue", value: formatCurrency(overview.totalRevenue), icon: DollarSign, sub: overview.paidRevenue > 0 || overview.unpaidRevenue > 0 ? `${formatCurrency(overview.paidRevenue)} paid · ${formatCurrency(overview.unpaidRevenue)} unpaid` : undefined },
     { label: "Ad Spend", value: formatCurrency(overview.totalSpend), icon: Activity },
     { label: "ROAS", value: `${overview.roas.toFixed(2)}x`, icon: Target },
     { label: "Total Leads", value: overview.totalLeads.toString(), icon: Users },
-    { label: "Match Rate", value: `${overview.attributionMatchRate}%`, icon: Link },
+    { label: "Close Rate", value: `${overview.closeRate}%`, icon: Target, sub: `${overview.invoicedJobCount} invoiced / ${overview.bookedLeads} booked` },
   ];
 
   const displayChartData = chartData && Array.isArray(chartData) && chartData.length > 0
@@ -158,6 +158,7 @@ export default function Dashboard() {
             <div>
               <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">{metric.label}</p>
               <p className="text-3xl font-display text-white">{metric.value}</p>
+              {"sub" in metric && metric.sub && <p className="text-muted-foreground text-[11px] mt-1">{metric.sub}</p>}
             </div>
           </PremiumCard>
         ))}

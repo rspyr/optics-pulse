@@ -1,7 +1,7 @@
 import { db, tenantsTable, jobsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, type STJob } from "./integrations/service-titan";
+import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, type STJob, type STInvoice } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -457,6 +457,109 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
   }
 }
 
+export async function syncServiceTitanInvoices(tenantId: number): Promise<{ synced: number; error?: string }> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, error: "Tenant not found" };
+
+  if (tenant.stSyncPaused) {
+    return { synced: 0, error: "ServiceTitan sync is paused for this tenant" };
+  }
+
+  const config = getTenantConfig(tenant);
+  if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
+    return { synced: 0, error: "ServiceTitan not configured" };
+  }
+
+  const syncLog = await logSync(tenantId, "service_titan", "invoices", new Date());
+
+  try {
+    const stConfig = {
+      clientId: config.serviceTitanClientId,
+      clientSecret: config.serviceTitanClientSecret,
+      tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+      appKey: config.serviceTitanAppKey,
+    };
+
+    let synced = 0;
+
+    async function processInvoiceBatch(invoices: STInvoice[]) {
+      const jobInvoiceMap = new Map<string, typeof invoices>();
+      for (const invoice of invoices) {
+        if (!invoice.job) continue;
+        const jobId = String(invoice.job.id);
+        const existing = jobInvoiceMap.get(jobId) || [];
+        existing.push(invoice);
+        jobInvoiceMap.set(jobId, existing);
+      }
+
+      for (const [stJobId, jobInvoices] of jobInvoiceMap.entries()) {
+        const jobIdHash = hashStJobId(stJobId);
+
+        const [existingJob] = await db.select({ id: jobsTable.id, stInvoiceId: jobsTable.stInvoiceId })
+          .from(jobsTable)
+          .where(and(
+            eq(jobsTable.tenantId, tenantId),
+            sql`(${jobsTable.stJobId} = ${stJobId} OR ${jobsTable.stJobIdHash} = ${jobIdHash})`,
+          ))
+          .limit(1);
+
+        if (!existingJob) continue;
+
+        const sorted = jobInvoices.sort((a, b) => {
+          const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+          const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        let totalInvoiceAmount = 0;
+        let totalRebate = 0;
+        let totalPaid = 0;
+        let totalBalance = 0;
+        let latestPaidOn: Date | null = null;
+
+        for (const inv of sorted) {
+          const parsed = parseInvoiceData(inv);
+          totalInvoiceAmount += parsed.invoiceTotal;
+          totalRebate += parsed.invoiceRebateAmount;
+          totalPaid += parsed.invoicePaidAmount;
+          totalBalance += parsed.invoiceBalance;
+          if (parsed.invoicePaidOn && (!latestPaidOn || parsed.invoicePaidOn > latestPaidOn)) {
+            latestPaidOn = parsed.invoicePaidOn;
+          }
+        }
+
+        const latestInvoice = parseInvoiceData(sorted[0]);
+
+        await db.update(jobsTable)
+          .set({
+            hasInvoice: true,
+            invoiceTotal: totalInvoiceAmount,
+            invoiceRebateAmount: totalRebate,
+            invoicePaidAmount: totalPaid > 0 ? totalPaid : 0,
+            invoiceBalance: totalBalance,
+            stInvoiceId: latestInvoice.stInvoiceId,
+            invoiceDate: latestInvoice.invoiceDate,
+            invoicePaidOn: latestPaidOn,
+            updatedAt: new Date(),
+          })
+          .where(eq(jobsTable.id, existingJob.id));
+        synced++;
+      }
+    }
+
+    await fetchInvoices(stConfig, undefined, processInvoiceBatch);
+
+    await completeSyncLog(syncLog.id, "completed", synced);
+    console.log(`[Sync] ServiceTitan invoices: synced ${synced} invoices for tenant ${tenantId}`);
+    return { synced };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await completeSyncLog(syncLog.id, "error", 0, message);
+    console.error(`[Sync] ServiceTitan invoices error for tenant ${tenantId}:`, message);
+    return { synced: 0, error: message };
+  }
+}
+
 let syncTimers: ReturnType<typeof setInterval>[] = [];
 
 export function startSyncScheduler() {
@@ -478,6 +581,11 @@ export function startSyncScheduler() {
     }
   }, campaignSyncInterval);
 
+  const invoiceSyncInterval = 60 * 60 * 1000;
+  const invoiceTimer = setInterval(async () => {
+    console.log("[SyncScheduler] ServiceTitan invoice sync PAUSED — integration disabled");
+  }, invoiceSyncInterval);
+
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
   const reviewTimer = setInterval(async () => {
     console.log("[SyncScheduler] Podium review sync PAUSED — integration disabled");
@@ -488,8 +596,8 @@ export function startSyncScheduler() {
     console.log("[SyncScheduler] CallRail sync PAUSED — integration disabled");
   }, callRailSyncInterval);
 
-  syncTimers = [jobsTimer, campaignTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: ST/Podium/CallRail PAUSED, campaigns every 60min");
+  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer, callRailTimer];
+  console.log("[SyncScheduler] Started: ST/Podium/CallRail PAUSED, campaigns every 60min, invoices PAUSED");
 }
 
 export function stopSyncScheduler() {

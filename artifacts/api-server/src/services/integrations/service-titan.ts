@@ -361,6 +361,116 @@ function extractJobTypeName(stJob: STJob): string {
   return "Service";
 }
 
+export interface STInvoiceItem {
+  id: number;
+  description: string;
+  quantity: string;
+  price: string;
+  total: string;
+  type: string;
+  skuName: string;
+}
+
+export interface STInvoice {
+  id: number;
+  total: string;
+  balance: string;
+  invoiceDate: string;
+  paidOn: string | null;
+  job: { id: number; number: string; type: string } | null;
+  items: STInvoiceItem[];
+  active: boolean;
+}
+
+interface STInvoicesResponse {
+  data: STInvoice[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
+export async function fetchInvoices(
+  config: STAuthConfig,
+  modifiedAfter?: string,
+  processBatch?: (invoices: STInvoice[]) => Promise<void>,
+): Promise<STInvoice[]> {
+  let page = 1;
+  const pageSize = 50;
+  let hasMore = true;
+  const allInvoices: STInvoice[] = [];
+  let batchInvoices: STInvoice[] = [];
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (modifiedAfter) {
+      params.set("modifiedOnOrAfter", modifiedAfter);
+    }
+
+    const response = await stFetch<STInvoicesResponse>(
+      config,
+      `/invoices?${params.toString()}`,
+      {},
+      "accounting",
+    );
+
+    const jobInvoices = response.data.filter((inv) => inv.job && inv.active !== false);
+    batchInvoices.push(...jobInvoices);
+    hasMore = response.hasMore;
+
+    if (batchInvoices.length >= 100 || !hasMore) {
+      if (processBatch) {
+        await processBatch(batchInvoices);
+      } else {
+        allInvoices.push(...batchInvoices);
+      }
+      batchInvoices = [];
+    }
+
+    page++;
+    if (page > 100) break;
+  }
+
+  if (batchInvoices.length > 0) {
+    if (processBatch) {
+      await processBatch(batchInvoices);
+    } else {
+      allInvoices.push(...batchInvoices);
+    }
+  }
+
+  return allInvoices;
+}
+
+export function parseInvoiceData(invoice: STInvoice) {
+  const total = parseFloat(invoice.total) || 0;
+  const balance = parseFloat(invoice.balance) || 0;
+
+  let rebateAmount = 0;
+  for (const item of invoice.items || []) {
+    const itemTotal = parseFloat(item.total) || 0;
+    if (itemTotal < 0) {
+      rebateAmount += Math.abs(itemTotal);
+    }
+  }
+
+  const paidAmount = total - balance;
+
+  return {
+    stInvoiceId: String(invoice.id),
+    invoiceTotal: total,
+    invoiceRebateAmount: rebateAmount,
+    invoicePaidAmount: paidAmount > 0 ? paidAmount : 0,
+    invoiceBalance: balance,
+    invoiceDate: invoice.invoiceDate ? new Date(invoice.invoiceDate) : null,
+    invoicePaidOn: invoice.paidOn ? new Date(invoice.paidOn) : null,
+    stJobId: invoice.job ? String(invoice.job.id) : null,
+  };
+}
+
 export async function patchJobCustomField(
   config: STAuthConfig,
   jobId: number,

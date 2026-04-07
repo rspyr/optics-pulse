@@ -40,7 +40,10 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
     }).from(leadsTable).where(leadWhere),
     db.select({
       totalJobs: count(),
-      totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN ${jobsTable.revenue} ELSE 0 END), 0)`,
+      totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue}) ELSE 0 END), 0)`,
+      paidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true THEN COALESCE(${jobsTable.invoicePaidAmount}, 0) ELSE 0 END), 0)`,
+      unpaidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true THEN COALESCE(${jobsTable.invoiceBalance}, 0) ELSE 0 END), 0)`,
+      invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
       matchedEvents: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} != 'unmatched')`,
     }).from(jobsTable).where(jobWhere),
     db.select({
@@ -61,12 +64,15 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const bookedLeads = Number(leadStats[0]?.bookedLeads ?? 0);
   const soldLeads = Number(leadStats[0]?.soldLeads ?? 0);
   const totalRevenue = Number(jobStats[0]?.totalRevenue ?? 0);
+  const paidRevenue = Number(jobStats[0]?.paidRevenue ?? 0);
+  const unpaidRevenue = Number(jobStats[0]?.unpaidRevenue ?? 0);
+  const invoicedJobCount = Number(jobStats[0]?.invoicedJobCount ?? 0);
   const matchedEvents = Number(jobStats[0]?.matchedEvents ?? 0);
   const totalJobs = Number(jobStats[0]?.totalJobs ?? 0);
 
   const bookingRate = totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0;
-  const closeRate = bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0;
-  const avgSaleValue = soldLeads > 0 ? Math.round(totalRevenue / soldLeads) : 0;
+  const closeRate = bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0;
+  const avgSaleValue = invoicedJobCount > 0 ? Math.round(totalRevenue / invoicedJobCount) : (soldLeads > 0 ? Math.round(totalRevenue / soldLeads) : 0);
   const cpl = totalLeads > 0 ? Math.round((totalSpend / totalLeads) * 100) / 100 : 0;
   const roas = totalSpend > 0 ? Math.round((totalRevenue / totalSpend) * 100) / 100 : 0;
   const attributionMatchRate = totalJobs > 0 ? Math.round((matchedEvents / totalJobs) * 100 * 10) / 10 : 0;
@@ -76,10 +82,13 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
     googleSpend: Math.round(googleSpend * 100) / 100,
     metaSpend: Math.round(metaSpend * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
+    paidRevenue: Math.round(paidRevenue * 100) / 100,
+    unpaidRevenue: Math.round(unpaidRevenue * 100) / 100,
     roas,
     totalLeads,
     bookedLeads,
     soldLeads,
+    invoicedJobCount,
     bookingRate,
     closeRate,
     avgSaleValue,
@@ -147,7 +156,7 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
       .orderBy(campaignDailyStatsTable.date),
     db.select({
       date: sql<string>`TO_CHAR(${jobsTable.completedAt}, 'YYYY-MM-DD')`,
-      revenue: sql<number>`COALESCE(SUM(${jobsTable.revenue}), 0)`,
+      revenue: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})), 0)`,
     })
       .from(jobsTable)
       .where(and(...jobConditions))
@@ -232,7 +241,8 @@ router.get("/dashboard/benchmarks", async (req, res) => {
       soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
     }).from(leadsTable).where(and(...leadConditions)),
     db.select({
-      revenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN ${jobsTable.revenue} ELSE 0 END), 0)`,
+      revenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue}) ELSE 0 END), 0)`,
+      invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
     }).from(jobsTable).where(and(...jobConditions)),
     db.select({
       total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
@@ -243,16 +253,17 @@ router.get("/dashboard/benchmarks", async (req, res) => {
 
   const totalLeads = Number(leadStats[0]?.totalLeads ?? 0);
   const bookedLeads = Number(leadStats[0]?.bookedLeads ?? 0);
+  const invoicedJobCount = Number(jobStats[0]?.invoicedJobCount ?? 0);
   const soldLeads = Number(leadStats[0]?.soldLeads ?? 0);
   const revenue = Number(jobStats[0]?.revenue ?? 0);
   const spend = Number(spendResult[0]?.total ?? 0);
 
-  const avgSaleValue = soldLeads > 0 ? Math.round((revenue / soldLeads) * 100) / 100 : 0;
+  const avgSaleValue = invoicedJobCount > 0 ? Math.round((revenue / invoicedJobCount) * 100) / 100 : (soldLeads > 0 ? Math.round((revenue / soldLeads) * 100) / 100 : 0);
 
   res.json({
     cpl: totalLeads > 0 ? Math.round((spend / totalLeads) * 100) / 100 : 0,
     bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
-    closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
+    closeRate: bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0,
     avgSaleValue,
     roas: spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0,
   });
@@ -279,7 +290,8 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
       .groupBy(leadsTable.tenantId),
     db.select({
       tenantId: jobsTable.tenantId,
-      mtdRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN ${jobsTable.revenue} ELSE 0 END), 0)`,
+      mtdRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue}) ELSE 0 END), 0)`,
+      invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
     }).from(jobsTable)
       .where(inArray(jobsTable.tenantId, tenantIds))
       .groupBy(jobsTable.tenantId),
@@ -304,6 +316,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
     const totalLeads = Number(l?.totalLeads ?? 0);
     const bookedLeads = Number(l?.bookedLeads ?? 0);
     const soldLeads = Number(l?.soldLeads ?? 0);
+    const invoicedJobCount = Number(j?.invoicedJobCount ?? 0);
     const mtdRevenue = Number(j?.mtdRevenue ?? 0);
     const mtdSpend = Number(s?.total ?? 0);
 
@@ -314,7 +327,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
       mtdRevenue: Math.round(mtdRevenue * 100) / 100,
       cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
       bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
-      closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
+      closeRate: bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0,
       roas: mtdSpend > 0 ? Math.round((mtdRevenue / mtdSpend) * 100) / 100 : 0,
       leadCount: totalLeads,
     };
