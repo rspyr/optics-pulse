@@ -281,6 +281,58 @@ router.get("/leads/comm-config", async (req, res) => {
   }
 });
 
+function parseNaturalDate(input: string): { start: Date; end: Date } | null {
+  const trimmed = input.trim();
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  const monthNames: Record<string, number> = {
+    january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2,
+    april: 3, apr: 3, may: 4, june: 5, jun: 5, july: 6, jul: 6,
+    august: 7, aug: 7, september: 8, sep: 8, sept: 8,
+    october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11,
+  };
+
+  let month: number | null = null;
+  let day: number | null = null;
+  let year: number = currentYear;
+
+  const slashDash = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  if (slashDash) {
+    month = parseInt(slashDash[1], 10) - 1;
+    day = parseInt(slashDash[2], 10);
+    if (slashDash[3]) {
+      year = parseInt(slashDash[3], 10);
+      if (year < 100) year += 2000;
+    }
+  }
+
+  if (month === null) {
+    const wordDate = trimmed.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:\s*,?\s*(\d{2,4}))?$/);
+    if (wordDate) {
+      const monthKey = wordDate[1].toLowerCase();
+      if (monthKey in monthNames) {
+        month = monthNames[monthKey];
+        day = parseInt(wordDate[2], 10);
+        if (wordDate[3]) {
+          year = parseInt(wordDate[3], 10);
+          if (year < 100) year += 2000;
+        }
+      }
+    }
+  }
+
+  if (month === null || day === null) return null;
+  if (month < 0 || month > 11 || day < 1 || day > 31) return null;
+
+  const start = new Date(year, month, day, 0, 0, 0, 0);
+  if (isNaN(start.getTime())) return null;
+  if (start.getMonth() !== month || start.getDate() !== day) return null;
+
+  const end = new Date(year, month, day, 23, 59, 59, 999);
+  return { start, end };
+}
+
 router.get("/leads/search", async (req, res) => {
   const role = req.session.userRole;
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : undefined;
@@ -301,12 +353,23 @@ router.get("/leads/search", async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
 
-  const validStartDate = startDate && !isNaN(startDate.getTime()) ? startDate : null;
-  const validEndDate = endDate && !isNaN(endDate.getTime()) ? endDate : null;
+  let validStartDate = startDate && !isNaN(startDate.getTime()) ? startDate : null;
+  let validEndDate = endDate && !isNaN(endDate.getTime()) ? endDate : null;
 
-  console.log(`[LeadSearch] tenant=${resolvedTenantId} q="${q}" funnelId=${funnelId} dateType=${dateType} startDate=${validStartDate?.toISOString() ?? "null"} endDate=${validEndDate?.toISOString() ?? "null"}`);
+  let textQuery = q;
+  if (q && !validStartDate && !validEndDate) {
+    const parsed = parseNaturalDate(q);
+    if (parsed) {
+      validStartDate = parsed.start;
+      validEndDate = parsed.end;
+      textQuery = "";
+      console.log(`[LeadSearch] parsed natural date from q="${q}": ${parsed.start.toISOString()} - ${parsed.end.toISOString()}`);
+    }
+  }
 
-  if (!q && !funnelId && !validStartDate && !validEndDate) {
+  console.log(`[LeadSearch] tenant=${resolvedTenantId} q="${textQuery}" funnelId=${funnelId} dateType=${dateType} startDate=${validStartDate?.toISOString() ?? "null"} endDate=${validEndDate?.toISOString() ?? "null"}`);
+
+  if (!textQuery && !funnelId && !validStartDate && !validEndDate) {
     console.log("[LeadSearch] No search criteria provided, returning empty");
     res.json({ leads: [], total: 0 });
     return;
@@ -319,19 +382,19 @@ router.get("/leads/search", async (req, res) => {
       conditions.push(eq(leadsTable.funnelId, funnelId));
     }
 
-    const digitsOnly = q.replace(/\D/g, "");
+    const digitsOnly = textQuery.replace(/\D/g, "");
     const isPhoneSearch = digitsOnly.length >= 1 && digitsOnly.length <= 15;
 
     let relevanceExpr: SQL;
-    if (q) {
+    if (textQuery) {
       const fuzzyConditions: SQL[] = [];
 
       fuzzyConditions.push(
-        sql`(${leadsTable.firstName} % ${q} OR ${leadsTable.lastName} % ${q} OR (COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, '')) % ${q})`
+        sql`(${leadsTable.firstName} % ${textQuery} OR ${leadsTable.lastName} % ${textQuery} OR (COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, '')) % ${textQuery})`
       );
 
       fuzzyConditions.push(
-        sql`(${leadsTable.email} IS NOT NULL AND ${leadsTable.email} % ${q})`
+        sql`(${leadsTable.email} IS NOT NULL AND ${leadsTable.email} % ${textQuery})`
       );
 
       if (isPhoneSearch) {
@@ -341,34 +404,34 @@ router.get("/leads/search", async (req, res) => {
       }
 
       fuzzyConditions.push(
-        sql`(LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${q}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${q}%`}))`
+        sql`(LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${textQuery}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${textQuery}%`}))`
       );
 
       fuzzyConditions.push(
-        sql`(${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}))`
+        sql`(${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${textQuery}%`}))`
       );
 
       fuzzyConditions.push(
-        sql`(${funnelTypesTable.name} IS NOT NULL AND ${funnelTypesTable.name} % ${q})`
+        sql`(${funnelTypesTable.name} IS NOT NULL AND ${funnelTypesTable.name} % ${textQuery})`
       );
 
       fuzzyConditions.push(
-        sql`(${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${q}%`}))`
+        sql`(${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${textQuery}%`}))`
       );
 
       conditions.push(sql`(${sql.join(fuzzyConditions, sql` OR `)})`);
 
       relevanceExpr = sql`(
         GREATEST(
-          COALESCE(similarity(${leadsTable.firstName}, ${q}), 0),
-          COALESCE(similarity(${leadsTable.lastName}, ${q}), 0),
-          COALESCE(similarity(COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, ''), ${q}), 0),
-          COALESCE(similarity(${leadsTable.email}, ${q}), 0),
+          COALESCE(similarity(${leadsTable.firstName}, ${textQuery}), 0),
+          COALESCE(similarity(${leadsTable.lastName}, ${textQuery}), 0),
+          COALESCE(similarity(COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, ''), ${textQuery}), 0),
+          COALESCE(similarity(${leadsTable.email}, ${textQuery}), 0),
           CASE WHEN ${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
-          CASE WHEN LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${q}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
-          CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
-          COALESCE(similarity(${funnelTypesTable.name}, ${q}), 0),
-          CASE WHEN ${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END
+          CASE WHEN LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${textQuery}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${textQuery}%`}) THEN 0.5 ELSE 0 END,
+          CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${textQuery}%`}) THEN 0.5 ELSE 0 END,
+          COALESCE(similarity(${funnelTypesTable.name}, ${textQuery}), 0),
+          CASE WHEN ${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${textQuery}%`}) THEN 0.5 ELSE 0 END
         )
       )`;
     } else {
@@ -401,7 +464,7 @@ router.get("/leads/search", async (req, res) => {
       }
       const tpWhere = and(...touchpointConds);
 
-      const orderExpr = q ? desc(sql`relevance`) : desc(sql`last_touchpoint`);
+      const orderExpr = textQuery ? desc(sql`relevance`) : desc(sql`last_touchpoint`);
 
       const [leads, [totalResult]] = await Promise.all([
         db
@@ -487,7 +550,7 @@ router.get("/leads/search", async (req, res) => {
         .from(leadsTable)
         .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
         .where(where)
-        .orderBy(q ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt))
+        .orderBy(textQuery ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt))
         .limit(limit)
         .offset(offset),
       db.select({ count: count() }).from(leadsTable).leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id)).where(where),
