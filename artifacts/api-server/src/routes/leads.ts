@@ -348,6 +348,14 @@ router.get("/leads/search", async (req, res) => {
         sql`(${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}))`
       );
 
+      fuzzyConditions.push(
+        sql`(${funnelTypesTable.name} IS NOT NULL AND ${funnelTypesTable.name} % ${q})`
+      );
+
+      fuzzyConditions.push(
+        sql`(${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${q}%`}))`
+      );
+
       conditions.push(sql`(${sql.join(fuzzyConditions, sql` OR `)})`);
 
       relevanceExpr = sql`(
@@ -358,7 +366,9 @@ router.get("/leads/search", async (req, res) => {
           COALESCE(similarity(${leadsTable.email}, ${q}), 0),
           CASE WHEN ${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
           CASE WHEN LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${q}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
-          CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END
+          CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
+          COALESCE(similarity(${funnelTypesTable.name}, ${q}), 0),
+          CASE WHEN ${funnelTypesTable.name} IS NOT NULL AND LOWER(${funnelTypesTable.name}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END
         )
       )`;
     } else {
@@ -428,11 +438,12 @@ router.get("/leads/search", async (req, res) => {
             lastTouchpoint: lastTouchpointExpr.as("last_touchpoint"),
           })
           .from(leadsTable)
+          .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
           .where(tpWhere)
           .orderBy(orderExpr, desc(leadsTable.createdAt))
           .limit(limit)
           .offset(offset),
-        db.select({ count: count() }).from(leadsTable).where(tpWhere),
+        db.select({ count: count() }).from(leadsTable).leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id)).where(tpWhere),
       ]);
 
       console.log(`[LeadSearch] lastTouchpoint query returned ${leads.length} of ${totalResult.count} total`);
@@ -474,11 +485,12 @@ router.get("/leads/search", async (req, res) => {
           relevance: relevanceExpr.as("relevance"),
         })
         .from(leadsTable)
+        .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
         .where(where)
         .orderBy(q ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt))
         .limit(limit)
         .offset(offset),
-      db.select({ count: count() }).from(leadsTable).where(where),
+      db.select({ count: count() }).from(leadsTable).leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id)).where(where),
     ]);
 
     console.log(`[LeadSearch] query returned ${leads.length} of ${totalResult.count} total`);
