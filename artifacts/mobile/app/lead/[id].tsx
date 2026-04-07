@@ -240,6 +240,8 @@ export default function LeadDetailScreen() {
   const [selectedCsr, setSelectedCsr] = useState<number | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  const claimedLeadId = useRef<number | null>(null);
+
   const detailTabScrollRef = useRef<ScrollView>(null);
   const detailTabLayouts = useRef<Record<string, { x: number; width: number }>>({});
   const detailScrollViewWidth = useRef(Dimensions.get("window").width);
@@ -373,6 +375,28 @@ export default function LeadDetailScreen() {
     return () => off("lead-updated", handler);
   }, [on, off, params.id, fetchLead, fetchHistory, fetchTimeline]);
 
+  useEffect(() => {
+    return () => {
+      const lid = claimedLeadId.current;
+      if (lid) {
+        apiFetch(`/api/leads-hub/${lid}/release-claim${tenantQs}`, { method: "POST" }).catch(() => {});
+        claimedLeadId.current = null;
+      }
+    };
+  }, []);
+
+  const tryClaimLead = async (): Promise<boolean> => {
+    const lid = Number(params.id);
+    try {
+      await apiFetch(`/api/leads-hub/${lid}/claim${tenantQs}`, { method: "POST" });
+      claimedLeadId.current = lid;
+      return true;
+    } catch (err) {
+      showFeedback("error", err instanceof Error ? err.message : "Could not claim this lead — it may have been reassigned");
+      return false;
+    }
+  };
+
   const logAction = async (body: Record<string, unknown>) => {
     setActionLoading(true);
     try {
@@ -382,6 +406,7 @@ export default function LeadDetailScreen() {
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showFeedback("success", `Action logged — ${res.lead?.hubStatus || "updated"}`);
+      claimedLeadId.current = null;
       setActionStep(null);
       setCallbackDate(new Date(Date.now() + 3600000));
       setCancelReason("");
@@ -400,6 +425,8 @@ export default function LeadDetailScreen() {
       showFeedback("error", "This lead has a contact restriction that prevents calls");
       return;
     }
+    const claimed = await tryClaimLead();
+    if (!claimed) return;
     if (lead?.phone) {
       const telUrl = `tel:${lead.phone.replace(/\D/g, "")}`;
       try {
@@ -422,6 +449,8 @@ export default function LeadDetailScreen() {
   };
 
   const handleText = async () => {
+    const claimed = await tryClaimLead();
+    if (!claimed) return;
     if (lead?.phone) {
       try {
         const smsUrl = `sms:${lead.phone.replace(/\D/g, "")}`;
@@ -437,11 +466,13 @@ export default function LeadDetailScreen() {
     }
   };
 
-  const handleVmDrop = () => {
+  const handleVmDrop = async () => {
     if (blocksCall) {
       showFeedback("error", "This lead has a contact restriction that prevents calls");
       return;
     }
+    const claimed = await tryClaimLead();
+    if (!claimed) return;
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("voicemail_drop");
       setActionStep("appt_booked_flow");

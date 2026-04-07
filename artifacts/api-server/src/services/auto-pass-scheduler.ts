@@ -6,6 +6,104 @@ import { emitLeadUpdated } from "../socket";
 import { syncPodiumConversationAssignment } from "./integrations/podium-api";
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
+const timerScheduledAt = new Map<number, { scheduledAt: number; delayMs: number }>();
+
+const CLAIM_TTL_MS = 5 * 60 * 1000;
+
+interface LeadClaim {
+  csrId: number;
+  claimedAt: number;
+  remainingAutoPassMs: number | null;
+}
+
+const claims = new Map<number, LeadClaim>();
+
+const claimExpiry = new Map<number, ReturnType<typeof setTimeout>>();
+
+export function claimLead(leadId: number, csrId: number): { ok: boolean; error?: string } {
+  const existing = claims.get(leadId);
+  if (existing) {
+    if (existing.csrId === csrId && Date.now() - existing.claimedAt < CLAIM_TTL_MS) {
+      existing.claimedAt = Date.now();
+      const oldExpiry = claimExpiry.get(leadId);
+      if (oldExpiry) clearTimeout(oldExpiry);
+      const expiryTimer = setTimeout(() => {
+        const claim = claims.get(leadId);
+        if (claim && claim.csrId === csrId) {
+          releaseClaim(leadId, csrId);
+        }
+      }, CLAIM_TTL_MS);
+      expiryTimer.unref();
+      claimExpiry.set(leadId, expiryTimer);
+      return { ok: true };
+    }
+    if (Date.now() - existing.claimedAt < CLAIM_TTL_MS) {
+      return { ok: false, error: "Lead is currently claimed by another CSR" };
+    }
+    claims.delete(leadId);
+    const oldExpiry = claimExpiry.get(leadId);
+    if (oldExpiry) { clearTimeout(oldExpiry); claimExpiry.delete(leadId); }
+  }
+
+  let remainingMs: number | null = null;
+  const timerInfo = timerScheduledAt.get(leadId);
+  const timer = timers.get(leadId);
+  if (timer && timerInfo) {
+    clearTimeout(timer);
+    timers.delete(leadId);
+    const elapsed = Date.now() - timerInfo.scheduledAt;
+    remainingMs = Math.max(0, timerInfo.delayMs - elapsed);
+    timerScheduledAt.delete(leadId);
+  } else if (timer) {
+    clearTimeout(timer);
+    timers.delete(leadId);
+    remainingMs = 60000;
+  }
+
+  claims.set(leadId, { csrId, claimedAt: Date.now(), remainingAutoPassMs: remainingMs });
+
+  const expiryTimer = setTimeout(() => {
+    const claim = claims.get(leadId);
+    if (claim && claim.csrId === csrId) {
+      releaseClaim(leadId, csrId);
+    }
+  }, CLAIM_TTL_MS);
+  expiryTimer.unref();
+  claimExpiry.set(leadId, expiryTimer);
+
+  return { ok: true };
+}
+
+export function releaseClaim(leadId: number, csrId: number): void {
+  const claim = claims.get(leadId);
+  if (!claim || claim.csrId !== csrId) return;
+  claims.delete(leadId);
+  const expiry = claimExpiry.get(leadId);
+  if (expiry) { clearTimeout(expiry); claimExpiry.delete(leadId); }
+
+  if (claim.remainingAutoPassMs !== null) {
+    scheduleAutoPass(leadId, claim.remainingAutoPassMs);
+  }
+}
+
+export function consumeClaim(leadId: number, csrId: number): void {
+  const claim = claims.get(leadId);
+  if (claim && claim.csrId === csrId) {
+    claims.delete(leadId);
+    const expiry = claimExpiry.get(leadId);
+    if (expiry) { clearTimeout(expiry); claimExpiry.delete(leadId); }
+  }
+}
+
+export function hasActiveClaim(leadId: number): { claimed: boolean; csrId?: number } {
+  const claim = claims.get(leadId);
+  if (!claim) return { claimed: false };
+  if (Date.now() - claim.claimedAt >= CLAIM_TTL_MS) {
+    claims.delete(leadId);
+    return { claimed: false };
+  }
+  return { claimed: true, csrId: claim.csrId };
+}
 
 const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"];
 
@@ -39,12 +137,14 @@ export function scheduleAutoPass(leadId: number, delayMs: number): void {
   if (delayMs < 0) delayMs = 0;
   const timer = setTimeout(() => {
     timers.delete(leadId);
+    timerScheduledAt.delete(leadId);
     fireAutoPass(leadId).catch(err => {
       console.error(`[auto-pass] Error firing auto-pass for lead ${leadId}:`, err);
     });
   }, delayMs);
   timer.unref();
   timers.set(leadId, timer);
+  timerScheduledAt.set(leadId, { scheduledAt: Date.now(), delayMs });
 }
 
 export function cancelAutoPass(leadId: number): void {
@@ -52,6 +152,7 @@ export function cancelAutoPass(leadId: number): void {
   if (existing) {
     clearTimeout(existing);
     timers.delete(leadId);
+    timerScheduledAt.delete(leadId);
   }
 }
 
@@ -140,6 +241,13 @@ async function fireAutoPass(leadId: number): Promise<void> {
     return;
   }
   if (!AUTO_PASS_STATUSES.includes(lead.hubStatus)) return;
+
+  const claimInfo = hasActiveClaim(leadId);
+  if (claimInfo.claimed) {
+    console.log(`[auto-pass] Lead ${leadId}: active claim by CSR ${claimInfo.csrId}, deferring auto-pass`);
+    scheduleAutoPass(leadId, CLAIM_TTL_MS);
+    return;
+  }
 
   const touched = await leadHasRealTouch(leadId);
   if (touched) {

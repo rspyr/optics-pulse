@@ -8,7 +8,7 @@ import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, 
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
-import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch } from "../services/auto-pass-scheduler";
+import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim } from "../services/auto-pass-scheduler";
 import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
@@ -290,6 +290,56 @@ router.get("/leads-hub/archive", async (req, res) => {
   res.json({ leads, total: totalResult.count });
 });
 
+router.post("/leads-hub/:id/claim", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const leadId = parseInt(String(req.params.id));
+  if (!leadId || isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, assignedCsrId: leadsTable.assignedCsrId })
+    .from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const role = (req.session as any)?.userRole as string | undefined;
+  const isAdmin = role && ["super_admin", "agency_user", "client_admin"].includes(role);
+  if (!isAdmin && lead.assignedCsrId !== userId) {
+    res.status(403).json({ error: "This lead has been reassigned to another CSR. Please refresh your queue." });
+    return;
+  }
+
+  const result = claimLead(leadId, userId);
+  if (!result.ok) {
+    res.status(409).json({ error: result.error });
+    return;
+  }
+
+  console.log(`[claim] Lead ${leadId} claimed by CSR ${userId}`);
+  res.json({ ok: true });
+});
+
+router.post("/leads-hub/:id/release-claim", async (req, res) => {
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
+
+  const leadId = parseInt(String(req.params.id));
+  if (!leadId || isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId })
+    .from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  releaseClaim(leadId, userId);
+  console.log(`[claim] Lead ${leadId} claim released by CSR ${userId}`);
+  res.json({ ok: true });
+});
+
 router.post("/leads-hub/action", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
@@ -302,6 +352,22 @@ router.post("/leads-hub/action", async (req, res) => {
 
   const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const role = (req.session as any)?.userRole as string | undefined;
+  const isAdmin = role && ["super_admin", "agency_user", "client_admin"].includes(role);
+  if (!isAdmin) {
+    const claimInfo = hasActiveClaim(leadId);
+    if (claimInfo.claimed && claimInfo.csrId !== userId) {
+      res.status(403).json({ error: "Another CSR is currently working this lead. Please try again later." });
+      return;
+    }
+    const isAssigned = lead.assignedCsrId === userId;
+    const holdsClaim = claimInfo.claimed && claimInfo.csrId === userId;
+    if (!isAssigned && !holdsClaim) {
+      res.status(403).json({ error: "This lead has been reassigned to another CSR. Please refresh your queue." });
+      return;
+    }
+  }
 
   const apptBookedOutcome = req.body.apptBookedOutcome as string | undefined;
   const outcome = apptBookedOutcome ? `appt_${apptBookedOutcome}` : (callResult || textResult || vmResult || actionType);
@@ -421,10 +487,23 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.status = hubStatusToLegacy(updates.hubStatus as HubStatus);
   }
 
-  const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
-
   const realTouchActions = ["call", "text", "voicemail_drop", "voicemail"];
   const isRealTouch = realTouchActions.includes(actionType);
+
+  if (isRealTouch && lead.assignedCsrId !== userId) {
+    const [actingUser] = await db.select({ name: usersTable.name })
+      .from(usersTable).where(eq(usersTable.id, userId));
+    if (actingUser) {
+      updates.assignedCsrId = userId;
+      updates.assignedTo = actingUser.name;
+      updates.assignedAt = new Date();
+    }
+  }
+
+  const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
+
+  consumeClaim(leadId, userId);
+
   const activeAutoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
   const finalStatus = (updates.hubStatus as string) || lead.hubStatus;
 
