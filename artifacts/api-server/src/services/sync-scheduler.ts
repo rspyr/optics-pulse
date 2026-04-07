@@ -569,7 +569,11 @@ export function startSyncScheduler() {
   const campaignSyncInterval = 60 * 60 * 1000;
 
   const jobsTimer = setInterval(async () => {
-    console.log("[SyncScheduler] ServiceTitan jobs sync PAUSED — integration disabled");
+    console.log("[SyncScheduler] Starting ServiceTitan jobs sync for all tenants");
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      await syncServiceTitanJobs(tenant.id);
+    }
   }, jobsSyncInterval);
 
   const campaignTimer = setInterval(async () => {
@@ -583,7 +587,11 @@ export function startSyncScheduler() {
 
   const invoiceSyncInterval = 60 * 60 * 1000;
   const invoiceTimer = setInterval(async () => {
-    console.log("[SyncScheduler] ServiceTitan invoice sync PAUSED — integration disabled");
+    console.log("[SyncScheduler] Starting ServiceTitan invoice sync for all tenants");
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      await syncServiceTitanInvoices(tenant.id);
+    }
   }, invoiceSyncInterval);
 
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
@@ -597,7 +605,7 @@ export function startSyncScheduler() {
   }, callRailSyncInterval);
 
   syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: ST/Podium/CallRail PAUSED, campaigns every 60min, invoices PAUSED");
+  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices every 60min, Podium/CallRail PAUSED");
 }
 
 export function stopSyncScheduler() {

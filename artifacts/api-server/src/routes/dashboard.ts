@@ -19,12 +19,12 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   }
   if (startDate) {
     leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
-    jobConditions.push(gte(jobsTable.createdAt, new Date(startDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) >= ${new Date(startDate)}`);
     spendConditions.push(gte(campaignDailyStatsTable.date, startDate));
   }
   if (endDate) {
     leadConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
-    jobConditions.push(lte(jobsTable.createdAt, new Date(endDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) <= ${new Date(endDate)}`);
     spendConditions.push(lte(campaignDailyStatsTable.date, endDate));
   }
 
@@ -32,7 +32,13 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const jobWhere = jobConditions.length > 0 ? and(...jobConditions) : undefined;
   const spendWhere = spendConditions.length > 0 ? and(...spendConditions) : undefined;
 
-  const [leadStats, jobStats, platformSpendResult] = await Promise.all([
+  const closeRateConditions: SQL[] = [];
+  closeRateConditions.push(sql`${leadsTable.status} IN ('booked', 'sold')`);
+  if (tenantId) closeRateConditions.push(eq(leadsTable.tenantId, tenantId));
+  if (startDate) closeRateConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
+  if (endDate) closeRateConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
+
+  const [leadStats, jobStats, platformSpendResult, closeRateStats] = await Promise.all([
     db.select({
       totalLeads: count(),
       bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
@@ -41,8 +47,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
     db.select({
       totalJobs: count(),
       totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue}) ELSE 0 END), 0)`,
-      paidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true THEN COALESCE(${jobsTable.invoicePaidAmount}, 0) ELSE 0 END), 0)`,
-      unpaidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true THEN COALESCE(${jobsTable.invoiceBalance}, 0) ELSE 0 END), 0)`,
+      paidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true AND (${jobsTable.invoiceBalance} = 0 OR ${jobsTable.invoicePaidOn} IS NOT NULL) THEN COALESCE(${jobsTable.invoicePaidAmount}, 0) + COALESCE(${jobsTable.invoiceRebateAmount}, 0) ELSE 0 END), 0)`,
       invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
       matchedEvents: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} != 'unmatched')`,
     }).from(jobsTable).where(jobWhere),
@@ -54,6 +59,19 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
       .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
       .where(spendWhere)
       .groupBy(campaignsTable.platform),
+    db.select({
+      bookedWithInvoice: sql<number>`COUNT(DISTINCT ${leadsTable.id})`,
+    })
+      .from(leadsTable)
+      .innerJoin(jobsTable, and(
+        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.hasInvoice, true),
+        sql`(
+          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
+          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
+        )`,
+      ))
+      .where(and(...closeRateConditions)),
   ]);
 
   const googleSpend = platformSpendResult.filter(r => r.platform === "google_ads" || r.platform === "google").reduce((s, r) => s + Number(r.total || 0), 0);
@@ -65,13 +83,14 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   const soldLeads = Number(leadStats[0]?.soldLeads ?? 0);
   const totalRevenue = Number(jobStats[0]?.totalRevenue ?? 0);
   const paidRevenue = Number(jobStats[0]?.paidRevenue ?? 0);
-  const unpaidRevenue = Number(jobStats[0]?.unpaidRevenue ?? 0);
+  const unpaidRevenue = Math.round((totalRevenue - paidRevenue) * 100) / 100;
+  const bookedWithInvoice = Number(closeRateStats[0]?.bookedWithInvoice ?? 0);
   const invoicedJobCount = Number(jobStats[0]?.invoicedJobCount ?? 0);
   const matchedEvents = Number(jobStats[0]?.matchedEvents ?? 0);
   const totalJobs = Number(jobStats[0]?.totalJobs ?? 0);
 
   const bookingRate = totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0;
-  const closeRate = bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0;
+  const closeRate = bookedLeads > 0 ? Math.round((bookedWithInvoice / bookedLeads) * 100 * 10) / 10 : 0;
   const avgSaleValue = invoicedJobCount > 0 ? Math.round(totalRevenue / invoicedJobCount) : (soldLeads > 0 ? Math.round(totalRevenue / soldLeads) : 0);
   const cpl = totalLeads > 0 ? Math.round((totalSpend / totalLeads) * 100) / 100 : 0;
   const roas = totalSpend > 0 ? Math.round((totalRevenue / totalSpend) * 100) / 100 : 0;
@@ -83,7 +102,7 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
     metaSpend: Math.round(metaSpend * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     paidRevenue: Math.round(paidRevenue * 100) / 100,
-    unpaidRevenue: Math.round(unpaidRevenue * 100) / 100,
+    unpaidRevenue: unpaidRevenue > 0 ? unpaidRevenue : 0,
     roas,
     totalLeads,
     bookedLeads,
@@ -135,11 +154,11 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   }
   if (startDate) {
     statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
-    jobConditions.push(gte(jobsTable.completedAt, new Date(startDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}) >= ${new Date(startDate)}`);
   }
   if (endDate) {
     statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
-    jobConditions.push(lte(jobsTable.completedAt, new Date(endDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}) <= ${new Date(endDate)}`);
   }
 
   const statsWhere = statsConditions.length > 0 ? and(...statsConditions) : undefined;
@@ -155,12 +174,12 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
       .where(statsWhere)
       .orderBy(campaignDailyStatsTable.date),
     db.select({
-      date: sql<string>`TO_CHAR(${jobsTable.completedAt}, 'YYYY-MM-DD')`,
+      date: sql<string>`TO_CHAR(COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}), 'YYYY-MM-DD')`,
       revenue: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})), 0)`,
     })
       .from(jobsTable)
       .where(and(...jobConditions))
-      .groupBy(sql`TO_CHAR(${jobsTable.completedAt}, 'YYYY-MM-DD')`),
+      .groupBy(sql`TO_CHAR(COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}), 'YYYY-MM-DD')`),
   ]);
 
   const dailyMap = new Map<string, { spend: number; googleSpend: number; metaSpend: number; revenue: number }>();
@@ -225,16 +244,25 @@ router.get("/dashboard/benchmarks", async (req, res) => {
 
   if (startDate) {
     leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
-    jobConditions.push(gte(jobsTable.createdAt, new Date(startDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) >= ${new Date(startDate)}`);
     spendConditions.push(gte(campaignDailyStatsTable.date, startDate));
   }
   if (endDate) {
     leadConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
-    jobConditions.push(lte(jobsTable.createdAt, new Date(endDate)));
+    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) <= ${new Date(endDate)}`);
     spendConditions.push(lte(campaignDailyStatsTable.date, endDate));
   }
 
-  const [leadStats, jobStats, spendResult] = await Promise.all([
+  const closeRateConditions: SQL[] = [
+    sql`${leadsTable.status} IN ('booked', 'sold')`,
+    inArray(leadsTable.tenantId,
+      db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isActive, true))
+    ),
+  ];
+  if (startDate) closeRateConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
+  if (endDate) closeRateConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
+
+  const [leadStats, jobStats, spendResult, closeRateStats] = await Promise.all([
     db.select({
       totalLeads: count(),
       bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
@@ -249,10 +277,24 @@ router.get("/dashboard/benchmarks", async (req, res) => {
     }).from(campaignDailyStatsTable)
       .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
       .where(and(...spendConditions)),
+    db.select({
+      bookedWithInvoice: sql<number>`COUNT(DISTINCT ${leadsTable.id})`,
+    })
+      .from(leadsTable)
+      .innerJoin(jobsTable, and(
+        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.hasInvoice, true),
+        sql`(
+          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
+          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
+        )`,
+      ))
+      .where(and(...closeRateConditions)),
   ]);
 
   const totalLeads = Number(leadStats[0]?.totalLeads ?? 0);
   const bookedLeads = Number(leadStats[0]?.bookedLeads ?? 0);
+  const bookedWithInvoice = Number(closeRateStats[0]?.bookedWithInvoice ?? 0);
   const invoicedJobCount = Number(jobStats[0]?.invoicedJobCount ?? 0);
   const soldLeads = Number(leadStats[0]?.soldLeads ?? 0);
   const revenue = Number(jobStats[0]?.revenue ?? 0);
@@ -263,7 +305,7 @@ router.get("/dashboard/benchmarks", async (req, res) => {
   res.json({
     cpl: totalLeads > 0 ? Math.round((spend / totalLeads) * 100) / 100 : 0,
     bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
-    closeRate: bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0,
+    closeRate: bookedLeads > 0 ? Math.round((bookedWithInvoice / bookedLeads) * 100 * 10) / 10 : 0,
     avgSaleValue,
     roas: spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0,
   });
@@ -279,7 +321,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
     return;
   }
 
-  const [leadsByTenant, jobsByTenant, spendByTenant] = await Promise.all([
+  const [leadsByTenant, jobsByTenant, spendByTenant, closeRateByTenant] = await Promise.all([
     db.select({
       tenantId: leadsTable.tenantId,
       totalLeads: count(),
@@ -302,21 +344,40 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
       .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
       .where(inArray(campaignsTable.tenantId, tenantIds))
       .groupBy(campaignsTable.tenantId),
+    db.select({
+      tenantId: leadsTable.tenantId,
+      bookedWithInvoice: sql<number>`COUNT(DISTINCT ${leadsTable.id})`,
+    })
+      .from(leadsTable)
+      .innerJoin(jobsTable, and(
+        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.hasInvoice, true),
+        sql`(
+          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
+          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
+        )`,
+      ))
+      .where(and(
+        inArray(leadsTable.tenantId, tenantIds),
+        sql`${leadsTable.status} IN ('booked', 'sold')`,
+      ))
+      .groupBy(leadsTable.tenantId),
   ]);
 
   const leadMap = new Map(leadsByTenant.map(r => [r.tenantId, r]));
   const jobMap = new Map(jobsByTenant.map(r => [r.tenantId, r]));
   const spendMap = new Map(spendByTenant.map(r => [r.tenantId, r]));
+  const closeRateMap = new Map(closeRateByTenant.map(r => [r.tenantId, r]));
 
   const results = tenants.map(tenant => {
     const l = leadMap.get(tenant.id);
     const j = jobMap.get(tenant.id);
     const s = spendMap.get(tenant.id);
+    const cr = closeRateMap.get(tenant.id);
 
     const totalLeads = Number(l?.totalLeads ?? 0);
     const bookedLeads = Number(l?.bookedLeads ?? 0);
-    const soldLeads = Number(l?.soldLeads ?? 0);
-    const invoicedJobCount = Number(j?.invoicedJobCount ?? 0);
+    const bookedWithInvoice = Number(cr?.bookedWithInvoice ?? 0);
     const mtdRevenue = Number(j?.mtdRevenue ?? 0);
     const mtdSpend = Number(s?.total ?? 0);
 
@@ -327,7 +388,7 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
       mtdRevenue: Math.round(mtdRevenue * 100) / 100,
       cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
       bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
-      closeRate: bookedLeads > 0 ? Math.round((invoicedJobCount / bookedLeads) * 100 * 10) / 10 : 0,
+      closeRate: bookedLeads > 0 ? Math.round((bookedWithInvoice / bookedLeads) * 100 * 10) / 10 : 0,
       roas: mtdSpend > 0 ? Math.round((mtdRevenue / mtdSpend) * 100) / 100 : 0,
       leadCount: totalLeads,
     };
