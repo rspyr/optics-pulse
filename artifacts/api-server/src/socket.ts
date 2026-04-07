@@ -360,7 +360,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
 
   const apptConds: any[] = [inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
   if (tenantId) apptConds.push(eq(leadsTable.tenantId, tenantId));
-  if (csrId) apptConds.push(eq(leadsTable.assignedCsrId, csrId));
+  if (csrId) apptConds.push(eq(leadsTable.bookedByCsrId, csrId));
   const [apptToday] = await db.select({ count: count() }).from(leadsTable).where(and(...apptConds));
 
   const callAttemptsConds: any[] = [
@@ -389,7 +389,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
     const spiffConds: any[] = [inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
     if (tenantId) spiffConds.push(eq(leadsTable.tenantId, tenantId));
-    if (csrId) spiffConds.push(eq(leadsTable.assignedCsrId, csrId));
+    if (csrId) spiffConds.push(eq(leadsTable.bookedByCsrId, csrId));
     const bookedLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId })
       .from(leadsTable).where(and(...spiffConds));
     const funnelIds = [...new Set(bookedLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
