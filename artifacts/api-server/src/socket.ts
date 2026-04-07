@@ -358,15 +358,10 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
 
   const [allLeadsToday] = await db.select({ count: count() }).from(leadsTable).where(and(...baseConds));
 
-  const bookedConds: any[] = [eq(leadsTable.status, "booked"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
-  if (tenantId) bookedConds.push(eq(leadsTable.tenantId, tenantId));
-  if (csrId) bookedConds.push(eq(leadsTable.assignedCsrId, csrId));
-  const [bookedToday] = await db.select({ count: count() }).from(leadsTable).where(and(...bookedConds));
-
-  const soldConds: any[] = [eq(leadsTable.status, "sold"), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
-  if (tenantId) soldConds.push(eq(leadsTable.tenantId, tenantId));
-  if (csrId) soldConds.push(eq(leadsTable.assignedCsrId, csrId));
-  const [soldToday] = await db.select({ count: count() }).from(leadsTable).where(and(...soldConds));
+  const apptConds: any[] = [inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
+  if (tenantId) apptConds.push(eq(leadsTable.tenantId, tenantId));
+  if (csrId) apptConds.push(eq(leadsTable.assignedCsrId, csrId));
+  const [apptToday] = await db.select({ count: count() }).from(leadsTable).where(and(...apptConds));
 
   const callAttemptsConds: any[] = [
     gte(callAttemptsTable.attemptedAt, rangeStart),
@@ -377,13 +372,13 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
   if (csrId) callAttemptsConds.push(eq(callAttemptsTable.userId, csrId));
   const [callAttemptsToday] = await db.select({ count: count() }).from(callAttemptsTable).where(and(...callAttemptsConds));
 
-  const contactedConds: any[] = [sql`${leadsTable.status} != 'new'`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
+  const contactedConds: any[] = [sql`${leadsTable.hubStatus} NOT IN ('day_1')`, eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
   if (tenantId) contactedConds.push(eq(leadsTable.tenantId, tenantId));
   if (csrId) contactedConds.push(eq(leadsTable.assignedCsrId, csrId));
   const [contactedExclPreBooked] = await db.select({ count: count() }).from(leadsTable).where(and(...contactedConds));
 
   const totalCalls = callAttemptsToday.count;
-  const bookings = bookedToday.count + soldToday.count;
+  const bookings = apptToday.count;
   const bookingRate = contactedExclPreBooked.count > 0 ? Math.round((bookings / contactedExclPreBooked.count) * 100) : 0;
   const newLeadsToday = allLeadsToday.count;
 
@@ -392,7 +387,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
-    const spiffConds: any[] = [inArray(leadsTable.status, ["booked", "sold"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
+    const spiffConds: any[] = [inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]), eq(leadsTable.preBooked, false), sql`${leadsTable.updatedAt} >= ${rangeStart}`, sql`${leadsTable.updatedAt} <= ${rangeEnd}`];
     if (tenantId) spiffConds.push(eq(leadsTable.tenantId, tenantId));
     if (csrId) spiffConds.push(eq(leadsTable.assignedCsrId, csrId));
     const bookedLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId })
@@ -405,7 +400,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
       funnelNameLookup = Object.fromEntries(fRows.map(f => [f.id, f.name]));
     }
     const bookedLeadsWithFunnel = bookedLeads.map(l => ({
-      status: l.status,
+      status: "booked" as const,
       funnelName: l.funnelId ? (funnelNameLookup[l.funnelId] || null) : null,
     }));
     commission = computeSpiffCommission(bookedLeadsWithFunnel, spiffConfig);
@@ -464,7 +459,7 @@ export async function getHudStats(tenantId: number | null, csrId?: number | null
     commission,
     newLeadsToday,
     avgSpeedToLead,
-    soldToday: soldToday.count,
+    soldToday: 0,
     bonusTier: bookingRate >= 60 ? "gold" : bookingRate >= 45 ? "silver" : bookingRate >= 30 ? "bronze" : "none",
     bonusThreshold: bookingRate >= 60 ? 60 : bookingRate >= 45 ? 45 : 30,
     nextBonusAt: bookingRate >= 60 ? 75 : bookingRate >= 45 ? 60 : bookingRate >= 30 ? 45 : 30,

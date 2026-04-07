@@ -1101,20 +1101,20 @@ router.get("/leads-hub/stats", async (req, res) => {
   }
 
   const filteredLeadIds = filteredLeads.map(l => l.id);
-  const callConds = [
-    inArray(callAttemptsTable.leadId, filteredLeadIds.length > 0 ? filteredLeadIds : [0]),
+  const allLeadCallConds = [
     gte(callAttemptsTable.attemptedAt, startDate),
     lte(callAttemptsTable.attemptedAt, endDate),
     sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
+    sql`${callAttemptsTable.leadId} IN (SELECT id FROM leads WHERE tenant_id = ${tenantId})`,
   ];
 
-  const callStats = filteredLeadIds.length > 0 ? await db.select({
+  const callStats = await db.select({
     userId: callAttemptsTable.userId,
     actionType: callAttemptsTable.actionType,
     count: count(),
   }).from(callAttemptsTable)
-    .where(and(...callConds))
-    .groupBy(callAttemptsTable.userId, callAttemptsTable.actionType) : [];
+    .where(and(...allLeadCallConds))
+    .groupBy(callAttemptsTable.userId, callAttemptsTable.actionType);
 
   const csrCallStats: Record<number, { calls: number; texts: number; vms: number }> = {};
   for (const s of callStats) {
@@ -1124,17 +1124,29 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (s.actionType === "voicemail_drop") csrCallStats[s.userId].vms = s.count;
   }
 
-  const callsByFunnelRaw = filteredLeadIds.length > 0 ? await db.select({
+  const callsByFunnelRaw = await db.select({
     leadId: callAttemptsTable.leadId,
     actionType: callAttemptsTable.actionType,
     count: count(),
   }).from(callAttemptsTable)
-    .where(and(...callConds))
-    .groupBy(callAttemptsTable.leadId, callAttemptsTable.actionType) : [];
+    .where(and(...allLeadCallConds))
+    .groupBy(callAttemptsTable.leadId, callAttemptsTable.actionType);
+
+  const allTouchedLeadIds = [...new Set(callsByFunnelRaw.map(r => r.leadId))];
+  let allLeadFunnelMap: Record<number, number> = { ...leadFunnelMap };
+  const missingLeadIds = allTouchedLeadIds.filter(id => !(id in allLeadFunnelMap));
+  if (missingLeadIds.length > 0) {
+    const extraLeads = await db.select({ id: leadsTable.id, funnelId: leadsTable.funnelId })
+      .from(leadsTable)
+      .where(inArray(leadsTable.id, missingLeadIds));
+    for (const l of extraLeads) {
+      if (l.funnelId) allLeadFunnelMap[l.id] = l.funnelId;
+    }
+  }
 
   const callsByFunnel: Record<number, { calls: number; texts: number; vms: number }> = {};
   for (const r of callsByFunnelRaw) {
-    const fId = leadFunnelMap[r.leadId];
+    const fId = allLeadFunnelMap[r.leadId];
     if (!fId) continue;
     if (!callsByFunnel[fId]) callsByFunnel[fId] = { calls: 0, texts: 0, vms: 0 };
     if (r.actionType === "call") callsByFunnel[fId].calls += r.count;
@@ -1142,10 +1154,21 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (r.actionType === "voicemail_drop") callsByFunnel[fId].vms += r.count;
   }
 
+  let totalCalls = 0, totalTexts = 0, totalVms = 0;
+  for (const s of callStats) {
+    if (s.actionType === "call") totalCalls += s.count;
+    if (s.actionType === "text") totalTexts += s.count;
+    if (s.actionType === "voicemail_drop") totalVms += s.count;
+  }
+
   res.json({
     totalLeads,
     appointments,
     bookingRate,
+    totalTouchpoints: totalCalls + totalTexts + totalVms,
+    totalCalls,
+    totalTexts,
+    totalVms,
     bySource: Object.entries(bySource).map(([source, data]) => ({
       source,
       ...data,

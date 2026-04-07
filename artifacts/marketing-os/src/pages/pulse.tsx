@@ -2872,10 +2872,10 @@ export default function Leads() {
           <PremiumCard className="p-4">
             <div className="flex items-center justify-between mb-3">
               <PhoneCall className="w-5 h-5 text-blue-400" />
-              <span className="text-xs text-blue-400/60 uppercase tracking-wider">Calls</span>
+              <span className="text-xs text-blue-400/60 uppercase tracking-wider">Touchpoints</span>
             </div>
             <p className="text-3xl font-display text-white">{stats.callsMadeToday}</p>
-            <p className="text-xs text-muted-foreground mt-1">calls made {tfLabel}</p>
+            <p className="text-xs text-muted-foreground mt-1">touchpoints made {tfLabel}</p>
           </PremiumCard>
 
           <PremiumCard className="p-4">
@@ -2926,7 +2926,7 @@ export default function Leads() {
           <PremiumCard className="p-3">
             <div className="flex items-center gap-2 mb-1">
               <PhoneCall className="w-4 h-4 text-blue-400" />
-              <span className="text-xs text-blue-400/60 uppercase">Calls</span>
+              <span className="text-xs text-blue-400/60 uppercase">Touchpoints</span>
             </div>
             <p className="text-xl font-display text-white">{stats.callsMadeToday}</p>
           </PremiumCard>

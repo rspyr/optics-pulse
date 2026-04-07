@@ -333,7 +333,7 @@ export default function HudScreen() {
         <View style={styles.statsRow}>
           <StatCard
             icon="phone-call"
-            label={`Calls ${tfLabel}`}
+            label={`Touchpoints ${tfLabel}`}
             value={stats?.callsMadeToday ?? 0}
             color={colors.primary}
           />

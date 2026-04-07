@@ -550,7 +550,7 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
         <MetricCard label="Total Leads" value={stats?.totalLeads || 0} icon={Users} />
         <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
         <MetricCard label={funnelFilter ? "Funnel Rate" : "Booking Rate"} value={stats?.bookingRate || 0} icon={TrendingUp} format="percent" subtitle={funnelFilter ? `Overall: ${overallBookingRate}%` : undefined} />
-        <MetricCard label="Total Calls" value={stats?.byCsr.reduce((s, c) => s + c.calls, 0) || 0} icon={Phone} />
+        <MetricCard label="Total Touchpoints" value={(stats?.totalTouchpoints ?? stats?.byCsr.reduce((s, c) => s + c.calls + c.texts + c.vms, 0)) || 0} icon={Phone} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -639,19 +639,19 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
       <PremiumCard className="p-5">
         <div className="flex items-center gap-2 mb-4">
           <Phone className="w-4 h-4 text-primary" />
-          <span className="text-sm font-display text-white">Total Calls with Funnel Breakdown</span>
+          <span className="text-sm font-display text-white">Total Touchpoints with Funnel Breakdown</span>
         </div>
         <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
-            <p className="text-2xl font-display text-white">{stats?.byCsr.reduce((s, c) => s + c.calls, 0) || 0}</p>
+            <p className="text-2xl font-display text-white">{stats?.totalCalls ?? stats?.byCsr.reduce((s, c) => s + c.calls, 0) ?? 0}</p>
             <p className="text-[10px] text-white/30 uppercase">Total Calls</p>
           </div>
           <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
-            <p className="text-2xl font-display text-blue-400">{stats?.byCsr.reduce((s, c) => s + c.texts, 0) || 0}</p>
+            <p className="text-2xl font-display text-blue-400">{stats?.totalTexts ?? stats?.byCsr.reduce((s, c) => s + c.texts, 0) ?? 0}</p>
             <p className="text-[10px] text-white/30 uppercase">Total Texts</p>
           </div>
           <div className="p-3 rounded bg-white/[0.02] border border-white/5 text-center">
-            <p className="text-2xl font-display text-purple-400">{stats?.byCsr.reduce((s, c) => s + c.vms, 0) || 0}</p>
+            <p className="text-2xl font-display text-purple-400">{stats?.totalVms ?? stats?.byCsr.reduce((s, c) => s + c.vms, 0) ?? 0}</p>
             <p className="text-[10px] text-white/30 uppercase">Total VMs</p>
           </div>
         </div>
