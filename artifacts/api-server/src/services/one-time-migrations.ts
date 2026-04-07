@@ -568,6 +568,32 @@ const migrations: Migration[] = [
       console.log("[Migration] Added message_items column to podium_messages");
     },
   },
+  {
+    id: "2026-04-07_create-pg-trgm-indexes",
+    description: "Create pg_trgm extension and GIN indexes on leads for fuzzy search",
+    run: async () => {
+      await db.execute(sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+      console.log("[Migration] Ensured pg_trgm extension exists");
+
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS leads_first_name_trgm
+        ON leads USING gin (first_name gin_trgm_ops)
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS leads_last_name_trgm
+        ON leads USING gin (last_name gin_trgm_ops)
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS leads_email_trgm
+        ON leads USING gin (email gin_trgm_ops)
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS leads_phone_trgm
+        ON leads USING gin (phone gin_trgm_ops)
+      `);
+      console.log("[Migration] Created GIN trigram indexes on leads (first_name, last_name, email, phone)");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
