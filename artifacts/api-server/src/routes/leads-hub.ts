@@ -1292,6 +1292,14 @@ router.get("/leads-hub/stats/timeseries", async (req, res) => {
 
   const startDate = req.query.startDate ? new Date(req.query.startDate as string) : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
   const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    res.status(400).json({ error: "Invalid date parameters" }); return;
+  }
+  if (endDate < startDate) {
+    res.status(400).json({ error: "endDate must be after startDate" }); return;
+  }
+
   const funnelId = req.query.funnelId ? Number(req.query.funnelId) : null;
   const source = req.query.source ? String(req.query.source) : null;
   const includePreBooked = req.query.includePreBooked === "true";
