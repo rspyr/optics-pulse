@@ -595,27 +595,13 @@ const migrations: Migration[] = [
     },
   },
   {
-    id: "2026-04-07_backfill-booked-by-csr-and-realign",
-    description: "Backfill booked_by_csr_id for finalized booked leads with NULL booker, then realign assigned_csr_id to match booked_by_csr_id",
+    id: "2026-04-07_realign-assigned-csr-for-booked-leads",
+    description: "Realign assigned_csr_id to match booked_by_csr_id on booked leads where they differ",
     run: async () => {
-      const backfilled = await db.execute(sql`
-        UPDATE leads
-        SET booked_by_csr_id = assigned_csr_id,
-            updated_at = NOW()
-        WHERE hub_status = 'appt_set'
-          AND booked_by_csr_id IS NULL
-          AND assigned_csr_id IS NOT NULL
-        RETURNING id, assigned_csr_id
-      `);
-      console.log(`[Migration] Backfilled booked_by_csr_id on ${backfilled.rows.length} finalized booked lead(s) from assigned_csr_id`);
-      for (const row of backfilled.rows as { id: number; assigned_csr_id: number }[]) {
-        console.log(`[Migration]   Lead ${row.id}: set booked_by_csr_id = ${row.assigned_csr_id}`);
-      }
-
       const mismatched = await db.execute(sql`
         SELECT id, assigned_csr_id AS old_assigned, booked_by_csr_id
         FROM leads
-        WHERE hub_status = 'appt_set'
+        WHERE hub_status IN ('appt_set', 'appt_booked')
           AND booked_by_csr_id IS NOT NULL
           AND assigned_csr_id IS DISTINCT FROM booked_by_csr_id
       `);
@@ -629,12 +615,12 @@ const migrations: Migration[] = [
               updated_at = NOW()
           WHERE id = ANY(${ids})
         `);
-        console.log(`[Migration] Realigned assigned_csr_id on ${mismatchedRows.length} finalized booked lead(s) to match booked_by_csr_id`);
+        console.log(`[Migration] Realigned assigned_csr_id on ${mismatchedRows.length} booked lead(s) to match booked_by_csr_id`);
         for (const row of mismatchedRows) {
           console.log(`[Migration]   Lead ${row.id}: assigned_csr_id ${row.old_assigned} -> ${row.booked_by_csr_id}`);
         }
       } else {
-        console.log(`[Migration] No mismatched assigned_csr_id found on finalized booked leads`);
+        console.log(`[Migration] No mismatched assigned_csr_id found on booked leads`);
       }
     },
   },
