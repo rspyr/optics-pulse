@@ -1286,4 +1286,84 @@ router.get("/leads-hub/stats", async (req, res) => {
 });
 
 
+router.get("/leads-hub/stats/timeseries", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.json({ series: [] }); return; }
+
+  const startDate = req.query.startDate ? new Date(req.query.startDate as string) : (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+  const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date();
+  const funnelId = req.query.funnelId ? Number(req.query.funnelId) : null;
+  const source = req.query.source ? String(req.query.source) : null;
+  const includePreBooked = req.query.includePreBooked === "true";
+
+  const baseConds = [
+    eq(leadsTable.tenantId, tenantId),
+    gte(leadsTable.createdAt, startDate),
+    lte(leadsTable.createdAt, endDate),
+  ];
+  if (funnelId) baseConds.push(eq(leadsTable.funnelId, funnelId));
+  if (source) baseConds.push(eq(leadsTable.source, source));
+
+  const leads = await db.select({
+    id: leadsTable.id,
+    hubStatus: leadsTable.hubStatus,
+    createdAt: leadsTable.createdAt,
+    preBooked: leadsTable.preBooked,
+  }).from(leadsTable).where(and(...baseConds));
+
+  const filteredLeads = includePreBooked ? leads : leads.filter(l => !l.preBooked);
+
+  const filteredLeadIds = filteredLeads.map(l => l.id);
+
+  let touchByDay: Record<string, number> = {};
+  if (filteredLeadIds.length > 0) {
+    const touchConds = [
+      gte(callAttemptsTable.attemptedAt, startDate),
+      lte(callAttemptsTable.attemptedAt, endDate),
+      sql`${callAttemptsTable.actionType} NOT IN ('transfer', 'system')`,
+      inArray(callAttemptsTable.leadId, filteredLeadIds),
+    ];
+    const touchRows = await db.select({
+      day: sql<string>`to_char(${callAttemptsTable.attemptedAt}, 'YYYY-MM-DD')`,
+      count: count(),
+    }).from(callAttemptsTable)
+      .where(and(...touchConds))
+      .groupBy(sql`to_char(${callAttemptsTable.attemptedAt}, 'YYYY-MM-DD')`);
+
+    for (const r of touchRows) {
+      touchByDay[r.day] = r.count;
+    }
+  }
+
+  const isAppt = (status: string) => status === "appt_set" || status === "appt_booked";
+
+  const dayMap: Record<string, { leads: number; appointments: number }> = {};
+  for (const l of filteredLeads) {
+    const day = new Date(l.createdAt).toISOString().slice(0, 10);
+    if (!dayMap[day]) dayMap[day] = { leads: 0, appointments: 0 };
+    dayMap[day].leads++;
+    if (isAppt(l.hubStatus)) dayMap[day].appointments++;
+  }
+
+  const allDays = new Set([...Object.keys(dayMap), ...Object.keys(touchByDay)]);
+  const current = new Date(startDate);
+  while (current <= endDate) {
+    allDays.add(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+
+  const series = [...allDays].sort().map(day => {
+    const d = dayMap[day] || { leads: 0, appointments: 0 };
+    return {
+      date: day,
+      leads: d.leads,
+      appointments: d.appointments,
+      bookingRate: d.leads > 0 ? Math.round((d.appointments / d.leads) * 100) : 0,
+      touchpoints: touchByDay[day] || 0,
+    };
+  });
+
+  res.json({ series });
+});
+
 export default router;

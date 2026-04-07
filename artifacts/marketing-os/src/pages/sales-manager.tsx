@@ -23,6 +23,7 @@ import {
 import { useLocation } from "wouter";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import ScriptManagement from "@/components/script-management";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -333,6 +334,105 @@ interface DrilldownFilter {
   label: string;
 }
 
+interface TimeseriesPoint {
+  date: string;
+  leads: number;
+  appointments: number;
+  bookingRate: number;
+  touchpoints: number;
+}
+
+function DrilldownChart({ tenantId, filter, startDate, endDate, includePreBooked }: {
+  tenantId: number | null;
+  filter: DrilldownFilter;
+  startDate: string;
+  endDate: string;
+  includePreBooked: boolean;
+}) {
+  const [series, setSeries] = useState<TimeseriesPoint[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    setLoading(true);
+    let cancelled = false;
+    const params = new URLSearchParams({ tenantId: String(tenantId), startDate, endDate });
+    if (filter.source) params.set("source", filter.source);
+    if (filter.funnelId) params.set("funnelId", String(filter.funnelId));
+    if (includePreBooked) params.set("includePreBooked", "true");
+
+    fetch(`${API_BASE}/leads-hub/stats/timeseries?${params}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : { series: [] })
+      .then(data => { if (!cancelled) setSeries(data.series || []); })
+      .catch(() => { if (!cancelled) setSeries([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [tenantId, filter, startDate, endDate, includePreBooked]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (series.length === 0) {
+    return <p className="text-xs text-white/30 text-center py-10">No data for this period</p>;
+  }
+
+  const formatted = series.map(p => ({
+    ...p,
+    label: new Date(p.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+  }));
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h4 className="text-[10px] text-white/40 uppercase tracking-wider mb-3">Leads & Appointments</h4>
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={formatted} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+            <XAxis dataKey="label" tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={{ stroke: "rgba(255,255,255,0.1)" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <Tooltip contentStyle={{ backgroundColor: "#0a0a0f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "rgba(255,255,255,0.5)" }} />
+            <Line type="monotone" dataKey="leads" stroke="#ffffff" strokeWidth={2} dot={false} name="Leads" />
+            <Line type="monotone" dataKey="appointments" stroke="#34d399" strokeWidth={2} dot={false} name="Appointments" />
+            <Legend wrapperStyle={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div>
+        <h4 className="text-[10px] text-white/40 uppercase tracking-wider mb-3">Booking Rate %</h4>
+        <ResponsiveContainer width="100%" height={120}>
+          <LineChart data={formatted} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+            <XAxis dataKey="label" tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={{ stroke: "rgba(255,255,255,0.1)" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={false} tickLine={false} unit="%" />
+            <Tooltip contentStyle={{ backgroundColor: "#0a0a0f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "rgba(255,255,255,0.5)" }} formatter={(v: number) => `${v}%`} />
+            <Line type="monotone" dataKey="bookingRate" stroke="#fbbf24" strokeWidth={2} dot={false} name="Rate" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div>
+        <h4 className="text-[10px] text-white/40 uppercase tracking-wider mb-3">Touchpoints</h4>
+        <ResponsiveContainer width="100%" height={120}>
+          <LineChart data={formatted} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+            <XAxis dataKey="label" tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={{ stroke: "rgba(255,255,255,0.1)" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 9, fill: "rgba(255,255,255,0.3)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <Tooltip contentStyle={{ backgroundColor: "#0a0a0f", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "rgba(255,255,255,0.5)" }} />
+            <Line type="monotone" dataKey="touchpoints" stroke="#60a5fa" strokeWidth={2} dot={false} name="Touchpoints" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
 function LeadsDrilldownPopout({
   tenantId,
   filter,
@@ -407,7 +507,7 @@ function LeadsDrilldownPopout({
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-md h-full bg-[#0a0a0f] border-l border-white/10 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className="relative w-full max-w-4xl h-full bg-[#0a0a0f] border-l border-white/10 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-white/10">
@@ -422,60 +522,72 @@ function LeadsDrilldownPopout({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-          {loading ? (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="w-5 h-5 text-primary animate-spin" />
-            </div>
-          ) : leads.length === 0 ? (
-            <p className="text-xs text-white/30 text-center py-10">No leads found</p>
-          ) : (
-            leads.map(lead => {
-              const funnelName = lead.funnelId
-                ? funnels.find(f => f.id === lead.funnelId)?.name || null
-                : null;
-              return (
-                <button
-                  key={lead.id}
-                  onClick={() => navigate(`/pulse?leadId=${lead.id}`)}
-                  className="w-full text-left p-3 rounded-lg bg-white/[0.03] border border-white/5 hover:bg-white/[0.07] hover:border-white/10 transition-all group"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-white truncate">
-                        {lead.firstName} {lead.lastName}
-                      </p>
-                      {lead.phone && (
-                        <p className="text-[10px] text-white/40 font-mono mt-0.5">{lead.phone}</p>
+        <div className="flex-1 flex min-h-0">
+          <div className="w-1/2 border-r border-white/10 overflow-y-auto p-4">
+            <DrilldownChart
+              tenantId={tenantId}
+              filter={filter}
+              startDate={startDate}
+              endDate={endDate}
+              includePreBooked={includePreBooked}
+            />
+          </div>
+
+          <div className="w-1/2 overflow-y-auto p-3 space-y-1.5">
+            {loading ? (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              </div>
+            ) : leads.length === 0 ? (
+              <p className="text-xs text-white/30 text-center py-10">No leads found</p>
+            ) : (
+              leads.map(lead => {
+                const funnelName = lead.funnelId
+                  ? funnels.find(f => f.id === lead.funnelId)?.name || null
+                  : null;
+                return (
+                  <button
+                    key={lead.id}
+                    onClick={() => navigate(`/pulse?leadId=${lead.id}`)}
+                    className="w-full text-left p-3 rounded-lg bg-white/[0.03] border border-white/5 hover:bg-white/[0.07] hover:border-white/10 transition-all group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-white truncate">
+                          {lead.firstName} {lead.lastName}
+                        </p>
+                        {lead.phone && (
+                          <p className="text-[10px] text-white/40 font-mono mt-0.5">{lead.phone}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                        <span className={cn(
+                          "text-[10px] font-mono px-1.5 py-0.5 rounded",
+                          HUB_STATUS_COLORS[lead.hubStatus] || "text-white/40"
+                        )}>
+                          {HUB_STATUS_LABELS[lead.hubStatus] || lead.hubStatus}
+                        </span>
+                        <ExternalLink className="w-3 h-3 text-white/20 group-hover:text-white/50 transition-colors" />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-[10px] text-white/25">{lead.source}</span>
+                      {funnelName && (
+                        <>
+                          <span className="text-[10px] text-white/15">·</span>
+                          <span className="text-[10px] text-white/25">{funnelName}</span>
+                        </>
                       )}
-                    </div>
-                    <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                      <span className={cn(
-                        "text-[10px] font-mono px-1.5 py-0.5 rounded",
-                        HUB_STATUS_COLORS[lead.hubStatus] || "text-white/40"
-                      )}>
-                        {HUB_STATUS_LABELS[lead.hubStatus] || lead.hubStatus}
+                      <span className="text-[10px] text-white/15">·</span>
+                      <span className="text-[10px] text-white/25">
+                        {new Date(lead.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
-                      <ExternalLink className="w-3 h-3 text-white/20 group-hover:text-white/50 transition-colors" />
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <span className="text-[10px] text-white/25">{lead.source}</span>
-                    {funnelName && (
-                      <>
-                        <span className="text-[10px] text-white/15">·</span>
-                        <span className="text-[10px] text-white/25">{funnelName}</span>
-                      </>
-                    )}
-                    <span className="text-[10px] text-white/15">·</span>
-                    <span className="text-[10px] text-white/25">
-                      {new Date(lead.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    </span>
-                  </div>
-                </button>
-              );
-            })
-          )}
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
     </div>,
@@ -619,6 +731,10 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
                       <div className="text-right">
                         <p className="text-xs font-mono text-emerald-400">{f.appointments}</p>
                         <p className="text-[9px] text-white/20 uppercase">appts</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-mono text-blue-400">{f.total > 0 ? ((f.calls + f.texts + f.vms) / f.total).toFixed(1) : "0"}</p>
+                        <p className="text-[9px] text-white/20 uppercase">tp/lead</p>
                       </div>
                       <div className="text-right min-w-[40px]">
                         <p className={cn(
