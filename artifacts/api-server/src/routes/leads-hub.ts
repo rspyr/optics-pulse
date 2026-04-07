@@ -1136,6 +1136,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     source: leadsTable.source,
     funnelId: leadsTable.funnelId,
     assignedCsrId: leadsTable.assignedCsrId,
+    bookedByCsrId: leadsTable.bookedByCsrId,
     serviceType: leadsTable.serviceType,
     preBooked: leadsTable.preBooked,
   }).from(leadsTable).where(and(...baseConds));
@@ -1168,13 +1169,25 @@ router.get("/leads-hub/stats", async (req, res) => {
     if (l.assignedCsrId) {
       if (!byCsr[l.assignedCsrId]) byCsr[l.assignedCsrId] = { total: 0, appointments: 0 };
       byCsr[l.assignedCsrId].total++;
-      if (isAppt(l.hubStatus)) byCsr[l.assignedCsrId].appointments++;
 
       if (l.funnelId) {
         const key = `${l.assignedCsrId}_${l.funnelId}`;
         if (!byCsrByFunnel[key]) byCsrByFunnel[key] = { csrId: l.assignedCsrId, funnelId: l.funnelId, total: 0, appointments: 0 };
         byCsrByFunnel[key].total++;
-        if (isAppt(l.hubStatus)) byCsrByFunnel[key].appointments++;
+      }
+    }
+
+    if (isAppt(l.hubStatus)) {
+      const bookerId = l.bookedByCsrId ?? l.assignedCsrId;
+      if (bookerId) {
+        if (!byCsr[bookerId]) byCsr[bookerId] = { total: 0, appointments: 0 };
+        byCsr[bookerId].appointments++;
+
+        if (l.funnelId) {
+          const key = `${bookerId}_${l.funnelId}`;
+          if (!byCsrByFunnel[key]) byCsrByFunnel[key] = { csrId: bookerId, funnelId: l.funnelId, total: 0, appointments: 0 };
+          byCsrByFunnel[key].appointments++;
+        }
       }
     }
   }
