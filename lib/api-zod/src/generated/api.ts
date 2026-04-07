@@ -217,6 +217,9 @@ export const ListLeadsQueryParams = zod.object({
   source: zod.coerce.string().optional(),
   limit: zod.coerce.number().default(listLeadsQueryLimitDefault),
   offset: zod.coerce.number().default(listLeadsQueryOffsetDefault),
+  funnelId: zod.coerce.number().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const ListLeadsResponse = zod.object({

@@ -207,6 +207,20 @@ paths:
           schema:
             type: integer
             default: 0
+        - name: funnelId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
       responses:
         "200":
           description: List of leads
