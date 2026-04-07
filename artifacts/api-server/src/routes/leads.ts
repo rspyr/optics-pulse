@@ -301,7 +301,13 @@ router.get("/leads/search", async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
 
-  if (!q && !funnelId && !startDate && !endDate) {
+  const validStartDate = startDate && !isNaN(startDate.getTime()) ? startDate : null;
+  const validEndDate = endDate && !isNaN(endDate.getTime()) ? endDate : null;
+
+  console.log(`[LeadSearch] tenant=${resolvedTenantId} q="${q}" funnelId=${funnelId} dateType=${dateType} startDate=${validStartDate?.toISOString() ?? "null"} endDate=${validEndDate?.toISOString() ?? "null"}`);
+
+  if (!q && !funnelId && !validStartDate && !validEndDate) {
+    console.log("[LeadSearch] No search criteria provided, returning empty");
     res.json({ leads: [], total: 0 });
     return;
   }
@@ -314,14 +320,14 @@ router.get("/leads/search", async (req, res) => {
     }
 
     const digitsOnly = q.replace(/\D/g, "");
-    const isPhoneSearch = digitsOnly.length >= 4 && digitsOnly.length <= 15;
+    const isPhoneSearch = digitsOnly.length >= 1 && digitsOnly.length <= 15;
 
     let relevanceExpr: SQL;
     if (q) {
       const fuzzyConditions: SQL[] = [];
 
       fuzzyConditions.push(
-        sql`(${leadsTable.firstName} % ${q} OR ${leadsTable.lastName} % ${q} OR (${leadsTable.firstName} || ' ' || ${leadsTable.lastName}) % ${q})`
+        sql`(${leadsTable.firstName} % ${q} OR ${leadsTable.lastName} % ${q} OR (COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, '')) % ${q})`
       );
 
       fuzzyConditions.push(
@@ -335,7 +341,7 @@ router.get("/leads/search", async (req, res) => {
       }
 
       fuzzyConditions.push(
-        sql`(LOWER(${leadsTable.firstName}) LIKE LOWER(${`%${q}%`}) OR LOWER(${leadsTable.lastName}) LIKE LOWER(${`%${q}%`}))`
+        sql`(LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${q}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${q}%`}))`
       );
 
       fuzzyConditions.push(
@@ -348,10 +354,10 @@ router.get("/leads/search", async (req, res) => {
         GREATEST(
           COALESCE(similarity(${leadsTable.firstName}, ${q}), 0),
           COALESCE(similarity(${leadsTable.lastName}, ${q}), 0),
-          COALESCE(similarity(${leadsTable.firstName} || ' ' || ${leadsTable.lastName}, ${q}), 0),
+          COALESCE(similarity(COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, ''), ${q}), 0),
           COALESCE(similarity(${leadsTable.email}, ${q}), 0),
           CASE WHEN ${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
-          CASE WHEN LOWER(${leadsTable.firstName}) LIKE LOWER(${`%${q}%`}) OR LOWER(${leadsTable.lastName}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
+          CASE WHEN LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${q}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END,
           CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${q}%`}) THEN 0.5 ELSE 0 END
         )
       )`;
@@ -360,28 +366,28 @@ router.get("/leads/search", async (req, res) => {
     }
 
     if (dateType === "created") {
-      if (startDate && !isNaN(startDate.getTime())) {
-        conditions.push(gte(leadsTable.createdAt, startDate));
+      if (validStartDate) {
+        conditions.push(gte(leadsTable.createdAt, validStartDate));
       }
-      if (endDate && !isNaN(endDate.getTime())) {
-        conditions.push(lte(leadsTable.createdAt, endDate));
+      if (validEndDate) {
+        conditions.push(lte(leadsTable.createdAt, validEndDate));
       }
     }
 
     const where = and(...conditions);
 
-    if (dateType === "lastTouchpoint" && (startDate || endDate)) {
+    if (dateType === "lastTouchpoint" && (validStartDate || validEndDate)) {
       const lastTouchpointExpr = sql`GREATEST(
         COALESCE((SELECT MAX(ca.attempted_at) FROM call_attempts ca WHERE ca.lead_id = ${leadsTable.id}), '1970-01-01'::timestamp),
         COALESCE((SELECT MAX(COALESCE(pm.podium_created_at, pm.created_at)) FROM podium_messages pm WHERE pm.lead_id = ${leadsTable.id}), '1970-01-01'::timestamp)
       )`;
 
       const touchpointConds: SQL[] = [...conditions];
-      if (startDate && !isNaN(startDate.getTime())) {
-        touchpointConds.push(sql`${lastTouchpointExpr} >= ${startDate}`);
+      if (validStartDate) {
+        touchpointConds.push(sql`${lastTouchpointExpr} >= ${validStartDate}`);
       }
-      if (endDate && !isNaN(endDate.getTime())) {
-        touchpointConds.push(sql`${lastTouchpointExpr} <= ${endDate}`);
+      if (validEndDate) {
+        touchpointConds.push(sql`${lastTouchpointExpr} <= ${validEndDate}`);
       }
       const tpWhere = and(...touchpointConds);
 
@@ -429,6 +435,7 @@ router.get("/leads/search", async (req, res) => {
         db.select({ count: count() }).from(leadsTable).where(tpWhere),
       ]);
 
+      console.log(`[LeadSearch] lastTouchpoint query returned ${leads.length} of ${totalResult.count} total`);
       res.json({ leads, total: totalResult.count });
       return;
     }
@@ -474,6 +481,7 @@ router.get("/leads/search", async (req, res) => {
       db.select({ count: count() }).from(leadsTable).where(where),
     ]);
 
+    console.log(`[LeadSearch] query returned ${leads.length} of ${totalResult.count} total`);
     res.json({ leads, total: totalResult.count });
   } catch (err) {
     console.error("[LeadSearch] Error:", err);

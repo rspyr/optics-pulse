@@ -136,7 +136,7 @@ export default function QueueScreen() {
       if (dType === "lastTouchpoint") params.set("dateType", "lastTouchpoint");
       const data = await apiFetch(`/api/leads/search?${params}`);
       setSearchResults(data);
-    } catch {} finally { setSearchLoading(false); }
+    } catch (err) { console.error("[LeadSearch] fetch error:", err); } finally { setSearchLoading(false); }
   }, [effectiveTenantId, apiFetch]);
 
   const handleSearchChange = useCallback((text: string) => {

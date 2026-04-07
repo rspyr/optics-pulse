@@ -600,8 +600,10 @@ function useLeadSearch(tenantId?: number | null) {
       if (res.ok) {
         const data = await res.json();
         setResults(data);
+      } else {
+        console.error("[LeadSearch] API error:", res.status, await res.text().catch(() => ""));
       }
-    } catch {} finally { setSearching(false); }
+    } catch (err) { console.error("[LeadSearch] fetch error:", err); } finally { setSearching(false); }
   }, [tenantId]);
 
   const updateFilters = useCallback((partial: Partial<SearchFilters>) => {
