@@ -281,7 +281,7 @@ router.get("/leads/comm-config", async (req, res) => {
   }
 });
 
-function parseNaturalDate(input: string): { start: Date; end: Date } | null {
+function parseNaturalDate(input: string): { start: Date; end: Date; remainingText: string } | null {
   const trimmed = input.trim();
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -296,28 +296,36 @@ function parseNaturalDate(input: string): { start: Date; end: Date } | null {
   let month: number | null = null;
   let day: number | null = null;
   let year: number = currentYear;
+  let matchedPortion = "";
 
-  const slashDash = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  const slashDash = trimmed.match(/(^|\s)(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?(?=\s|$)/);
   if (slashDash) {
-    month = parseInt(slashDash[1], 10) - 1;
-    day = parseInt(slashDash[2], 10);
-    if (slashDash[3]) {
-      year = parseInt(slashDash[3], 10);
+    month = parseInt(slashDash[2], 10) - 1;
+    day = parseInt(slashDash[3], 10);
+    if (slashDash[4]) {
+      year = parseInt(slashDash[4], 10);
       if (year < 100) year += 2000;
     }
+    matchedPortion = slashDash[0];
   }
 
   if (month === null) {
-    const wordDate = trimmed.match(/^([a-zA-Z]+)\s+(\d{1,2})(?:\s*,?\s*(\d{2,4}))?$/);
+    const monthNamesPattern = Object.keys(monthNames).join("|");
+    const wordDateRegex = new RegExp(
+      `(^|\\s)(${monthNamesPattern})\\s+(\\d{1,2})(?:\\s*,?\\s*(\\d{2,4}))?(?=\\s|$)`,
+      "i"
+    );
+    const wordDate = trimmed.match(wordDateRegex);
     if (wordDate) {
-      const monthKey = wordDate[1].toLowerCase();
+      const monthKey = wordDate[2].toLowerCase();
       if (monthKey in monthNames) {
         month = monthNames[monthKey];
-        day = parseInt(wordDate[2], 10);
-        if (wordDate[3]) {
-          year = parseInt(wordDate[3], 10);
+        day = parseInt(wordDate[3], 10);
+        if (wordDate[4]) {
+          year = parseInt(wordDate[4], 10);
           if (year < 100) year += 2000;
         }
+        matchedPortion = wordDate[0];
       }
     }
   }
@@ -330,7 +338,10 @@ function parseNaturalDate(input: string): { start: Date; end: Date } | null {
   if (start.getMonth() !== month || start.getDate() !== day) return null;
 
   const end = new Date(year, month, day, 23, 59, 59, 999);
-  return { start, end };
+
+  const remainingText = trimmed.replace(matchedPortion, " ").replace(/\s+/g, " ").trim();
+
+  return { start, end, remainingText };
 }
 
 router.get("/leads/search", async (req, res) => {
@@ -362,8 +373,8 @@ router.get("/leads/search", async (req, res) => {
     if (parsed) {
       validStartDate = parsed.start;
       validEndDate = parsed.end;
-      textQuery = "";
-      console.log(`[LeadSearch] parsed natural date from q="${q}": ${parsed.start.toISOString()} - ${parsed.end.toISOString()}`);
+      textQuery = parsed.remainingText;
+      console.log(`[LeadSearch] parsed natural date from q="${q}": ${parsed.start.toISOString()} - ${parsed.end.toISOString()}, remaining text="${textQuery}"`);
     }
   }
 
