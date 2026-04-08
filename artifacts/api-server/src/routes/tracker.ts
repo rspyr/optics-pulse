@@ -7,6 +7,7 @@ import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
+import { normalizeAddress } from "../services/reconciliation";
 
 const router: IRouter = Router();
 
@@ -36,6 +37,49 @@ const PII_FIELD_PATTERNS: Record<string, string[]> = {
   phone: ["phone", "phone_number", "phonenumber", "telephone", "tel", "mobile"],
   fullName: ["full_name", "fullname", "name", "your_name", "your-name"],
 };
+
+const ADDRESS_FIELD_PATTERNS: Record<string, string[]> = {
+  street: ["address", "street", "street_address", "streetaddress", "address1", "address_1", "address_line_1", "addressline1"],
+  city: ["city"],
+  state: ["state", "province", "region"],
+  zip: ["zip", "zipcode", "zip_code", "postal_code", "postalcode", "postal"],
+};
+
+function extractAddressFromFields(fields: Record<string, unknown>): string | null {
+  const normalized = new Map<string, string>();
+  for (const [key, val] of Object.entries(fields)) {
+    if (typeof val === "string" && val.trim()) {
+      normalized.set(key.toLowerCase().replace(/[\s-]/g, "_"), val.trim());
+    }
+  }
+
+  const parts: Record<string, string | null> = { street: null, city: null, state: null, zip: null };
+  for (const [partKey, patterns] of Object.entries(ADDRESS_FIELD_PATTERNS)) {
+    for (const pattern of patterns) {
+      const val = normalized.get(pattern);
+      if (val) {
+        parts[partKey] = val;
+        break;
+      }
+    }
+  }
+
+  if (!parts.street && !parts.city) return null;
+
+  const addressParts: string[] = [];
+  if (parts.street) addressParts.push(parts.street);
+  if (parts.city) addressParts.push(parts.city);
+  if (parts.state && parts.zip) {
+    addressParts.push(`${parts.state} ${parts.zip}`);
+  } else if (parts.state) {
+    addressParts.push(parts.state);
+  } else if (parts.zip) {
+    addressParts.push(parts.zip);
+  }
+
+  const raw = addressParts.join(", ");
+  return normalizeAddress(raw);
+}
 
 function extractPiiFromFields(fields: Record<string, unknown>): { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } {
   const result: { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } = {
@@ -126,6 +170,7 @@ router.post("/tracker/submit", async (req, res) => {
     const pii = extractPiiFromFields(fields);
     const hashedPhone = pii.phone ? hashValue(normalizePhone(pii.phone)) : null;
     const hashedEmail = pii.email ? hashValue(pii.email) : null;
+    const billingAddress = extractAddressFromFields(fields);
 
     const formFieldsToStore = Object.keys(fields).length > 0
       ? { ...fields, ...(Object.keys(custom).length > 0 ? { _custom: custom } : {}) }
@@ -148,6 +193,7 @@ router.post("/tracker/submit", async (req, res) => {
       liFatId,
       hashedPhone,
       hashedEmail,
+      billingAddress,
       utmSource,
       utmMedium,
       utmCampaign,

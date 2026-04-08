@@ -8,6 +8,7 @@ import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
+import { normalizeAddress } from "../services/reconciliation";
 
 const router: IRouter = Router();
 
@@ -39,6 +40,39 @@ async function resolveFunnelType(tenantId: number, funnelSlug: string | null | u
     .where(and(eq(tenantFunnelTypesTable.tenantId, tenantId), eq(tenantFunnelTypesTable.funnelTypeId, ft.id)));
   if (!assoc) return null;
   return { name: ft.name, id: ft.id };
+}
+
+function extractWebhookBillingAddress(dataObj: Record<string, unknown>): string | null {
+  const street = typeof dataObj.address === "string" ? dataObj.address.trim()
+    : typeof dataObj.street === "string" ? dataObj.street.trim()
+    : typeof dataObj.street_address === "string" ? dataObj.street_address.trim()
+    : typeof dataObj.streetAddress === "string" ? dataObj.streetAddress.trim()
+    : null;
+  const city = typeof dataObj.city === "string" ? dataObj.city.trim() : null;
+  const state = typeof dataObj.state === "string" ? dataObj.state.trim()
+    : typeof dataObj.province === "string" ? dataObj.province.trim()
+    : null;
+  const zip = typeof dataObj.zip === "string" ? dataObj.zip.trim()
+    : typeof dataObj.zipcode === "string" ? dataObj.zipcode.trim()
+    : typeof dataObj.zip_code === "string" ? dataObj.zip_code.trim()
+    : typeof dataObj.postal_code === "string" ? dataObj.postal_code.trim()
+    : typeof dataObj.postalCode === "string" ? dataObj.postalCode.trim()
+    : null;
+
+  if (!street && !city) return null;
+
+  const addressParts: string[] = [];
+  if (street) addressParts.push(street);
+  if (city) addressParts.push(city);
+  if (state && zip) {
+    addressParts.push(`${state} ${zip}`);
+  } else if (state) {
+    addressParts.push(state);
+  } else if (zip) {
+    addressParts.push(zip);
+  }
+
+  return normalizeAddress(addressParts.join(", "));
 }
 
 router.post("/webhooks/ingest", async (req, res) => {
@@ -77,12 +111,17 @@ router.post("/webhooks/ingest", async (req, res) => {
       ? `callrail:${rawExternalId}`
       : rawExternalId || null;
 
+    const bodyObj = req.body as Record<string, unknown>;
+    const dataObj = (bodyObj.data || {}) as Record<string, unknown>;
+    const billingAddress = extractWebhookBillingAddress(dataObj);
+
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
       eventType,
       gclid: data.gclid || null,
       hashedPhone,
       hashedEmail,
+      billingAddress,
       utmSource: data.utmSource || null,
       utmCampaign: data.utmCampaign || null,
       utmMedium: data.utmMedium || null,
@@ -92,8 +131,6 @@ router.post("/webhooks/ingest", async (req, res) => {
       externalId,
     }).returning();
 
-    const bodyObj = req.body as Record<string, unknown>;
-    const dataObj = (bodyObj.data || {}) as Record<string, unknown>;
     const rawFullName = typeof dataObj.fullName === "string" ? dataObj.fullName : "";
     const webhookNameFields = [data.firstName, data.lastName, rawFullName].filter(Boolean).join(" ").toLowerCase();
     const isTestLead = webhookNameFields.includes("test");

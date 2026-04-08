@@ -14,7 +14,7 @@ function normalizePhone(phone: string): string {
   return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 }
 
-function normalizeAddress(address: string): string {
+export function normalizeAddress(address: string): string {
   return address
     .trim()
     .toLowerCase()
