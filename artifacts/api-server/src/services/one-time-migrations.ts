@@ -785,6 +785,43 @@ const migrations: Migration[] = [
       console.log("[Migration] Created unique index uq_tenant_client_slug on tenants");
     },
   },
+  {
+    id: "2026-04-08_add-tracker-columns",
+    description: "Add tracker attribution columns to attribution_events and client_slug to tenants",
+    run: async () => {
+      await db.execute(sql`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS client_slug TEXT`);
+      console.log("[Migration] Ensured client_slug column on tenants");
+
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_term TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_content TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS msclkid TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS ttclid TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS li_fat_id TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS referrer TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS page_url TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_type TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_id TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_name TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_fields JSONB`);
+      console.log("[Migration] Ensured all tracker columns on attribution_events");
+    },
+  },
+  {
+    id: "2026-04-08_enforce-client-slug-not-null",
+    description: "Set NOT NULL on tenants.client_slug after seeding, ensuring all tenants have a slug",
+    run: async () => {
+      const missing = await db.execute(sql`SELECT id, name FROM tenants WHERE client_slug IS NULL`);
+      for (const row of missing.rows as Array<{ id: number; name: string }>) {
+        const slug = (row.name || `tenant-${row.id}`).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `tenant-${row.id}`;
+        await db.execute(sql`UPDATE tenants SET client_slug = ${slug + '-' + row.id} WHERE id = ${row.id}`);
+      }
+      await db.execute(sql`ALTER TABLE tenants ALTER COLUMN client_slug SET NOT NULL`);
+      await db.execute(sql`DROP INDEX IF EXISTS uq_tenant_client_slug`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_client_slug ON tenants (client_slug)`);
+      console.log("[Migration] Enforced NOT NULL + unique constraint on tenants.client_slug");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

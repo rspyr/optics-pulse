@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 export const tenantsTable = pgTable("tenants", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  clientSlug: text("client_slug"),
+  clientSlug: text("client_slug").notNull(),
   serviceTitanId: text("service_titan_id"),
   timezone: text("timezone").notNull().default("America/New_York"),
   apiConfig: jsonb("api_config"),

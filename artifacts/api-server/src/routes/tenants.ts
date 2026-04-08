@@ -90,9 +90,18 @@ router.get("/tenants", async (req, res) => {
 router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, res) => {
   const body = CreateTenantBody.parse(req.body);
   const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  let baseSlug = slugify(body.name) || "tenant";
+  let candidateSlug = baseSlug;
+  let suffix = 1;
+  while (true) {
+    const [existing] = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.clientSlug, candidateSlug)).limit(1);
+    if (!existing) break;
+    suffix++;
+    candidateSlug = `${baseSlug}-${suffix}`;
+  }
   const insertData: Record<string, unknown> = {
     name: body.name,
-    clientSlug: slugify(body.name),
+    clientSlug: candidateSlug,
     serviceTitanId: body.serviceTitanId,
     timezone: body.timezone || "America/New_York",
     isDemo: req.body.isDemo === true ? true : false,

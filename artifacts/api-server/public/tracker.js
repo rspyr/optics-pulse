@@ -382,6 +382,52 @@
     });
   }
 
+  function bindJQueryEvents() {
+    if (typeof window.jQuery === "undefined") return;
+    var $ = window.jQuery;
+    try {
+      $(document).on("gform_confirmation_loaded", function(event, formId) {
+        var formEl = formId ? document.getElementById("gform_" + formId) : null;
+        var fields = formEl ? extractFormFields(formEl) : {};
+        handleFormSubmit(fields, {
+          id: formId ? String(formId) : null,
+          name: null,
+          type: "gravity",
+          action: null
+        });
+      });
+      $(document).on("wpformsAjaxSubmitSuccess", function(event, response) {
+        var formEl = null;
+        if (response && response.length) formEl = response[0];
+        if (!formEl || formEl.tagName !== "FORM") {
+          formEl = event.target && event.target.tagName === "FORM" ? event.target : null;
+        }
+        var fields = formEl ? extractFormFields(formEl) : {};
+        handleFormSubmit(fields, {
+          id: formEl ? (formEl.id || null) : null,
+          name: formEl ? (formEl.name || null) : null,
+          type: "wpforms",
+          action: null
+        });
+      });
+    } catch(e) {}
+  }
+
+  if (typeof window.jQuery !== "undefined") {
+    bindJQueryEvents();
+  } else {
+    var jqCheckCount = 0;
+    var jqCheckInterval = setInterval(function() {
+      jqCheckCount++;
+      if (typeof window.jQuery !== "undefined") {
+        clearInterval(jqCheckInterval);
+        bindJQueryEvents();
+      } else if (jqCheckCount > 20) {
+        clearInterval(jqCheckInterval);
+      }
+    }, 500);
+  }
+
   var apiBase = scriptTag ? scriptTag.src.replace(/\/tracker\.js.*$/, "") : "";
   var tenantIdAttr = scriptTag ? scriptTag.getAttribute("data-tenant") : null;
 
