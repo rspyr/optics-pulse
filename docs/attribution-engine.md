@@ -15,6 +15,8 @@ The attribution engine is the core system that connects marketing spend to actua
 - [Attribution Events](#attribution-events)
   - [Event Sources](#event-sources)
   - [Event Types](#event-types)
+  - [Ingestion Endpoints](#ingestion-endpoints)
+  - [Universal Form Attribution Script](#universal-form-attribution-script-trackerjs)
 - [Reconciliation Engine](#reconciliation-engine)
   - [Match Levels](#match-levels)
   - [Matching Pipeline](#matching-pipeline)
@@ -43,13 +45,25 @@ It does this by:
 ## Data Flow
 
 ```
-Ad Click / Call / Form Fill
+  Client Website                        Server-Side Sources
+  ─────────────                         ───────────────────
+  Ad Click / Form Fill                  Inbound Call / CRM Webhook
+        │                                       │
+        ▼                                       ▼
+  tracker.js (IIFE)                     /webhooks/ingest
+  captures UTM, click IDs,             receives CallRail, GHL,
+  cookies, intercepts form             Podium payloads
+        │                                       │
+        ▼                                       ▼
+  POST /api/tracker/submit ──────────────────────┘
         │
         ▼
-  Attribution Event (webhook ingestion)
+  Attribution Event Created
+  (UTM params, click IDs, form fields JSONB, hashed PII)
         │
         ▼
-  Lead Created (with GCLID, UTM params, hashed PII)
+  Lead Created + Round-Robin CSR Assignment
+  (when PII detected: name, email, or phone)
         │
         ▼
   ServiceTitan Job Synced (every 15 min)
@@ -125,7 +139,7 @@ Events enter the system via two endpoints:
 
 ### Universal Form Attribution Script (`tracker.js`)
 
-The tracker script is a self-contained IIFE served from `/tracker.js` on the API server. It is embedded on each client's website via a single `<script>` tag:
+The tracker script is a self-contained IIFE served from `/tracker.js` on the API server. It replaces the earlier passive hidden-field injector with an active script that intercepts form submissions directly. It is embedded on each client's website via a single `<script>` tag:
 
 ```html
 <script src="https://{api-domain}/tracker.js" data-client-id="acme-hvac" defer></script>
@@ -138,31 +152,86 @@ The tracker script is a self-contained IIFE served from `/tracker.js` on the API
 | **UTM Capture** | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` from URL params |
 | **Click ID Capture** | `gclid`, `fbclid`, `msclkid`, `ttclid`, `li_fat_id`, `wbraid` |
 | **Cookie Persistence** | Last-touch attribution cookie (`_attr_data`, 30-day TTL) + first-touch landing page cookie (`_attr_lp`) |
-| **Form Interception** | Native HTML forms (`submit` event), HubSpot (`postMessage`), Gravity Forms (`gform_confirmation_loaded`), WPForms (`wpformsAjaxSubmitSuccess`), Typeform (`postMessage`) |
+| **Form Interception** | Native HTML forms (`submit` event), HubSpot (`postMessage onFormSubmitted`), Gravity Forms (`gform_confirmation_loaded`), WPForms (`wpformsAjaxSubmitSuccess`), Typeform (`postMessage form-submit`) |
+| **jQuery Compatibility** | Deferred jQuery detection (polls up to 10s) then binds `$(document).on(...)` for Gravity/WPForms events that are jQuery-triggered rather than native DOM events |
 | **Dynamic Forms** | `MutationObserver` with `WeakSet` dedup auto-binds forms injected after page load |
-| **Delivery** | `fetch` with `keepalive` + 2 retries (1.5s delay); `navigator.sendBeacon` fallback; `localStorage` queue (cap 10) with flush on next page load |
-| **Heartbeat** | POST to `/api/tracker/heartbeat` every 6 hours for script health monitoring |
+| **Submission Dedup** | 3-second sliding window dedup keyed on `type|id|name` prevents double POSTs when both native submit and plugin success hooks fire for the same form |
+| **Delivery** | `fetch` with `keepalive` + 2 retries (1.5s delay) → `navigator.sendBeacon` fallback (with `Blob` content-type) → `localStorage` queue (cap 10) flushed on next page load |
+| **Sensitive Field Filtering** | Automatically excludes `password`, `credit_card`, `cvv`, `ssn`, and similar fields; skips `hidden` and `password` input types |
+| **Heartbeat** | POST to `/api/tracker/heartbeat` every 6 hours for script health monitoring; accepts both `clientId` (slug) and legacy numeric `tenantId` |
 
 **Script Attributes:**
 
 | Attribute | Required | Description |
 |:----------|:---------|:------------|
-| `data-client-id` | Yes | Tenant's `clientSlug` (e.g., `acme-hvac`) |
+| `data-client-id` | Yes | Tenant's `clientSlug` (e.g., `acme-hvac`) — auto-generated from tenant name, unique per tenant |
 | `data-endpoint` | No | Override submit URL (defaults to same origin `/api/tracker/submit`) |
 | `data-cookie-domain` | No | Cookie domain for cross-subdomain tracking |
 | `data-exclude-fields` | No | JSON array of field names to exclude from capture |
 | `data-capture-fields` | No | JSON array of field names to exclusively capture (allowlist mode) |
 | `data-custom` | No | JSON object of custom dimensions sent with every submission |
-| `data-funnel` | No | Funnel slug for routing |
+| `data-funnel` | No | Funnel slug for lead routing — maps to a tenant's configured funnel type |
 | `data-tenant` | No | Legacy numeric tenant ID (backward compat for heartbeat) |
+
+**Payload Structure:**
+
+Each submission POSTs this JSON to `/api/tracker/submit`:
+
+```json
+{
+  "client_id": "acme-hvac",
+  "submitted_at": "2026-04-08T19:00:00.000Z",
+  "page_url": "https://acmehvac.com/contact",
+  "landing_page": "https://acmehvac.com/?utm_source=google&gclid=abc123",
+  "referrer": "https://google.com",
+  "attribution": {
+    "utm_source": "google",
+    "utm_medium": "cpc",
+    "utm_campaign": "spring-ac",
+    "utm_term": "ac repair",
+    "utm_content": null,
+    "gclid": "abc123",
+    "fbclid": null,
+    "msclkid": null,
+    "ttclid": null,
+    "li_fat_id": null,
+    "wbraid": null
+  },
+  "form": {
+    "id": "contact-form",
+    "name": "Contact Us",
+    "type": "native",
+    "action": "https://acmehvac.com/submit"
+  },
+  "fields": {
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane@example.com",
+    "phone": "555-123-4567",
+    "service_needed": "AC Repair"
+  },
+  "custom": {
+    "funnel": "hvac-residential"
+  }
+}
+```
 
 **Backend Processing (`/api/tracker/submit`):**
 
-1. Resolves `client_id` string slug → tenant via `clientSlug` column
+1. Resolves `client_id` string slug → tenant via `clientSlug` column (unique, not null)
 2. Creates an `attribution_event` with all UTM params, click IDs, referrer, page URL, form metadata, and form fields (JSONB)
-3. Extracts PII from form fields (name, email, phone) using keyword matching
-4. If PII is found: creates a lead with round-robin CSR assignment (same flow as webhook ingestion)
-5. Hashes phone/email (SHA-256) for reconciliation matching
+3. Pre-assigns match level: Diamond if GCLID present, Golden if phone detected, Silver if email detected
+4. Hashes phone/email (SHA-256) for reconciliation matching
+5. Extracts PII from form fields using keyword matching (`first_name`, `email`, `phone`, `name`, etc.)
+6. If PII is found and not a test lead: creates a lead with round-robin CSR assignment (same flow as webhook ingestion), triggers auto-pass timer, logs initial assignment, and emits real-time Socket.IO notification
+
+**Tenant Identification (`clientSlug`):**
+
+Each tenant has a unique `clientSlug` stored on the tenants table. It is:
+- Auto-generated from the tenant name when a tenant is created (e.g., "Acme HVAC" → `acme-hvac`)
+- Collision-safe: if a slug already exists, a numeric suffix is appended (`acme-hvac-2`)
+- Seeded for existing tenants via a one-time migration
+- Enforced as NOT NULL with a unique index
 
 ---
 
