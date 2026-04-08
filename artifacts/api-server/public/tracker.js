@@ -205,6 +205,16 @@
   function sendPayload(payload) {
     var body = JSON.stringify(payload);
 
+    var beaconOrQueue = function() {
+      try {
+        if (typeof navigator.sendBeacon === "function") {
+          var sent = navigator.sendBeacon(CONFIG.endpointUrl, new Blob([body], { type: "application/json" }));
+          if (sent) return;
+        }
+      } catch(e) {}
+      queuePayload(payload);
+    };
+
     var attempt = function(retries) {
       try {
         fetch(CONFIG.endpointUrl, {
@@ -217,25 +227,17 @@
           if (retries > 0) {
             sleep(RETRY_DELAY).then(function() { attempt(retries - 1); });
           } else {
-            queuePayload(payload);
+            beaconOrQueue();
           }
         }).catch(function() {
           if (retries > 0) {
             sleep(RETRY_DELAY).then(function() { attempt(retries - 1); });
           } else {
-            queuePayload(payload);
+            beaconOrQueue();
           }
         });
       } catch(e) {
-        try {
-          if (typeof navigator.sendBeacon === "function") {
-            navigator.sendBeacon(CONFIG.endpointUrl, body);
-          } else {
-            queuePayload(payload);
-          }
-        } catch(e2) {
-          queuePayload(payload);
-        }
+        beaconOrQueue();
       }
     };
 
