@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, notInArray, inArray, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
@@ -45,32 +45,69 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
 
 router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const conditions = tenantId ? eq(integrationSyncLogsTable.tenantId, tenantId) : undefined;
+  const tenantCond = tenantId ? eq(integrationSyncLogsTable.tenantId, tenantId) : undefined;
 
-  const recentLogs = await db.select()
-    .from(integrationSyncLogsTable)
-    .where(conditions)
-    .orderBy(desc(integrationSyncLogsTable.createdAt))
-    .limit(100);
+  const MAINTENANCE_SYNC_TYPES = ["st_data_purge", "oci_upload", "enhanced_conversions", "capi_upload", "attribution_writeback"];
 
-  const PURGE_TYPES = new Set(["st_data_purge"]);
-  const MAINTENANCE_TYPES = new Set(["st_data_purge", "oci_upload", "enhanced_conversions", "capi_upload", "attribution_writeback"]);
+  const [dataSyncLogs, purgeLogs, runningLogs] = await Promise.all([
+    db.select()
+      .from(integrationSyncLogsTable)
+      .where(tenantCond
+        ? and(tenantCond, notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES))
+        : notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES))
+      .orderBy(desc(integrationSyncLogsTable.createdAt))
+      .limit(60),
+    db.select()
+      .from(integrationSyncLogsTable)
+      .where(tenantCond
+        ? and(tenantCond, eq(integrationSyncLogsTable.syncType, "st_data_purge"))
+        : eq(integrationSyncLogsTable.syncType, "st_data_purge"))
+      .orderBy(desc(integrationSyncLogsTable.createdAt))
+      .limit(1),
+    db.select()
+      .from(integrationSyncLogsTable)
+      .where(tenantCond
+        ? and(tenantCond, eq(integrationSyncLogsTable.status, "running"))
+        : eq(integrationSyncLogsTable.status, "running"))
+      .orderBy(desc(integrationSyncLogsTable.createdAt))
+      .limit(10),
+  ]);
 
-  const syncLogs = recentLogs.filter((l) => !PURGE_TYPES.has(l.syncType));
-  const purgeLogs = recentLogs.filter((l) => PURGE_TYPES.has(l.syncType));
+  const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
+  if (tenantId) {
+    const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    if (tenant?.apiConfig && typeof tenant.apiConfig === "string") {
+      try {
+        const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
+        configuredMap.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret);
+        configuredMap.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
+        configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
+      } catch { /* decryption failed */ }
+    }
+  }
 
-  const integrations = ["service_titan", "google_ads", "meta"];
-  const statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; latestRunAt: string | null; syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }> = {};
+  type IntegrationState = "running" | "healthy" | "error" | "no_credentials" | "never";
+
+  const integrations = ["service_titan", "google_ads", "meta"] as const;
+  const statusByIntegration: Record<string, {
+    lastSync: string | null;
+    lastStatus: string;
+    lastRecords: number;
+    errorCount: number;
+    latestRunAt: string | null;
+    state: IntegrationState;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }>;
+  }> = {};
 
   for (const integ of integrations) {
-    const integLogs = syncLogs.filter((l) => l.integration === integ);
-    const latest = integLogs.find((l) => !MAINTENANCE_TYPES.has(l.syncType));
-    const lastSuccessful = integLogs.find((l) => l.status === "completed" && !MAINTENANCE_TYPES.has(l.syncType));
+    const integLogs = dataSyncLogs.filter((l) => l.integration === integ);
+    const isRunning = runningLogs.some((l) => l.integration === integ);
+    const latest = integLogs[0];
+    const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
     const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> = {};
     const typeSet = new Set(integLogs.map((l) => l.syncType));
     for (const st of typeSet) {
-      if (MAINTENANCE_TYPES.has(st)) continue;
       const typeLogs = integLogs.filter((l) => l.syncType === st);
       const latestOfType = typeLogs[0];
       syncTypes[st] = {
@@ -80,25 +117,33 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       };
     }
 
+    let state: IntegrationState = "never";
+    if (isRunning) {
+      state = "running";
+    } else if (tenantId && !configuredMap[integ]) {
+      state = "no_credentials";
+    } else if (latest?.status === "error") {
+      state = "error";
+    } else if (latest?.status === "completed") {
+      state = "healthy";
+    }
+
     statusByIntegration[integ] = {
       lastSync: lastSuccessful?.completedAt?.toISOString() || null,
       lastStatus: latest?.status || "never",
       lastRecords: latest?.recordsProcessed || 0,
-      errorCount: integLogs.filter((l) => l.status === "error" && !MAINTENANCE_TYPES.has(l.syncType)).length,
+      errorCount: integLogs.filter((l) => l.status === "error").length,
       latestRunAt: latest?.completedAt?.toISOString() || null,
+      state,
       syncTypes,
     };
   }
-
-  const mainLogs = recentLogs
-    .filter((l) => !PURGE_TYPES.has(l.syncType))
-    .slice(0, 20);
 
   const lastPurge = purgeLogs[0];
 
   res.json({
     statusByIntegration,
-    recentLogs: mainLogs,
+    recentLogs: dataSyncLogs.slice(0, 20),
     purgeStatus: lastPurge ? {
       lastRun: lastPurge.completedAt?.toISOString() || null,
       status: lastPurge.status,

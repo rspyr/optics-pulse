@@ -24,8 +24,9 @@ export default function Internal() {
   const [roasFilter, setRoasFilter] = useState<string>("");
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
 
+  type IntegrationState = "running" | "healthy" | "error" | "no_credentials" | "never";
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
   }
@@ -314,24 +315,31 @@ export default function Internal() {
               <div key={integ} className="p-4 bg-white/[0.03] rounded-lg border border-white/5">
                 <div className="flex items-center justify-between mb-2">
                   <span className={`font-medium text-sm ${color}`}>{label}</span>
-                  {status?.lastStatus === "completed" ? (
-                    <CheckCircle className="w-4 h-4 text-emerald-400" />
-                  ) : status?.lastStatus === "error" ? (
-                    <XCircle className="w-4 h-4 text-red-400" />
+                  {status?.state === "running" ? (
+                    <span className="flex items-center gap-1 text-xs text-blue-400"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing</span>
+                  ) : status?.state === "healthy" ? (
+                    <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Healthy</span>
+                  ) : status?.state === "error" ? (
+                    <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Error</span>
+                  ) : status?.state === "no_credentials" ? (
+                    <span className="flex items-center gap-1 text-xs text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> No credentials</span>
                   ) : (
                     <span className="text-xs text-muted-foreground">Never synced</span>
                   )}
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
-                  <p>Last: {status?.lastSync ? new Date(status.lastSync).toLocaleString() : "—"}</p>
+                  <p>Last successful: {status?.lastSync ? new Date(status.lastSync).toLocaleString() : "—"}</p>
                   {status?.syncTypes && Object.keys(status.syncTypes).length > 0 && (
                     <div className="mt-2 space-y-1 border-t border-white/5 pt-2">
                       {Object.entries(status.syncTypes).map(([type, info]) => (
                         <div key={type} className="flex items-center justify-between">
-                          <span className="text-muted-foreground capitalize">{type.replace(/_/g, " ")}</span>
-                          <span className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5">
                             <span className={`w-1.5 h-1.5 rounded-full ${info.lastStatus === "completed" ? "bg-emerald-400" : info.lastStatus === "error" ? "bg-red-400" : "bg-amber-400"}`} />
-                            <span>{info.recordsProcessed.toLocaleString()} records</span>
+                            <span className="text-muted-foreground capitalize">{type.replace(/_/g, " ")}</span>
+                          </div>
+                          <span className="text-right">
+                            <span>{info.recordsProcessed.toLocaleString()} rec</span>
+                            {info.lastRun && <span className="text-white/20 ml-1.5">{new Date(info.lastRun).toLocaleDateString()}</span>}
                           </span>
                         </div>
                       ))}
