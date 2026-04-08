@@ -502,9 +502,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SpendRevenueDataPoint"
+                $ref: "#/components/schemas/SpendRevenueChartResponse"
 
   /auth/login:
     post:
@@ -1595,6 +1593,19 @@ components:
         revenue:
           type: number
       required: [date, spend, googleSpend, metaSpend, revenue]
+
+    SpendRevenueChartResponse:
+      type: object
+      properties:
+        daily:
+          type: array
+          items:
+            $ref: "#/components/schemas/SpendRevenueDataPoint"
+        historicalRevenue:
+          type: number
+        historicalJobCount:
+          type: integer
+      required: [daily, historicalRevenue, historicalJobCount]
 
     BenchmarkData:
       type: object

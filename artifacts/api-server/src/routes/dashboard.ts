@@ -7,6 +7,8 @@ const router: IRouter = Router();
 
 router.use("/dashboard", denyClientUser);
 
+const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
+
 async function computeMetrics(tenantId: number | null, startDate?: string, endDate?: string) {
   const leadConditions: SQL[] = [];
   const jobConditions: SQL[] = [];
@@ -19,12 +21,12 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   }
   if (startDate) {
     leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) >= ${new Date(startDate)}`);
+    jobConditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
     spendConditions.push(gte(campaignDailyStatsTable.date, startDate));
   }
   if (endDate) {
     leadConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) <= ${new Date(endDate)}`);
+    jobConditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
     spendConditions.push(lte(campaignDailyStatsTable.date, endDate));
   }
 
@@ -148,18 +150,23 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
     statsConditions.push(eq(campaignsTable.tenantId, tenantId));
     jobConditions.push(eq(jobsTable.tenantId, tenantId));
   }
+  const allJobConditions: SQL[] = [eq(jobsTable.status, "completed")];
+  if (tenantId) {
+    allJobConditions.push(eq(jobsTable.tenantId, tenantId));
+  }
+
   if (startDate) {
     statsConditions.push(gte(campaignDailyStatsTable.date, startDate));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) >= ${new Date(startDate)}`);
+    jobConditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
   }
   if (endDate) {
     statsConditions.push(lte(campaignDailyStatsTable.date, endDate));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) <= ${new Date(endDate)}`);
+    jobConditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
   }
 
   const statsWhere = statsConditions.length > 0 ? and(...statsConditions) : undefined;
 
-  const [stats, revenueByDate] = await Promise.all([
+  const [stats, revenueByDate, outOfRangeResult] = await Promise.all([
     db.select({
       date: campaignDailyStatsTable.date,
       platform: campaignsTable.platform,
@@ -170,12 +177,21 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
       .where(statsWhere)
       .orderBy(campaignDailyStatsTable.date),
     db.select({
-      date: sql<string>`TO_CHAR(COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}), 'YYYY-MM-DD')`,
+      date: sql<string>`TO_CHAR(${jobDateExpr}, 'YYYY-MM-DD')`,
       revenue: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})), 0)`,
     })
       .from(jobsTable)
       .where(and(...jobConditions))
-      .groupBy(sql`TO_CHAR(COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}), 'YYYY-MM-DD')`),
+      .groupBy(sql`TO_CHAR(${jobDateExpr}, 'YYYY-MM-DD')`),
+    (startDate || endDate) ? db.select({
+      total: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})), 0)`,
+      jobCount: sql<number>`COUNT(*)`,
+    })
+      .from(jobsTable)
+      .where(and(
+        ...allJobConditions,
+        ...(startDate ? [sql`${jobDateExpr} < ${new Date(startDate)}`] : []),
+      )) : Promise.resolve([{ total: 0, jobCount: 0 }]),
   ]);
 
   const dailyMap = new Map<string, { spend: number; googleSpend: number; metaSpend: number; revenue: number }>();
@@ -201,6 +217,9 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
     }
   }
 
+  const historicalRevenue = Number(outOfRangeResult[0]?.total ?? 0);
+  const historicalJobCount = Number(outOfRangeResult[0]?.jobCount ?? 0);
+
   const result = Array.from(dailyMap.entries())
     .map(([date, data]) => ({
       date,
@@ -211,7 +230,11 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  res.json(result);
+  res.json({
+    daily: result,
+    historicalRevenue: Math.round(historicalRevenue * 100) / 100,
+    historicalJobCount,
+  });
 });
 
 router.get("/dashboard/benchmarks", async (req, res) => {
@@ -240,12 +263,12 @@ router.get("/dashboard/benchmarks", async (req, res) => {
 
   if (startDate) {
     leadConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) >= ${new Date(startDate)}`);
+    jobConditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
     spendConditions.push(gte(campaignDailyStatsTable.date, startDate));
   }
   if (endDate) {
     leadConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
-    jobConditions.push(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.createdAt}) <= ${new Date(endDate)}`);
+    jobConditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
     spendConditions.push(lte(campaignDailyStatsTable.date, endDate));
   }
 

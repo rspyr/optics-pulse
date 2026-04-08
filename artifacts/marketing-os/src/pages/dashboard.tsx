@@ -86,11 +86,13 @@ export default function Dashboard() {
       ["Period", `${startDate} to ${endDate}`],
     ];
 
-    if (chartData && Array.isArray(chartData)) {
+    if (chartDaily.length > 0) {
       rows.push([], ["Date", "Spend", "Revenue"]);
-      for (const row of chartData) {
-        const r = row as unknown as Record<string, unknown>;
-        rows.push([String(r.date || ""), String(r.spend || 0), String(r.revenue || 0)]);
+      for (const row of chartDaily) {
+        rows.push([String(row.date || ""), String(row.spend || 0), String(row.revenue || 0)]);
+      }
+      if (historicalRevenue > 0) {
+        rows.push([], ["Historical Revenue (before date range)", String(historicalRevenue), `${historicalJobCount} jobs`]);
       }
     }
 
@@ -114,9 +116,10 @@ export default function Dashboard() {
     { label: "Close Rate", value: `${overview.closeRate}%`, icon: Target, sub: `Appointments → Invoiced Jobs · ${overview.invoicedJobCount} invoiced / ${overview.bookedLeads} booked` },
   ];
 
-  const displayChartData = chartData && Array.isArray(chartData) && chartData.length > 0
-    ? chartData
-    : [];
+  const chartDaily = chartData?.daily ?? [];
+  const historicalRevenue = chartData?.historicalRevenue ?? 0;
+  const historicalJobCount = chartData?.historicalJobCount ?? 0;
+  const displayChartData = chartDaily.length > 0 ? chartDaily : [];
 
   return (
     <div className="space-y-8">
@@ -167,8 +170,19 @@ export default function Dashboard() {
 
       <PremiumCard className="h-[450px] p-6 flex flex-col" transition={{ delay: 0.5 }}>
         <div className="mb-6">
-          <h3 className="font-display text-xl text-white">Spend vs Revenue Attribution</h3>
-          <p className="text-muted-foreground text-sm">Nightly reconciled ServiceTitan revenue mapped to Google/Meta ad spend.</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-display text-xl text-white">Spend vs Revenue Attribution</h3>
+              <p className="text-muted-foreground text-sm">Nightly reconciled ServiceTitan revenue mapped to Google/Meta ad spend.</p>
+            </div>
+            {historicalRevenue > 0 && (
+              <div className="text-right bg-white/5 border border-white/10 rounded-lg px-3 py-2">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Historical Revenue</p>
+                <p className="text-sm font-display text-amber-400">{formatCurrency(historicalRevenue)}</p>
+                <p className="text-[10px] text-muted-foreground">{historicalJobCount} jobs before range</p>
+              </div>
+            )}
+          </div>
         </div>
         {displayChartData.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">

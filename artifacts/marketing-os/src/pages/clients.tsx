@@ -232,17 +232,21 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const uniqueLeadTypes = useMemo(() => [...new Set(leads.map(l => l.leadType).filter(Boolean))].sort(), [leads]);
   const uniqueSalespeople = useMemo(() => [...new Set(leads.map(l => l.assignedTo).filter(Boolean))].sort(), [leads]);
 
+  const chartDaily = chartData?.daily ?? [];
+  const historicalRevenue = chartData?.historicalRevenue ?? 0;
+  const historicalJobCount = chartData?.historicalJobCount ?? 0;
+
   const chartDataForDisplay = useMemo(() => {
-    if (!chartData) return [];
+    if (!chartDaily.length) return [];
     const logDates = new Set((changeLogs || []).map(l => l.date));
     const numDays = Number(dateRange);
     const dailyFee = agencyFee / 30;
-    return chartData.map(point => ({
+    return chartDaily.map(point => ({
       ...point,
       hasChangeLog: logDates.has(point.date),
       totalCost: roiMode === "allcosts" ? point.spend + dailyFee : point.spend,
     }));
-  }, [chartData, changeLogs, roiMode, agencyFee, dateRange]);
+  }, [chartDaily, changeLogs, roiMode, agencyFee, dateRange]);
 
   const handleNlSubmit = useCallback(async () => {
     if (!nlQuery.trim() || nlLoading) return;
@@ -672,6 +676,11 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
                   ? `Includes ${formatCurrency(agencyFee)}/mo agency retainer (${formatCurrency(Math.round(agencyFee / 30))}/day)`
                   : "Ad spend only (ROAS view)"}
               </p>
+              {historicalRevenue > 0 && (
+                <p className="text-amber-400/80 text-[10px] mt-1">
+                  {formatCurrency(historicalRevenue)} historical revenue ({historicalJobCount} jobs) completed before this date range
+                </p>
+              )}
             </div>
             <button
               onClick={() => setShowChangeLog(!showChangeLog)}

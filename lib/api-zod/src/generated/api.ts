@@ -599,9 +599,11 @@ export const GetSpendRevenueChartResponseItem = zod.object({
   metaSpend: zod.number(),
   revenue: zod.number(),
 });
-export const GetSpendRevenueChartResponse = zod.array(
-  GetSpendRevenueChartResponseItem,
-);
+export const GetSpendRevenueChartResponse = zod.object({
+  daily: zod.array(GetSpendRevenueChartResponseItem),
+  historicalRevenue: zod.number(),
+  historicalJobCount: zod.number(),
+});
 
 /**
  * @summary Login with email and password

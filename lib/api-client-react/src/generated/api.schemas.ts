@@ -295,6 +295,12 @@ export interface SpendRevenueDataPoint {
   revenue: number;
 }
 
+export interface SpendRevenueChartResponse {
+  daily: SpendRevenueDataPoint[];
+  historicalRevenue: number;
+  historicalJobCount: number;
+}
+
 export interface BenchmarkData {
   cpl: number;
   bookingRate: number;

@@ -68,6 +68,7 @@ import type {
   ReconciliationResult,
   ReconciliationStatusResponse,
   RunReconciliationBody,
+  SpendRevenueChartResponse,
   SpendRevenueDataPoint,
   Tenant,
   TenantPerformanceRow,
@@ -1821,8 +1822,8 @@ export const getGetSpendRevenueChartUrl = (
 export const getSpendRevenueChart = async (
   params?: GetSpendRevenueChartParams,
   options?: RequestInit,
-): Promise<SpendRevenueDataPoint[]> => {
-  return customFetch<SpendRevenueDataPoint[]>(
+): Promise<SpendRevenueChartResponse> => {
+  return customFetch<SpendRevenueChartResponse>(
     getGetSpendRevenueChartUrl(params),
     {
       ...options,
