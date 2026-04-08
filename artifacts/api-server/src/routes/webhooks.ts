@@ -85,7 +85,7 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
 
     const body = IngestWebhookBody.parse(req.body);
 
-    const pausedSources = ["callrail", "ghl", "podium"];
+    const pausedSources: string[] = [];
     if (pausedSources.includes(body.source)) {
       res.json({ success: false, eventId: 0, message: `${body.source} integration is currently paused` });
       return;
@@ -115,18 +115,46 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
     const bodyObj = req.body as Record<string, unknown>;
     const dataObj = (bodyObj.data || {}) as Record<string, unknown>;
     const billingAddress = extractWebhookBillingAddress(dataObj);
+    const wbraid = (dataObj.wbraid as string) || null;
+    const fbclid = (dataObj.fbclid as string) || null;
+    const msclkid = (dataObj.msclkid as string) || null;
+    const ttclid = (dataObj.ttclid as string) || null;
+    const liFatId = (dataObj.liFatId as string) || (dataObj.li_fat_id as string) || null;
+    const utmTerm = (dataObj.utmTerm as string) || (dataObj.utm_term as string) || null;
+    const utmContent = (dataObj.utmContent as string) || (dataObj.utm_content as string) || null;
+    const pageUrl = (dataObj.pageUrl as string) || (dataObj.page_url as string) || null;
+    const referrer = (dataObj.referrer as string) || null;
+    const userAgent = (dataObj.userAgent as string) || (dataObj.user_agent as string) || null;
+    const formType = (dataObj.formType as string) || (dataObj.form_type as string) || null;
+    const formId = (dataObj.formId as string) || (dataObj.form_id as string) || null;
+    const formName = (dataObj.formName as string) || (dataObj.form_name as string) || null;
+    const formFields = (dataObj.formFields as Record<string, unknown>) || (dataObj.form_fields as Record<string, unknown>) || null;
 
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
       eventType,
       gclid: data.gclid || null,
+      wbraid,
+      fbclid,
+      msclkid,
+      ttclid,
+      liFatId,
       hashedPhone,
       hashedEmail,
       billingAddress,
       utmSource: data.utmSource || null,
       utmCampaign: data.utmCampaign || null,
       utmMedium: data.utmMedium || null,
+      utmTerm,
+      utmContent,
       landingPage: data.landingPage || null,
+      pageUrl,
+      referrer,
+      userAgent,
+      formType,
+      formId,
+      formName,
+      formFields,
       matchLevel: data.gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched",
       matchConfidence: data.gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
       externalId,
@@ -197,8 +225,146 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
   }
 });
 
-router.post("/webhooks/ghl", webhookLimiter, async (_req, res) => {
-  res.json({ success: false, message: "GHL integration is currently paused" });
+router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody
+      ? (req as typeof req & { rawBody?: Buffer }).rawBody!.toString("utf-8")
+      : JSON.stringify(req.body);
+    const signature = req.headers["x-mos-signature"] as string | undefined;
+    if (!verifySignature(rawBody, signature)) {
+      res.status(401).json({ success: false, message: "Invalid webhook signature" });
+      return;
+    }
+
+    const contact = (body.contact || body) as Record<string, unknown>;
+    const customData = (body.customData || body.custom_data || {}) as Record<string, unknown>;
+
+    const tenantIdRaw = body.tenantId || body.tenant_id || customData.tenantId || customData.tenant_id;
+    if (!tenantIdRaw || isNaN(Number(tenantIdRaw))) {
+      res.status(400).json({ success: false, message: "Missing or invalid tenantId" });
+      return;
+    }
+    const tenantId = Number(tenantIdRaw);
+
+    const phone = String(contact.phone || contact.phone_number || "").trim() || null;
+    const email = String(contact.email || "").trim() || null;
+    const firstName = String(contact.firstName || contact.first_name || contact.name || "").trim() || null;
+    const lastName = String(contact.lastName || contact.last_name || "").trim() || null;
+    const fullName = String(contact.fullName || contact.full_name || "").trim() || null;
+
+    const hashedPhone = phone ? hashValue(normalizePhone(phone)) : null;
+    const hashedEmail = email ? hashValue(email) : null;
+
+    const gclid = String(customData.gclid || body.gclid || "").trim() || null;
+    const fbclid = String(customData.fbclid || body.fbclid || "").trim() || null;
+    const wbraid = String(customData.wbraid || body.wbraid || "").trim() || null;
+    const utmSource = String(customData.utmSource || customData.utm_source || body.utm_source || "ghl").trim();
+    const utmCampaign = String(customData.utmCampaign || customData.utm_campaign || body.utm_campaign || "").trim() || null;
+    const utmMedium = String(customData.utmMedium || customData.utm_medium || body.utm_medium || "").trim() || null;
+    const utmTerm = String(customData.utmTerm || customData.utm_term || body.utm_term || "").trim() || null;
+    const utmContent = String(customData.utmContent || customData.utm_content || body.utm_content || "").trim() || null;
+    const landingPage = String(customData.landingPage || customData.landing_page || body.landing_page || "").trim() || null;
+    const pageUrl = String(customData.pageUrl || customData.page_url || body.page_url || "").trim() || null;
+    const referrer = String(customData.referrer || body.referrer || "").trim() || null;
+
+    const formObj = (body.form || {}) as Record<string, unknown>;
+    const formId = String(formObj.id || body.formId || body.form_id || "").trim() || null;
+    const formName = String(formObj.name || body.formName || body.form_name || "").trim() || null;
+    const formType = String(body.type || body.eventType || body.event_type || "form_fill").trim() || null;
+
+    const formFields = (body.fields || body.formFields || body.form_fields || null) as Record<string, unknown> | null;
+
+    const externalId = contact.id ? `ghl:${String(contact.id)}` : null;
+
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId,
+      eventType: "form_fill",
+      gclid,
+      wbraid,
+      fbclid,
+      hashedPhone,
+      hashedEmail,
+      utmSource,
+      utmCampaign,
+      utmMedium,
+      utmTerm,
+      utmContent,
+      landingPage,
+      pageUrl,
+      referrer,
+      formType,
+      formId,
+      formName,
+      formFields,
+      externalId,
+      matchLevel: gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched",
+      matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
+    }).returning();
+
+    const webhookNameFields = [firstName, lastName, fullName].filter(Boolean).join(" ").toLowerCase();
+    const isTestLead = webhookNameFields.includes("test");
+
+    if (!isTestLead && (firstName || lastName || phone || email)) {
+      const funnelSlug = (customData.funnel as string) || (customData._mos_funnel as string) || null;
+      const resolved = await resolveFunnelType(tenantId, funnelSlug);
+      const resolvedLeadType = resolved?.name || "ghl";
+      const resolvedFunnelId = resolved?.id || null;
+      const rawApptDate = (customData.appointmentDate as string) || (contact.appointmentDate as string) || null;
+      const rawApptTime = (customData.appointmentTime as string) || (contact.appointmentTime as string) || null;
+      const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
+
+      const [newLead] = await db.insert(leadsTable).values({
+        tenantId,
+        firstName: firstName || "Unknown",
+        lastName: lastName || "",
+        phone: phone || null,
+        email: email || null,
+        source: await normalizeSource(tenantId, utmSource || "ghl"),
+        matchedGclid: gclid || null,
+        interestType: null,
+        leadType: resolvedLeadType,
+        funnelId: resolvedFunnelId,
+        appointmentDate: rawApptDate,
+        appointmentTime: rawApptTime,
+        hubStatus: hasApptDetails ? "appt_booked" : "day_1",
+        preBooked: hasApptDetails,
+        dayInSequence: 1,
+        status: "new",
+      }).returning();
+
+      if (newLead) {
+        try {
+          const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
+          if (result.assignedCsrId && result.passIntervalMinutes != null) {
+            scheduleAutoPass(newLead.id, result.passIntervalMinutes * 60 * 1000);
+            await db.insert(callAttemptsTable).values({
+              leadId: newLead.id,
+              userId: result.assignedCsrId,
+              method: "system",
+              outcome: "initial_assignment",
+              platform: "native",
+              actionType: "system",
+              notes: `System: Lead initially assigned to ${result.csrName}`,
+            });
+          } else if (!result.assignedCsrId) {
+            console.warn(`[GHL Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);
+          }
+        } catch (err) {
+          console.warn("[GHL Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
+        }
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
+        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+      }
+    }
+
+    console.log(`[GHL Webhook] Processed event ${event.id} for tenant ${tenantId}`);
+    res.json({ success: true, eventId: event.id, message: "GHL webhook processed successfully" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process GHL webhook";
+    console.error("[GHL Webhook] Error:", error);
+    res.status(400).json({ success: false, eventId: 0, message });
+  }
 });
 
 function verifyPodiumSignature(rawBody: Buffer | string, signature: string, secret: string): boolean {
