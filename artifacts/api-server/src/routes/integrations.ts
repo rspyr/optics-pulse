@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
-import { eq, desc, and, notInArray, inArray, sql } from "drizzle-orm";
+import { eq, desc, and, notInArray } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
@@ -67,8 +67,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     db.select()
       .from(integrationSyncLogsTable)
       .where(tenantCond
-        ? and(tenantCond, eq(integrationSyncLogsTable.status, "running"))
-        : eq(integrationSyncLogsTable.status, "running"))
+        ? and(tenantCond, eq(integrationSyncLogsTable.status, "running"), notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES))
+        : and(eq(integrationSyncLogsTable.status, "running"), notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES)))
       .orderBy(desc(integrationSyncLogsTable.createdAt))
       .limit(10),
   ]);
