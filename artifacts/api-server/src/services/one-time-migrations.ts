@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable, leadSourceAliasesTable } from "@workspace/db";
-import { eq, and, sql, isNull, isNotNull, or, ne, inArray } from "drizzle-orm";
+import { eq, and, sql, isNull, isNotNull, or, ne, inArray, desc } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
 import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
 import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
@@ -621,6 +621,78 @@ const migrations: Migration[] = [
         }
       } else {
         console.log(`[Migration] No mismatched assigned_csr_id found on booked leads`);
+      }
+    },
+  },
+  {
+    id: "2026-04-08_add-lead-id-and-backfill",
+    description: "Add lead_id FK column to jobs table, create index, and backfill linkages from phone/email",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lead_id INTEGER REFERENCES leads(id)
+      `);
+      console.log("[Migration] Added lead_id column to jobs table");
+
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS idx_jobs_lead_id ON jobs(lead_id) WHERE lead_id IS NOT NULL
+      `);
+      console.log("[Migration] Created partial index on jobs.lead_id");
+
+      const jobsToMatch = await db.select({
+        id: jobsTable.id,
+        tenantId: jobsTable.tenantId,
+        customerPhone: jobsTable.customerPhone,
+        customerEmail: jobsTable.customerEmail,
+      }).from(jobsTable).where(
+        and(
+          isNull(jobsTable.leadId),
+          or(isNotNull(jobsTable.customerPhone), isNotNull(jobsTable.customerEmail)),
+        ),
+      );
+
+      if (jobsToMatch.length === 0) {
+        console.log("[Migration] No jobs with PII available for lead_id backfill (all purged or already linked)");
+        return;
+      }
+
+      console.log(`[Migration] Attempting lead_id backfill for ${jobsToMatch.length} jobs with phone/email`);
+      let matched = 0;
+      for (const job of jobsToMatch) {
+        const orClauses: ReturnType<typeof sql>[] = [];
+        if (job.customerPhone) {
+          orClauses.push(
+            sql`(${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${job.customerPhone})`,
+          );
+        }
+        if (job.customerEmail) {
+          orClauses.push(
+            sql`(${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND LOWER(${leadsTable.email}) = LOWER(${job.customerEmail}))`,
+          );
+        }
+        if (orClauses.length === 0) continue;
+
+        const orClause = orClauses.length === 1 ? orClauses[0] : sql`(${sql.join(orClauses, sql` OR `)})`;
+        const [lead] = await db.select({ id: leadsTable.id })
+          .from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, job.tenantId), orClause))
+          .orderBy(desc(leadsTable.createdAt))
+          .limit(1);
+
+        if (lead) {
+          await db.update(jobsTable)
+            .set({ leadId: lead.id, updatedAt: new Date() })
+            .where(eq(jobsTable.id, job.id));
+          matched++;
+        }
+      }
+
+      console.log(`[Migration] lead_id backfill complete: ${matched}/${jobsToMatch.length} jobs linked to leads`);
+      const purgedCount = jobsToMatch.length - matched;
+      if (purgedCount > 0) {
+        const totalPurgedJobs = await db.select({ count: sql<number>`COUNT(*)` })
+          .from(jobsTable)
+          .where(and(isNull(jobsTable.leadId), isNull(jobsTable.customerPhone), isNull(jobsTable.customerEmail)));
+        console.log(`[Migration] ${Number(totalPurgedJobs[0]?.count ?? 0)} jobs have no PII and no lead_id — these were purged before lead matching was introduced and will remain unlinked`);
       }
     },
   },
