@@ -16,6 +16,7 @@ interface FunnelType {
 interface Tenant {
   id: number;
   name: string;
+  clientSlug: string;
 }
 
 interface TrackerHealth {
@@ -182,7 +183,7 @@ export default function AdminFunnels() {
       )}
 
       {tab === "scripts" && (
-        <ScriptTagsTab tenants={tenants} copiedId={copiedId} setCopiedId={setCopiedId} />
+        <ScriptTagsTab tenants={tenants} health={health} copiedId={copiedId} setCopiedId={setCopiedId} />
       )}
 
       {tab === "health" && (
@@ -296,6 +297,7 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
 }
 
 interface ScriptData {
+  clientSlug: string;
   script: string;
   funnelScripts: { id: number; name: string; slug: string; script: string }[];
 }
@@ -311,33 +313,46 @@ const INSTALLATION_INSTRUCTIONS = `Installation Instructions for Marketing OS Tr
    Example:
    <head>
      <!-- your existing tags -->
-     <script src="https://..." data-tenant="..." ></script>
+     <script src="https://..." data-client-id="your-client-slug"></script>
    </head>
 
-2. WHICH PAGES
-   Install the script on ALL pages of your website, especially any page that
-   contains a form (contact forms, quote request forms, scheduling forms, etc.).
-   The tracker automatically detects forms and injects hidden attribution fields.
+2. HOW IT WORKS
+   The tracker script automatically:
+   - Captures UTM parameters (utm_source, utm_medium, utm_campaign, etc.)
+   - Captures ad platform click IDs (gclid, fbclid, msclkid, wbraid, ttclid, li_fat_id)
+   - Persists attribution data in a first-party cookie across page views
+   - Intercepts form submissions and attaches attribution + form field data
+   - Sends a heartbeat so you can monitor installation health in Marketing OS
+   - Tracks the visitor's landing page and referrer
 
-3. FUNNEL-SPECIFIC SCRIPTS (if applicable)
+3. DATA ATTRIBUTES
+   - data-client-id (required): Your unique client identifier (clientSlug)
+   - data-funnel (optional): Funnel slug for per-funnel attribution tracking
+
+4. WHICH PAGES
+   Install the base script on ALL pages of your website. The tracker detects
+   forms automatically using a MutationObserver, so dynamically loaded forms
+   are also captured.
+
+5. FUNNEL-SPECIFIC SCRIPTS (if applicable)
    If you have per-funnel scripts, use those on the specific landing pages for
    each funnel/campaign. The base script should still be on all other pages.
+   Do NOT install both the base script AND a funnel script on the same page.
 
-4. VERIFICATION
+6. VERIFICATION
    After installing, visit your website and then check the "Tracker Health" tab
    in Marketing OS. You should see a green "Healthy" status with the detected
    domain within a few minutes.
 
-5. COMMON ISSUES
-   - Script not firing: Make sure it is placed before </head>, not at the
+7. COMMON ISSUES
+   - Script not firing: Make sure it is placed in the <head>, not at the
      bottom of <body>.
-   - Forms not tracked: The script uses a MutationObserver to detect
-     dynamically loaded forms. If your forms load inside iframes, they may
-     not be detected.
-   - Multiple scripts: Do NOT install both the base script AND a funnel script
-     on the same page. Use one or the other.`;
+   - Forms inside iframes: The tracker cannot detect forms loaded in
+     cross-origin iframes.
+   - Cookie persistence: The tracker uses a first-party cookie (_mos_attr)
+     with a 90-day expiry. Cookie-blocking browser extensions may interfere.`;
 
-function buildDevPrompt(tenantName: string, baseScript: string, funnelScripts: { name: string; script: string }[]) {
+function buildDevPrompt(tenantName: string, clientSlug: string, baseScript: string, funnelScripts: { name: string; script: string }[]) {
   const allScripts = [
     `Base Script (install on all pages):\n${baseScript}`,
     ...funnelScripts.map(fs => `${fs.name} (install on that funnel's landing pages only):\n${fs.script}`)
@@ -347,7 +362,9 @@ function buildDevPrompt(tenantName: string, baseScript: string, funnelScripts: {
 
 We need a tracking script installed on the ${tenantName} website so we can properly attribute marketing leads. This is a lightweight JavaScript tag — similar to a Google Analytics snippet.
 
-Here's what we need:
+Client ID: ${clientSlug}
+
+Here are the script tag(s) to install:
 
 ${allScripts}
 
@@ -357,7 +374,14 @@ Installation steps:
 3. Do NOT install both the base script and a funnel-specific script on the same page — use one or the other.
 4. After installing, please let us know so we can verify the tracker is reporting correctly.
 
-The script is async and lightweight — it will not affect page load speed. It captures UTM parameters and Google Click IDs from the URL and injects hidden fields into any forms on the page for lead attribution.
+What the script does:
+- Captures UTM parameters (utm_source, utm_medium, utm_campaign, utm_term, utm_content)
+- Captures ad platform click IDs (gclid, fbclid, msclkid, wbraid, ttclid, li_fat_id)
+- Persists attribution data in a first-party cookie so it survives across page navigations
+- Automatically intercepts form submissions and attaches attribution data as hidden fields
+- Sends a periodic heartbeat so we can verify installation health remotely
+
+The script loads asynchronously and will not affect page load speed.
 
 Thank you!`;
 }
@@ -375,7 +399,7 @@ function CopyButton({ copyKey, copiedId, onClick, label }: { copyKey: string; co
   );
 }
 
-function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; copiedId: string | null; setCopiedId: (id: string | null) => void }) {
+function ScriptTagsTab({ tenants, health, copiedId, setCopiedId }: { tenants: Tenant[]; health: TrackerHealth[]; copiedId: string | null; setCopiedId: (id: string | null) => void }) {
   const [scriptData, setScriptData] = useState<Record<number, ScriptData>>({});
   const [showInstructions, setShowInstructions] = useState(false);
 
@@ -383,7 +407,7 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
     tenants.forEach(t => {
       fetch(`${API}/api/funnel-types/script/${t.id}`, { credentials: "include" })
         .then(r => r.json())
-        .then(data => setScriptData(prev => ({ ...prev, [t.id]: { script: data.script, funnelScripts: data.funnelScripts || [] } })))
+        .then(data => setScriptData(prev => ({ ...prev, [t.id]: { clientSlug: data.clientSlug, script: data.script, funnelScripts: data.funnelScripts || [] } })))
         .catch(() => {});
     });
   }, [tenants]);
@@ -425,6 +449,8 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
 
       {tenants.map(t => {
         const data = scriptData[t.id];
+        const tenantHealth = health.find(h => h.tenantId === t.id);
+
         if (!data) return (
           <PremiumCard key={t.id} className="p-5">
             <h3 className="font-display text-lg text-white">{t.name}</h3>
@@ -432,11 +458,33 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
           </PremiumCard>
         );
 
-        const prompt = buildDevPrompt(t.name, data.script, data.funnelScripts);
+        const clientSlug = data.clientSlug || t.clientSlug;
+        const prompt = buildDevPrompt(t.name, clientSlug, data.script, data.funnelScripts);
 
         return (
           <PremiumCard key={t.id} className="p-5">
-            <h3 className="font-display text-lg text-white mb-4">{t.name}</h3>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <h3 className="font-display text-lg text-white">{t.name}</h3>
+                <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-xs font-mono text-muted-foreground">
+                  {clientSlug}
+                </span>
+              </div>
+              {tenantHealth && (
+                <div className="flex items-center gap-2">
+                  {tenantHealth.isHealthy ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-red-400" />}
+                  <div className="text-right">
+                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${tenantHealth.isHealthy ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
+                      {tenantHealth.isHealthy ? "Healthy" : "Inactive"}
+                    </span>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {tenantHealth.lastSeen ? `Last seen: ${new Date(tenantHealth.lastSeen).toLocaleString()}` : "Never reported"}
+                      {tenantHealth.domain ? ` · ${tenantHealth.domain}` : ""}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="space-y-4">
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
@@ -459,7 +507,7 @@ function ScriptTagsTab({ tenants, copiedId, setCopiedId }: { tenants: Tenant[]; 
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (no funnel)</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (all pages)</p>
                   <CopyButton
                     copyKey={`base-${t.id}`}
                     copiedId={copiedId}

@@ -79,7 +79,8 @@ router.get("/funnel-types/script/:tenantId", async (req, res) => {
       ? `https://${devDomain}`
       : "https://api.marketingos.app";
 
-  const baseScript = `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}"></script>`;
+  const clientSlug = tenant.clientSlug;
+  const baseScript = `<script src="${baseUrl}/tracker.js" data-client-id="${clientSlug}"></script>`;
 
   const associations = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
     .from(tenantFunnelTypesTable)
@@ -96,11 +97,11 @@ router.get("/funnel-types/script/:tenantId", async (req, res) => {
       id: f.id,
       name: f.name,
       slug: f.slug,
-      script: `<script src="${baseUrl}/tracker.js" data-tenant="${tenantId}" data-funnel="${f.slug}"></script>`,
+      script: `<script src="${baseUrl}/tracker.js" data-client-id="${clientSlug}" data-funnel="${f.slug}"></script>`,
     }));
   }
 
-  res.json({ tenantId, tenantName: tenant.name, script: baseScript, funnelScripts });
+  res.json({ tenantId, tenantName: tenant.name, clientSlug, script: baseScript, funnelScripts });
 });
 
 router.post("/tenants/:id/funnel-types", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {

@@ -252,9 +252,7 @@ export default function Settings() {
     fetch(`${API}/api/funnel-types/script/${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => setScriptTag(data.script || ""))
-      .catch(() => {
-        setScriptTag(`<script src="${window.location.origin}/tracker.js" data-tenant="${tenantId}"></script>`);
-      });
+      .catch(() => {});
   }, [tenantId, isClientUser]);
 
   function trackField(field: string) {
