@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
+import { TrackerSubmitBody } from "@workspace/api-zod";
 import { eq, and } from "drizzle-orm";
+import { z } from "zod";
 import crypto from "crypto";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
@@ -8,6 +10,11 @@ import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
+import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rate-limit";
+
+const TrackerSubmitPayload = TrackerSubmitBody.extend({
+  submitted_at: z.string().optional(),
+});
 
 const router: IRouter = Router();
 
@@ -119,10 +126,17 @@ function extractPiiFromFields(fields: Record<string, unknown>): { firstName: str
   return result;
 }
 
-router.post("/tracker/submit", async (req, res) => {
+router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
   try {
+    const parsed = TrackerSubmitPayload.safeParse(req.body);
+    if (!parsed.success) {
+      const errors = parsed.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ");
+      res.status(400).json({ success: false, message: `Invalid payload: ${errors}` });
+      return;
+    }
+
     const body = req.body as Record<string, unknown>;
-    const clientId = typeof body.client_id === "string" ? body.client_id.trim() : null;
+    const clientId = parsed.data.client_id.trim();
 
     if (!clientId) {
       res.status(400).json({ success: false, message: "client_id is required" });
@@ -282,7 +296,7 @@ router.post("/tracker/submit", async (req, res) => {
   }
 });
 
-router.post("/tracker/heartbeat", async (req, res) => {
+router.post("/tracker/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
   try {
     let tenantId = req.body.tenantId ? Number(req.body.tenantId) : null;
     const clientId = typeof req.body.clientId === "string" ? req.body.clientId.trim() : null;

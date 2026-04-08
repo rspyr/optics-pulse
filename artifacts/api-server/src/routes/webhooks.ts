@@ -9,6 +9,7 @@ import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
+import { webhookLimiter } from "../middleware/rate-limit";
 
 const router: IRouter = Router();
 
@@ -75,7 +76,7 @@ function extractWebhookBillingAddress(dataObj: Record<string, unknown>): string 
   return normalizeAddress(addressParts.join(", "));
 }
 
-router.post("/webhooks/ingest", async (req, res) => {
+router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
   try {
     const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody
       ? (req as typeof req & { rawBody?: Buffer }).rawBody!.toString("utf-8")
@@ -196,7 +197,7 @@ router.post("/webhooks/ingest", async (req, res) => {
   }
 });
 
-router.post("/webhooks/ghl", async (_req, res) => {
+router.post("/webhooks/ghl", webhookLimiter, async (_req, res) => {
   res.json({ success: false, message: "GHL integration is currently paused" });
 });
 
@@ -206,7 +207,7 @@ function verifyPodiumSignature(rawBody: Buffer | string, signature: string, secr
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-router.post("/webhooks/podium", async (req, res): Promise<void> => {
+router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> => {
   try {
     const podiumSignature = req.headers["x-podium-signature"] as string | undefined;
     const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody;
