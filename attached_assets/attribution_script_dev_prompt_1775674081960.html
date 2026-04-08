@@ -1,0 +1,494 @@
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); }
+  .wrap { max-width: 820px; padding: 1.5rem 0; }
+  .title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+  .doc-title { font-size: 20px; font-weight: 500; color: var(--color-text-primary); }
+  .badge { font-size: 11px; font-weight: 500; background: var(--color-background-info); color: var(--color-text-info); padding: 4px 10px; border-radius: var(--border-radius-md); }
+  .toc { background: var(--color-background-secondary); border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+  .toc-label { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .toc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 16px; }
+  .toc-item { font-size: 13px; color: var(--color-text-info); cursor: pointer; padding: 2px 0; }
+  .toc-item:hover { text-decoration: underline; }
+  .section { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); margin-bottom: 1rem; overflow: hidden; }
+  .sec-header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--color-background-secondary); cursor: pointer; user-select: none; }
+  .sec-num { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); min-width: 20px; }
+  .sec-title { font-size: 15px; font-weight: 500; color: var(--color-text-primary); flex: 1; }
+  .sec-tag { font-size: 11px; padding: 2px 8px; border-radius: var(--border-radius-md); font-weight: 500; }
+  .tag-req { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .tag-opt { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .tag-cfg { background: var(--color-background-success); color: var(--color-text-success); }
+  .chevron { font-size: 12px; color: var(--color-text-tertiary); transition: transform 0.2s; }
+  .chevron.open { transform: rotate(90deg); }
+  .sec-body { padding: 16px; border-top: 0.5px solid var(--color-border-tertiary); display: none; }
+  .sec-body.open { display: block; }
+  .sec-body p { font-size: 14px; color: var(--color-text-secondary); line-height: 1.7; margin-bottom: 10px; }
+  .sec-body p:last-child { margin-bottom: 0; }
+  .sub { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin: 14px 0 6px; }
+  .item-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .item-list li { font-size: 14px; color: var(--color-text-secondary); padding-left: 14px; position: relative; line-height: 1.6; }
+  .item-list li::before { content: '—'; position: absolute; left: 0; color: var(--color-text-tertiary); }
+  .code-block { background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 12px 14px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-primary); white-space: pre-wrap; margin: 10px 0; overflow-x: auto; line-height: 1.6; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .pill { font-size: 12px; font-weight: 500; padding: 3px 10px; border-radius: 100px; }
+  .pill-gray { background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); }
+  .pill-blue { background: var(--color-background-info); color: var(--color-text-info); }
+  .pill-green { background: var(--color-background-success); color: var(--color-text-success); }
+  .pill-red { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .pill-amber { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .divider { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 12px 0; }
+  .copy-btn { font-size: 12px; padding: 5px 12px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: transparent; color: var(--color-text-secondary); cursor: pointer; float: right; margin-bottom: 6px; }
+  .copy-btn:hover { background: var(--color-background-secondary); }
+  .note { background: var(--color-background-warning); border-left: 3px solid var(--color-text-warning); padding: 10px 12px; border-radius: 0 var(--border-radius-md) var(--border-radius-md) 0; margin: 10px 0; font-size: 13px; color: var(--color-text-primary); line-height: 1.6; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+  .mini-card { background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 10px 12px; }
+  .mini-card .mc-label { font-size: 11px; color: var(--color-text-tertiary); font-weight: 500; margin-bottom: 4px; }
+  .mini-card .mc-val { font-size: 13px; color: var(--color-text-primary); line-height: 1.5; }
+  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+
+<div class="wrap">
+  <div class="title-row">
+    <span class="doc-title">Developer spec — universal form attribution script</span>
+    <span class="badge">v1.0</span>
+  </div>
+
+  <div class="toc">
+    <div class="toc-label">Sections</div>
+    <div class="toc-grid">
+      <span class="toc-item" onclick="toggleById('s1')">1. Overview &amp; goals</span>
+      <span class="toc-item" onclick="toggleById('s2')">2. Decisions made</span>
+      <span class="toc-item" onclick="toggleById('s3')">3. Script architecture</span>
+      <span class="toc-item" onclick="toggleById('s4')">4. UTM capture &amp; persistence</span>
+      <span class="toc-item" onclick="toggleById('s5')">5. Form detection</span>
+      <span class="toc-item" onclick="toggleById('s6')">6. Payload structure</span>
+      <span class="toc-item" onclick="toggleById('s7')">7. Backend delivery</span>
+      <span class="toc-item" onclick="toggleById('s8')">8. Deployment</span>
+      <span class="toc-item" onclick="toggleById('s9')">9. Config reference</span>
+      <span class="toc-item" onclick="toggleById('s10')">10. Edge cases</span>
+      <span class="toc-item" onclick="toggleById('s11')">11. Testing checklist</span>
+      <span class="toc-item" onclick="toggleById('s12')">12. Out of scope</span>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="section" id="s1">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">01</span>
+      <span class="sec-title">Overview &amp; goals</span>
+      <span class="chevron open">▶</span>
+    </div>
+    <div class="sec-body open">
+      <p>Build a single, self-contained JavaScript file that can be dropped onto any client website — either via Google Tag Manager or a direct <code style="font-family:var(--font-mono);font-size:12px;">&lt;script&gt;</code> tag — with zero modification to existing form markup.</p>
+      <p>The script must capture UTM attribution data and all form field values at submission time, then POST a structured JSON payload to a configurable backend endpoint. It replaces the current per-form webhook approach, which is fragile and requires bespoke installs.</p>
+      <div class="sub">Core goals</div>
+      <ul class="item-list">
+        <li>Zero touch on existing form HTML across all client sites</li>
+        <li>Survive SPA navigation, lazy-loaded content, and dynamically injected forms (HubSpot, etc.)</li>
+        <li>Capture UTMs with last-touch attribution, persisted across sessions via cookie</li>
+        <li>Support native HTML forms, HubSpot embedded forms, Gravity/WP Forms, and Typeform iFrames</li>
+        <li>Deliver payload reliably to a custom backend — with retry on failure</li>
+        <li>Single config object at the top of the file — one line to change per client</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S2 -->
+  <div class="section" id="s2">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">02</span>
+      <span class="sec-title">Decisions already made</span>
+      <span class="sec-tag tag-cfg">Locked</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <div class="grid2">
+        <div class="mini-card"><div class="mc-label">Data destination</div><div class="mc-val">Custom backend / database via HTTP POST</div></div>
+        <div class="mini-card"><div class="mc-label">Deployment</div><div class="mc-val">GTM custom HTML tag or direct &lt;script&gt; — both supported</div></div>
+        <div class="mini-card"><div class="mc-label">Form types</div><div class="mc-val">Native HTML, HubSpot, Gravity/WPForms, Typeform (iFrame)</div></div>
+        <div class="mini-card"><div class="mc-label">UTM attribution model</div><div class="mc-val">Last-touch — always overwritten on new UTM visit</div></div>
+        <div class="mini-card"><div class="mc-label">UTM storage</div><div class="mc-val">Cookie (30 day expiry, reset on each new UTM hit)</div></div>
+        <div class="mini-card"><div class="mc-label">Multi-client config</div><div class="mc-val">One JS config object at top of file per client</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- S3 -->
+  <div class="section" id="s3">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">03</span>
+      <span class="sec-title">Script architecture</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <p>The script is a single IIFE (immediately invoked function expression) with no external dependencies. It must be compatible with all modern browsers and IE11 is explicitly out of scope.</p>
+      <div class="sub">Execution order (on page load)</div>
+      <ul class="item-list">
+        <li><strong style="font-weight:500;">Step 1 — UTM capture:</strong> Read UTM params from <code style="font-family:var(--font-mono);font-size:12px;">window.location.search</code>. If any UTM is present, overwrite the attribution cookie immediately (last-touch)</li>
+        <li><strong style="font-weight:500;">Step 2 — Session metadata:</strong> Capture <code style="font-family:var(--font-mono);font-size:12px;">document.referrer</code>, page URL, timestamp, and any client-defined custom dimensions</li>
+        <li><strong style="font-weight:500;">Step 3 — Form watcher init:</strong> Start MutationObserver on <code style="font-family:var(--font-mono);font-size:12px;">document.body</code> to catch dynamically injected forms</li>
+        <li><strong style="font-weight:500;">Step 4 — Bind existing forms:</strong> Find and bind all currently-present forms immediately on load</li>
+        <li><strong style="font-weight:500;">Step 5 — HubSpot listener:</strong> Attach <code style="font-family:var(--font-mono);font-size:12px;">window.addEventListener('message', ...)</code> to catch HubSpot's cross-origin postMessage events</li>
+        <li><strong style="font-weight:500;">Step 6 — Typeform listener:</strong> Same postMessage approach, filtered by Typeform's known event schema</li>
+      </ul>
+      <div class="sub">Module structure inside the IIFE</div>
+      <div class="code-block">AttributionTracker/
+├── config            // per-client settings object
+├── utm.capture()     // read + write UTM cookie
+├── utm.get()         // read current UTM state from cookie
+├── forms.bind()      // attach submit listeners to native forms
+├── forms.observe()   // MutationObserver for dynamic injection
+├── forms.extract()   // serialize form fields to key/value map
+├── hubspot.listen()  // postMessage listener for HS embed events
+├── typeform.listen() // postMessage listener for Typeform events
+├── payload.build()   // assemble the final JSON payload
+└── delivery.send()   // POST with fetch + retry logic</div>
+    </div>
+  </div>
+
+  <!-- S4 -->
+  <div class="section" id="s4">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">04</span>
+      <span class="sec-title">UTM capture &amp; persistence</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <div class="sub">Parameters to capture</div>
+      <div class="pill-row">
+        <span class="pill pill-blue">utm_source</span>
+        <span class="pill pill-blue">utm_medium</span>
+        <span class="pill pill-blue">utm_campaign</span>
+        <span class="pill pill-blue">utm_term</span>
+        <span class="pill pill-blue">utm_content</span>
+        <span class="pill pill-gray">gclid</span>
+        <span class="pill pill-gray">fbclid</span>
+        <span class="pill pill-gray">msclkid</span>
+        <span class="pill pill-gray">ttclid</span>
+        <span class="pill pill-gray">li_fat_id</span>
+      </div>
+      <p>All click IDs (gclid, fbclid, etc.) should be captured alongside UTMs as they are essential for ad platform attribution matching.</p>
+      <div class="sub">Attribution logic (last-touch)</div>
+      <ul class="item-list">
+        <li>On every page load, check <code style="font-family:var(--font-mono);font-size:12px;">window.location.search</code> for any of the above parameters</li>
+        <li>If any are found, write ALL current URL params (not just UTMs) into a single cookie named <code style="font-family:var(--font-mono);font-size:12px;">_attr_data</code>, serialized as JSON, with a 30-day expiry</li>
+        <li>This overwrites any previous cookie value (last-touch wins)</li>
+        <li>If no UTM params are present on the current page load, leave the existing cookie untouched</li>
+        <li>Cookie must be set with <code style="font-family:var(--font-mono);font-size:12px;">SameSite=Lax; path=/</code> — do not set HttpOnly (JS must read it)</li>
+      </ul>
+      <div class="note">Cookie domain: default to current domain. If the config specifies a <code style="font-family:var(--font-mono);font-size:12px;">cookieDomain</code> (e.g. <code style="font-family:var(--font-mono);font-size:12px;">.example.com</code>), use that so attribution persists across subdomains.</div>
+      <div class="sub">Additional session metadata to always capture (not from cookie)</div>
+      <ul class="item-list">
+        <li><code style="font-family:var(--font-mono);font-size:12px;">page_url</code> — full URL at time of form submission (<code style="font-family:var(--font-mono);font-size:12px;">window.location.href</code>)</li>
+        <li><code style="font-family:var(--font-mono);font-size:12px;">referrer</code> — <code style="font-family:var(--font-mono);font-size:12px;">document.referrer</code> at time of form submission</li>
+        <li><code style="font-family:var(--font-mono);font-size:12px;">submitted_at</code> — ISO 8601 timestamp</li>
+        <li><code style="font-family:var(--font-mono);font-size:12px;">landing_page</code> — first page URL from cookie (set on first visit if not already set, never overwritten)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S5 -->
+  <div class="section" id="s5">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">05</span>
+      <span class="sec-title">Form detection &amp; field extraction</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+
+      <div class="sub">Native HTML forms</div>
+      <ul class="item-list">
+        <li>On load, query <code style="font-family:var(--font-mono);font-size:12px;">document.querySelectorAll('form')</code> and bind a <code style="font-family:var(--font-mono);font-size:12px;">submit</code> event listener to each</li>
+        <li>On submit event, use <code style="font-family:var(--font-mono);font-size:12px;">FormData</code> API to extract all field values (inputs, selects, textareas, checkboxes, radios)</li>
+        <li>Skip fields with <code style="font-family:var(--font-mono);font-size:12px;">type="hidden"</code>, <code style="font-family:var(--font-mono);font-size:12px;">type="password"</code>, and any field whose name/id matches the config's <code style="font-family:var(--font-mono);font-size:12px;">excludeFields</code> array</li>
+        <li>Capture the form's <code style="font-family:var(--font-mono);font-size:12px;">id</code>, <code style="font-family:var(--font-mono);font-size:12px;">name</code>, and <code style="font-family:var(--font-mono);font-size:12px;">action</code> attributes as form metadata</li>
+        <li>Do NOT call <code style="font-family:var(--font-mono);font-size:12px;">event.preventDefault()</code> — the form must still submit normally</li>
+      </ul>
+
+      <div class="sub">MutationObserver (for dynamic / SPA-injected forms)</div>
+      <ul class="item-list">
+        <li>Observe <code style="font-family:var(--font-mono);font-size:12px;">document.body</code> with <code style="font-family:var(--font-mono);font-size:12px;">{ childList: true, subtree: true }</code></li>
+        <li>On each mutation, check added nodes for <code style="font-family:var(--font-mono);font-size:12px;">&lt;form&gt;</code> elements and bind them if not already bound (use a <code style="font-family:var(--font-mono);font-size:12px;">WeakSet</code> to track already-bound forms)</li>
+      </ul>
+
+      <div class="sub">HubSpot embedded forms</div>
+      <ul class="item-list">
+        <li>Listen to <code style="font-family:var(--font-mono);font-size:12px;">window.addEventListener('message', handler)</code></li>
+        <li>Filter for events where <code style="font-family:var(--font-mono);font-size:12px;">event.data.type === 'hsFormCallback'</code> and <code style="font-family:var(--font-mono);font-size:12px;">event.data.eventName === 'onFormSubmitted'</code></li>
+        <li>Extract field data from <code style="font-family:var(--font-mono);font-size:12px;">event.data.data.submissionValues</code></li>
+        <li>Also capture <code style="font-family:var(--font-mono);font-size:12px;">event.data.id</code> (the HubSpot form GUID) as form metadata</li>
+        <li>Note: HubSpot also fires <code style="font-family:var(--font-mono);font-size:12px;">onFormReady</code> and <code style="font-family:var(--font-mono);font-size:12px;">onFormSubmit</code> — use <code style="font-family:var(--font-mono);font-size:12px;">onFormSubmitted</code> (past tense) as it fires after the submission is complete</li>
+      </ul>
+
+      <div class="sub">Gravity Forms / WPForms</div>
+      <ul class="item-list">
+        <li>These render as standard <code style="font-family:var(--font-mono);font-size:12px;">&lt;form&gt;</code> elements with class <code style="font-family:var(--font-mono);font-size:12px;">gform_wrapper</code> or <code style="font-family:var(--font-mono);font-size:12px;">wpforms-form</code></li>
+        <li>The native HTML form listener covers basic submissions</li>
+        <li>However, both support AJAX submission that does NOT fire a native submit event — also listen for their JS hooks: <code style="font-family:var(--font-mono);font-size:12px;">gform_confirmation_loaded</code> (Gravity) and <code style="font-family:var(--font-mono);font-size:12px;">wpformsAjaxSubmitSuccess</code> (WPForms) on the <code style="font-family:var(--font-mono);font-size:12px;">document</code></li>
+        <li>On these AJAX events, re-extract field data from the form element before it's cleared</li>
+      </ul>
+
+      <div class="sub">Typeform (iFrame embed)</div>
+      <ul class="item-list">
+        <li>Typeform runs in an iFrame — direct DOM access is not possible</li>
+        <li>Listen for <code style="font-family:var(--font-mono);font-size:12px;">window.message</code> events where <code style="font-family:var(--font-mono);font-size:12px;">event.data.type === 'form-submit'</code> from Typeform's embed SDK</li>
+        <li>Field-level values are NOT available from Typeform's postMessage by default — capture the <code style="font-family:var(--font-mono);font-size:12px;">responseId</code> and <code style="font-family:var(--font-mono);font-size:12px;">formId</code> from the event payload. Flag this in the payload as <code style="font-family:var(--font-mono);font-size:12px;">form_type: 'typeform'</code> so the backend knows to fetch full response data from the Typeform API if needed</li>
+      </ul>
+
+      <div class="sub">Field exclusion &amp; PII handling</div>
+      <ul class="item-list">
+        <li>Always exclude: <code style="font-family:var(--font-mono);font-size:12px;">password</code>, <code style="font-family:var(--font-mono);font-size:12px;">credit_card</code>, <code style="font-family:var(--font-mono);font-size:12px;">cvv</code>, <code style="font-family:var(--font-mono);font-size:12px;">ssn</code> — match on field name/id/type</li>
+        <li>Config option <code style="font-family:var(--font-mono);font-size:12px;">excludeFields: []</code> allows additional field name patterns to skip</li>
+        <li>Config option <code style="font-family:var(--font-mono);font-size:12px;">captureFields: []</code> — if non-empty, only capture fields whose names match this allowlist (whitelist mode)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S6 -->
+  <div class="section" id="s6">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">06</span>
+      <span class="sec-title">Payload structure</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <p>Every form submission should POST a single JSON object to the backend. The schema below is the required standard — the backend should be built to accept this shape.</p>
+      <div class="code-block">{
+  "client_id": "acme-corp",            // from config
+  "submitted_at": "2025-09-15T14:32:00Z",
+  "page_url": "https://acme.com/contact",
+  "landing_page": "https://acme.com/?utm_source=google",
+  "referrer": "https://google.com",
+
+  "attribution": {
+    "utm_source": "google",
+    "utm_medium": "cpc",
+    "utm_campaign": "brand-q3",
+    "utm_term": "acme software",
+    "utm_content": "ad-variant-b",
+    "gclid": "EAIaIQ...",
+    "fbclid": null,
+    "msclkid": null
+  },
+
+  "form": {
+    "id": "contact-form",              // form id attribute or HS guid
+    "name": "Contact Form",            // form name attr or derived label
+    "type": "native",                  // native | hubspot | gravity | wpforms | typeform
+    "action": "/submit"                // native forms only
+  },
+
+  "fields": {
+    "first_name": "Jane",
+    "last_name": "Smith",
+    "email": "jane@example.com",
+    "company": "Acme Corp",
+    "phone": "+1 555 000 0000",
+    "message": "I'd like a demo"
+  },
+
+  "custom": {}                         // any key/value from config.customDimensions
+}</div>
+      <div class="note">The <code style="font-family:var(--font-mono);font-size:12px;">fields</code> object uses the raw form field <code style="font-family:var(--font-mono);font-size:12px;">name</code> attribute as the key. The backend is responsible for any field name remapping to CRM properties.</div>
+    </div>
+  </div>
+
+  <!-- S7 -->
+  <div class="section" id="s7">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">07</span>
+      <span class="sec-title">Backend delivery &amp; retry logic</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <div class="sub">Primary delivery — fetch</div>
+      <ul class="item-list">
+        <li>Use <code style="font-family:var(--font-mono);font-size:12px;">fetch(config.endpointUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })</code></li>
+        <li>Use <code style="font-family:var(--font-mono);font-size:12px;">keepalive: true</code> on the fetch call — this ensures the request completes even if triggered just before page unload (important for native form submits that navigate away)</li>
+        <li>The backend must return a CORS header allowing the client's origin. This is a backend requirement, not a script concern — document it for the backend developer</li>
+      </ul>
+      <div class="sub">Retry logic</div>
+      <ul class="item-list">
+        <li>On network failure or non-2xx response, retry up to 2 times with a 1.5s delay between attempts</li>
+        <li>On final failure, store the payload in <code style="font-family:var(--font-mono);font-size:12px;">localStorage</code> under key <code style="font-family:var(--font-mono);font-size:12px;">_attr_queue</code> as a JSON array</li>
+        <li>On next page load, check <code style="font-family:var(--font-mono);font-size:12px;">_attr_queue</code> and attempt to flush any queued payloads before running the main init</li>
+        <li>On successful flush, remove the entry from the queue</li>
+        <li>Cap the queue at 10 entries to prevent unbounded localStorage growth</li>
+      </ul>
+      <div class="sub">Beacon fallback</div>
+      <ul class="item-list">
+        <li>If the form submit navigates the page away and <code style="font-family:var(--font-mono);font-size:12px;">keepalive</code> fetch is not supported (rare), fall back to <code style="font-family:var(--font-mono);font-size:12px;">navigator.sendBeacon()</code> with the JSON payload as a Blob with <code style="font-family:var(--font-mono);font-size:12px;">application/json</code> type</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S8 -->
+  <div class="section" id="s8">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">08</span>
+      <span class="sec-title">Deployment — GTM &amp; direct script</span>
+      <span class="sec-tag tag-cfg">Config</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <div class="sub">Google Tag Manager</div>
+      <ul class="item-list">
+        <li>The script is pasted as a Custom HTML tag in GTM</li>
+        <li>Trigger: All Pages — Page View (or DOM Ready if forms load slowly)</li>
+        <li>Tag firing priority: set to 10 (fires early, before other tags)</li>
+        <li>The config object sits at the top of the Custom HTML block — the only thing an installer needs to edit</li>
+        <li>Do not use GTM variables to pass the endpoint URL — keep everything inside the script for portability</li>
+      </ul>
+      <div class="sub">Direct script tag</div>
+      <div class="code-block">&lt;script src="https://cdn.yourclient.com/attribution.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  window.AttributionTrackerConfig = {
+    clientId: 'acme-corp',
+    endpointUrl: 'https://api.yourbackend.com/leads',
+    cookieDomain: '.acme.com'
+  };
+&lt;/script&gt;</div>
+      <p>When loaded via direct script, expose config via <code style="font-family:var(--font-mono);font-size:12px;">window.AttributionTrackerConfig</code> before the script loads, OR pass config inline at the top of the script file per client.</p>
+      <div class="sub">Script hosting</div>
+      <ul class="item-list">
+        <li>Host the minified script on a CDN (Cloudflare, Fastly, S3+CloudFront)</li>
+        <li>Each client gets the same base script — config is the only difference</li>
+        <li>Optionally: generate a client-specific URL like <code style="font-family:var(--font-mono);font-size:12px;">/attribution/acme-corp.js</code> with config baked in at build time, so installers paste a single tag with no separate config block</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S9 -->
+  <div class="section" id="s9">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">09</span>
+      <span class="sec-title">Config object reference</span>
+      <span class="sec-tag tag-cfg">Config</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <div class="code-block">var config = {
+  // REQUIRED
+  clientId:      'acme-corp',                          // unique per client
+  endpointUrl:   'https://api.yourbackend.com/leads',  // your backend POST URL
+
+  // OPTIONAL — attribution
+  cookieDomain:  '.acme.com',   // omit to default to current domain
+  cookieName:    '_attr_data',  // default; change if conflicts exist
+  cookieDays:    30,            // default 30
+
+  // OPTIONAL — form handling
+  excludeForms:  ['#newsletter-form'],  // CSS selectors to skip
+  excludeFields: ['phone_ext'],         // field name patterns to exclude
+  captureFields: [],             // if non-empty: ONLY capture these field names
+
+  // OPTIONAL — debug
+  debug:         false,          // if true, console.log all payloads instead of sending
+
+  // OPTIONAL — custom dimensions
+  // any key/value pairs added here will appear in payload.custom
+  customDimensions: {
+    site_version: 'v2',
+    ab_test: 'control'
+  }
+};</div>
+    </div>
+  </div>
+
+  <!-- S10 -->
+  <div class="section" id="s10">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">10</span>
+      <span class="sec-title">Edge cases to handle</span>
+      <span class="sec-tag tag-req">Required</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <ul class="item-list">
+        <li><strong style="font-weight:500;">Multi-step forms:</strong> Only fire the payload on final submission — detect by checking whether the submit event leads to a confirmation state vs. advancing a step. For HubSpot, use <code style="font-family:var(--font-mono);font-size:12px;">onFormSubmitted</code> which fires only on true final submit</li>
+        <li><strong style="font-weight:500;">Duplicate binding:</strong> Use a <code style="font-family:var(--font-mono);font-size:12px;">WeakSet</code> (or a <code style="font-family:var(--font-mono);font-size:12px;">data-attr-bound</code> attribute) to prevent the same form being bound multiple times by the MutationObserver</li>
+        <li><strong style="font-weight:500;">SPA route changes:</strong> If the site uses pushState/replaceState (React, Vue, etc.), re-run the UTM capture step on each route change by patching <code style="font-family:var(--font-mono);font-size:12px;">history.pushState</code> and listening for <code style="font-family:var(--font-mono);font-size:12px;">popstate</code></li>
+        <li><strong style="font-weight:500;">Cookie blocked (Safari ITP):</strong> Safari aggressively expires cookies set via JS. If the cookie cannot be set, fall back to <code style="font-family:var(--font-mono);font-size:12px;">sessionStorage</code> for that session only. Log a warning in debug mode</li>
+        <li><strong style="font-weight:500;">CSP restrictions:</strong> The script makes an outbound POST — the client's Content-Security-Policy must allow <code style="font-family:var(--font-mono);font-size:12px;">connect-src</code> to the endpoint domain. Document this requirement for installers</li>
+        <li><strong style="font-weight:500;">Form submit before script loads:</strong> If a user submits a form before the script has initialized (very fast user, slow CDN), the event is missed. Mitigate by loading the script in <code style="font-family:var(--font-mono);font-size:12px;">&lt;head&gt;</code> or with high GTM priority. This is an acceptable known gap — document it</li>
+        <li><strong style="font-weight:500;">Multiple forms on one page:</strong> All forms are bound independently — each gets its own payload with its own form metadata</li>
+        <li><strong style="font-weight:500;">Form inside an iFrame (non-Typeform):</strong> Out of scope. Cross-origin iFrames cannot be accessed. Document this clearly</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S11 -->
+  <div class="section" id="s11">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">11</span>
+      <span class="sec-title">QA &amp; testing checklist</span>
+      <span class="sec-tag tag-opt">Pre-launch</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <ul class="item-list">
+        <li>Load page with UTMs in URL — verify cookie is written with correct values</li>
+        <li>Load page WITHOUT UTMs — verify existing cookie is not overwritten</li>
+        <li>Clear cookie, load page without UTMs — verify attribution fields are null/empty in payload (not erroring)</li>
+        <li>Submit a native HTML form — verify payload arrives at backend with correct fields and attribution</li>
+        <li>Submit a HubSpot embedded form — verify <code style="font-family:var(--font-mono);font-size:12px;">onFormSubmitted</code> event is captured and payload is sent</li>
+        <li>Submit a Gravity Forms AJAX form — verify <code style="font-family:var(--font-mono);font-size:12px;">gform_confirmation_loaded</code> triggers payload</li>
+        <li>Submit a Typeform — verify postMessage is caught and <code style="font-family:var(--font-mono);font-size:12px;">responseId</code> is in payload</li>
+        <li>Navigate to a new page (SPA), then submit a form — verify forms on the new route are bound</li>
+        <li>Throttle network to Slow 3G, submit form — verify retry logic fires and payload eventually delivers</li>
+        <li>Block the endpoint entirely — verify payload is queued in localStorage</li>
+        <li>Reload page after blocked delivery — verify queued payload is flushed on next load</li>
+        <li>Enable <code style="font-family:var(--font-mono);font-size:12px;">debug: true</code> — verify all payloads log to console and nothing is POSTed</li>
+        <li>Install via GTM — verify tag fires on all pages, no console errors</li>
+        <li>Install via direct script tag — verify same behavior</li>
+        <li>Test on Safari — verify sessionStorage fallback if cookie is blocked</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- S12 -->
+  <div class="section" id="s12">
+    <div class="sec-header" onclick="toggle(this)">
+      <span class="sec-num">12</span>
+      <span class="sec-title">Explicitly out of scope</span>
+      <span class="sec-tag tag-opt">Note</span>
+      <span class="chevron">▶</span>
+    </div>
+    <div class="sec-body">
+      <ul class="item-list">
+        <li>Writing UTM values back into hidden form fields (not needed — backend receives attribution separately in the payload)</li>
+        <li>Cross-origin iFrame forms other than Typeform (requires postMessage cooperation from the third party)</li>
+        <li>IE11 support</li>
+        <li>CRM field mapping (backend responsibility)</li>
+        <li>De-duplication of submissions (backend responsibility)</li>
+        <li>User identification / stitching across devices</li>
+        <li>Server-side UTM capture</li>
+        <li>A/B test variant tracking beyond what's passed via <code style="font-family:var(--font-mono);font-size:12px;">customDimensions</code></li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function toggle(header) {
+  const body = header.nextElementSibling;
+  const chevron = header.querySelector('.chevron');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  chevron.classList.toggle('open', !isOpen);
+}
+function toggleById(id) {
+  const sec = document.getElementById(id);
+  if (!sec) return;
+  const header = sec.querySelector('.sec-header');
+  toggle(header);
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+</script>
