@@ -8,6 +8,6 @@
 
 export type ListChangeLogsParams = {
   tenantId?: number;
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: string;
+  endDate?: string;
 };

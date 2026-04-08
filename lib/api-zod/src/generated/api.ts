@@ -218,8 +218,8 @@ export const ListLeadsQueryParams = zod.object({
   limit: zod.coerce.number().default(listLeadsQueryLimitDefault),
   offset: zod.coerce.number().default(listLeadsQueryOffsetDefault),
   funnelId: zod.coerce.number().optional(),
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const ListLeadsResponse = zod.object({
@@ -331,8 +331,8 @@ export const ListCampaignsResponse = zod.array(ListCampaignsResponseItem);
  */
 export const GetCampaignStatsQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetCampaignStatsResponse = zod.object({
@@ -584,8 +584,8 @@ export const IngestWebhookResponse = zod.object({
  */
 export const GetDashboardOverviewQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetDashboardOverviewResponse = zod.object({
@@ -632,8 +632,8 @@ export const GetDashboardOverviewResponse = zod.object({
  */
 export const GetSpendRevenueChartQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetSpendRevenueChartResponse = zod.object({
@@ -1005,8 +1005,8 @@ export const GetAdminLeaderboardResponse = zod.object({
  * @summary Get aggregated stats for all tenants (Command Center)
  */
 export const GetAdminDashboardStatsQueryParams = zod.object({
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetAdminDashboardStatsResponse = zod.object({
@@ -1042,8 +1042,8 @@ export const GetAdminDashboardStatsResponse = zod.object({
  */
 export const ListChangeLogsQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const ListChangeLogsResponseItem = zod.object({
@@ -1072,8 +1072,8 @@ export const CreateChangeLogBody = zod.object({
  * @summary Get agency-wide benchmark averages (available to all authenticated users)
  */
 export const GetDashboardBenchmarksQueryParams = zod.object({
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetDashboardBenchmarksResponse = zod.object({
@@ -1088,8 +1088,8 @@ export const GetDashboardBenchmarksResponse = zod.object({
  * @summary Get all tenants performance table (agency God View)
  */
 export const GetTenantPerformanceQueryParams = zod.object({
-  startDate: zod.date().optional(),
-  endDate: zod.date().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
 });
 
 export const GetTenantPerformanceResponseItem = zod.object({

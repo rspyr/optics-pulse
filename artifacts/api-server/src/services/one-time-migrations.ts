@@ -755,6 +755,28 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: "2026-04-08_add-tracker-columns",
+    description: "Add tracker attribution columns to attribution_events and client_slug to tenants",
+    run: async () => {
+      await db.execute(sql`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS client_slug TEXT`);
+      console.log("[Migration] Ensured client_slug column on tenants");
+
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_term TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_content TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS msclkid TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS ttclid TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS li_fat_id TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS referrer TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS page_url TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_type TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_id TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_name TEXT`);
+      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_fields JSONB`);
+      console.log("[Migration] Ensured all tracker columns on attribution_events");
+    },
+  },
+  {
     id: "2026-04-08_seed-client-slugs",
     description: "Seed clientSlug on tenants from slugified tenant name",
     run: async () => {
@@ -783,28 +805,6 @@ const migrations: Migration[] = [
     run: async () => {
       await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_client_slug ON tenants (client_slug) WHERE client_slug IS NOT NULL`);
       console.log("[Migration] Created unique index uq_tenant_client_slug on tenants");
-    },
-  },
-  {
-    id: "2026-04-08_add-tracker-columns",
-    description: "Add tracker attribution columns to attribution_events and client_slug to tenants",
-    run: async () => {
-      await db.execute(sql`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS client_slug TEXT`);
-      console.log("[Migration] Ensured client_slug column on tenants");
-
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_term TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS utm_content TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS msclkid TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS ttclid TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS li_fat_id TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS referrer TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS page_url TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_type TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_id TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_name TEXT`);
-      await db.execute(sql`ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS form_fields JSONB`);
-      console.log("[Migration] Ensured all tracker columns on attribution_events");
     },
   },
   {

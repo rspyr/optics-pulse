@@ -8,6 +8,6 @@
 
 export type GetSpendRevenueChartParams = {
   tenantId?: number;
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: string;
+  endDate?: string;
 };

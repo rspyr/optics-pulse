@@ -257,7 +257,22 @@
 
   flushQueue();
 
+  var recentSubmits = [];
+  var DEDUP_WINDOW = 3000;
+
+  function isDuplicateSubmit(formMeta) {
+    var now = Date.now();
+    var key = (formMeta.type || "") + "|" + (formMeta.id || "") + "|" + (formMeta.name || "");
+    recentSubmits = recentSubmits.filter(function(entry) { return now - entry.ts < DEDUP_WINDOW; });
+    for (var i = 0; i < recentSubmits.length; i++) {
+      if (recentSubmits[i].key === key) return true;
+    }
+    recentSubmits.push({ key: key, ts: now });
+    return false;
+  }
+
   function handleFormSubmit(fields, formMeta) {
+    if (isDuplicateSubmit(formMeta)) return;
     var payload = buildPayload(fields, formMeta);
     sendPayload(payload);
   }

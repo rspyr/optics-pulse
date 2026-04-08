@@ -7,6 +7,6 @@
  */
 
 export type GetAdminDashboardStatsParams = {
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: string;
+  endDate?: string;
 };

@@ -7,6 +7,6 @@
  */
 
 export type GetDashboardBenchmarksParams = {
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: string;
+  endDate?: string;
 };
