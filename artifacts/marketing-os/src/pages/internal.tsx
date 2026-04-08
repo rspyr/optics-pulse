@@ -24,7 +24,7 @@ export default function Internal() {
   const [roasFilter, setRoasFilter] = useState<string>("");
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
 
-  type IntegrationState = "running" | "healthy" | "error" | "no_credentials" | "never";
+  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
   interface SyncStatus {
     statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
@@ -317,6 +317,8 @@ export default function Internal() {
                   <span className={`font-medium text-sm ${color}`}>{label}</span>
                   {status?.state === "running" ? (
                     <span className="flex items-center gap-1 text-xs text-blue-400"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing</span>
+                  ) : status?.state === "paused" ? (
+                    <span className="flex items-center gap-1 text-xs text-amber-400"><Clock className="w-3.5 h-3.5" /> Paused</span>
                   ) : status?.state === "healthy" ? (
                     <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Healthy</span>
                   ) : status?.state === "error" ? (

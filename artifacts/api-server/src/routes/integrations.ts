@@ -86,7 +86,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     }
   }
 
-  type IntegrationState = "running" | "healthy" | "error" | "no_credentials" | "never";
+  const PAUSED_INTEGRATIONS = new Set(["service_titan", "podium", "callrail", "ghl"]);
+  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
 
   const integrations = ["service_titan", "google_ads", "meta"] as const;
   const statusByIntegration: Record<string, {
@@ -120,6 +121,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     let state: IntegrationState = "never";
     if (isRunning) {
       state = "running";
+    } else if (PAUSED_INTEGRATIONS.has(integ)) {
+      state = "paused";
     } else if (tenantId && !configuredMap[integ]) {
       state = "no_credentials";
     } else if (latest?.status === "error") {
