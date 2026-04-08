@@ -89,8 +89,10 @@ router.get("/tenants", async (req, res) => {
 
 router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, res) => {
   const body = CreateTenantBody.parse(req.body);
+  const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const insertData: Record<string, unknown> = {
     name: body.name,
+    clientSlug: slugify(body.name),
     serviceTitanId: body.serviceTitanId,
     timezone: body.timezone || "America/New_York",
     isDemo: req.body.isDemo === true ? true : false,

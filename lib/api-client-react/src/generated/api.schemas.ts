@@ -248,6 +248,61 @@ export interface WebhookIngestResponse {
   message: string;
 }
 
+export type TrackerSubmitPayloadAttribution = {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_term?: string;
+  utm_content?: string;
+  gclid?: string;
+  fbclid?: string;
+  msclkid?: string;
+  ttclid?: string;
+  li_fat_id?: string;
+  wbraid?: string;
+};
+
+export type TrackerSubmitPayloadFormType =
+  (typeof TrackerSubmitPayloadFormType)[keyof typeof TrackerSubmitPayloadFormType];
+
+export const TrackerSubmitPayloadFormType = {
+  native: "native",
+  hubspot: "hubspot",
+  gravity: "gravity",
+  wpforms: "wpforms",
+  typeform: "typeform",
+} as const;
+
+export type TrackerSubmitPayloadForm = {
+  id?: string;
+  name?: string;
+  type?: TrackerSubmitPayloadFormType;
+  action?: string;
+};
+
+export type TrackerSubmitPayloadFields = { [key: string]: unknown };
+
+export type TrackerSubmitPayloadCustom = { [key: string]: unknown };
+
+export interface TrackerSubmitPayload {
+  /** Client slug identifying the tenant */
+  client_id: string;
+  submitted_at?: string;
+  page_url?: string;
+  landing_page?: string;
+  referrer?: string;
+  attribution?: TrackerSubmitPayloadAttribution;
+  form?: TrackerSubmitPayloadForm;
+  fields?: TrackerSubmitPayloadFields;
+  custom?: TrackerSubmitPayloadCustom;
+}
+
+export interface TrackerSubmitResponse {
+  success: boolean;
+  eventId?: number;
+  message?: string;
+}
+
 export type DashboardOverviewPreviousPeriod = {
   totalSpend?: number;
   googleSpend?: number;
@@ -808,6 +863,9 @@ export type ListLeadsParams = {
   source?: string;
   limit?: number;
   offset?: number;
+  funnelId?: number;
+  startDate?: string;
+  endDate?: string;
 };
 
 export type ListLeadsStatus =

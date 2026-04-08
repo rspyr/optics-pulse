@@ -92,6 +92,8 @@ const currentDir = typeof __dirname !== "undefined"
   : path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(currentDir, "../public")));
 
+app.use("/api/tracker", cors({ origin: true, methods: ["GET", "POST", "OPTIONS"] }));
+
 app.use("/api", router);
 
 export default app;

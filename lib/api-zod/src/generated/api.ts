@@ -218,8 +218,8 @@ export const ListLeadsQueryParams = zod.object({
   limit: zod.coerce.number().default(listLeadsQueryLimitDefault),
   offset: zod.coerce.number().default(listLeadsQueryOffsetDefault),
   funnelId: zod.coerce.number().optional(),
-  startDate: zod.coerce.string().optional(),
-  endDate: zod.coerce.string().optional(),
+  startDate: zod.date().optional(),
+  endDate: zod.date().optional(),
 });
 
 export const ListLeadsResponse = zod.object({
@@ -502,6 +502,50 @@ export const ListJobsResponse = zod.object({
 });
 
 /**
+ * @summary Receive form submission with attribution data from client-side tracker script
+ */
+export const TrackerSubmitBody = zod.object({
+  client_id: zod.string().describe("Client slug identifying the tenant"),
+  submitted_at: zod.date().optional(),
+  page_url: zod.string().optional(),
+  landing_page: zod.string().optional(),
+  referrer: zod.string().optional(),
+  attribution: zod
+    .object({
+      utm_source: zod.string().optional(),
+      utm_medium: zod.string().optional(),
+      utm_campaign: zod.string().optional(),
+      utm_term: zod.string().optional(),
+      utm_content: zod.string().optional(),
+      gclid: zod.string().optional(),
+      fbclid: zod.string().optional(),
+      msclkid: zod.string().optional(),
+      ttclid: zod.string().optional(),
+      li_fat_id: zod.string().optional(),
+      wbraid: zod.string().optional(),
+    })
+    .optional(),
+  form: zod
+    .object({
+      id: zod.string().optional(),
+      name: zod.string().optional(),
+      type: zod
+        .enum(["native", "hubspot", "gravity", "wpforms", "typeform"])
+        .optional(),
+      action: zod.string().optional(),
+    })
+    .optional(),
+  fields: zod.record(zod.string(), zod.unknown()).optional(),
+  custom: zod.record(zod.string(), zod.unknown()).optional(),
+});
+
+export const TrackerSubmitResponse = zod.object({
+  success: zod.boolean(),
+  eventId: zod.number().optional(),
+  message: zod.string().optional(),
+});
+
+/**
  * @summary Ingest webhook from CallRail, GoHighLevel, or forms
  */
 export const IngestWebhookBody = zod.object({
@@ -592,15 +636,16 @@ export const GetSpendRevenueChartQueryParams = zod.object({
   endDate: zod.date().optional(),
 });
 
-export const GetSpendRevenueChartResponseItem = zod.object({
-  date: zod.date(),
-  spend: zod.number(),
-  googleSpend: zod.number(),
-  metaSpend: zod.number(),
-  revenue: zod.number(),
-});
 export const GetSpendRevenueChartResponse = zod.object({
-  daily: zod.array(GetSpendRevenueChartResponseItem),
+  daily: zod.array(
+    zod.object({
+      date: zod.date(),
+      spend: zod.number(),
+      googleSpend: zod.number(),
+      metaSpend: zod.number(),
+      revenue: zod.number(),
+    }),
+  ),
   historicalRevenue: zod.number(),
   historicalJobCount: zod.number(),
 });

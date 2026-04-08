@@ -429,6 +429,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/JobListResponse"
 
+  /tracker/submit:
+    post:
+      operationId: trackerSubmit
+      tags: [tracker]
+      summary: Receive form submission with attribution data from client-side tracker script
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrackerSubmitPayload"
+      responses:
+        "200":
+          description: Submission processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackerSubmitResponse"
+
   /webhooks/ingest:
     post:
       operationId: ingestWebhook
@@ -1504,6 +1523,77 @@ components:
         message:
           type: string
       required: [success, message]
+
+    TrackerSubmitPayload:
+      type: object
+      properties:
+        client_id:
+          type: string
+          description: Client slug identifying the tenant
+        submitted_at:
+          type: string
+          format: date-time
+        page_url:
+          type: string
+        landing_page:
+          type: string
+        referrer:
+          type: string
+        attribution:
+          type: object
+          properties:
+            utm_source:
+              type: string
+            utm_medium:
+              type: string
+            utm_campaign:
+              type: string
+            utm_term:
+              type: string
+            utm_content:
+              type: string
+            gclid:
+              type: string
+            fbclid:
+              type: string
+            msclkid:
+              type: string
+            ttclid:
+              type: string
+            li_fat_id:
+              type: string
+            wbraid:
+              type: string
+        form:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            type:
+              type: string
+              enum: [native, hubspot, gravity, wpforms, typeform]
+            action:
+              type: string
+        fields:
+          type: object
+          additionalProperties: true
+        custom:
+          type: object
+          additionalProperties: true
+      required: [client_id]
+
+    TrackerSubmitResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        eventId:
+          type: integer
+        message:
+          type: string
+      required: [success]
 
     DashboardOverview:
       type: object

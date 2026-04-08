@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -13,15 +13,27 @@ export const attributionEventsTable = pgTable("attribution_events", {
   gclid: text("gclid"),
   wbraid: text("wbraid"),
   fbclid: text("fbclid"),
+  msclkid: text("msclkid"),
+  ttclid: text("ttclid"),
+  liFatId: text("li_fat_id"),
   hashedPhone: text("hashed_phone"),
   hashedEmail: text("hashed_email"),
   billingAddress: text("billing_address"),
   utmSource: text("utm_source"),
   utmCampaign: text("utm_campaign"),
   utmMedium: text("utm_medium"),
+  utmTerm: text("utm_term"),
+  utmContent: text("utm_content"),
   landingPage: text("landing_page"),
+  pageUrl: text("page_url"),
+  referrer: text("referrer"),
   userAgent: text("user_agent"),
   externalId: text("external_id"),
+  formType: text("form_type"),
+  formId: text("form_id"),
+  formName: text("form_name"),
+  formFields: jsonb("form_fields").$type<Record<string, unknown>>(),
+  submittedAt: timestamp("submitted_at"),
   matchLevel: matchLevelEnum("match_level"),
   matchConfidence: real("match_confidence"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

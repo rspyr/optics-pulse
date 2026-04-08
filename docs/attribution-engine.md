@@ -103,18 +103,66 @@ Attribution events represent a marketing touchpoint — the moment a potential c
 
 | Source | Method | Data Captured |
 |:-------|:-------|:-------------|
-| Google Ads | Tracker script on client website | GCLID, UTM parameters, landing page |
-| Meta | Tracker script on client website | FBCLID, UTM parameters |
+| **Tracker Script** | IIFE on client website (`tracker.js`) | All UTM params (source, medium, campaign, term, content), click IDs (GCLID, FBCLID, MSCLKID, TTCLID, li_fat_id, wbraid), landing page, referrer, form fields |
 | CallRail | API sync | Caller phone number (hashed), call duration, tracking number |
 | GHL (GoHighLevel) | Webhook | Form fields, hashed email/phone |
+| Podium | Webhook | SMS/call conversations, contact data |
 
 ### Event Types
 
 - **click** — Ad click captured by the tracker script (carries GCLID or FBCLID)
 - **call** — Inbound phone call tracked via CallRail
-- **form_fill** — Form submission captured via GHL webhook or tracker script
+- **form_fill** — Form submission captured via tracker script or GHL webhook
 
-Events are created via the `/webhooks/ingest` endpoint. The tracker script on each client's website automatically captures click IDs and UTM parameters when a visitor arrives from an ad, then sends them along with any form submission or call tracking data.
+### Ingestion Endpoints
+
+Events enter the system via two endpoints:
+
+| Endpoint | Purpose | Auth |
+|:---------|:--------|:-----|
+| `POST /api/tracker/submit` | Client-side tracker script submissions (forms with attribution) | Open CORS (public, keyed by `client_id` slug) |
+| `POST /webhooks/ingest` | Server-side webhooks from CallRail, GHL, Podium | Replit-domain CORS only |
+
+### Universal Form Attribution Script (`tracker.js`)
+
+The tracker script is a self-contained IIFE served from `/tracker.js` on the API server. It is embedded on each client's website via a single `<script>` tag:
+
+```html
+<script src="https://{api-domain}/tracker.js" data-client-id="acme-hvac" defer></script>
+```
+
+**Capabilities:**
+
+| Feature | Details |
+|:--------|:--------|
+| **UTM Capture** | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` from URL params |
+| **Click ID Capture** | `gclid`, `fbclid`, `msclkid`, `ttclid`, `li_fat_id`, `wbraid` |
+| **Cookie Persistence** | Last-touch attribution cookie (`_attr_data`, 30-day TTL) + first-touch landing page cookie (`_attr_lp`) |
+| **Form Interception** | Native HTML forms (`submit` event), HubSpot (`postMessage`), Gravity Forms (`gform_confirmation_loaded`), WPForms (`wpformsAjaxSubmitSuccess`), Typeform (`postMessage`) |
+| **Dynamic Forms** | `MutationObserver` with `WeakSet` dedup auto-binds forms injected after page load |
+| **Delivery** | `fetch` with `keepalive` + 2 retries (1.5s delay); `navigator.sendBeacon` fallback; `localStorage` queue (cap 10) with flush on next page load |
+| **Heartbeat** | POST to `/api/tracker/heartbeat` every 6 hours for script health monitoring |
+
+**Script Attributes:**
+
+| Attribute | Required | Description |
+|:----------|:---------|:------------|
+| `data-client-id` | Yes | Tenant's `clientSlug` (e.g., `acme-hvac`) |
+| `data-endpoint` | No | Override submit URL (defaults to same origin `/api/tracker/submit`) |
+| `data-cookie-domain` | No | Cookie domain for cross-subdomain tracking |
+| `data-exclude-fields` | No | JSON array of field names to exclude from capture |
+| `data-capture-fields` | No | JSON array of field names to exclusively capture (allowlist mode) |
+| `data-custom` | No | JSON object of custom dimensions sent with every submission |
+| `data-funnel` | No | Funnel slug for routing |
+| `data-tenant` | No | Legacy numeric tenant ID (backward compat for heartbeat) |
+
+**Backend Processing (`/api/tracker/submit`):**
+
+1. Resolves `client_id` string slug → tenant via `clientSlug` column
+2. Creates an `attribution_event` with all UTM params, click IDs, referrer, page URL, form metadata, and form fields (JSONB)
+3. Extracts PII from form fields (name, email, phone) using keyword matching
+4. If PII is found: creates a lead with round-robin CSR assignment (same flow as webhook ingestion)
+5. Hashes phone/email (SHA-256) for reconciliation matching
 
 ---
 
@@ -211,15 +259,18 @@ Maintenance activities (PII purge, conversion uploads, attribution writebacks) a
 
 | File | Purpose |
 |:-----|:--------|
+| `artifacts/api-server/public/tracker.js` | Client-side universal form attribution IIFE script |
+| `artifacts/api-server/src/routes/tracker.ts` | `/api/tracker/submit` endpoint — processes form submissions with attribution |
 | `artifacts/api-server/src/services/reconciliation.ts` | Core matching engine — waterfall logic, external conversion push |
 | `artifacts/api-server/src/services/sync-scheduler.ts` | Scheduled sync orchestration for all integrations |
 | `artifacts/api-server/src/services/st-data-purge.ts` | PII redaction worker for ServiceTitan data |
 | `artifacts/api-server/src/services/integrations/service-titan.ts` | ServiceTitan API client |
 | `artifacts/api-server/src/routes/integrations.ts` | Sync status endpoint and manual sync triggers |
-| `artifacts/api-server/src/routes/webhooks.ts` | Attribution event ingestion endpoint |
+| `artifacts/api-server/src/routes/webhooks.ts` | Attribution event ingestion via webhooks (CallRail, GHL, Podium) |
 | `artifacts/api-server/src/routes/attribution.ts` | Attribution event listing API |
 | `artifacts/marketing-os/src/pages/internal.tsx` | Admin dashboard with integration status UI |
 | `artifacts/marketing-os/src/pages/attribution.tsx` | Attribution log viewer |
-| `lib/db/src/schema/attribution-events.ts` | Attribution events table schema |
+| `lib/db/src/schema/attribution-events.ts` | Attribution events table schema (includes formFields JSONB, all UTM/click ID columns) |
+| `lib/db/src/schema/tenants.ts` | Tenants table schema (includes `clientSlug` for tracker identification) |
 | `lib/db/src/schema/jobs.ts` | Jobs table schema (match level, GCLID fields) |
 | `lib/db/src/schema/integration-sync-logs.ts` | Sync log table schema |

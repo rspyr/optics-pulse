@@ -69,9 +69,10 @@ import type {
   ReconciliationStatusResponse,
   RunReconciliationBody,
   SpendRevenueChartResponse,
-  SpendRevenueDataPoint,
   Tenant,
   TenantPerformanceRow,
+  TrackerSubmitPayload,
+  TrackerSubmitResponse,
   TrainingAlertResponse,
   TrainingContextualResponse,
   TrainingItem,
@@ -1611,6 +1612,92 @@ export function useListJobs<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Receive form submission with attribution data from client-side tracker script
+ */
+export const getTrackerSubmitUrl = () => {
+  return `/api/tracker/submit`;
+};
+
+export const trackerSubmit = async (
+  trackerSubmitPayload: TrackerSubmitPayload,
+  options?: RequestInit,
+): Promise<TrackerSubmitResponse> => {
+  return customFetch<TrackerSubmitResponse>(getTrackerSubmitUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(trackerSubmitPayload),
+  });
+};
+
+export const getTrackerSubmitMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackerSubmit>>,
+    TError,
+    { data: BodyType<TrackerSubmitPayload> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof trackerSubmit>>,
+  TError,
+  { data: BodyType<TrackerSubmitPayload> },
+  TContext
+> => {
+  const mutationKey = ["trackerSubmit"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof trackerSubmit>>,
+    { data: BodyType<TrackerSubmitPayload> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return trackerSubmit(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TrackerSubmitMutationResult = NonNullable<
+  Awaited<ReturnType<typeof trackerSubmit>>
+>;
+export type TrackerSubmitMutationBody = BodyType<TrackerSubmitPayload>;
+export type TrackerSubmitMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Receive form submission with attribution data from client-side tracker script
+ */
+export const useTrackerSubmit = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackerSubmit>>,
+    TError,
+    { data: BodyType<TrackerSubmitPayload> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof trackerSubmit>>,
+  TError,
+  { data: BodyType<TrackerSubmitPayload> },
+  TContext
+> => {
+  return useMutation(getTrackerSubmitMutationOptions(options));
+};
 
 /**
  * @summary Ingest webhook from CallRail, GoHighLevel, or forms

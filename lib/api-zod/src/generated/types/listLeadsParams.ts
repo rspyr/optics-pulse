@@ -13,4 +13,7 @@ export type ListLeadsParams = {
   source?: string;
   limit?: number;
   offset?: number;
+  funnelId?: number;
+  startDate?: Date;
+  endDate?: Date;
 };

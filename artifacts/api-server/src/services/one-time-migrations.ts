@@ -754,6 +754,37 @@ const migrations: Migration[] = [
       console.log(`[Migration] Final state: ${Number(remainingUnlinked[0]?.count ?? 0)} total jobs with no lead_id (purged before lead matching, no surviving identifiers to match)`);
     },
   },
+  {
+    id: "2026-04-08_seed-client-slugs",
+    description: "Seed clientSlug on tenants from slugified tenant name",
+    run: async () => {
+      const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name }).from(tenantsTable);
+      const usedSlugs = new Set<string>();
+      for (const t of tenants) {
+        let slug = t.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+        if (!slug) slug = `tenant-${t.id}`;
+        while (usedSlugs.has(slug)) {
+          slug = `${slug}-${t.id}`;
+        }
+        usedSlugs.add(slug);
+        await db.update(tenantsTable)
+          .set({ clientSlug: slug })
+          .where(eq(tenantsTable.id, t.id));
+      }
+      console.log(`[Migrations] Seeded clientSlug for ${tenants.length} tenants`);
+    },
+  },
+  {
+    id: "2026-04-08_unique-client-slug",
+    description: "Add unique index on tenants.client_slug for tracker script identification",
+    run: async () => {
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_client_slug ON tenants (client_slug) WHERE client_slug IS NOT NULL`);
+      console.log("[Migration] Created unique index uq_tenant_client_slug on tenants");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
