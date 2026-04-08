@@ -686,14 +686,69 @@ const migrations: Migration[] = [
         }
       }
 
-      console.log(`[Migration] lead_id backfill complete: ${matched}/${jobsToMatch.length} jobs linked to leads`);
-      const purgedCount = jobsToMatch.length - matched;
-      if (purgedCount > 0) {
-        const totalPurgedJobs = await db.select({ count: sql<number>`COUNT(*)` })
-          .from(jobsTable)
-          .where(and(isNull(jobsTable.leadId), isNull(jobsTable.customerPhone), isNull(jobsTable.customerEmail)));
-        console.log(`[Migration] ${Number(totalPurgedJobs[0]?.count ?? 0)} jobs have no PII and no lead_id — these were purged before lead matching was introduced and will remain unlinked`);
+      console.log(`[Migration] lead_id backfill (phone/email): ${matched}/${jobsToMatch.length} jobs linked to leads`);
+
+      const purgedJobs = await db.select({
+        id: jobsTable.id,
+        tenantId: jobsTable.tenantId,
+        matchedGclid: jobsTable.matchedGclid,
+        customerName: jobsTable.customerName,
+      }).from(jobsTable).where(
+        and(
+          isNull(jobsTable.leadId),
+          isNull(jobsTable.customerPhone),
+          isNull(jobsTable.customerEmail),
+        ),
+      );
+
+      if (purgedJobs.length > 0) {
+        console.log(`[Migration] Attempting fallback backfill for ${purgedJobs.length} purged jobs via gclid/name`);
+        let gclidMatched = 0;
+        let nameMatched = 0;
+
+        for (const job of purgedJobs) {
+          if (job.matchedGclid) {
+            const [lead] = await db.select({ id: leadsTable.id })
+              .from(leadsTable)
+              .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.matchedGclid, job.matchedGclid)))
+              .limit(1);
+            if (lead) {
+              await db.update(jobsTable)
+                .set({ leadId: lead.id, updatedAt: new Date() })
+                .where(eq(jobsTable.id, job.id));
+              gclidMatched++;
+              continue;
+            }
+          }
+
+          if (job.customerName) {
+            const nameParts = job.customerName.split(" ");
+            const firstName = nameParts[0] || "";
+            const lastName = nameParts.slice(1).join(" ") || "";
+            const nameConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
+            if (lastName) nameConditions.push(eq(leadsTable.lastName, lastName));
+            const [lead] = await db.select({ id: leadsTable.id })
+              .from(leadsTable)
+              .where(and(...nameConditions))
+              .orderBy(desc(leadsTable.createdAt))
+              .limit(1);
+            if (lead) {
+              await db.update(jobsTable)
+                .set({ leadId: lead.id, updatedAt: new Date() })
+                .where(eq(jobsTable.id, job.id));
+              nameMatched++;
+              continue;
+            }
+          }
+        }
+
+        console.log(`[Migration] Fallback backfill: ${gclidMatched} via gclid, ${nameMatched} via name, ${purgedJobs.length - gclidMatched - nameMatched} remain unlinked`);
       }
+
+      const remainingUnlinked = await db.select({ count: sql<number>`COUNT(*)` })
+        .from(jobsTable)
+        .where(isNull(jobsTable.leadId));
+      console.log(`[Migration] Final state: ${Number(remainingUnlinked[0]?.count ?? 0)} total jobs with no lead_id (purged before lead matching, no surviving identifiers to match)`);
     },
   },
 ];
