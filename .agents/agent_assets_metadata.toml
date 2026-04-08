@@ -11,3 +11,9 @@ id = "xotfA7YfTiDnDttGf7aYw"
 uri = "file://docs/google-ads-api-application.md"
 type = "text"
 title = "Google Ads API Application Documentation"
+
+[[outputs]]
+id = "YLse_I9F_-LKzMdutvZ7W"
+uri = "file://docs/attribution-engine.md"
+type = "text"
+title = "Attribution Engine Documentation"
