@@ -650,13 +650,14 @@ const migrations: Migration[] = [
         ),
       );
 
+      let matched = 0;
+
       if (jobsToMatch.length === 0) {
-        console.log("[Migration] No jobs with PII available for lead_id backfill (all purged or already linked)");
-        return;
+        console.log("[Migration] No jobs with PII available for phone/email backfill phase");
+      } else {
+        console.log(`[Migration] Phase 1: Attempting lead_id backfill for ${jobsToMatch.length} jobs with phone/email`);
       }
 
-      console.log(`[Migration] Attempting lead_id backfill for ${jobsToMatch.length} jobs with phone/email`);
-      let matched = 0;
       for (const job of jobsToMatch) {
         const orClauses: ReturnType<typeof sql>[] = [];
         if (job.customerPhone) {
@@ -686,7 +687,7 @@ const migrations: Migration[] = [
         }
       }
 
-      console.log(`[Migration] lead_id backfill (phone/email): ${matched}/${jobsToMatch.length} jobs linked to leads`);
+      console.log(`[Migration] Phase 1 complete: ${matched}/${jobsToMatch.length} jobs linked via phone/email`);
 
       const purgedJobs = await db.select({
         id: jobsTable.id,
@@ -702,7 +703,7 @@ const migrations: Migration[] = [
       );
 
       if (purgedJobs.length > 0) {
-        console.log(`[Migration] Attempting fallback backfill for ${purgedJobs.length} purged jobs via gclid/name`);
+        console.log(`[Migration] Phase 2: Attempting fallback backfill for ${purgedJobs.length} purged jobs via gclid/name`);
         let gclidMatched = 0;
         let nameMatched = 0;
 
@@ -742,7 +743,9 @@ const migrations: Migration[] = [
           }
         }
 
-        console.log(`[Migration] Fallback backfill: ${gclidMatched} via gclid, ${nameMatched} via name, ${purgedJobs.length - gclidMatched - nameMatched} remain unlinked`);
+        console.log(`[Migration] Phase 2 complete: ${gclidMatched} via gclid, ${nameMatched} via name, ${purgedJobs.length - gclidMatched - nameMatched} remain unlinked`);
+      } else {
+        console.log("[Migration] Phase 2: No purged jobs without lead_id found");
       }
 
       const remainingUnlinked = await db.select({ count: sql<number>`COUNT(*)` })
