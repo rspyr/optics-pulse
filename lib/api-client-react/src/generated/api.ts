@@ -19,6 +19,7 @@ import type {
 import type {
   AdminDashboardStats,
   AdminUser,
+  AttributionEventDetailResponse,
   AttributionEventListResponse,
   AuthUser,
   AutomationAlert,
@@ -1319,6 +1320,96 @@ export function useListAttributionEvents<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListAttributionEventsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get attribution event detail with matched job and lead
+ */
+export const getGetAttributionEventUrl = (id: number) => {
+  return `/api/attribution/events/${id}`;
+};
+
+export const getAttributionEvent = async (
+  id: number,
+  options?: RequestInit,
+): Promise<AttributionEventDetailResponse> => {
+  return customFetch<AttributionEventDetailResponse>(
+    getGetAttributionEventUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAttributionEventQueryKey = (id: number) => {
+  return [`/api/attribution/events/${id}`] as const;
+};
+
+export const getGetAttributionEventQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAttributionEvent>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAttributionEvent>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAttributionEventQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAttributionEvent>>
+  > = ({ signal }) => getAttributionEvent(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAttributionEvent>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAttributionEventQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAttributionEvent>>
+>;
+export type GetAttributionEventQueryError = ErrorType<void>;
+
+/**
+ * @summary Get attribution event detail with matched job and lead
+ */
+
+export function useGetAttributionEvent<
+  TData = Awaited<ReturnType<typeof getAttributionEvent>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAttributionEvent>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAttributionEventQueryOptions(id, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

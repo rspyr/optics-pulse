@@ -131,6 +131,8 @@ export const AttributionEventEventType = {
   form_fill: "form_fill",
 } as const;
 
+export type AttributionEventFormFields = { [key: string]: unknown } | null;
+
 export type AttributionEventMatchLevel =
   | (typeof AttributionEventMatchLevel)[keyof typeof AttributionEventMatchLevel]
   | null;
@@ -150,13 +152,27 @@ export interface AttributionEvent {
   gclid?: string | null;
   wbraid?: string | null;
   fbclid?: string | null;
+  msclkid?: string | null;
+  ttclid?: string | null;
+  liFatId?: string | null;
   hashedPhone?: string | null;
   hashedEmail?: string | null;
   billingAddress?: string | null;
   utmSource?: string | null;
   utmCampaign?: string | null;
   utmMedium?: string | null;
+  utmTerm?: string | null;
+  utmContent?: string | null;
   landingPage?: string | null;
+  pageUrl?: string | null;
+  referrer?: string | null;
+  userAgent?: string | null;
+  externalId?: string | null;
+  formType?: string | null;
+  formId?: string | null;
+  formName?: string | null;
+  formFields?: AttributionEventFormFields;
+  submittedAt?: string | null;
   matchLevel?: AttributionEventMatchLevel;
   matchConfidence?: number | null;
   createdAt: string;
@@ -165,6 +181,28 @@ export interface AttributionEvent {
 export interface AttributionEventListResponse {
   events: AttributionEvent[];
   total: number;
+}
+
+export interface AttributionMatchedJob {
+  id: number;
+  customerName?: string | null;
+  stJobId?: string | null;
+  matchLevel?: string | null;
+  matchedGclid?: string | null;
+  revenue: number;
+  leadId?: number | null;
+}
+
+export interface AttributionMatchedLead {
+  id: number;
+  firstName: string;
+  lastName: string;
+}
+
+export interface AttributionEventDetailResponse {
+  event: AttributionEvent;
+  matchedJob?: AttributionMatchedJob;
+  matchedLead?: AttributionMatchedLead;
 }
 
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus];

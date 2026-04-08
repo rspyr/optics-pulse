@@ -357,6 +357,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/AttributionEventListResponse"
 
+  /attribution/events/{id}:
+    get:
+      operationId: getAttributionEvent
+      tags: [attribution]
+      summary: Get attribution event detail with matched job and lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Attribution event detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttributionEventDetailResponse"
+        "404":
+          description: Event not found
+
   /attribution/reconcile:
     post:
       operationId: runReconciliation
@@ -1382,6 +1403,15 @@ components:
         fbclid:
           type: string
           nullable: true
+        msclkid:
+          type: string
+          nullable: true
+        ttclid:
+          type: string
+          nullable: true
+        liFatId:
+          type: string
+          nullable: true
         hashedPhone:
           type: string
           nullable: true
@@ -1400,8 +1430,42 @@ components:
         utmMedium:
           type: string
           nullable: true
+        utmTerm:
+          type: string
+          nullable: true
+        utmContent:
+          type: string
+          nullable: true
         landingPage:
           type: string
+          nullable: true
+        pageUrl:
+          type: string
+          nullable: true
+        referrer:
+          type: string
+          nullable: true
+        userAgent:
+          type: string
+          nullable: true
+        externalId:
+          type: string
+          nullable: true
+        formType:
+          type: string
+          nullable: true
+        formId:
+          type: string
+          nullable: true
+        formName:
+          type: string
+          nullable: true
+        formFields:
+          type: object
+          nullable: true
+        submittedAt:
+          type: string
+          format: date-time
           nullable: true
         matchLevel:
           type: string
@@ -1425,6 +1489,52 @@ components:
         total:
           type: integer
       required: [events, total]
+
+    AttributionEventDetailResponse:
+      type: object
+      properties:
+        event:
+          $ref: "#/components/schemas/AttributionEvent"
+        matchedJob:
+          $ref: "#/components/schemas/AttributionMatchedJob"
+        matchedLead:
+          $ref: "#/components/schemas/AttributionMatchedLead"
+      required: [event]
+
+    AttributionMatchedJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        customerName:
+          type: string
+          nullable: true
+        stJobId:
+          type: string
+          nullable: true
+        matchLevel:
+          type: string
+          nullable: true
+        matchedGclid:
+          type: string
+          nullable: true
+        revenue:
+          type: number
+        leadId:
+          type: integer
+          nullable: true
+      required: [id, revenue]
+
+    AttributionMatchedLead:
+      type: object
+      properties:
+        id:
+          type: integer
+        firstName:
+          type: string
+        lastName:
+          type: string
+      required: [id, firstName, lastName]
 
     Job:
       type: object

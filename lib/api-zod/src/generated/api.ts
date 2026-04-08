@@ -377,13 +377,27 @@ export const ListAttributionEventsResponse = zod.object({
       gclid: zod.string().nullish(),
       wbraid: zod.string().nullish(),
       fbclid: zod.string().nullish(),
+      msclkid: zod.string().nullish(),
+      ttclid: zod.string().nullish(),
+      liFatId: zod.string().nullish(),
       hashedPhone: zod.string().nullish(),
       hashedEmail: zod.string().nullish(),
       billingAddress: zod.string().nullish(),
       utmSource: zod.string().nullish(),
       utmCampaign: zod.string().nullish(),
       utmMedium: zod.string().nullish(),
+      utmTerm: zod.string().nullish(),
+      utmContent: zod.string().nullish(),
       landingPage: zod.string().nullish(),
+      pageUrl: zod.string().nullish(),
+      referrer: zod.string().nullish(),
+      userAgent: zod.string().nullish(),
+      externalId: zod.string().nullish(),
+      formType: zod.string().nullish(),
+      formId: zod.string().nullish(),
+      formName: zod.string().nullish(),
+      formFields: zod.object({}).passthrough().nullish(),
+      submittedAt: zod.date().nullish(),
       matchLevel: zod
         .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
         .nullish(),
@@ -392,6 +406,68 @@ export const ListAttributionEventsResponse = zod.object({
     }),
   ),
   total: zod.number(),
+});
+
+/**
+ * @summary Get attribution event detail with matched job and lead
+ */
+export const GetAttributionEventParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetAttributionEventResponse = zod.object({
+  event: zod.object({
+    id: zod.number(),
+    tenantId: zod.number(),
+    eventType: zod.enum(["click", "call", "form_fill"]),
+    gclid: zod.string().nullish(),
+    wbraid: zod.string().nullish(),
+    fbclid: zod.string().nullish(),
+    msclkid: zod.string().nullish(),
+    ttclid: zod.string().nullish(),
+    liFatId: zod.string().nullish(),
+    hashedPhone: zod.string().nullish(),
+    hashedEmail: zod.string().nullish(),
+    billingAddress: zod.string().nullish(),
+    utmSource: zod.string().nullish(),
+    utmCampaign: zod.string().nullish(),
+    utmMedium: zod.string().nullish(),
+    utmTerm: zod.string().nullish(),
+    utmContent: zod.string().nullish(),
+    landingPage: zod.string().nullish(),
+    pageUrl: zod.string().nullish(),
+    referrer: zod.string().nullish(),
+    userAgent: zod.string().nullish(),
+    externalId: zod.string().nullish(),
+    formType: zod.string().nullish(),
+    formId: zod.string().nullish(),
+    formName: zod.string().nullish(),
+    formFields: zod.object({}).passthrough().nullish(),
+    submittedAt: zod.date().nullish(),
+    matchLevel: zod
+      .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
+      .nullish(),
+    matchConfidence: zod.number().nullish(),
+    createdAt: zod.date(),
+  }),
+  matchedJob: zod
+    .object({
+      id: zod.number(),
+      customerName: zod.string().nullish(),
+      stJobId: zod.string().nullish(),
+      matchLevel: zod.string().nullish(),
+      matchedGclid: zod.string().nullish(),
+      revenue: zod.number(),
+      leadId: zod.number().nullish(),
+    })
+    .optional(),
+  matchedLead: zod
+    .object({
+      id: zod.number(),
+      firstName: zod.string(),
+      lastName: zod.string(),
+    })
+    .optional(),
 });
 
 /**

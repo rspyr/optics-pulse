@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, reconciliationRunsTable } from "@workspace/db";
-import { eq, and, count, desc, SQL } from "drizzle-orm";
+import { db, attributionEventsTable, reconciliationRunsTable, jobsTable, leadsTable } from "@workspace/db";
+import { eq, and, or, count, desc, sql, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
+import crypto from "crypto";
 
 const router: IRouter = Router();
 
@@ -29,6 +30,139 @@ router.get("/attribution/events", async (req, res) => {
   ]);
 
   res.json({ events, total: totalResult.count });
+});
+
+router.get("/attribution/events/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "Invalid event ID" });
+      return;
+    }
+
+    const role = req.session.userRole;
+    const userTenantId = req.session.tenantId;
+
+    const conditions: SQL[] = [eq(attributionEventsTable.id, id)];
+    if (role !== "super_admin" && role !== "agency_user") {
+      if (!userTenantId) {
+        res.status(403).json({ error: "No tenant assigned" });
+        return;
+      }
+      conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
+    }
+
+    const [event] = await db.select().from(attributionEventsTable).where(and(...conditions)).limit(1);
+    if (!event) {
+      res.status(404).json({ error: "Event not found" });
+      return;
+    }
+
+    type MatchedJobRow = { id: number; customerName: string | null; stJobId: string | null; matchLevel: string | null; matchedGclid: string | null; revenue: number; leadId: number | null };
+    let matchedJob: MatchedJobRow | null = null;
+    let matchedLead: { id: number; firstName: string; lastName: string } | null = null;
+
+    const jobSelect = {
+      id: jobsTable.id,
+      customerName: jobsTable.customerName,
+      stJobId: jobsTable.stJobId,
+      matchLevel: jobsTable.matchLevel,
+      matchedGclid: jobsTable.matchedGclid,
+      revenue: jobsTable.revenue,
+      leadId: jobsTable.leadId,
+    };
+
+    const hashValue = (v: string) => crypto.createHash("sha256").update(v.trim().toLowerCase()).digest("hex");
+    const normalizePhone = (p: string) => p.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
+
+    if (event.gclid) {
+      const [job] = await db.select(jobSelect).from(jobsTable)
+        .where(and(eq(jobsTable.tenantId, event.tenantId), eq(jobsTable.matchedGclid, event.gclid)))
+        .limit(1);
+      if (job) matchedJob = job;
+    }
+
+    if (!matchedJob && event.hashedPhone) {
+      const leads = await db.select({
+        id: leadsTable.id,
+        phone: leadsTable.phone,
+        firstName: leadsTable.firstName,
+        lastName: leadsTable.lastName,
+      }).from(leadsTable).where(eq(leadsTable.tenantId, event.tenantId));
+
+      for (const lead of leads) {
+        if (lead.phone && hashValue(normalizePhone(lead.phone)) === event.hashedPhone) {
+          const [job] = await db.select(jobSelect).from(jobsTable)
+            .where(and(eq(jobsTable.tenantId, event.tenantId), eq(jobsTable.leadId, lead.id), eq(jobsTable.matchLevel, "golden")))
+            .limit(1);
+          if (job) {
+            matchedJob = job;
+            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName };
+            break;
+          }
+        }
+      }
+    }
+
+    if (!matchedJob && event.hashedEmail) {
+      const leads = await db.select({
+        id: leadsTable.id,
+        email: leadsTable.email,
+        firstName: leadsTable.firstName,
+        lastName: leadsTable.lastName,
+      }).from(leadsTable).where(eq(leadsTable.tenantId, event.tenantId));
+
+      for (const lead of leads) {
+        if (lead.email && hashValue(lead.email) === event.hashedEmail) {
+          const [job] = await db.select(jobSelect).from(jobsTable)
+            .where(and(eq(jobsTable.tenantId, event.tenantId), eq(jobsTable.leadId, lead.id), eq(jobsTable.matchLevel, "silver")))
+            .limit(1);
+          if (job) {
+            matchedJob = job;
+            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName };
+            break;
+          }
+        }
+      }
+    }
+
+    if (!matchedJob && event.billingAddress) {
+      const normalizeAddress = (a: string) => a.trim().toLowerCase()
+        .replace(/\bstreet\b/g, "st").replace(/\bavenue\b/g, "ave")
+        .replace(/\bdrive\b/g, "dr").replace(/\broad\b/g, "rd")
+        .replace(/\bboulevard\b/g, "blvd").replace(/\blane\b/g, "ln")
+        .replace(/\bcourt\b/g, "ct").replace(/\bplace\b/g, "pl")
+        .replace(/[.,#]/g, "").replace(/\s+/g, " ");
+
+      const normalizedEventAddr = normalizeAddress(event.billingAddress);
+      const jobs = await db.select({
+        ...jobSelect,
+        serviceAddress: jobsTable.serviceAddress,
+      }).from(jobsTable)
+        .where(and(eq(jobsTable.tenantId, event.tenantId), eq(jobsTable.matchLevel, "bronze")));
+
+      for (const job of jobs) {
+        if (job.serviceAddress && normalizeAddress(job.serviceAddress) === normalizedEventAddr) {
+          matchedJob = job;
+          break;
+        }
+      }
+    }
+
+    if (!matchedLead && matchedJob?.leadId) {
+      const [lead] = await db.select({
+        id: leadsTable.id,
+        firstName: leadsTable.firstName,
+        lastName: leadsTable.lastName,
+      }).from(leadsTable).where(eq(leadsTable.id, matchedJob.leadId)).limit(1);
+      if (lead) matchedLead = lead;
+    }
+
+    res.json({ event, matchedJob, matchedLead });
+  } catch (error) {
+    console.error("[Attribution Event Detail] Error:", error);
+    res.status(500).json({ error: "Failed to fetch event detail" });
+  }
 });
 
 router.post("/attribution/reconcile", requireRole("super_admin", "agency_user"), async (req, res) => {

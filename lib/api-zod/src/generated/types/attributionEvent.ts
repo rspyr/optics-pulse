@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AttributionEventEventType } from "./attributionEventEventType";
+import type { AttributionEventFormFields } from "./attributionEventFormFields";
 import type { AttributionEventMatchLevel } from "./attributionEventMatchLevel";
 
 export interface AttributionEvent {
@@ -15,13 +16,27 @@ export interface AttributionEvent {
   gclid?: string | null;
   wbraid?: string | null;
   fbclid?: string | null;
+  msclkid?: string | null;
+  ttclid?: string | null;
+  liFatId?: string | null;
   hashedPhone?: string | null;
   hashedEmail?: string | null;
   billingAddress?: string | null;
   utmSource?: string | null;
   utmCampaign?: string | null;
   utmMedium?: string | null;
+  utmTerm?: string | null;
+  utmContent?: string | null;
   landingPage?: string | null;
+  pageUrl?: string | null;
+  referrer?: string | null;
+  userAgent?: string | null;
+  externalId?: string | null;
+  formType?: string | null;
+  formId?: string | null;
+  formName?: string | null;
+  formFields?: AttributionEventFormFields;
+  submittedAt?: Date | null;
   matchLevel?: AttributionEventMatchLevel;
   matchConfidence?: number | null;
   createdAt: Date;
