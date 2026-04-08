@@ -6,11 +6,11 @@ import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrati
 import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
 import { patchJobCustomField } from "./integrations/service-titan";
 
-function hashValue(value: string): string {
+export function hashValue(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
 
-function normalizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 }
 

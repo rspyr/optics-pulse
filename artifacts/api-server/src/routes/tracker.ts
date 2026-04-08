@@ -18,11 +18,11 @@ const TrackerSubmitPayload = TrackerSubmitBody.extend({
 
 const router: IRouter = Router();
 
-function hashValue(value: string): string {
+export function hashValue(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
 
-function normalizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 }
 
@@ -88,7 +88,7 @@ function extractAddressFromFields(fields: Record<string, unknown>): string | nul
   return normalizeAddress(raw);
 }
 
-function extractPiiFromFields(fields: Record<string, unknown>): { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } {
+export function extractPiiFromFields(fields: Record<string, unknown>): { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } {
   const result: { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } = {
     firstName: null, lastName: null, email: null, phone: null,
   };
