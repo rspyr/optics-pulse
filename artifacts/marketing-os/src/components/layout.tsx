@@ -1,6 +1,7 @@
 import React from "react";
 import { Link, useLocation } from "wouter";
 import ChatDrawer from "./chat-drawer";
+import { NotificationBell } from "./notification-bell";
 import { 
   LayoutDashboard, 
   Users, 
@@ -158,8 +159,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
       <main className="flex-1 overflow-y-auto relative">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-secondary/20 via-background to-background pointer-events-none" />
-        <div className="relative z-10 p-6 md:p-10 min-h-full">
-          {children}
+        <div className="relative z-10 min-h-full">
+          {isAgency && (
+            <div className="flex justify-end px-6 md:px-10 pt-4">
+              <NotificationBell />
+            </div>
+          )}
+          <div className="px-6 md:px-10 pb-6 md:pb-10 pt-2">
+            {children}
+          </div>
         </div>
       </main>
 

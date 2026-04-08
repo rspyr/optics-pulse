@@ -12,6 +12,7 @@ import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
 import { startCallbackScheduler } from "./services/callback-scheduler";
+import { startHeartbeatMonitor } from "./services/notifications";
 
 const rawPort = process.env["PORT"];
 
@@ -45,4 +46,5 @@ httpServer.listen(port, async () => {
   startSheetSyncScheduler();
   recoverTimers().catch(err => console.error("[auto-pass] Recovery error:", err));
   startCallbackScheduler();
+  startHeartbeatMonitor();
 });

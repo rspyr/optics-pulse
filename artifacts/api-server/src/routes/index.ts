@@ -32,6 +32,7 @@ import metaOAuthRouter from "./meta-oauth";
 import podiumOAuthRouter from "./podium-oauth";
 import podiumRoutesRouter from "./podium-routes";
 import pushTokensRouter from "./push-tokens";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -74,6 +75,7 @@ router.use(sheetConfigsRouter);
 router.use(leadSourceAliasesRouter);
 router.use(podiumRoutesRouter);
 router.use(pushTokensRouter);
+router.use(notificationsRouter);
 
 export default router;
 

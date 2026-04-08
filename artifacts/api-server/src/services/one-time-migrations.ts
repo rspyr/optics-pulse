@@ -822,6 +822,32 @@ const migrations: Migration[] = [
       console.log("[Migration] Enforced NOT NULL + unique constraint on tenants.client_slug");
     },
   },
+  {
+    id: "2026-04-08_create-notifications-table",
+    description: "Create notifications table for sync failure alerting and stale heartbeat monitoring",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER REFERENCES tenants(id),
+          type TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'warning',
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          integration TEXT,
+          is_read BOOLEAN NOT NULL DEFAULT FALSE,
+          is_dismissed BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          read_at TIMESTAMP,
+          dismissed_at TIMESTAMP
+        )
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_notifications_tenant_id ON notifications(tenant_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(is_read, is_dismissed) WHERE is_read = false AND is_dismissed = false`);
+      console.log("[Migration] Created notifications table with indexes");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

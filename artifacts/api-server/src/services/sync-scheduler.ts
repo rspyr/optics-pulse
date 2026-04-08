@@ -1,4 +1,5 @@
 import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
+import { emitSyncFailureNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, type STJob, type STInvoice } from "./integrations/service-titan";
@@ -239,6 +240,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     const message = err instanceof Error ? err.message : String(err);
     await completeSyncLog(syncLog.id, "error", 0, message);
     console.error(`[Sync] ServiceTitan error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "service_titan", message); } catch {}
     return { synced: 0, error: message };
   }
 }
@@ -449,6 +451,7 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
     const message = err instanceof Error ? err.message : String(err);
     await completeSyncLog(syncLog.id, "error", 0, message);
     console.error(`[Sync] Google Ads error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "google_ads", message); } catch {}
     return { synced: 0, error: message };
   }
 }
@@ -520,6 +523,7 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
     const message = err instanceof Error ? err.message : String(err);
     await completeSyncLog(syncLog.id, "error", 0, message);
     console.error(`[Sync] Meta error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "meta", message); } catch {}
     return { synced: 0, error: message };
   }
 }
@@ -636,6 +640,7 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
     const message = err instanceof Error ? err.message : String(err);
     await completeSyncLog(syncLog.id, "error", 0, message);
     console.error(`[Sync] ServiceTitan invoices error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "service_titan", message); } catch {}
     return { synced: 0, error: message };
   }
 }
