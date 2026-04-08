@@ -64,12 +64,8 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
     })
       .from(leadsTable)
       .innerJoin(jobsTable, and(
-        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.leadId, leadsTable.id),
         eq(jobsTable.hasInvoice, true),
-        sql`(
-          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
-          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
-        )`,
       ))
       .where(and(...closeRateConditions)),
   ]);
@@ -282,12 +278,8 @@ router.get("/dashboard/benchmarks", async (req, res) => {
     })
       .from(leadsTable)
       .innerJoin(jobsTable, and(
-        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.leadId, leadsTable.id),
         eq(jobsTable.hasInvoice, true),
-        sql`(
-          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
-          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
-        )`,
       ))
       .where(and(...closeRateConditions)),
   ]);
@@ -350,12 +342,8 @@ router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_u
     })
       .from(leadsTable)
       .innerJoin(jobsTable, and(
-        eq(leadsTable.tenantId, jobsTable.tenantId),
+        eq(jobsTable.leadId, leadsTable.id),
         eq(jobsTable.hasInvoice, true),
-        sql`(
-          (${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${jobsTable.customerPhone} IS NOT NULL AND ${leadsTable.phone} = ${jobsTable.customerPhone})
-          OR (${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND ${jobsTable.customerEmail} IS NOT NULL AND LOWER(${leadsTable.email}) = LOWER(${jobsTable.customerEmail}))
-        )`,
       ))
       .where(and(
         inArray(leadsTable.tenantId, tenantIds),

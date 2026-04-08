@@ -1,5 +1,5 @@
-import { db, tenantsTable, jobsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, isNull, isNotNull, sql, desc } from "drizzle-orm";
+import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable } from "@workspace/db";
+import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, type STJob, type STInvoice } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
@@ -61,6 +61,59 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
   await db.update(integrationSyncLogsTable)
     .set({ status, recordsProcessed, completedAt: new Date(), errorMessage: errorMessage || null })
     .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+export async function matchJobsToLeads(tenantId: number): Promise<{ matched: number }> {
+  const unmatchedJobs = await db.select({
+    id: jobsTable.id,
+    customerPhone: jobsTable.customerPhone,
+    customerEmail: jobsTable.customerEmail,
+  }).from(jobsTable).where(
+    and(
+      eq(jobsTable.tenantId, tenantId),
+      isNull(jobsTable.leadId),
+      or(isNotNull(jobsTable.customerPhone), isNotNull(jobsTable.customerEmail)),
+    ),
+  );
+
+  if (unmatchedJobs.length === 0) return { matched: 0 };
+
+  let matched = 0;
+  for (const job of unmatchedJobs) {
+    const matchConditions: SQL[] = [eq(leadsTable.tenantId, tenantId)];
+
+    const orClauses: SQL[] = [];
+    if (job.customerPhone) {
+      orClauses.push(
+        sql`${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${job.customerPhone}`,
+      );
+    }
+    if (job.customerEmail) {
+      orClauses.push(
+        sql`${leadsTable.email} IS NOT NULL AND ${leadsTable.email} != '' AND LOWER(${leadsTable.email}) = LOWER(${job.customerEmail})`,
+      );
+    }
+
+    if (orClauses.length === 0) continue;
+
+    matchConditions.push(or(...orClauses)!);
+
+    const [lead] = await db.select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(and(...matchConditions))
+      .orderBy(desc(leadsTable.createdAt))
+      .limit(1);
+
+    if (lead) {
+      await db.update(jobsTable)
+        .set({ leadId: lead.id, updatedAt: new Date() })
+        .where(eq(jobsTable.id, job.id));
+      matched++;
+    }
+  }
+
+  console.log(`[LeadMatch] Linked ${matched}/${unmatchedJobs.length} jobs to leads for tenant ${tenantId}`);
+  return { matched };
 }
 
 export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: number; error?: string }> {
@@ -150,21 +203,35 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId}`);
 
-    Promise.all([
-      enrichCustomerContacts(tenantId, stConfig),
-      enrichJobAddresses(tenantId, stConfig),
-    ]).catch((err) => {
-      console.warn(`[Sync] Background enrichment failed for tenant ${tenantId}:`, (err as Error).message);
-    });
+    try {
+      await Promise.all([
+        enrichCustomerContacts(tenantId, stConfig),
+        enrichJobAddresses(tenantId, stConfig),
+      ]);
+    } catch (err) {
+      console.warn(`[Sync] Enrichment failed for tenant ${tenantId}:`, (err as Error).message);
+    }
 
     if (synced > 0) {
-      const reconciliationDelay = 60 * 60 * 1000;
-      setTimeout(() => {
-        console.log(`[Sync] Triggering post-sync reconciliation for tenant ${tenantId}`);
-        runReconciliation(tenantId, "scheduled").catch((err) => {
-          console.error(`[Sync] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
-        });
-      }, reconciliationDelay);
+      console.log(`[Sync] Running post-sync pipeline for tenant ${tenantId}`);
+
+      try {
+        await matchJobsToLeads(tenantId);
+      } catch (err) {
+        console.error(`[Sync] Post-sync lead matching failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+
+      try {
+        await runReconciliation(tenantId, "scheduled");
+      } catch (err) {
+        console.error(`[Sync] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+
+      try {
+        await syncServiceTitanInvoices(tenantId);
+      } catch (err) {
+        console.error(`[Sync] Post-sync invoice sync failed for tenant ${tenantId}:`, (err as Error).message);
+      }
     }
 
     return { synced };
@@ -481,7 +548,7 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
     .orderBy(desc(integrationSyncLogsTable.completedAt))
     .limit(1);
 
-  const modifiedOnOrAfter = lastSuccessfulSync?.completedAt ?? undefined;
+  const modifiedOnOrAfter = lastSuccessfulSync?.completedAt?.toISOString() ?? undefined;
 
   const syncLog = await logSync(tenantId, "service_titan", "invoices", new Date());
 

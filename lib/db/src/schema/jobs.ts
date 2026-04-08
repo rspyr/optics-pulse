@@ -2,12 +2,14 @@ import { pgTable, serial, integer, text, timestamp, real, pgEnum, boolean } from
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
+import { leadsTable } from "./leads";
 
 export const jobStatusEnum = pgEnum("job_status", ["pending", "in_progress", "completed", "cancelled"]);
 
 export const jobsTable = pgTable("jobs", {
   id: serial("id").primaryKey(),
   tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
+  leadId: integer("lead_id").references(() => leadsTable.id),
   stJobId: text("st_job_id"),
   stJobIdHash: text("st_job_id_hash"),
   stCustomerId: text("st_customer_id"),
