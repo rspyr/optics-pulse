@@ -51,25 +51,60 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     .from(integrationSyncLogsTable)
     .where(conditions)
     .orderBy(desc(integrationSyncLogsTable.createdAt))
-    .limit(50);
+    .limit(100);
+
+  const PURGE_TYPES = new Set(["st_data_purge"]);
+  const MAINTENANCE_TYPES = new Set(["st_data_purge", "oci_upload", "enhanced_conversions", "capi_upload", "attribution_writeback"]);
+
+  const syncLogs = recentLogs.filter((l) => !PURGE_TYPES.has(l.syncType));
+  const purgeLogs = recentLogs.filter((l) => PURGE_TYPES.has(l.syncType));
 
   const integrations = ["service_titan", "google_ads", "meta"];
-  const statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; latestRunAt: string | null }> = {};
+  const statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; latestRunAt: string | null; syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }> = {};
 
   for (const integ of integrations) {
-    const integLogs = recentLogs.filter((l) => l.integration === integ);
-    const latest = integLogs[0];
-    const lastSuccessful = integLogs.find((l) => l.status === "completed");
+    const integLogs = syncLogs.filter((l) => l.integration === integ);
+    const latest = integLogs.find((l) => !MAINTENANCE_TYPES.has(l.syncType));
+    const lastSuccessful = integLogs.find((l) => l.status === "completed" && !MAINTENANCE_TYPES.has(l.syncType));
+
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> = {};
+    const typeSet = new Set(integLogs.map((l) => l.syncType));
+    for (const st of typeSet) {
+      if (MAINTENANCE_TYPES.has(st)) continue;
+      const typeLogs = integLogs.filter((l) => l.syncType === st);
+      const latestOfType = typeLogs[0];
+      syncTypes[st] = {
+        lastRun: latestOfType?.completedAt?.toISOString() || null,
+        lastStatus: latestOfType?.status || "never",
+        recordsProcessed: latestOfType?.recordsProcessed || 0,
+      };
+    }
+
     statusByIntegration[integ] = {
       lastSync: lastSuccessful?.completedAt?.toISOString() || null,
       lastStatus: latest?.status || "never",
       lastRecords: latest?.recordsProcessed || 0,
-      errorCount: integLogs.filter((l) => l.status === "error").length,
+      errorCount: integLogs.filter((l) => l.status === "error" && !MAINTENANCE_TYPES.has(l.syncType)).length,
       latestRunAt: latest?.completedAt?.toISOString() || null,
+      syncTypes,
     };
   }
 
-  res.json({ statusByIntegration, recentLogs: recentLogs.slice(0, 20) });
+  const mainLogs = recentLogs
+    .filter((l) => !PURGE_TYPES.has(l.syncType))
+    .slice(0, 20);
+
+  const lastPurge = purgeLogs[0];
+
+  res.json({
+    statusByIntegration,
+    recentLogs: mainLogs,
+    purgeStatus: lastPurge ? {
+      lastRun: lastPurge.completedAt?.toISOString() || null,
+      status: lastPurge.status,
+      recordsProcessed: lastPurge.recordsProcessed,
+    } : null,
+  });
 });
 
 router.get("/integrations/tenant-config/:tenantId", requireRole("super_admin", "agency_user"), async (req, res) => {

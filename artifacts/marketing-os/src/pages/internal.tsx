@@ -25,8 +25,9 @@ export default function Internal() {
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
 
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
+    purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -323,7 +324,22 @@ export default function Internal() {
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <p>Last: {status?.lastSync ? new Date(status.lastSync).toLocaleString() : "—"}</p>
-                  <p>Records: {status?.lastRecords ?? 0}</p>
+                  {status?.syncTypes && Object.keys(status.syncTypes).length > 0 && (
+                    <div className="mt-2 space-y-1 border-t border-white/5 pt-2">
+                      {Object.entries(status.syncTypes).map(([type, info]) => (
+                        <div key={type} className="flex items-center justify-between">
+                          <span className="text-muted-foreground capitalize">{type.replace(/_/g, " ")}</span>
+                          <span className="flex items-center gap-1.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${info.lastStatus === "completed" ? "bg-emerald-400" : info.lastStatus === "error" ? "bg-red-400" : "bg-amber-400"}`} />
+                            <span>{info.recordsProcessed.toLocaleString()} records</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!status?.syncTypes || Object.keys(status.syncTypes).length === 0 ? (
+                    <p>Records: {status?.lastRecords ?? 0}</p>
+                  ) : null}
                   {(status?.errorCount ?? 0) > 0 && (
                     <p className="text-red-400">{status!.errorCount} errors in recent history</p>
                   )}
@@ -340,6 +356,20 @@ export default function Internal() {
             );
           })}
         </div>
+        {syncStatus?.purgeStatus && (
+          <div className="mt-4 p-3 bg-white/[0.02] rounded-lg border border-white/5">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <span className={`w-1.5 h-1.5 rounded-full ${syncStatus.purgeStatus.status === "completed" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                <span className="text-muted-foreground">Data Cleanup (PII purge)</span>
+              </div>
+              <span className="text-muted-foreground">
+                {syncStatus.purgeStatus.lastRun ? new Date(syncStatus.purgeStatus.lastRun).toLocaleString() : "—"}
+                {syncStatus.purgeStatus.recordsProcessed > 0 ? ` · ${syncStatus.purgeStatus.recordsProcessed} cleaned` : ""}
+              </span>
+            </div>
+          </div>
+        )}
         {syncStatus?.recentLogs && syncStatus.recentLogs.length > 0 && (
           <div className="mt-4">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Sync Activity</p>
@@ -349,9 +379,10 @@ export default function Internal() {
                   <div className="flex items-center gap-2">
                     <span className={`w-1.5 h-1.5 rounded-full ${log.status === "completed" ? "bg-emerald-400" : log.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
                     <span className="text-muted-foreground">{log.completedAt ? new Date(log.completedAt).toLocaleString() : "Running..."}</span>
-                    <Badge variant="neutral">{log.integration.replace("_", " ")}</Badge>
+                    <Badge variant="neutral">{log.integration.replace(/_/g, " ")}</Badge>
+                    <span className="text-white/30 capitalize">{log.syncType.replace(/_/g, " ")}</span>
                   </div>
-                  <span className="text-muted-foreground">{log.recordsProcessed} records</span>
+                  <span className="text-muted-foreground">{log.recordsProcessed.toLocaleString()} records</span>
                 </div>
               ))}
             </div>
