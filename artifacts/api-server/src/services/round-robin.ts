@@ -34,16 +34,18 @@ export async function assignLeadRoundRobin(
   const now = new Date();
   const pausedSchedules = await db.select().from(csrScheduleTable)
     .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.isPaused, true)));
-  const pausedUserIds = new Set(
-    pausedSchedules
-      .filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now)
-      .map(s => s.userId)
-  );
+  const activePaused = pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now);
+  const pausedUserIds = new Set(activePaused.map(s => s.userId));
 
   let rawOrder = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
   if (rawOrder.length === 0) {
-    console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs paused — falling back to full cascade order`);
-    rawOrder = config.cascadeOrder as number[];
+    const hasManagerPause = activePaused.some(s => s.pauseSource === "manager");
+    if (!hasManagerPause) {
+      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs auto/self paused — falling back to full cascade order`);
+      rawOrder = config.cascadeOrder as number[];
+    } else {
+      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs paused (includes manager pauses) — no fallback`);
+    }
   }
 
   const activeUsers = await db.select({ id: usersTable.id, name: usersTable.name })

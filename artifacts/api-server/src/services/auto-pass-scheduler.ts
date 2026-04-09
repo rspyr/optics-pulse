@@ -167,14 +167,18 @@ async function getActiveOrderForConfig(config: typeof routingConfigTable.$inferS
   const now = new Date();
   const pausedSchedules = await db.select().from(csrScheduleTable)
     .where(and(eq(csrScheduleTable.tenantId, config.tenantId), eq(csrScheduleTable.isPaused, true)));
-  const pausedIds = new Set(
-    pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now).map(s => s.userId)
-  );
+  const activePaused = pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now);
+  const pausedIds = new Set(activePaused.map(s => s.userId));
 
   let unpausedOrder = cascadeOrder.filter(id => !pausedIds.has(id));
   if (unpausedOrder.length === 0) {
-    console.log(`[auto-pass] Tenant ${config.tenantId}: All CSRs paused — falling back to full cascade order`);
-    unpausedOrder = [...cascadeOrder];
+    const hasManagerPause = activePaused.some(s => s.pauseSource === "manager");
+    if (!hasManagerPause) {
+      console.log(`[auto-pass] Tenant ${config.tenantId}: All CSRs auto/self paused — falling back to full cascade order`);
+      unpausedOrder = [...cascadeOrder];
+    } else {
+      console.log(`[auto-pass] Tenant ${config.tenantId}: All CSRs paused (includes manager pauses) — no fallback`);
+    }
   }
 
   const activeUsers = await db.select({ id: usersTable.id, name: usersTable.name })
