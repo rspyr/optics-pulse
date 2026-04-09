@@ -391,12 +391,10 @@ function useSocketIO(tenantId: number | null, isAgency: boolean, onReconnect?: (
   }, []);
 
   useEffect(() => {
-    let hasConnectedOnce = false;
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
     socket.on("connect", () => {
       console.log("[Pulse] Socket.IO connected:", socket.id);
       setTimeout(() => { if (onReconnectRef.current) onReconnectRef.current(); }, 500);
-      hasConnectedOnce = true;
     });
     socket.on("new-lead", (lead: LeadData) => {
       if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
