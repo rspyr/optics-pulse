@@ -63,11 +63,23 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         src.buffer = buf;
         src.connect(ctx.destination);
         src.start(0);
-        audioUnlockedRef.current = true;
-        console.log("[Notification] Audio context unlocked by user gesture");
         ctx.close().catch((err) => console.warn("[Notification] AudioContext close error:", err));
       } catch (err) {
-        console.warn("[Notification] Audio unlock failed:", err);
+        console.warn("[Notification] WebAudio unlock failed:", err);
+      }
+      const audio = audioRef.current;
+      if (audio) {
+        audio.muted = true;
+        audio.play().then(() => {
+          audio.pause();
+          audio.muted = false;
+          audio.currentTime = 0;
+          audioUnlockedRef.current = true;
+          console.log("[Notification] Audio context unlocked by user gesture");
+        }).catch((err) => {
+          audio.muted = false;
+          console.warn("[Notification] HTMLAudio unlock failed:", err);
+        });
       }
     };
     document.addEventListener("click", unlock, { once: false, capture: true });
