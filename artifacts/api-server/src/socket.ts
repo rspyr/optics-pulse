@@ -1,6 +1,6 @@
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import type { Server as HTTPServer } from "http";
-import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable, userLoginSessionsTable } from "@workspace/db";
+import { db, leadsTable, tenantsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable, userLoginSessionsTable, csrScheduleTable } from "@workspace/db";
 import { eq, and, count, sql, avg, inArray, gte, ne, isNull } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "./routes/sales-manager";
 import { assignLeadRoundRobin } from "./services/round-robin";
@@ -15,6 +15,9 @@ const DEMO_LEAD_TYPES_FALLBACK = ["Fit Funnel", "Quiz", "Pop-up", "Direct"];
 let cachedFunnelTypes: Record<number, { name: string; id: number }[]> = {};
 
 const activeSocketsBySessionKey: Record<string, number> = {};
+const activeSocketsByUserId: Record<number, number> = {};
+const autoPauseTimers: Record<number, ReturnType<typeof setTimeout>> = {};
+const AUTO_PAUSE_GRACE_MS = 30_000;
 
 function randomFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -92,6 +95,30 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
 
     if (role === "client_user" && sessionKey) {
       activeSocketsBySessionKey[sessionKey] = (activeSocketsBySessionKey[sessionKey] ?? 0) + 1;
+      const uid = session.userId!;
+      activeSocketsByUserId[uid] = (activeSocketsByUserId[uid] ?? 0) + 1;
+
+      if (autoPauseTimers[uid]) {
+        clearTimeout(autoPauseTimers[uid]);
+        delete autoPauseTimers[uid];
+        console.log(`[Socket.IO] Cancelled auto-pause timer for user ${uid}`);
+      }
+
+      if (session.tenantId) {
+        db.select().from(csrScheduleTable)
+          .where(and(eq(csrScheduleTable.tenantId, session.tenantId), eq(csrScheduleTable.userId, uid)))
+          .limit(1)
+          .then(async (rows) => {
+            if (rows.length > 0 && rows[0].isPaused && (rows[0].pauseSource === "auto" || rows[0].pauseSource === "self")) {
+              await db.update(csrScheduleTable)
+                .set({ isPaused: false, pauseSource: "manager", pauseStart: null, pauseEnd: null, updatedAt: new Date() })
+                .where(eq(csrScheduleTable.id, rows[0].id));
+              console.log(`[Socket.IO] Auto-unpaused user ${uid} (was ${rows[0].pauseSource}-paused)`);
+            }
+          })
+          .catch((err) => console.error("[Socket.IO] Failed to auto-unpause on connect:", err));
+      }
+
       db.select({ id: userLoginSessionsTable.id })
         .from(userLoginSessionsTable)
         .where(and(
@@ -102,7 +129,7 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
         .then(async (rows) => {
           if (rows.length === 0) {
             await db.insert(userLoginSessionsTable).values({
-              userId: session.userId!,
+              userId: uid,
               tenantId: session.tenantId ?? null,
               sessionKey,
               loginAt: new Date(),
@@ -148,7 +175,10 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     socket.on("disconnect", () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
       if (session?.userId && role === "client_user" && sessionKey) {
+        const uid = session.userId;
         activeSocketsBySessionKey[sessionKey] = Math.max(0, (activeSocketsBySessionKey[sessionKey] ?? 1) - 1);
+        activeSocketsByUserId[uid] = Math.max(0, (activeSocketsByUserId[uid] ?? 1) - 1);
+
         if (activeSocketsBySessionKey[sessionKey] === 0) {
           delete activeSocketsBySessionKey[sessionKey];
           db.update(userLoginSessionsTable)
@@ -159,6 +189,41 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
             ))
             .then(() => {})
             .catch((err) => console.error("[Socket.IO] Failed to close login session on disconnect:", err));
+        }
+
+        if (activeSocketsByUserId[uid] === 0) {
+          delete activeSocketsByUserId[uid];
+          if (session.tenantId) {
+            const tenantId = session.tenantId;
+            console.log(`[Socket.IO] Starting ${AUTO_PAUSE_GRACE_MS}ms auto-pause timer for user ${uid}`);
+            autoPauseTimers[uid] = setTimeout(() => {
+              delete autoPauseTimers[uid];
+              db.select().from(csrScheduleTable)
+                .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.userId, uid)))
+                .limit(1)
+                .then(async (rows) => {
+                  if (rows.length > 0) {
+                    if (rows[0].pauseSource === "manager" && rows[0].isPaused) {
+                      console.log(`[Socket.IO] User ${uid} already manager-paused, skipping auto-pause`);
+                      return;
+                    }
+                    await db.update(csrScheduleTable)
+                      .set({ isPaused: true, pauseSource: "auto", pauseStart: new Date(), pauseEnd: null, updatedAt: new Date() })
+                      .where(eq(csrScheduleTable.id, rows[0].id));
+                  } else {
+                    await db.insert(csrScheduleTable).values({
+                      tenantId,
+                      userId: uid,
+                      isPaused: true,
+                      pauseSource: "auto",
+                      pauseStart: new Date(),
+                    });
+                  }
+                  console.log(`[Socket.IO] Auto-paused user ${uid} after grace period`);
+                })
+                .catch((err) => console.error("[Socket.IO] Failed to auto-pause on disconnect:", err));
+            }, AUTO_PAUSE_GRACE_MS);
+          }
         }
       }
     });

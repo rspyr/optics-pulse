@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, varchar, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { usersTable } from "./users";
 import { funnelTypesTable } from "./funnel-types";
@@ -24,6 +24,7 @@ export const csrScheduleTable = pgTable("csr_schedule", {
   tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id),
   userId: integer("user_id").notNull().references(() => usersTable.id),
   isPaused: boolean("is_paused").notNull().default(false),
+  pauseSource: varchar("pause_source", { length: 20 }).$type<"manager" | "self" | "auto">().notNull().default("manager"),
   pauseStart: timestamp("pause_start"),
   pauseEnd: timestamp("pause_end"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

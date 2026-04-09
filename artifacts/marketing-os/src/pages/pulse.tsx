@@ -15,7 +15,8 @@ import {
   Volume2, DollarSign, Loader2, CheckCircle2, XCircle,
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
-  Pencil, Timer, Send, ArrowDown, ExternalLink, Search
+  Pencil, Timer, Send, ArrowDown, ExternalLink, Search,
+  Pause, Play
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
@@ -373,12 +374,14 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
   return { data, loading, refetch: fetchArchive };
 }
 
-function useSocketIO(tenantId: number | null, isAgency: boolean) {
+function useSocketIO(tenantId: number | null, isAgency: boolean, onReconnect?: () => void) {
   const [latestLead, setLatestLead] = useState<LeadData | null>(null);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const tenantIdRef = useRef(tenantId);
+  const onReconnectRef = useRef(onReconnect);
+  useEffect(() => { onReconnectRef.current = onReconnect; }, [onReconnect]);
 
   useEffect(() => { tenantIdRef.current = tenantId; }, [tenantId]);
   useEffect(() => {
@@ -388,8 +391,15 @@ function useSocketIO(tenantId: number | null, isAgency: boolean) {
   }, []);
 
   useEffect(() => {
+    let hasConnectedOnce = false;
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
-    socket.on("connect", () => console.log("[Pulse] Socket.IO connected:", socket.id));
+    socket.on("connect", () => {
+      console.log("[Pulse] Socket.IO connected:", socket.id);
+      if (hasConnectedOnce && onReconnectRef.current) {
+        onReconnectRef.current();
+      }
+      hasConnectedOnce = true;
+    });
     socket.on("new-lead", (lead: LeadData) => {
       if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
       setLatestLead(lead);
@@ -2451,9 +2461,43 @@ export default function Leads() {
   }, []);
   const tfLabel = getTimeframeLabel(hudTimeframe);
 
+  const [myPauseState, setMyPauseState] = useState<{ isPaused: boolean; pauseSource: string }>({ isPaused: false, pauseSource: "manager" });
+  const [pauseToggling, setPauseToggling] = useState(false);
+
+  const fetchMyPause = useCallback(() => {
+    if (!effectiveTenantId) return;
+    fetch(`${API_BASE}/leads-hub/my-pause?tenantId=${effectiveTenantId}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setMyPauseState(d); })
+      .catch(() => {});
+  }, [effectiveTenantId]);
+
+  useEffect(() => { fetchMyPause(); }, [fetchMyPause]);
+
+  const toggleMyPause = useCallback(async () => {
+    if (pauseToggling) return;
+    setPauseToggling(true);
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/my-pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ isPaused: !myPauseState.isPaused }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMyPauseState(data);
+      }
+    } catch (e) {
+      console.error("[Pulse] Failed to toggle pause:", e);
+    } finally {
+      setPauseToggling(false);
+    }
+  }, [myPauseState.isPaused, pauseToggling]);
+
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency, fetchMyPause);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2465,6 +2509,7 @@ export default function Leads() {
       prevTenantRef.current = effectiveTenantId;
     }
   }, [effectiveTenantId, clearSearch]);
+
   const [activeTab, setActiveTab] = useState<QueueTab>("new");
   const [selectedLead, setSelectedLead] = useState<LeadData | null>(null);
   const deepLinkHandled = useRef(false);
@@ -2695,6 +2740,23 @@ export default function Leads() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {isClientUser && (
+            <button
+              onClick={toggleMyPause}
+              disabled={pauseToggling || (myPauseState.isPaused && myPauseState.pauseSource === "manager")}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2 rounded-lg border font-semibold text-sm transition-all duration-200",
+                myPauseState.isPaused
+                  ? "bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                  : "bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25",
+                (pauseToggling || (myPauseState.isPaused && myPauseState.pauseSource === "manager")) && "opacity-50 cursor-not-allowed"
+              )}
+              title={myPauseState.isPaused ? (myPauseState.pauseSource === "manager" ? "Paused by manager" : "Click to resume leads") : "Click to pause leads"}
+            >
+              {myPauseState.isPaused ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {myPauseState.isPaused ? "PAUSED" : "ACTIVE"}
+            </button>
+          )}
           <button
             onClick={() => { refetch(); refetchStats(); }}
             className="p-2 rounded-lg border border-white/10 text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"

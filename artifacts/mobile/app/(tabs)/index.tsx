@@ -18,6 +18,7 @@ import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { useCsrFilter } from "@/contexts/CsrFilterContext";
+import { usePauseState } from "@/hooks/usePauseState";
 import { StatCard } from "@/components/StatCard";
 
 interface HudStats {
@@ -83,6 +84,8 @@ export default function HudScreen() {
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { isPaused, toggling: pauseToggling, toggle: togglePause, isManagerPaused } = usePauseState();
+  const isCsr = user?.role === "client_user";
   const [stats, setStats] = useState<HudStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [timeframe, setTimeframe] = useState<HudTimeframe>("today");
@@ -196,6 +199,26 @@ export default function HudScreen() {
           </View>
         </View>
         <View style={styles.headerRight}>
+          {isCsr && (
+            <TouchableOpacity
+              onPress={() => { togglePause(); if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+              disabled={pauseToggling || isManagerPaused}
+              activeOpacity={0.7}
+              style={[
+                styles.pauseBtn,
+                {
+                  backgroundColor: isPaused ? "#F59E0B20" : "#10B98120",
+                  borderColor: isPaused ? "#F59E0B40" : "#10B98140",
+                  opacity: pauseToggling || isManagerPaused ? 0.5 : 1,
+                },
+              ]}
+            >
+              <Feather name={isPaused ? "pause" : "play"} size={12} color={isPaused ? "#F59E0B" : "#10B981"} />
+              <Text style={[styles.pauseBtnText, { color: isPaused ? "#F59E0B" : "#10B981" }]}>
+                {isPaused ? "PAUSED" : "ACTIVE"}
+              </Text>
+            </TouchableOpacity>
+          )}
           <View style={styles.liveIndicator}>
             <View style={[styles.liveDot, { backgroundColor: connected ? colors.emerald : colors.red }]} />
             <Text style={[styles.liveText, { color: connected ? colors.emerald : colors.red }]}>
@@ -387,6 +410,8 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 13, fontFamily: "Inter_400Regular" },
   userName: { fontSize: 22, fontFamily: "Inter_700Bold" },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
+  pauseBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
+  pauseBtnText: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
   liveIndicator: { flexDirection: "row", alignItems: "center", gap: 5 },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
   liveText: { fontSize: 11, fontFamily: "Inter_700Bold", letterSpacing: 1 },

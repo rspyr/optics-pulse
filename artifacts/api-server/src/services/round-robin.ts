@@ -40,9 +40,10 @@ export async function assignLeadRoundRobin(
       .map(s => s.userId)
   );
 
-  const rawOrder = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
+  let rawOrder = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
   if (rawOrder.length === 0) {
-    return { assignedCsrId: null, csrName: null, reason: "All CSRs are paused" };
+    console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs paused — falling back to full cascade order`);
+    rawOrder = config.cascadeOrder as number[];
   }
 
   const activeUsers = await db.select({ id: usersTable.id, name: usersTable.name })

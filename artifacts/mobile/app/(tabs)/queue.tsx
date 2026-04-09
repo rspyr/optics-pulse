@@ -24,6 +24,7 @@ import { useTenant } from "@/contexts/TenantContext";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
 import { useCsrFilter } from "@/contexts/CsrFilterContext";
+import { usePauseState } from "@/hooks/usePauseState";
 import { LeadCard } from "@/components/LeadCard";
 import { EditableSourcePicker } from "@/components/EditableSourcePicker";
 
@@ -83,6 +84,8 @@ export default function QueueScreen() {
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { isPaused, toggling: pauseToggling, toggle: togglePause, isManagerPaused } = usePauseState();
+  const isCsr = user?.role === "client_user";
   const [activeTab, setActiveTab] = useState<Tab>("new");
   const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], archive: [], total: 0 });
   const [loading, setLoading] = useState(true);
@@ -337,9 +340,33 @@ export default function QueueScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.headerArea, { paddingTop: isWeb ? 67 + 12 : insets.top + 12 }]}>
-        <Text style={[styles.title, { color: colors.foreground }]}>Lead Queue</Text>
-        <View style={[styles.totalBadge, { backgroundColor: colors.primary + "20" }]}>
-          <Text style={[styles.totalText, { color: colors.primary }]}>{queue.total} active</Text>
+        <View style={styles.headerTopRow}>
+          <View style={styles.headerTitleGroup}>
+            <Text style={[styles.title, { color: colors.foreground }]}>Lead Queue</Text>
+            <View style={[styles.totalBadge, { backgroundColor: colors.primary + "20" }]}>
+              <Text style={[styles.totalText, { color: colors.primary }]}>{queue.total} active</Text>
+            </View>
+          </View>
+          {isCsr && (
+            <TouchableOpacity
+              onPress={() => { togglePause(); if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+              disabled={pauseToggling || isManagerPaused}
+              activeOpacity={0.7}
+              style={[
+                styles.pauseButton,
+                {
+                  backgroundColor: isPaused ? "#F59E0B20" : "#10B98120",
+                  borderColor: isPaused ? "#F59E0B40" : "#10B98140",
+                  opacity: pauseToggling || isManagerPaused ? 0.5 : 1,
+                },
+              ]}
+            >
+              <Feather name={isPaused ? "pause" : "play"} size={14} color={isPaused ? "#F59E0B" : "#10B981"} />
+              <Text style={[styles.pauseButtonText, { color: isPaused ? "#F59E0B" : "#10B981" }]}>
+                {isPaused ? "PAUSED" : "ACTIVE"}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -669,10 +696,14 @@ export default function QueueScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  headerArea: { paddingHorizontal: 16, paddingBottom: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerArea: { paddingHorizontal: 16, paddingBottom: 12 },
+  headerTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerTitleGroup: { flexDirection: "row", alignItems: "center", gap: 10 },
   title: { fontSize: 22, fontFamily: "Inter_700Bold" },
   totalBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   totalText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  pauseButton: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
+  pauseButtonText: { fontSize: 12, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
   csrSelector: { marginHorizontal: 16, marginBottom: 8, borderRadius: 10, borderWidth: 1, padding: 12, gap: 8 },
   csrHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
   csrLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },

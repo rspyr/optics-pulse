@@ -1060,7 +1060,10 @@ router.put("/leads-hub/csr-schedule/:userId", async (req, res) => {
 
   if (existing.length > 0) {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (isPaused !== undefined) updates.isPaused = isPaused;
+    if (isPaused !== undefined) {
+      updates.isPaused = isPaused;
+      updates.pauseSource = "manager";
+    }
     if (pauseStart !== undefined) updates.pauseStart = pauseStart ? new Date(pauseStart) : null;
     if (pauseEnd !== undefined) updates.pauseEnd = pauseEnd ? new Date(pauseEnd) : null;
 
@@ -1074,10 +1077,61 @@ router.put("/leads-hub/csr-schedule/:userId", async (req, res) => {
       tenantId,
       userId: targetUserId,
       isPaused: isPaused || false,
+      pauseSource: "manager",
       pauseStart: pauseStart ? new Date(pauseStart) : null,
       pauseEnd: pauseEnd ? new Date(pauseEnd) : null,
     }).returning();
     res.json(created);
+  }
+});
+
+router.get("/leads-hub/my-pause", async (req, res) => {
+  const userId = (req.session as any)?.userId;
+  const role = (req.session as any)?.role;
+  const tenantId = resolveTenantId(req);
+  if (!userId || !tenantId) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (role !== "client_user") { res.status(403).json({ error: "Only CSRs can access pause state" }); return; }
+
+  const [schedule] = await db.select().from(csrScheduleTable)
+    .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.userId, userId)));
+
+  const isPaused = schedule?.isPaused || false;
+  const pauseSource = schedule?.pauseSource || "manager";
+  res.json({ isPaused, pauseSource });
+});
+
+router.post("/leads-hub/my-pause", async (req, res) => {
+  const userId = (req.session as any)?.userId;
+  const role = (req.session as any)?.role;
+  const tenantId = resolveTenantId(req);
+  if (!userId || !tenantId) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (role !== "client_user") { res.status(403).json({ error: "Only CSRs can toggle pause" }); return; }
+
+  const { isPaused } = req.body;
+  if (typeof isPaused !== "boolean") { res.status(400).json({ error: "isPaused (boolean) is required" }); return; }
+
+  const [existing] = await db.select().from(csrScheduleTable)
+    .where(and(eq(csrScheduleTable.tenantId, tenantId), eq(csrScheduleTable.userId, userId)));
+
+  if (existing) {
+    if (existing.pauseSource === "manager" && existing.isPaused) {
+      res.status(409).json({ error: "Your leads are paused by a manager. Contact your manager to resume.", isPaused: true, pauseSource: "manager" });
+      return;
+    }
+    const [updated] = await db.update(csrScheduleTable)
+      .set({ isPaused, pauseSource: isPaused ? "self" : "manager", pauseStart: isPaused ? new Date() : null, pauseEnd: null, updatedAt: new Date() })
+      .where(eq(csrScheduleTable.id, existing.id))
+      .returning();
+    res.json({ isPaused: updated.isPaused, pauseSource: updated.pauseSource });
+  } else {
+    const [created] = await db.insert(csrScheduleTable).values({
+      tenantId,
+      userId,
+      isPaused,
+      pauseSource: isPaused ? "self" : "manager",
+      pauseStart: isPaused ? new Date() : null,
+    }).returning();
+    res.json({ isPaused: created.isPaused, pauseSource: created.pauseSource });
   }
 });
 
