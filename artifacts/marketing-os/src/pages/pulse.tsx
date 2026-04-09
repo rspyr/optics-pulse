@@ -376,7 +376,7 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
 }
 
 function usePulseSocketIO(onReconnectCb?: () => void) {
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect } = useLeadNotification();
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage } = useLeadNotification();
   const onReconnectCbRef = useRef(onReconnectCb);
   useEffect(() => { onReconnectCbRef.current = onReconnectCb; }, [onReconnectCb]);
 
@@ -386,7 +386,7 @@ function usePulseSocketIO(onReconnectCb?: () => void) {
     });
   }, [onReconnect]);
 
-  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled };
+  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, onPodiumMessage };
 }
 
 function formatElapsed(ms: number): string {
@@ -855,6 +855,15 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   }, [leadId, tenantId]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const { onPodiumMessage } = useLeadNotification();
+  useEffect(() => {
+    return onPodiumMessage((msg) => {
+      if (msg.leadId === leadId) {
+        fetchHistory();
+      }
+    });
+  }, [leadId, fetchHistory, onPodiumMessage]);
 
   const startEdit = (entry: HistoryEntry) => {
     setEditingId(entry.id);
@@ -2487,7 +2496,7 @@ export default function Leads() {
 
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = usePulseSocketIO(fetchMyPause);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification } = usePulseSocketIO(fetchMyPause);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2522,6 +2531,8 @@ export default function Leads() {
 
   const [notificationLead, setNotificationLead] = useState<LeadData | null>(null);
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [podiumNotif, setPodiumNotif] = useState<{ id?: number; leadId?: number; body?: string; channelType?: string; senderName?: string; leadName?: string } | null>(null);
+  const podiumNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [spiffEvent, setSpiffEvent] = useState<{ id: number; amount: number } | null>(null);
   const spiffIdRef = useRef(0);
   const [callbackNotification, setCallbackNotification] = useState<LeadData | null>(null);
@@ -2544,6 +2555,17 @@ export default function Leads() {
       refetchStats();
     }
   }, [latestLead, refetch, refetchStats, clearLatestLead]);
+
+  useEffect(() => {
+    if (latestPodiumNotification) {
+      setPodiumNotif(latestPodiumNotification);
+      if (podiumNotifTimerRef.current) clearTimeout(podiumNotifTimerRef.current);
+      podiumNotifTimerRef.current = setTimeout(() => {
+        setPodiumNotif(null);
+        clearPodiumNotification();
+      }, 15000);
+    }
+  }, [latestPodiumNotification, clearPodiumNotification]);
 
   useEffect(() => {
     if (leadUpdatedSignal > 0) { refetch(); refetchStats(); }
@@ -2587,6 +2609,7 @@ export default function Leads() {
   useEffect(() => {
     return () => {
       if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+      if (podiumNotifTimerRef.current) clearTimeout(podiumNotifTimerRef.current);
     };
   }, []);
 
@@ -2602,6 +2625,30 @@ export default function Leads() {
     setSelectedLead(notificationLead);
     dismissNotification();
   }, [notificationLead, dismissNotification]);
+
+  const dismissPodiumNotif = useCallback(() => {
+    if (podiumNotifTimerRef.current) clearTimeout(podiumNotifTimerRef.current);
+    setPodiumNotif(null);
+    clearPodiumNotification();
+  }, [clearPodiumNotification]);
+
+  const handlePodiumNotifClick = useCallback(async () => {
+    if (!podiumNotif?.leadId) { dismissPodiumNotif(); return; }
+    const allLeads = [...queueData.newLeads, ...queueData.callbacks, ...queueData.reengagement, ...queueData.oldLeads];
+    const lead = allLeads.find((l: LeadData) => l.id === podiumNotif.leadId);
+    if (lead) {
+      setSelectedLead(lead);
+    } else {
+      try {
+        const res = await fetch(`${API_BASE}/leads/${podiumNotif.leadId}?tenantId=${effectiveTenantId}`, { credentials: "include" });
+        if (res.ok) {
+          const fetchedLead = await res.json();
+          if (fetchedLead?.id) setSelectedLead(fetchedLead as LeadData);
+        }
+      } catch {}
+    }
+    dismissPodiumNotif();
+  }, [podiumNotif, queueData, dismissPodiumNotif, effectiveTenantId]);
 
   const tabCounts: Record<QueueTab, number> = {
     new: queueData.newLeads.length,
@@ -2713,6 +2760,52 @@ export default function Leads() {
                   )}
                   {callbackNotification.phone && <span className="font-mono text-[11px] text-white/40">{formatPhone(callbackNotification.phone)}</span>}
                 </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {podiumNotif && (
+          <motion.div
+            key={`podium-notif-${podiumNotif.id}`}
+            initial={{ x: 400, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 400, opacity: 0 }}
+            transition={{ type: "spring", damping: 20, stiffness: 300 }}
+            className={cn("fixed right-6 z-50 w-80", notificationLead && callbackNotification ? "top-[240px]" : notificationLead || callbackNotification ? "top-[120px]" : "top-6")}
+          >
+            <div
+              onClick={handlePodiumNotifClick}
+              className="relative overflow-hidden rounded-xl border border-blue-500/40 bg-gradient-to-br from-blue-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(59,130,246,0.25)] backdrop-blur-xl cursor-pointer hover:border-blue-500/60 transition-colors"
+            >
+              <div className="relative p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-5 w-5">
+                      <motion.span className="absolute inline-flex h-full w-full rounded-full bg-blue-500" animate={{ scale: [1, 1.8, 1], opacity: [0.75, 0, 0.75] }} transition={{ duration: 1.2, repeat: Infinity }} />
+                      <span className="relative inline-flex rounded-full h-5 w-5 bg-blue-500 items-center justify-center">
+                        {podiumNotif.channelType === "phone" || podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
+                          ? <Phone className="w-3 h-3 text-white" />
+                          : <MessageSquare className="w-3 h-3 text-white" />}
+                      </span>
+                    </span>
+                    <span className="text-sm font-display font-bold text-blue-400">
+                      {podiumNotif.channelType === "phone" || podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
+                        ? "Incoming Call"
+                        : "Inbound Text"}
+                    </span>
+                    <span className="text-[9px] text-white/20 px-1.5 py-0.5 rounded bg-white/5">Podium</span>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); dismissPodiumNotif(); }} className="text-white/40 hover:text-white/80 p-0.5 rounded hover:bg-white/10">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-white font-display text-base">{podiumNotif.leadName || podiumNotif.senderName || "Unknown Contact"}</p>
+                {podiumNotif.body && (
+                  <p className="text-xs text-white/50 mt-1 line-clamp-2">{podiumNotif.body}</p>
+                )}
+                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-blue-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 15, ease: "linear" }} />
               </div>
             </div>
           </motion.div>

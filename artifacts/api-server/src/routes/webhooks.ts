@@ -502,11 +502,41 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
       podiumCreatedAt,
     }).returning();
 
+    let leadName: string | null = null;
+    let assignedCsrId: number | null = null;
+    if (matchedLeadId) {
+      const [lead] = await db.select({ firstName: leadsTable.firstName, lastName: leadsTable.lastName, assignedCsrId: leadsTable.assignedCsrId })
+        .from(leadsTable).where(eq(leadsTable.id, matchedLeadId)).limit(1);
+      if (lead) {
+        leadName = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || null;
+        assignedCsrId = lead.assignedCsrId;
+      }
+    }
+
     const { emitPodiumMessage } = await import("../socket");
     emitPodiumMessage(matchedTenantId, {
       ...inserted,
       eventType,
+      leadName: leadName || senderName || null,
     } as unknown as Record<string, unknown>);
+
+    if (direction === "inbound" && matchedTenantId) {
+      const { sendPushToUser, sendPushToTenantUsers } = await import("../services/push-notifications");
+      const isCall = channelType === "phone" || channelType === "call" || channelType === "phone_call" || channelType === "car_wars";
+      const pushTitle = isCall ? "Incoming Call" : "Inbound Text";
+      const contactName = leadName || senderName || "Unknown Contact";
+      const pushBody = isCall
+        ? `${contactName} is calling`
+        : `${contactName}: ${messageBody.slice(0, 100) || "(no message)"}`;
+      const pushData = { leadId: matchedLeadId, type: "podium_inbound", channelType };
+      if (assignedCsrId) {
+        sendPushToUser(assignedCsrId, pushTitle, pushBody, pushData)
+          .catch(err => console.error("[Podium Webhook] Push notification error:", err));
+      } else {
+        sendPushToTenantUsers(matchedTenantId, pushTitle, pushBody, pushData)
+          .catch(err => console.error("[Podium Webhook] Push notification error:", err));
+      }
+    }
 
     console.log(`[Podium Webhook] ${eventType} — message ${messageUid} stored for tenant ${matchedTenantId}, lead ${matchedLeadId}`);
     res.json({ success: true, message: "Webhook processed" });

@@ -17,7 +17,21 @@ export interface LeadNotificationData {
   [key: string]: unknown;
 }
 
+export interface PodiumNotificationData {
+  id?: number;
+  leadId?: number;
+  tenantId?: number;
+  direction?: string;
+  body?: string;
+  channelType?: string;
+  senderName?: string;
+  leadName?: string;
+  eventType?: string;
+}
+
 type ReconnectCallback = () => void;
+
+type PodiumMessageCallback = (msg: PodiumNotificationData) => void;
 
 interface LeadNotificationContextType {
   soundEnabled: boolean;
@@ -26,6 +40,9 @@ interface LeadNotificationContextType {
   clearLatestLead: () => void;
   leadUpdatedSignal: number;
   onReconnect: (cb: ReconnectCallback) => () => void;
+  latestPodiumNotification: PodiumNotificationData | null;
+  clearPodiumNotification: () => void;
+  onPodiumMessage: (cb: PodiumMessageCallback) => () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -37,11 +54,13 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [latestLead, setLatestLead] = useState<LeadNotificationData | null>(null);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
+  const [latestPodiumNotification, setLatestPodiumNotification] = useState<PodiumNotificationData | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const soundEnabledRef = useRef(soundEnabled);
   const tenantIdRef = useRef(effectiveTenantId);
   const audioUnlockedRef = useRef(false);
   const reconnectListenersRef = useRef<Set<ReconnectCallback>>(new Set());
+  const podiumMessageListenersRef = useRef<Set<PodiumMessageCallback>>(new Set());
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
@@ -156,20 +175,36 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       setLatestLead(lead);
       playNotification(lead);
     });
+    socket.on("podium-message", (msg: PodiumNotificationData) => {
+      if (tenantIdRef.current && msg.tenantId && msg.tenantId !== tenantIdRef.current) return;
+      podiumMessageListenersRef.current.forEach(cb => {
+        try { cb(msg); } catch (e) { console.warn("[LeadNotification] Podium message callback error:", e); }
+      });
+      if (msg.direction === "inbound") {
+        setLatestPodiumNotification(msg);
+        playNotification({ firstName: msg.leadName || msg.senderName || "Unknown" });
+      }
+    });
     socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
   }, [user?.id, effectiveTenantId, isAgency, playNotification]);
 
   const clearLatestLead = useCallback(() => setLatestLead(null), []);
+  const clearPodiumNotification = useCallback(() => setLatestPodiumNotification(null), []);
 
   const registerOnReconnect = useCallback((cb: ReconnectCallback) => {
     reconnectListenersRef.current.add(cb);
     return () => { reconnectListenersRef.current.delete(cb); };
   }, []);
 
+  const registerOnPodiumMessage = useCallback((cb: PodiumMessageCallback) => {
+    podiumMessageListenersRef.current.add(cb);
+    return () => { podiumMessageListenersRef.current.delete(cb); };
+  }, []);
+
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>

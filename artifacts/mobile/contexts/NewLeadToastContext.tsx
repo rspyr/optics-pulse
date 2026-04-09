@@ -24,6 +24,16 @@ interface ToastLead {
   phone?: string;
 }
 
+interface PodiumToast {
+  id: number;
+  leadId?: number;
+  leadName?: string;
+  senderName?: string;
+  body?: string;
+  channelType?: string;
+  direction?: string;
+}
+
 interface NewLeadToastContextType {
   recordPushLeadId: (leadId: number) => void;
 }
@@ -34,6 +44,50 @@ const NewLeadToastContext = createContext<NewLeadToastContextType>({
 
 export function useNewLeadToast() {
   return useContext(NewLeadToastContext);
+}
+
+function PodiumToastBanner({ data, onPress, onDismiss }: { data: PodiumToast; onPress: () => void; onDismiss: () => void }) {
+  const slideAnim = useRef(new Animated.Value(-120)).current;
+  const progressAnim = useRef(new Animated.Value(1)).current;
+
+  const isCall = data.channelType === "phone" || data.channelType === "call" || data.channelType === "phone_call" || data.channelType === "car_wars";
+
+  useEffect(() => {
+    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 300 }).start();
+    Animated.timing(progressAnim, { toValue: 0, duration: 15000, useNativeDriver: false }).start();
+    const timer = setTimeout(onDismiss, 15000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+
+  return (
+    <Animated.View style={[styles.toastContainer, { transform: [{ translateY: slideAnim }] }]}>
+      <TouchableOpacity
+        style={[styles.card, { backgroundColor: "#1e3a5f", borderColor: "#3b82f666" }]}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
+        <View style={styles.topRow}>
+          <View style={styles.pulseWrap}>
+            <View style={[styles.pulseDot, { backgroundColor: "#3b82f6" }]} />
+          </View>
+          <Text style={[styles.toastTitle, { color: "#60a5fa" }]}>{isCall ? "Incoming Call" : "Inbound Text"}</Text>
+          <View style={styles.podiumBadge}>
+            <Text style={styles.podiumBadgeText}>Podium</Text>
+          </View>
+          <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Feather name="x" size={16} color="rgba(255,255,255,0.4)" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.toastName}>{data.leadName || data.senderName || "Unknown Contact"}</Text>
+        {data.body && !isCall ? (
+          <Text style={styles.podiumBody} numberOfLines={2}>{data.body}</Text>
+        ) : null}
+        <Animated.View style={[styles.progressBar, { width: progressWidth, backgroundColor: "rgba(59,130,246,0.6)" }]} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
 }
 
 function ToastBanner({ lead, onPress, onDismiss }: { lead: ToastLead; onPress: () => void; onDismiss: () => void }) {
@@ -83,7 +137,9 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
   const isWeb = Platform.OS === "web";
 
   const [toastLead, setToastLead] = useState<ToastLead | null>(null);
+  const [podiumToast, setPodiumToast] = useState<PodiumToast | null>(null);
   const recentToastIds = useRef(new Set<number>());
+  const recentPodiumIds = useRef(new Set<number>());
   const pushLeadIds = useRef(new Set<number>());
 
   const recordPushLeadId = (leadId: number) => {
@@ -120,8 +176,24 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
       }
     };
 
+    const handlePodiumMessage = (data: PodiumToast) => {
+      if (
+        data &&
+        data.id &&
+        data.direction === "inbound" &&
+        AppState.currentState === "active" &&
+        !recentPodiumIds.current.has(data.id)
+      ) {
+        recentPodiumIds.current.add(data.id);
+        setTimeout(() => recentPodiumIds.current.delete(data.id), 120000);
+        if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setPodiumToast(data);
+      }
+    };
+
     on("new-lead", handleNewLead);
-    return () => { off("new-lead", handleNewLead); };
+    on("podium-message", handlePodiumMessage);
+    return () => { off("new-lead", handleNewLead); off("podium-message", handlePodiumMessage); };
   }, [user?.id, on, off]);
 
   return (
@@ -137,6 +209,21 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
               router.push({ pathname: "/lead/[id]", params: { id: String(id), lead: JSON.stringify(toastLead) } });
             }}
             onDismiss={() => setToastLead(null)}
+          />
+        </View>
+      )}
+      {podiumToast && !toastLead && (
+        <View style={{ position: "absolute", top: isWeb ? 67 : insets.top + 8, left: 0, right: 0, zIndex: 9998 }}>
+          <PodiumToastBanner
+            data={podiumToast}
+            onPress={() => {
+              const leadId = podiumToast.leadId;
+              setPodiumToast(null);
+              if (leadId) {
+                router.push({ pathname: "/lead/[id]", params: { id: String(leadId) } });
+              }
+            }}
+            onDismiss={() => setPodiumToast(null)}
           />
         </View>
       )}
@@ -156,4 +243,7 @@ const styles = StyleSheet.create({
   toastSource: { fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" },
   toastPhone: { fontSize: 11, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.3)" },
   progressBar: { position: "absolute", bottom: 0, left: 0, height: 2, backgroundColor: "rgba(242,5,5,0.6)" },
+  podiumBadge: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  podiumBadgeText: { fontSize: 9, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.3)" },
+  podiumBody: { fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.5)", marginTop: 4 },
 });
