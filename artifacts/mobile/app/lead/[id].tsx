@@ -35,7 +35,7 @@ type ActionStep =
   | "dead_reason"
   | "text_done"
   | "vm_done"
-  | "appt_booked_flow"
+  | "appt_booked_spoke"
   | "appt_cancel_reason"
   | "dead_reason_custom";
 
@@ -215,7 +215,7 @@ export default function LeadDetailScreen() {
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", spokeResult: "", editCallbackDate: new Date(Date.now() + 3600000), editApptDate: new Date(Date.now() + 86400000), editApptTime: new Date(Date.now() + 86400000) });
+  const [editForm, setEditForm] = useState({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", spokeResult: "", apptBookedOutcome: "", editCallbackDate: new Date(Date.now() + 3600000), editApptDate: new Date(Date.now() + 86400000), editApptTime: new Date(Date.now() + 86400000) });
   const [showEditDatePicker, setShowEditDatePicker] = useState(false);
   const [showEditTimePicker, setShowEditTimePicker] = useState(false);
   const [showEditApptDatePicker, setShowEditApptDatePicker] = useState(false);
@@ -442,10 +442,8 @@ export default function LeadDetailScreen() {
     }
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("call");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("call_done");
     }
+    setActionStep("call_done");
   };
 
   const handleText = async () => {
@@ -460,10 +458,8 @@ export default function LeadDetailScreen() {
     }
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("text");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("text_done");
     }
+    setActionStep("text_done");
   };
 
   const handleVmDrop = async () => {
@@ -475,10 +471,8 @@ export default function LeadDetailScreen() {
     if (!claimed) return;
     if (lead?.hubStatus === "appt_booked") {
       setApptBookedChannel("voicemail_drop");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("vm_done");
     }
+    setActionStep("vm_done");
   };
 
   const handleTransfer = async () => {
@@ -562,6 +556,7 @@ export default function LeadDetailScreen() {
     const dr = entry.deadReason || "";
     const isExistingCustom = dr && !DEAD_REASONS.some(d => d.value === dr && d.value !== "custom");
     setEditCustomDeadNote(isExistingCustom ? dr : "");
+    const existingApptOutcome = entry.outcome?.startsWith("appt_") ? entry.outcome.replace("appt_", "") : "";
     setEditForm({
       actionType: entry.actionType || entry.method || "",
       notes: entry.notes || "",
@@ -570,6 +565,7 @@ export default function LeadDetailScreen() {
       vmResult: entry.vmResult || "",
       deadReason: isExistingCustom ? "custom" : dr,
       spokeResult: entry.spokeResult || "",
+      apptBookedOutcome: existingApptOutcome,
       editCallbackDate: entry.callbackAt ? new Date(entry.callbackAt) : new Date(Date.now() + 3600000),
       editApptDate: entry.appointmentDate ? new Date(entry.appointmentDate) : new Date(Date.now() + 86400000),
       editApptTime: entry.appointmentTime ? (() => { const [h, m] = entry.appointmentTime!.split(":").map(Number); const d = new Date(); d.setHours(h || 9, m || 0, 0, 0); return d; })() : (() => { const d = new Date(); d.setHours(9, 0, 0, 0); return d; })(),
@@ -594,7 +590,16 @@ export default function LeadDetailScreen() {
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
       if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
-      if (editForm.callResult === "spoke_with_customer") {
+      if (lead?.hubStatus === "appt_booked") {
+        const hasContact = editForm.callResult === "spoke_with_customer" || editForm.textResult === "yes" || editForm.vmResult === "spoke_with_customer";
+        if (hasContact && !editForm.apptBookedOutcome) {
+          Alert.alert("Missing Info", "Please select an appointment status (Confirmed, Rescheduled, or Canceled).");
+          setEditSaving(false);
+          return;
+        }
+        if (editForm.apptBookedOutcome) body.apptBookedOutcome = editForm.apptBookedOutcome;
+      }
+      if (editForm.callResult === "spoke_with_customer" && lead?.hubStatus !== "appt_booked") {
         if (!editForm.spokeResult) {
           Alert.alert("Missing Info", "Please select a spoke result (Appointment Set, Callback Requested, or Dead Lead).");
           setEditSaving(false);
@@ -926,16 +931,22 @@ export default function LeadDetailScreen() {
             </View>
           )}
 
-          {actionStep === "appt_booked_flow" && (
+          {actionStep === "appt_booked_spoke" && (
             <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.stepHeader}>
                 <Feather name="calendar" size={20} color="#8B5CF6" />
                 <Text style={[styles.stepTitle, { color: "#8B5CF6" }]}>PRE-BOOKED APPOINTMENT</Text>
               </View>
-              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>Confirm the appointment status after reaching the lead:</Text>
+              <Text style={[styles.stepSubtitle, { color: colors.mutedForeground }]}>Spoke with customer — confirm the appointment status:</Text>
               <TouchableOpacity
                 style={[styles.outcomeBtn, { backgroundColor: "#10B98115", borderColor: "#10B98125" }]}
-                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "confirmed" })}
+                onPress={() => logAction({
+                  actionType: apptBookedChannel,
+                  apptBookedOutcome: "confirmed",
+                  ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+                  ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+                  ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+                })}
                 disabled={actionLoading}
               >
                 {actionLoading ? <ActivityIndicator size="small" color="#10B981" /> : <Feather name="check-circle" size={16} color="#10B981" />}
@@ -943,7 +954,13 @@ export default function LeadDetailScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.outcomeBtn, { backgroundColor: "#F59E0B15", borderColor: "#F59E0B25" }]}
-                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "rescheduled" })}
+                onPress={() => logAction({
+                  actionType: apptBookedChannel,
+                  apptBookedOutcome: "rescheduled",
+                  ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+                  ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+                  ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+                })}
                 disabled={actionLoading}
               >
                 {actionLoading ? <ActivityIndicator size="small" color="#F59E0B" /> : <Feather name="calendar" size={16} color="#F59E0B" />}
@@ -957,8 +974,8 @@ export default function LeadDetailScreen() {
                 <Feather name="x-circle" size={16} color="#EF4444" />
                 <Text style={[styles.outcomeBtnText, { color: "#EF4444" }]}>Canceled</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setActionStep(null)}>
-                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Cancel</Text>
+              <TouchableOpacity onPress={() => setActionStep(apptBookedChannel === "call" ? "call_done" : apptBookedChannel === "text" ? "text_done" : "vm_done")}>
+                <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -976,12 +993,19 @@ export default function LeadDetailScreen() {
               />
               <TouchableOpacity
                 style={[styles.outcomeBtn, { backgroundColor: "#EF444420", borderColor: "#EF444430" }]}
-                onPress={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
+                onPress={() => logAction({
+                  actionType: apptBookedChannel,
+                  apptBookedOutcome: "canceled",
+                  cancelReason: cancelReason || "appointment_canceled",
+                  ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+                  ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+                  ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+                })}
                 disabled={actionLoading}
               >
                 {actionLoading ? <ActivityIndicator size="small" color="#EF4444" /> : <Text style={[styles.outcomeBtnText, { color: "#EF4444" }]}>Confirm Cancellation</Text>}
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setActionStep("appt_booked_flow")}>
+              <TouchableOpacity onPress={() => setActionStep("appt_booked_spoke")}>
                 <Text style={[styles.backLink, { color: colors.mutedForeground }]}>Back</Text>
               </TouchableOpacity>
             </View>
@@ -1001,7 +1025,11 @@ export default function LeadDetailScreen() {
                     style={[styles.resultGridItem, { backgroundColor: colors.secondary, borderColor: colors.border }]}
                     onPress={() => {
                       if (r.value === "spoke_with_customer") {
-                        setActionStep("spoke_result");
+                        if (lead?.hubStatus === "appt_booked") {
+                          setActionStep("appt_booked_spoke");
+                        } else {
+                          setActionStep("spoke_result");
+                        }
                       } else {
                         logAction({ actionType: "call", callResult: r.value });
                       }
@@ -1199,6 +1227,9 @@ export default function LeadDetailScreen() {
                     } else if (r.value === "dead") {
                       setDeadFromFlow("text");
                       setActionStep("dead_reason");
+                    } else if (r.value === "yes" && lead?.hubStatus === "appt_booked") {
+                      setApptBookedChannel("text");
+                      setActionStep("appt_booked_spoke");
                     } else {
                       logAction({ actionType: "text", textResult: r.value });
                     }
@@ -1227,7 +1258,12 @@ export default function LeadDetailScreen() {
                   style={[styles.resultGridItem, { backgroundColor: colors.secondary, borderColor: colors.border }]}
                   onPress={() => {
                     if (r.value === "spoke_with_customer") {
-                      setActionStep("spoke_result");
+                      if (lead?.hubStatus === "appt_booked") {
+                        setApptBookedChannel("voicemail_drop");
+                        setActionStep("appt_booked_spoke");
+                      } else {
+                        setActionStep("spoke_result");
+                      }
                     } else {
                       logAction({ actionType: "voicemail_drop", vmResult: r.value });
                     }
@@ -1405,7 +1441,7 @@ export default function LeadDetailScreen() {
                                         backgroundColor: editForm.actionType === at.value ? colors.primary + "20" : colors.secondary,
                                         borderColor: editForm.actionType === at.value ? colors.primary + "40" : colors.border,
                                       }]}
-                                      onPress={() => setEditForm(f => ({ ...f, actionType: at.value, callResult: "", textResult: "", vmResult: "", spokeResult: "", deadReason: "" }))}
+                                      onPress={() => setEditForm(f => ({ ...f, actionType: at.value, callResult: "", textResult: "", vmResult: "", spokeResult: "", deadReason: "", apptBookedOutcome: "" }))}
                                     >
                                       <Text style={{ fontSize: 12, color: editForm.actionType === at.value ? colors.primary : colors.foreground, fontFamily: "Inter_500Medium" }}>{at.label}</Text>
                                     </TouchableOpacity>
@@ -1426,9 +1462,10 @@ export default function LeadDetailScreen() {
                                             }]}
                                             onPress={() => {
                                               const m = editForm.actionType;
-                                              if (m === "call") setEditForm(f => ({ ...f, callResult: opt.value, spokeResult: opt.value !== "spoke_with_customer" ? "" : f.spokeResult, deadReason: opt.value !== "spoke_with_customer" ? "" : f.deadReason }));
-                                              else if (m === "text") setEditForm(f => ({ ...f, textResult: opt.value }));
-                                              else setEditForm(f => ({ ...f, vmResult: opt.value }));
+                                              const isContact = (m === "call" && opt.value === "spoke_with_customer") || (m === "text" && opt.value === "yes") || ((m === "voicemail" || m === "voicemail_drop") && opt.value === "spoke_with_customer");
+                                              if (m === "call") setEditForm(f => ({ ...f, callResult: opt.value, spokeResult: opt.value !== "spoke_with_customer" ? "" : f.spokeResult, deadReason: opt.value !== "spoke_with_customer" ? "" : f.deadReason, apptBookedOutcome: isContact ? f.apptBookedOutcome : "" }));
+                                              else if (m === "text") setEditForm(f => ({ ...f, textResult: opt.value, apptBookedOutcome: isContact ? f.apptBookedOutcome : "" }));
+                                              else setEditForm(f => ({ ...f, vmResult: opt.value, apptBookedOutcome: isContact ? f.apptBookedOutcome : "" }));
                                             }}
                                           >
                                             <Text style={{ fontSize: 12, color: val === opt.value ? colors.primary : colors.foreground, fontFamily: "Inter_500Medium" }}>{opt.label}</Text>
@@ -1438,7 +1475,7 @@ export default function LeadDetailScreen() {
                                     </View>
                                   </>
                                 )}
-                                {editForm.callResult === "spoke_with_customer" && (
+                                {editForm.callResult === "spoke_with_customer" && lead?.hubStatus !== "appt_booked" && (
                                   <>
                                     <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Spoke Result</Text>
                                     <View style={styles.editPickerRow}>
@@ -1457,7 +1494,30 @@ export default function LeadDetailScreen() {
                                     </View>
                                   </>
                                 )}
-                                {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "call_back" && (
+                                {lead?.hubStatus === "appt_booked" && (editForm.callResult === "spoke_with_customer" || editForm.textResult === "yes" || editForm.vmResult === "spoke_with_customer") && (
+                                  <>
+                                    <Text style={{ fontSize: 11, color: "#8B5CF6", fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Appointment Status</Text>
+                                    <View style={styles.editPickerRow}>
+                                      {[
+                                        { value: "confirmed", label: "Confirmed", color: "#10B981" },
+                                        { value: "rescheduled", label: "Rescheduled", color: "#F59E0B" },
+                                        { value: "canceled", label: "Canceled", color: "#EF4444" },
+                                      ].map(ao => (
+                                        <TouchableOpacity
+                                          key={ao.value}
+                                          style={[styles.editPickerItem, {
+                                            backgroundColor: editForm.apptBookedOutcome === ao.value ? ao.color + "20" : colors.secondary,
+                                            borderColor: editForm.apptBookedOutcome === ao.value ? ao.color + "40" : colors.border,
+                                          }]}
+                                          onPress={() => setEditForm(f => ({ ...f, apptBookedOutcome: f.apptBookedOutcome === ao.value ? "" : ao.value }))}
+                                        >
+                                          <Text style={{ fontSize: 12, color: editForm.apptBookedOutcome === ao.value ? ao.color : colors.foreground, fontFamily: "Inter_500Medium" }}>{ao.label}</Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
+                                  </>
+                                )}
+                                {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "call_back" && lead?.hubStatus !== "appt_booked" && (
                                   <>
                                     <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Callback Date & Time</Text>
                                     <TouchableOpacity
@@ -1559,7 +1619,7 @@ export default function LeadDetailScreen() {
                                     )}
                                   </>
                                 )}
-                                {((editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "dead") || editForm.textResult === "dead") && (
+                                {((editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "dead") || editForm.textResult === "dead") && lead?.hubStatus !== "appt_booked" && (
                                   <>
                                     <Text style={{ fontSize: 11, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold", marginBottom: 4, marginTop: 8 }}>Dead Reason</Text>
                                     <View style={styles.editPickerRow}>

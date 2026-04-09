@@ -370,6 +370,15 @@ router.post("/leads-hub/action", async (req, res) => {
   }
 
   const apptBookedOutcome = req.body.apptBookedOutcome as string | undefined;
+
+  if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
+    const hasContactOutcome = callResult === "spoke_with_customer" || textResult === "yes" || vmResult === "spoke_with_customer";
+    if (!hasContactOutcome) {
+      res.status(400).json({ error: "Appointment status can only be changed after speaking with the customer" });
+      return;
+    }
+  }
+
   const outcome = apptBookedOutcome ? `appt_${apptBookedOutcome}` : (callResult || textResult || vmResult || actionType);
 
   await db.insert(callAttemptsTable).values({
@@ -553,12 +562,13 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     res.status(403).json({ error: "You can only edit your own actions" }); return;
   }
 
-  const { actionType, callResult, vmResult, textResult, deadReason, notes, spokeResult, callbackAt, appointmentSet } = req.body;
+  const { actionType, callResult, vmResult, textResult, deadReason, notes, spokeResult, callbackAt, appointmentSet, apptBookedOutcome } = req.body;
 
   const validCallResults = ["no_answer", "left_voicemail", "vm_full", "vm_not_setup", "bad_number", "spoke_with_customer", "hung_up", "blocked", "out_of_service_area"];
   const validTextResults = ["yes", "not_able_to", "dead", "no_need", "reached_out"];
   const validVmResults = ["yes", "no", "bad_number", "vm_full", "vm_not_setup", "spoke_with_customer"];
   const validActionTypes = ["call", "text", "voicemail_drop", "voicemail"];
+  const validApptOutcomes = ["confirmed", "rescheduled", "canceled"];
 
   if (actionType !== undefined && !validActionTypes.includes(actionType)) {
     res.status(400).json({ error: "Invalid action type" }); return;
@@ -572,8 +582,20 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   if (vmResult !== undefined && vmResult && !validVmResults.includes(vmResult)) {
     res.status(400).json({ error: "Invalid VM result" }); return;
   }
+  if (apptBookedOutcome !== undefined && apptBookedOutcome && !validApptOutcomes.includes(apptBookedOutcome)) {
+    res.status(400).json({ error: "Invalid appointment outcome" }); return;
+  }
+  if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
+    const effectiveCallResult = callResult !== undefined ? callResult : attempt.callResult;
+    const effectiveTextResult = textResult !== undefined ? textResult : attempt.textResult;
+    const effectiveVmResult = vmResult !== undefined ? vmResult : attempt.vmResult;
+    const hasContactSignal = effectiveCallResult === "spoke_with_customer" || effectiveTextResult === "yes" || effectiveVmResult === "spoke_with_customer";
+    if (!hasContactSignal) {
+      res.status(400).json({ error: "Appointment outcome requires a contact signal (spoke with customer or yes response)" }); return;
+    }
+  }
 
-  const outcome = callResult || textResult || vmResult || actionType || attempt.outcome;
+  const outcome = apptBookedOutcome ? `appt_${apptBookedOutcome}` : (callResult || textResult || vmResult || actionType || attempt.outcome);
 
   const updateFields: Record<string, unknown> = {};
   if (actionType !== undefined) { updateFields.method = actionType; updateFields.actionType = actionType; }
@@ -587,7 +609,19 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   const [updated] = await db.update(callAttemptsTable).set(updateFields).where(eq(callAttemptsTable.id, attemptId)).returning();
 
   const leadUpdates: Record<string, unknown> = { updatedAt: new Date() };
-  if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
+  if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
+    if (apptBookedOutcome === "confirmed") {
+      leadUpdates.hubStatus = "appt_set";
+      leadUpdates.status = "booked";
+      leadUpdates.disposition = "booked";
+      leadUpdates.bookedByCsrId = userId;
+    } else if (apptBookedOutcome === "rescheduled") {
+      leadUpdates.hubStatus = "appt_booked";
+    } else if (apptBookedOutcome === "canceled") {
+      leadUpdates.hubStatus = "dead";
+      leadUpdates.deadReason = deadReason || "appointment_canceled";
+    }
+  } else if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
     leadUpdates.hubStatus = "call_back";
     leadUpdates.callbackAt = new Date(callbackAt);
     leadUpdates.status = "contacted";

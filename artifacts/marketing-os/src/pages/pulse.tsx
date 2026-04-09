@@ -839,12 +839,12 @@ interface TimelineEntry {
   [key: string]: unknown;
 }
 
-function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean }) {
+function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false, leadHubStatus }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean; leadHubStatus?: string }) {
   const [unifiedTimeline, setUnifiedTimeline] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "" });
+  const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string; apptBookedOutcome: string; spokeResult: string; callbackAt: string; appointmentDate: string; appointmentTime: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", apptBookedOutcome: "", spokeResult: "", callbackAt: "", appointmentDate: "", appointmentTime: "" });
   const [editCustomDeadNote, setEditCustomDeadNote] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [expandedCallIds, setExpandedCallIds] = useState<Set<number>>(new Set());
@@ -875,6 +875,9 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     const dr = entry.deadReason || "";
     const isExistingCustom = dr && !DEAD_REASONS.some(d => d.value === dr && d.value !== "custom");
     setEditCustomDeadNote(isExistingCustom ? dr : "");
+    const existingApptOutcome = entry.outcome?.startsWith("appt_") ? entry.outcome.replace("appt_", "") : "";
+    const defaultCb = new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+    const defaultApptDate = new Date(Date.now() + 86400000).toISOString().split("T")[0];
     setEditForm({
       actionType: entry.actionType || entry.method || "",
       notes: entry.notes || "",
@@ -882,6 +885,11 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       textResult: entry.textResult || "",
       vmResult: entry.vmResult || "",
       deadReason: isExistingCustom ? "custom" : dr,
+      apptBookedOutcome: existingApptOutcome,
+      spokeResult: entry.spokeResult || "",
+      callbackAt: entry.callbackAt ? new Date(entry.callbackAt).toISOString().slice(0, 16) : defaultCb,
+      appointmentDate: entry.appointmentDate || defaultApptDate,
+      appointmentTime: entry.appointmentTime || "09:00",
     });
   };
 
@@ -904,6 +912,43 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       if (method === "call") body.callResult = editForm.callResult || null;
       if (method === "text") body.textResult = editForm.textResult || null;
       if (method === "voicemail" || method === "voicemail_drop") body.vmResult = editForm.vmResult || null;
+      if (leadHubStatus === "appt_booked") {
+        const hasContact = editForm.callResult === "spoke_with_customer" || editForm.textResult === "yes" || editForm.vmResult === "spoke_with_customer";
+        if (hasContact && !editForm.apptBookedOutcome) {
+          alert("Please select an appointment status (Confirmed, Rescheduled, or Canceled).");
+          setEditSaving(false);
+          return;
+        }
+        if (editForm.apptBookedOutcome) body.apptBookedOutcome = editForm.apptBookedOutcome;
+      }
+      if (editForm.callResult === "spoke_with_customer" && leadHubStatus !== "appt_booked") {
+        if (!editForm.spokeResult) {
+          alert("Please select a spoke result (Appointment Set, Callback Requested, or Dead Lead).");
+          setEditSaving(false);
+          return;
+        }
+        body.spokeResult = editForm.spokeResult;
+        body.callbackAt = null;
+        body.appointmentSet = null;
+        if (editForm.spokeResult === "call_back") {
+          if (new Date(editForm.callbackAt).getTime() <= Date.now()) {
+            alert("Please select a future callback date/time.");
+            setEditSaving(false);
+            return;
+          }
+          body.callbackAt = new Date(editForm.callbackAt).toISOString();
+        } else if (editForm.spokeResult === "appointment_set") {
+          body.appointmentSet = true;
+          body.appointmentDate = editForm.appointmentDate;
+          body.appointmentTime = editForm.appointmentTime;
+        } else if (editForm.spokeResult === "dead") {
+          if (!resolvedDeadReason) {
+            alert("Please select a dead reason.");
+            setEditSaving(false);
+            return;
+          }
+        }
+      }
 
       const res = await fetch(`${API_BASE}/leads-hub/action/${entry.id}?tenantId=${tenantId}`, {
         method: "PUT",
@@ -957,7 +1002,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             </span>
             <span className="text-[10px] text-amber-400 font-medium">Editing</span>
           </div>
-          <Select value={editForm.actionType} onValueChange={v => setEditForm(f => ({ ...f, actionType: v, callResult: "", textResult: "", vmResult: "" }))}>
+          <Select value={editForm.actionType} onValueChange={v => setEditForm(f => ({ ...f, actionType: v, callResult: "", textResult: "", vmResult: "", apptBookedOutcome: "", spokeResult: "", deadReason: "" }))}>
             <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
               <SelectValue />
             </SelectTrigger>
@@ -975,9 +1020,11 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             return (
               <Select value={val || "__none__"} onValueChange={v => {
                 const actualVal = v === "__none__" ? "" : v;
-                if (m === "call") setEditForm(f => ({ ...f, callResult: actualVal }));
-                else if (m === "text") setEditForm(f => ({ ...f, textResult: actualVal }));
-                else setEditForm(f => ({ ...f, vmResult: actualVal }));
+                const isContact = (m === "call" && actualVal === "spoke_with_customer") || (m === "text" && actualVal === "yes") || ((m === "voicemail" || m === "voicemail_drop") && actualVal === "spoke_with_customer");
+                const clearSpoke = m === "call" && actualVal !== "spoke_with_customer";
+                if (m === "call") setEditForm(f => ({ ...f, callResult: actualVal, apptBookedOutcome: isContact ? f.apptBookedOutcome : "", spokeResult: clearSpoke ? "" : f.spokeResult, deadReason: clearSpoke ? "" : f.deadReason }));
+                else if (m === "text") setEditForm(f => ({ ...f, textResult: actualVal, apptBookedOutcome: isContact ? f.apptBookedOutcome : "" }));
+                else setEditForm(f => ({ ...f, vmResult: actualVal, apptBookedOutcome: isContact ? f.apptBookedOutcome : "" }));
               }}>
                 <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
                   <SelectValue />
@@ -991,14 +1038,66 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
               </Select>
             );
           })()}
-          {(editForm.callResult === "spoke_with_customer" || editForm.textResult === "dead") && (
+          {leadHubStatus === "appt_booked" && (editForm.callResult === "spoke_with_customer" || editForm.textResult === "yes" || editForm.vmResult === "spoke_with_customer") && (
+            <Select value={editForm.apptBookedOutcome || "__none__"} onValueChange={v => setEditForm(f => ({ ...f, apptBookedOutcome: v === "__none__" ? "" : v }))}>
+              <SelectTrigger className="w-full bg-purple-500/10 border border-purple-500/20 rounded px-2 py-1 text-[11px] text-purple-300 h-auto">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select appointment status...</SelectItem>
+                <SelectItem value="confirmed">Confirmed</SelectItem>
+                <SelectItem value="rescheduled">Rescheduled</SelectItem>
+                <SelectItem value="canceled">Canceled</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+          {editForm.callResult === "spoke_with_customer" && leadHubStatus !== "appt_booked" && (
+            <Select value={editForm.spokeResult || "__none__"} onValueChange={v => setEditForm(f => ({ ...f, spokeResult: v === "__none__" ? "" : v, deadReason: v !== "dead" ? "" : f.deadReason }))}>
+              <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select spoke result...</SelectItem>
+                {SPOKE_RESULTS.map(r => (
+                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "call_back" && leadHubStatus !== "appt_booked" && (
+            <input
+              type="datetime-local"
+              value={editForm.callbackAt}
+              onChange={e => setEditForm(f => ({ ...f, callbackAt: e.target.value }))}
+              min={new Date().toISOString().slice(0, 16)}
+              className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto"
+            />
+          )}
+          {editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "appointment_set" && leadHubStatus !== "appt_booked" && (
+            <div className="flex gap-1.5">
+              <input
+                type="date"
+                value={editForm.appointmentDate}
+                onChange={e => setEditForm(f => ({ ...f, appointmentDate: e.target.value }))}
+                min={new Date().toISOString().split("T")[0]}
+                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto"
+              />
+              <input
+                type="time"
+                value={editForm.appointmentTime}
+                onChange={e => setEditForm(f => ({ ...f, appointmentTime: e.target.value }))}
+                className="w-24 bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto"
+              />
+            </div>
+          )}
+          {((editForm.callResult === "spoke_with_customer" && editForm.spokeResult === "dead") || editForm.textResult === "dead") && leadHubStatus !== "appt_booked" && (
             <>
               <Select value={editForm.deadReason || "__none__"} onValueChange={v => { setEditForm(f => ({ ...f, deadReason: v === "__none__" ? "" : v })); if (v === "custom") setEditCustomDeadNote(""); }}>
                 <SelectTrigger className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-[11px] text-white h-auto">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">Dead reason (optional)...</SelectItem>
+                  <SelectItem value="__none__">Select dead reason...</SelectItem>
                   {DEAD_REASONS.map(r => (
                     <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                   ))}
@@ -1344,7 +1443,7 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
 function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false }: {
   lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean;
 }) {
-  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "dead_reason_custom" | "text_done" | "text_result" | "vm_done" | "appt_booked_flow" | "appt_cancel_reason">(null);
+  const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "dead_reason_custom" | "text_done" | "text_result" | "vm_done" | "appt_booked_spoke" | "appt_cancel_reason">(null);
   const [customDeadNote, setCustomDeadNote] = useState("");
   const [selectedCallResult, setSelectedCallResult] = useState<string | null>(null);
   const [deadFromFlow, setDeadFromFlow] = useState<"call" | "text">("call");
@@ -1441,10 +1540,8 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
     if (lead.phone && commConfig.callPlatform !== "none") window.open(`tel:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
     if (lead.hubStatus === "appt_booked") {
       setApptBookedChannel("call");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("call_done");
     }
+    setActionStep("call_done");
   };
 
   const handleText = () => {
@@ -1452,7 +1549,6 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       setShowChatPanel(true);
       if (lead.hubStatus === "appt_booked") {
         setApptBookedChannel("text");
-        setActionStep("appt_booked_flow");
       }
       return;
     }
@@ -1461,19 +1557,15 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
     }
     if (lead.hubStatus === "appt_booked") {
       setApptBookedChannel("text");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("text_done");
     }
+    setActionStep("text_done");
   };
 
   const handleVmDrop = () => {
     if (lead.hubStatus === "appt_booked") {
       setApptBookedChannel("voicemail_drop");
-      setActionStep("appt_booked_flow");
-    } else {
-      setActionStep("vm_done");
     }
+    setActionStep("vm_done");
   };
 
   const confirmVmDrop = () => {
@@ -1600,16 +1692,22 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         )}
       </PremiumCard>
 
-      {lead.hubStatus === "appt_booked" && actionStep === "appt_booked_flow" && (
+      {lead.hubStatus === "appt_booked" && actionStep === "appt_booked_spoke" && (
         <PremiumCard className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Calendar className="w-5 h-5 text-purple-400" />
             <span className="text-sm font-medium text-purple-400">PRE-BOOKED APPOINTMENT</span>
           </div>
-          <p className="text-sm text-white/60 mb-4">Confirm the appointment status after reaching the lead:</p>
+          <p className="text-sm text-white/60 mb-4">Spoke with customer — confirm the appointment status:</p>
           <div className="space-y-2">
             <button
-              onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "confirmed" })}
+              onClick={() => logAction({
+                actionType: apptBookedChannel,
+                apptBookedOutcome: "confirmed",
+                ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+                ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+                ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+              })}
               disabled={actionLoading}
               className="w-full px-4 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 text-sm font-medium hover:bg-emerald-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
             >
@@ -1617,7 +1715,13 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               Confirmed
             </button>
             <button
-              onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "rescheduled" })}
+              onClick={() => logAction({
+                actionType: apptBookedChannel,
+                apptBookedOutcome: "rescheduled",
+                ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+                ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+                ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+              })}
               disabled={actionLoading}
               className="w-full px-4 py-2.5 rounded-lg bg-amber-500/15 border border-amber-500/25 text-amber-400 text-sm font-medium hover:bg-amber-500/25 disabled:opacity-50 transition-colors text-left flex items-center gap-2"
             >
@@ -1633,6 +1737,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               Canceled
             </button>
           </div>
+          <button onClick={() => setActionStep(apptBookedChannel === "call" ? "call_done" : apptBookedChannel === "text" ? "text_done" : "vm_done")} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
         </PremiumCard>
       )}
 
@@ -1646,13 +1751,20 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
             className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white mb-3 min-h-[80px] resize-none placeholder-white/20"
           />
           <button
-            onClick={() => logAction({ actionType: apptBookedChannel, apptBookedOutcome: "canceled", cancelReason: cancelReason || "appointment_canceled" })}
+            onClick={() => logAction({
+              actionType: apptBookedChannel,
+              apptBookedOutcome: "canceled",
+              cancelReason: cancelReason || "appointment_canceled",
+              ...(apptBookedChannel === "call" ? { callResult: "spoke_with_customer" } : {}),
+              ...(apptBookedChannel === "text" ? { textResult: "yes" } : {}),
+              ...(apptBookedChannel === "voicemail_drop" ? { vmResult: "spoke_with_customer" } : {}),
+            })}
             disabled={actionLoading}
             className="w-full px-3 py-2 rounded-lg bg-red-500/20 text-red-400 text-sm font-medium hover:bg-red-500/30 disabled:opacity-50 transition-colors"
           >
             {actionLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Confirm Cancellation"}
           </button>
-          <button onClick={() => setActionStep(null)} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
+          <button onClick={() => setActionStep("appt_booked_spoke")} className="mt-2 text-[10px] text-white/30 hover:text-white/50">Back</button>
         </PremiumCard>
       )}
 
@@ -1778,7 +1890,11 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                     onClick={() => {
                       if (r.value === "spoke_with_customer") {
                         setSelectedCallResult(r.value);
-                        setActionStep("spoke_result");
+                        if (lead.hubStatus === "appt_booked") {
+                          setActionStep("appt_booked_spoke");
+                        } else {
+                          setActionStep("spoke_result");
+                        }
                       } else {
                         logAction({ actionType: "call", callResult: r.value });
                       }
@@ -2005,6 +2121,9 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                         setActionStep("dead_reason");
                       } else if (r.value === "no_need") {
                         setActionStep(null);
+                      } else if (r.value === "yes" && lead.hubStatus === "appt_booked") {
+                        setApptBookedChannel("text");
+                        setActionStep("appt_booked_spoke");
                       } else {
                         logAction({ actionType: "text", textResult: r.value });
                       }
@@ -2056,13 +2175,38 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                 </div>
               )}
 
-              <button
-                onClick={confirmVmDrop}
-                disabled={actionLoading}
-                className="w-full px-3 py-2 rounded-lg bg-orange-500/20 text-orange-400 text-sm font-medium hover:bg-orange-500/30 disabled:opacity-50 transition-colors mb-2"
-              >
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Log VM Drop"}
-              </button>
+              {lead.hubStatus === "appt_booked" ? (
+                <>
+                  <p className="text-sm text-white/60 mb-2">What happened?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {VM_RESULTS.map(r => (
+                      <button
+                        key={r.value}
+                        onClick={() => {
+                          if (r.value === "spoke_with_customer") {
+                            setApptBookedChannel("voicemail_drop");
+                            setActionStep("appt_booked_spoke");
+                          } else {
+                            logAction({ actionType: "voicemail_drop", vmResult: r.value });
+                          }
+                        }}
+                        disabled={actionLoading}
+                        className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-xs text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left"
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <button
+                  onClick={confirmVmDrop}
+                  disabled={actionLoading}
+                  className="w-full px-3 py-2 rounded-lg bg-orange-500/20 text-orange-400 text-sm font-medium hover:bg-orange-500/30 disabled:opacity-50 transition-colors mb-2"
+                >
+                  {actionLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Log VM Drop"}
+                </button>
+              )}
               <button onClick={() => setActionStep(null)} className="mt-1 text-[10px] text-white/30 hover:text-white/50">Cancel</button>
             </PremiumCard>
           </motion.div>
@@ -2117,7 +2261,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       )}
 
       <PremiumCard className="p-4">
-        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} />
+        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} />
       </PremiumCard>
     </div>
   );
