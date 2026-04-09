@@ -848,6 +848,16 @@ const migrations: Migration[] = [
       console.log("[Migration] Created notifications table with indexes");
     },
   },
+  {
+    id: "028_csr_pause_source",
+    description: "Add pause_source column to csr_schedule",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE csr_schedule ADD COLUMN IF NOT EXISTS pause_source VARCHAR(20) NOT NULL DEFAULT 'manager'
+      `);
+      console.log("[Migration] Added pause_source column to csr_schedule");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

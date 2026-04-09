@@ -1,0 +1,1 @@
+ALTER TABLE csr_schedule ADD COLUMN IF NOT EXISTS pause_source VARCHAR(20) NOT NULL DEFAULT 'manager';
