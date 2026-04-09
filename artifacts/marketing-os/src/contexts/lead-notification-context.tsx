@@ -53,6 +53,7 @@ interface LeadNotificationContextType {
   onPodiumMessage: (cb: PodiumMessageCallback) => () => void;
   latestCallbackDue: CallbackDueData | null;
   clearCallbackDue: () => void;
+  playCallbackSound: (leadName: string) => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -197,7 +198,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       }
     });
     socket.on("callback-due", (data: CallbackDueData) => {
-      if (user?.id && data.targetUserId !== user.id) return;
+      if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
       playNotification({ firstName: data.leadName });
     });
@@ -209,6 +210,9 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const clearLatestLead = useCallback(() => setLatestLead(null), []);
   const clearPodiumNotification = useCallback(() => setLatestPodiumNotification(null), []);
   const clearCallbackDue = useCallback(() => setLatestCallbackDue(null), []);
+  const playCallbackSound = useCallback((leadName: string) => {
+    playNotification({ firstName: leadName });
+  }, [playNotification]);
 
   const registerOnReconnect = useCallback((cb: ReconnectCallback) => {
     reconnectListenersRef.current.add(cb);
@@ -221,7 +225,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>

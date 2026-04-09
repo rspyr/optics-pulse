@@ -376,7 +376,7 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
 }
 
 function usePulseSocketIO(onReconnectCb?: () => void) {
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue } = useLeadNotification();
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound } = useLeadNotification();
   const onReconnectCbRef = useRef(onReconnectCb);
   useEffect(() => { onReconnectCbRef.current = onReconnectCb; }, [onReconnectCb]);
 
@@ -386,7 +386,7 @@ function usePulseSocketIO(onReconnectCb?: () => void) {
     });
   }, [onReconnect]);
 
-  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue };
+  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound };
 }
 
 function formatElapsed(ms: number): string {
@@ -2496,7 +2496,7 @@ export default function Leads() {
 
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, latestCallbackDue, clearCallbackDue } = usePulseSocketIO(fetchMyPause);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, latestCallbackDue, clearCallbackDue, playCallbackSound } = usePulseSocketIO(fetchMyPause);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2584,8 +2584,14 @@ export default function Leads() {
       const lead = dueCallbacks[0];
       notifiedCallbackKeysRef.current.add(`${effectiveTenantId}:${lead.id}:${lead.callbackAt}`);
       setCallbackNotification(lead);
+      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "Unknown";
+      playCallbackSound(name);
+      if (callbackNotifTimerRef.current) clearTimeout(callbackNotifTimerRef.current);
+      callbackNotifTimerRef.current = setTimeout(() => {
+        setCallbackNotification(null);
+      }, 30000);
     }
-  }, [queueData.callbacks, callbackNotification]);
+  }, [queueData.callbacks, callbackNotification, playCallbackSound]);
 
   useEffect(() => {
     if (!latestCallbackDue) return;
