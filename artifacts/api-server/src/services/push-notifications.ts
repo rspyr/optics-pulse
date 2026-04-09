@@ -5,6 +5,7 @@ import webpush from "web-push";
 const vapidPublic = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivate = process.env.VAPID_PRIVATE_KEY;
 const vapidSubject = process.env.VAPID_SUBJECT || "mailto:admin@marketingos.app";
+const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
 
 if (vapidPublic && vapidPrivate) {
   webpush.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
@@ -12,6 +13,14 @@ if (vapidPublic && vapidPrivate) {
 } else {
   console.warn("[Push] VAPID keys not configured — web push disabled");
 }
+
+if (expoAccessToken) {
+  console.log("[Push] Expo access token configured for authenticated push requests");
+} else {
+  console.warn("[Push] EXPO_ACCESS_TOKEN not set — Expo push requests will be unauthenticated and may fail with InvalidCredentials");
+}
+
+let invalidCredentialsWarned = false;
 
 interface ExpoPushMessage {
   to: string;
@@ -41,9 +50,13 @@ async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoPushTicket
   const tickets: ExpoPushTicket[] = [];
   for (const chunk of chunks) {
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (expoAccessToken) {
+        headers["Authorization"] = `Bearer ${expoAccessToken}`;
+      }
       const response = await fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(chunk),
       });
       const result = await response.json() as { data: ExpoPushTicket[] };
@@ -125,13 +138,21 @@ export async function sendPushToUser(
           okCount++;
         } else if (ticket.status === "error") {
           errCount++;
-          console.error(`[Push] Ticket error for user ${userId}: ${ticket.details?.error ?? ticket.message ?? "unknown"}`);
-          if (ticket.details?.error === "DeviceNotRegistered") {
+          const errorType = ticket.details?.error ?? "unknown";
+
+          if (errorType === "InvalidCredentials") {
+            if (!invalidCredentialsWarned) {
+              console.error(`[Push] InvalidCredentials error — the EXPO_ACCESS_TOKEN is missing or invalid. Push notifications will fail until a valid token is configured.`);
+              invalidCredentialsWarned = true;
+            }
+          } else if (errorType === "DeviceNotRegistered") {
             const tokenToRemove = expoTokens[i]?.token;
             if (tokenToRemove) {
               await db.delete(pushTokensTable).where(eq(pushTokensTable.token, tokenToRemove));
               console.log(`[Push] Removed invalid token for user ${userId}`);
             }
+          } else {
+            console.error(`[Push] Ticket error for user ${userId}: ${errorType} — ${ticket.message ?? "no details"}`);
           }
         }
       }
