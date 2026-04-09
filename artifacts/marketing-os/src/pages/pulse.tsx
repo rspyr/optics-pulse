@@ -1309,11 +1309,12 @@ interface PodiumMsg {
   createdAt: string;
 }
 
-function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: number; tenantId: number; timezone: string; onClose: () => void }) {
+function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenantId: number; timezone: string }) {
   const [messages, setMessages] = useState<PodiumMsg[]>([]);
   const [loading, setLoading] = useState(true);
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [conversationUid, setConversationUid] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1358,8 +1359,8 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
   }, [leadId]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (expanded) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, expanded]);
 
   const handleSend = async () => {
     if (!messageText.trim() || sending) return;
@@ -1379,72 +1380,78 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
   };
 
   return (
-    <PremiumCard className="p-4">
-      <div className="flex items-center justify-between mb-3">
+    <PremiumCard className="p-0 overflow-hidden">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
+      >
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-blue-400" />
-          <span className="text-sm font-medium text-blue-400">SMS Chat</span>
+          <span className="text-sm font-medium text-blue-400">SMS Conversation</span>
           <span className="text-[9px] text-white/20 px-1.5 py-0.5 rounded bg-white/5">via Podium</span>
+          {!expanded && messages.length > 0 && (
+            <span className="text-[9px] text-white/30 px-1.5 py-0.5 rounded bg-white/5">{messages.length} messages</span>
+          )}
         </div>
-        <div className="flex items-center gap-1.5">
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
+        <ChevronDown className={cn("w-4 h-4 text-white/30 transition-transform", expanded && "rotate-180")} />
+      </button>
 
-      <div className="max-h-64 overflow-y-auto space-y-2 mb-3 pr-1">
-        {loading && <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>}
-        {!loading && messages.length === 0 && (
-          <p className="text-xs text-white/20 text-center py-4">No messages yet. Send the first text!</p>
-        )}
-        {messages.map(msg => (
-          <div key={msg.id} className={cn("flex", msg.direction === "outbound" ? "justify-end" : "justify-start")}>
-            <div className={cn(
-              "max-w-[80%] rounded-xl px-3 py-2",
-              msg.direction === "outbound"
-                ? "bg-blue-500/20 border border-blue-500/20 text-white/80"
-                : "bg-white/5 border border-white/10 text-white/70"
-            )}>
-              <p className="text-xs leading-relaxed">{msg.body || ""}</p>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[9px] text-white/25">
-                  {msg.podiumCreatedAt ? formatDateTimeInTz(msg.podiumCreatedAt, timezone) : ""}
-                </span>
-                {msg.deliveryStatus && msg.direction === "outbound" && (
-                  <span className={cn(
-                    "text-[8px] px-1 py-0.5 rounded",
-                    msg.deliveryStatus === "failed" ? "text-red-400 bg-red-500/10" : "text-white/20"
-                  )}>
-                    {msg.deliveryStatus}
-                  </span>
-                )}
+      {expanded && (
+        <div className="px-4 pb-4 border-t border-white/5">
+          <div className="max-h-64 overflow-y-auto space-y-2 mb-3 pr-1 mt-3">
+            {loading && <div className="py-4 text-center"><Loader2 className="w-4 h-4 text-white/30 animate-spin mx-auto" /></div>}
+            {!loading && messages.length === 0 && (
+              <p className="text-xs text-white/20 text-center py-4">No messages yet. Send the first text!</p>
+            )}
+            {messages.map(msg => (
+              <div key={msg.id} className={cn("flex", msg.direction === "outbound" ? "justify-end" : "justify-start")}>
+                <div className={cn(
+                  "max-w-[80%] rounded-xl px-3 py-2",
+                  msg.direction === "outbound"
+                    ? "bg-blue-500/20 border border-blue-500/20 text-white/80"
+                    : "bg-white/5 border border-white/10 text-white/70"
+                )}>
+                  <p className="text-xs leading-relaxed">{msg.body || ""}</p>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className="text-[9px] text-white/25">
+                      {msg.podiumCreatedAt ? formatDateTimeInTz(msg.podiumCreatedAt, timezone) : ""}
+                    </span>
+                    {msg.deliveryStatus && msg.direction === "outbound" && (
+                      <span className={cn(
+                        "text-[8px] px-1 py-0.5 rounded",
+                        msg.deliveryStatus === "failed" ? "text-red-400 bg-red-500/10" : "text-white/20"
+                      )}>
+                        {msg.deliveryStatus}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
+            ))}
+            <div ref={messagesEndRef} />
           </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
 
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={messageText}
-          onChange={e => setMessageText(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-          placeholder="Type a message..."
-          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-blue-500/30 resize-none"
-          style={{ overflowY: "hidden" }}
-        />
-        <button
-          onClick={handleSend}
-          disabled={!messageText.trim() || sending}
-          className="px-3 py-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
-        >
-          {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-        </button>
-      </div>
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={messageText}
+              onChange={e => setMessageText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              placeholder="Type a message..."
+              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-blue-500/30 resize-none"
+              style={{ overflowY: "hidden" }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!messageText.trim() || sending}
+              className="px-3 py-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 transition-colors"
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      )}
     </PremiumCard>
   );
 }
@@ -1475,7 +1482,6 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   const [callbackDate, setCallbackDate] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState("");
-  const [showChatPanel, setShowChatPanel] = useState(false);
 
   const contactPrefs = (lead.contactPreferences || []) as string[];
   const blocksCall = contactPrefs.some(p => CONTACT_FLAG_CONFIG[p]?.blocksCall);
@@ -1554,14 +1560,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
   };
 
   const handleText = () => {
-    if (commConfig.textPlatform === "podium" && lead.phone) {
-      setShowChatPanel(true);
-      if (lead.hubStatus === "appt_booked") {
-        setApptBookedChannel("text");
-      }
-      return;
-    }
-    if (commConfig.textPlatform !== "none" && lead.phone) {
+    if (commConfig.textPlatform !== "none" && commConfig.textPlatform !== "podium" && lead.phone) {
       window.open(`sms:${lead.phone.replace(/[^0-9+]/g, "")}`, "_self");
     }
     if (lead.hubStatus === "appt_booked") {
@@ -1826,15 +1825,11 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         </div>
       )}
 
-      {showChatPanel && (
+      {commConfig.textPlatform === "podium" && lead.phone && (
         <PodiumChatPanel
           leadId={lead.id}
           tenantId={tenantId}
           timezone={timezone}
-          onClose={() => {
-            setShowChatPanel(false);
-            if (!actionStep) setActionStep("text_done");
-          }}
         />
       )}
 

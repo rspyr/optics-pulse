@@ -39,7 +39,7 @@ type ActionStep =
   | "appt_cancel_reason"
   | "dead_reason_custom";
 
-type DetailTab = "history" | "conversation";
+type DetailTab = "history";
 
 const CALL_RESULTS = [
   { value: "no_answer", label: "No Answer" },
@@ -222,6 +222,7 @@ export default function LeadDetailScreen() {
   const [showEditApptTimePicker, setShowEditApptTimePicker] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [commConfig, setCommConfig] = useState<{ textPlatform: string }>({ textPlatform: "native" });
+  const [podiumExpanded, setPodiumExpanded] = useState(false);
 
   const [actionStep, setActionStep] = useState<ActionStep>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -540,7 +541,6 @@ export default function LeadDetailScreen() {
 
   const DETAIL_TABS: { key: DetailTab; label: string; icon: keyof typeof Feather.glyphMap; badge?: number }[] = [
     { key: "history", label: "History", icon: "clock" },
-    ...(isPodiumConnected ? [{ key: "conversation" as DetailTab, label: "Conversation", icon: "message-circle" as keyof typeof Feather.glyphMap }] : []),
   ];
 
   const toggleCallExpand = (id: number) => {
@@ -1705,101 +1705,120 @@ export default function LeadDetailScreen() {
             </View>
           )}
 
-          {activeTab === "conversation" && isPodiumConnected && (
-            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={styles.messagesHeader}>
-                <Feather name="message-circle" size={18} color="#8B5CF6" />
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Conversation</Text>
-              </View>
-
-              {messages.length === 0 ? (
-                <View style={styles.emptyMessages}>
-                  <Feather name="message-square" size={32} color={colors.mutedForeground} />
-                  <Text style={[styles.emptyMsgText, { color: colors.mutedForeground }]}>No messages yet</Text>
-                  <Text style={[styles.emptyMsgSub, { color: colors.mutedForeground }]}>
-                    Send a message below to start a conversation
-                  </Text>
+          {isPodiumConnected && (
+            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border, padding: 0, overflow: "hidden" }]}>
+              <TouchableOpacity
+                style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14 }}
+                onPress={() => setPodiumExpanded(e => !e)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Feather name="message-circle" size={16} color="#3B82F6" />
+                  <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#3B82F6" }}>SMS Conversation</Text>
+                  <View style={{ backgroundColor: "#3B82F610", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                    <Text style={{ fontSize: 9, color: "#3B82F680", fontFamily: "Inter_500Medium" }}>via Podium</Text>
+                  </View>
+                  {!podiumExpanded && messages.length > 0 && (
+                    <View style={{ backgroundColor: colors.secondary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                      <Text style={{ fontSize: 9, color: colors.mutedForeground, fontFamily: "Inter_500Medium" }}>{messages.length} msgs</Text>
+                    </View>
+                  )}
                 </View>
-              ) : (
-                <View style={styles.messagesList}>
-                  {[...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(msg => {
-                    const isCall = msg.channelType === "call" || msg.channelType === "phone_call";
-                    if (isCall) {
-                      const isExpanded = expandedCallIds.has(msg.id + 100000);
-                      return (
-                        <View key={msg.id}>
-                          <TouchableOpacity
-                            style={[styles.podiumCallBtn, { backgroundColor: "#06B6D408", borderColor: "#06B6D420" }]}
-                            onPress={() => toggleCallExpand(msg.id + 100000)}
-                            activeOpacity={0.7}
+                <Feather name="chevron-down" size={16} color={colors.mutedForeground} style={podiumExpanded ? { transform: [{ rotate: "180deg" }] } : {}} />
+              </TouchableOpacity>
+
+              {podiumExpanded && (
+                <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingHorizontal: 16, paddingBottom: 12 }}>
+                  {messages.length === 0 ? (
+                    <View style={styles.emptyMessages}>
+                      <Feather name="message-square" size={32} color={colors.mutedForeground} />
+                      <Text style={[styles.emptyMsgText, { color: colors.mutedForeground }]}>No messages yet</Text>
+                      <Text style={[styles.emptyMsgSub, { color: colors.mutedForeground }]}>
+                        Send a message below to start a conversation
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.messagesList, { marginTop: 12 }]}>
+                      {[...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(msg => {
+                        const isCall = msg.channelType === "call" || msg.channelType === "phone_call";
+                        if (isCall) {
+                          const isExp = expandedCallIds.has(msg.id + 100000);
+                          return (
+                            <View key={msg.id}>
+                              <TouchableOpacity
+                                style={[styles.podiumCallBtn, { backgroundColor: "#06B6D408", borderColor: "#06B6D420" }]}
+                                onPress={() => toggleCallExpand(msg.id + 100000)}
+                                activeOpacity={0.7}
+                              >
+                                <View style={styles.podiumCallRow}>
+                                  <Feather name="phone" size={12} color="#06B6D4" />
+                                  <Text style={{ fontSize: 13, color: "#67E8F9", fontFamily: "Inter_600SemiBold", flex: 1 }}>
+                                    {msg.direction === "outbound" ? "Outgoing" : "Incoming"} Call
+                                  </Text>
+                                  {msg.senderName && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>— {msg.senderName}</Text>}
+                                  <Feather name="chevron-down" size={14} color="#06B6D480" style={isExp ? { transform: [{ rotate: "180deg" }] } : {}} />
+                                </View>
+                                <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                  {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                </Text>
+                              </TouchableOpacity>
+                              {isExp && msg.body && (
+                                <View style={[styles.transcriptBlock, { borderLeftColor: "#06B6D420" }]}>
+                                  <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 4 }}>TRANSCRIPT / NOTES</Text>
+                                  <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_400Regular", lineHeight: 18 }}>{msg.body}</Text>
+                                </View>
+                              )}
+                            </View>
+                          );
+                        }
+                        return (
+                          <View
+                            key={msg.id}
+                            style={[
+                              styles.messageBubble,
+                              msg.direction === "outbound"
+                                ? { backgroundColor: "#3B82F615", borderColor: "#3B82F620", borderWidth: 1, alignSelf: "flex-end" }
+                                : { backgroundColor: colors.secondary, borderColor: colors.border, borderWidth: 1, alignSelf: "flex-start" },
+                            ]}
                           >
-                            <View style={styles.podiumCallRow}>
-                              <Feather name="phone" size={12} color="#06B6D4" />
-                              <Text style={{ fontSize: 13, color: "#67E8F9", fontFamily: "Inter_600SemiBold", flex: 1 }}>
-                                {msg.direction === "outbound" ? "Outgoing" : "Incoming"} Call
+                            <Text style={[styles.msgBody, { color: colors.foreground }]}>{msg.body}</Text>
+                            <View style={styles.podiumMeta}>
+                              <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                               </Text>
-                              {msg.senderName && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>— {msg.senderName}</Text>}
-                              <Feather name="chevron-down" size={14} color="#06B6D480" style={isExpanded ? { transform: [{ rotate: "180deg" }] } : {}} />
+                              <Text style={{ fontSize: 9, color: msg.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
+                                {msg.direction === "outbound" ? "Sent" : "Received"}
+                              </Text>
                             </View>
-                            <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
-                              {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                            </Text>
-                          </TouchableOpacity>
-                          {isExpanded && msg.body && (
-                            <View style={[styles.transcriptBlock, { borderLeftColor: "#06B6D420" }]}>
-                              <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 4 }}>TRANSCRIPT / NOTES</Text>
-                              <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_400Regular", lineHeight: 18 }}>{msg.body}</Text>
-                            </View>
-                          )}
-                        </View>
-                      );
-                    }
-                    return (
-                      <View
-                        key={msg.id}
-                        style={[
-                          styles.messageBubble,
-                          msg.direction === "outbound"
-                            ? { backgroundColor: "#3B82F615", borderColor: "#3B82F620", borderWidth: 1, alignSelf: "flex-end" }
-                            : { backgroundColor: colors.secondary, borderColor: colors.border, borderWidth: 1, alignSelf: "flex-start" },
-                        ]}
-                      >
-                        <Text style={[styles.msgBody, { color: colors.foreground }]}>{msg.body}</Text>
-                        <View style={styles.podiumMeta}>
-                          <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
-                            {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                          </Text>
-                          <Text style={{ fontSize: 9, color: msg.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
-                            {msg.direction === "outbound" ? "Sent" : "Received"}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+
+                  <View style={[styles.msgInputRow, { borderTopColor: colors.border }]}>
+                    <TextInput
+                      style={[styles.msgInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
+                      placeholder="Type a message..."
+                      placeholderTextColor={colors.mutedForeground}
+                      value={newMessage}
+                      onChangeText={setNewMessage}
+                      multiline
+                    />
+                    <TouchableOpacity
+                      style={[styles.sendBtn, { backgroundColor: colors.primary, opacity: sendingMsg || !newMessage.trim() ? 0.5 : 1 }]}
+                      onPress={sendPodiumMessage}
+                      disabled={sendingMsg || !newMessage.trim()}
+                    >
+                      {sendingMsg ? (
+                        <ActivityIndicator size="small" color="#FFF" />
+                      ) : (
+                        <Feather name="send" size={16} color="#FFF" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
-
-              <View style={[styles.msgInputRow, { borderTopColor: colors.border }]}>
-                <TextInput
-                  style={[styles.msgInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder="Type a message..."
-                  placeholderTextColor={colors.mutedForeground}
-                  value={newMessage}
-                  onChangeText={setNewMessage}
-                  multiline
-                />
-                <TouchableOpacity
-                  style={[styles.sendBtn, { backgroundColor: colors.primary, opacity: sendingMsg || !newMessage.trim() ? 0.5 : 1 }]}
-                  onPress={sendPodiumMessage}
-                  disabled={sendingMsg || !newMessage.trim()}
-                >
-                  {sendingMsg ? (
-                    <ActivityIndicator size="small" color="#FFF" />
-                  ) : (
-                    <Feather name="send" size={16} color="#FFF" />
-                  )}
-                </TouchableOpacity>
-              </View>
             </View>
           )}
         </ScrollView>
