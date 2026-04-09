@@ -37,15 +37,15 @@ export async function assignLeadRoundRobin(
   const activePaused = pausedSchedules.filter(s => !s.pauseEnd || new Date(s.pauseEnd) > now);
   const pausedUserIds = new Set(activePaused.map(s => s.userId));
 
-  const managerPausedIds = new Set(activePaused.filter(s => s.pauseSource === "manager").map(s => s.userId));
+  const intentionalPausedIds = new Set(activePaused.filter(s => s.pauseSource === "manager" || s.pauseSource === "self").map(s => s.userId));
   let rawOrder = (config.cascadeOrder as number[]).filter(id => !pausedUserIds.has(id));
   if (rawOrder.length === 0) {
-    const nonManagerOrder = (config.cascadeOrder as number[]).filter(id => !managerPausedIds.has(id));
-    if (nonManagerOrder.length > 0) {
-      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs paused — falling back to non-manager-paused CSRs`);
-      rawOrder = nonManagerOrder;
+    const autoPausedFallback = (config.cascadeOrder as number[]).filter(id => !intentionalPausedIds.has(id));
+    if (autoPausedFallback.length > 0) {
+      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs paused — falling back to auto-paused (disconnected) CSRs`);
+      rawOrder = autoPausedFallback;
     } else {
-      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs manager-paused — no fallback`);
+      console.log(`[RoundRobin] Tenant ${tenantId}: All CSRs intentionally paused — no fallback`);
     }
   }
 
