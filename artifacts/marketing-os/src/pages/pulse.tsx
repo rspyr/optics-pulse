@@ -7,6 +7,7 @@ import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
 import { motion, AnimatePresence } from "framer-motion";
 import { io as socketIOClient } from "socket.io-client";
+import { useLeadNotification } from "@/contexts/lead-notification-context";
 import {
   Phone, MessageSquare, Mic,
   Clock, Zap, X, Copy,
@@ -374,39 +375,18 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
   return { data, loading, refetch: fetchArchive };
 }
 
-function useSocketIO(tenantId: number | null, isAgency: boolean, onReconnect?: () => void) {
-  const [latestLead, setLatestLead] = useState<LeadData | null>(null);
-  const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const tenantIdRef = useRef(tenantId);
-  const onReconnectRef = useRef(onReconnect);
-  useEffect(() => { onReconnectRef.current = onReconnect; }, [onReconnect]);
-
-  useEffect(() => { tenantIdRef.current = tenantId; }, [tenantId]);
-  useEffect(() => {
-    const audio = new Audio("data:audio/wav;base64,UklGRl9vT19teleVlfT0+AU5EIBAAAABkAAAAFAAMAeAAAAAA=");
-    audio.volume = 0.3;
-    audioRef.current = audio;
-  }, []);
+function usePulseSocketIO(onReconnectCb?: () => void) {
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect } = useLeadNotification();
+  const onReconnectCbRef = useRef(onReconnectCb);
+  useEffect(() => { onReconnectCbRef.current = onReconnectCb; }, [onReconnectCb]);
 
   useEffect(() => {
-    const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
-    socket.on("connect", () => {
-      console.log("[Pulse] Socket.IO connected:", socket.id);
-      setTimeout(() => { if (onReconnectRef.current) onReconnectRef.current(); }, 500);
+    return onReconnect(() => {
+      if (onReconnectCbRef.current) onReconnectCbRef.current();
     });
-    socket.on("new-lead", (lead: LeadData) => {
-      if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
-      setLatestLead(lead);
-      if (soundEnabled && audioRef.current) audioRef.current.play().catch(() => {});
-    });
-    socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
-    socket.on("disconnect", () => console.log("[Pulse] Socket.IO disconnected"));
-    return () => { socket.disconnect(); };
-  }, [tenantId, isAgency, soundEnabled]);
+  }, [onReconnect]);
 
-  return { latestLead, clearLatestLead: useCallback(() => setLatestLead(null), []), leadUpdatedSignal, soundEnabled, setSoundEnabled };
+  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled };
 }
 
 function formatElapsed(ms: number): string {
@@ -2493,7 +2473,7 @@ export default function Leads() {
 
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = useSocketIO(effectiveTenantId, isAgency, fetchMyPause);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled } = usePulseSocketIO(fetchMyPause);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2540,7 +2520,7 @@ export default function Leads() {
 
   useEffect(() => {
     if (latestLead) {
-      setNotificationLead(latestLead);
+      setNotificationLead(latestLead as LeadData);
       if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
       notificationTimerRef.current = setTimeout(() => {
         setNotificationLead(null);

@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
 import { AuthProvider, useAuth } from "@/components/auth-context";
+import { LeadNotificationProvider } from "@/contexts/lead-notification-context";
 import { AppLayout } from "@/components/layout";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
@@ -96,6 +97,7 @@ function AuthenticatedRoutes() {
   }
 
   return (
+    <LeadNotificationProvider>
     <AppLayout>
       <Switch>
         <Route path="/">{() => isAgency ? <Dashboard key="dashboard" /> : <Clients key="clients" />}</Route>
@@ -118,6 +120,7 @@ function AuthenticatedRoutes() {
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
+    </LeadNotificationProvider>
   );
 }
 

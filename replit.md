@@ -19,7 +19,7 @@ The frontend employs React, Vite, TailwindCSS v4, Wouter, and TanStack React Que
 - **API:** An Express 5 server manages all API interactions.
 - **Database:** PostgreSQL is the primary database, interfaced via Drizzle ORM. Database migrations are handled as one-time scripts on server startup. Lazy initialization patterns are used to seed default data for new tenants.
 - **Authentication:** Session-based authentication is implemented with `express-session` and a PostgreSQL store, featuring 30-day session durations and `bcryptjs` for password hashing. Role-based access control (`super_admin`, `agency_user`, `client_admin`, `client_user`) is in place. User management includes password changes, user inactivation, and hard deletion with foreign key protection.
-- **Real-time Features:** Socket.IO provides real-time lead notifications and other interactive functionalities, ensuring tenant isolation.
+- **Real-time Features:** Socket.IO provides real-time lead notifications and other interactive functionalities, ensuring tenant isolation. A global `LeadNotificationProvider` context (`contexts/lead-notification-context.tsx`) handles new-lead socket events and notification sound playback across all pages. It includes browser audio-unlock on first user gesture, visual toast fallback when audio is blocked by autoplay policy, and uses refs for the sound-enabled flag to avoid unnecessary socket reconnections.
 - **API Codegen:** OpenAPI specifications with Orval generate TypeScript API clients and Zod schemas for robust API interactions.
 - **Monorepo Structure:** The project is organized into `artifacts` for applications and `lib` for shared code.
 
