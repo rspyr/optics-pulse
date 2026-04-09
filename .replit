@@ -32,6 +32,5 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
-VAPID_PUBLIC_KEY = "BESJEN9ym4BfJI1HAqjAE5V3YESxWSf69F-cv0N9_ayuhJYHgINLKQT7CRsO_BrQm0L1DKCS-UpbOznzC2YHV5w"
-VAPID_PRIVATE_KEY = "NwImWl8CY4c3DG2myb-lQ6dTQ5fYKZgvq6a171iXL_4"
 VAPID_SUBJECT = "mailto:admin@marketingos.app"
+VAPID_PUBLIC_KEY = "BBLKyhfjKtOGGQr3dQAtaKjZzAzHkHD9pgqb300ktSQyU3IEhq1pZhiEZRO3XNbGPLBwEHZtbNgDakanZ7NInDI"
