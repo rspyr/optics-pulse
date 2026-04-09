@@ -2461,12 +2461,12 @@ export default function Leads() {
   const [pauseToggling, setPauseToggling] = useState(false);
 
   const fetchMyPause = useCallback(() => {
-    if (!effectiveTenantId) return;
+    if (!effectiveTenantId || !isClientUser) return;
     fetch(`${API_BASE}/leads-hub/my-pause?tenantId=${effectiveTenantId}`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setMyPauseState(d); })
       .catch(() => {});
-  }, [effectiveTenantId]);
+  }, [effectiveTenantId, isClientUser]);
 
   useEffect(() => { fetchMyPause(); }, [fetchMyPause]);
 

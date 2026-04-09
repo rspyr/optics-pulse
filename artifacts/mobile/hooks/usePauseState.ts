@@ -2,23 +2,26 @@ import { useState, useCallback, useEffect } from "react";
 import { useApi } from "@/hooks/useApi";
 import { useTenant } from "@/contexts/TenantContext";
 import { useSocket } from "@/contexts/SocketContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function usePauseState() {
   const { apiFetch } = useApi();
   const { effectiveTenantId } = useTenant();
   const { on, off } = useSocket();
+  const { user } = useAuth();
+  const isClientUser = user?.role === "client_user";
   const [isPaused, setIsPaused] = useState(false);
   const [pauseSource, setPauseSource] = useState("manager");
   const [toggling, setToggling] = useState(false);
 
   const fetchPause = useCallback(async () => {
-    if (!effectiveTenantId) return;
+    if (!effectiveTenantId || !isClientUser) return;
     try {
       const data = await apiFetch(`/api/leads-hub/my-pause?tenantId=${effectiveTenantId}`);
       setIsPaused(data.isPaused);
       setPauseSource(data.pauseSource);
     } catch (e) {}
-  }, [apiFetch, effectiveTenantId]);
+  }, [apiFetch, effectiveTenantId, isClientUser]);
 
   useEffect(() => { fetchPause(); }, [fetchPause]);
 
