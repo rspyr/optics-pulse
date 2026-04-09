@@ -1087,7 +1087,7 @@ router.put("/leads-hub/csr-schedule/:userId", async (req, res) => {
 
 router.get("/leads-hub/my-pause", async (req, res) => {
   const userId = (req.session as any)?.userId;
-  const role = (req.session as any)?.role;
+  const role = (req.session as any)?.userRole as string | undefined;
   const tenantId = resolveTenantId(req);
   if (!userId || !tenantId) { res.status(401).json({ error: "Unauthorized" }); return; }
   if (role !== "client_user") { res.status(403).json({ error: "Only CSRs can access pause state" }); return; }
@@ -1102,7 +1102,7 @@ router.get("/leads-hub/my-pause", async (req, res) => {
 
 router.post("/leads-hub/my-pause", async (req, res) => {
   const userId = (req.session as any)?.userId;
-  const role = (req.session as any)?.role;
+  const role = (req.session as any)?.userRole as string | undefined;
   const tenantId = resolveTenantId(req);
   if (!userId || !tenantId) { res.status(401).json({ error: "Unauthorized" }); return; }
   if (role !== "client_user") { res.status(403).json({ error: "Only CSRs can toggle pause" }); return; }
