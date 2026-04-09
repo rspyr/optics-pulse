@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, unique, jsonb } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 export const pushTokensTable = pgTable("push_tokens", {
@@ -6,6 +6,7 @@ export const pushTokensTable = pgTable("push_tokens", {
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   token: text("token").notNull(),
   platform: text("platform").notNull().default("expo"),
+  subscription: jsonb("subscription"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   unique("push_tokens_user_token_unique").on(table.userId, table.token),

@@ -858,6 +858,16 @@ const migrations: Migration[] = [
       console.log("[Migration] Added pause_source column to csr_schedule");
     },
   },
+  {
+    id: "2026-04-09_push-tokens-subscription-column",
+    description: "Add subscription jsonb column to push_tokens for web push subscriptions",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE push_tokens ADD COLUMN IF NOT EXISTS subscription JSONB
+      `);
+      console.log("[Migration] Added subscription column to push_tokens");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

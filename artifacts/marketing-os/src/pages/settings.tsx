@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
 
 const API = import.meta.env.VITE_API_URL || "";
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -23,6 +24,63 @@ interface TeamMemberEntry {
   name: string | null;
   email: string | null;
   podiumUserUid: string | null;
+}
+
+function PushNotificationCard() {
+  const { permission, subscribed, loading, supported, subscribe, unsubscribe } = usePushNotifications();
+
+  if (!supported) return null;
+
+  const handleToggle = async () => {
+    if (subscribed) {
+      await unsubscribe();
+    } else {
+      await subscribe();
+    }
+  };
+
+  return (
+    <PremiumCard>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Bell className="w-5 h-5 text-cyan-400" />
+          <div>
+            <h3 className="text-xl font-display text-white">Push Notifications</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              {permission === "denied"
+                ? "Notifications are blocked in your browser settings."
+                : subscribed
+                  ? "You'll receive browser notifications for new leads."
+                  : "Enable browser notifications to get alerted for new leads."}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={handleToggle}
+          disabled={loading || permission === "denied"}
+          className={cn(
+            "relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50",
+            subscribed ? "bg-cyan-500" : "bg-white/10"
+          )}
+        >
+          {loading ? (
+            <Loader2 className="w-4 h-4 animate-spin text-white mx-auto" />
+          ) : (
+            <span className={cn(
+              "inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform duration-200",
+              subscribed ? "translate-x-6" : "translate-x-1"
+            )} />
+          )}
+        </button>
+      </div>
+      {permission === "denied" && (
+        <p className="text-xs text-amber-400/70 mt-3 flex items-center gap-1.5">
+          <BellOff className="w-3.5 h-3.5" />
+          To enable notifications, update your browser's notification permissions for this site.
+        </p>
+      )}
+    </PremiumCard>
+  );
 }
 
 function PodiumUserLinking({ tenantId }: { tenantId: number }) {
@@ -523,6 +581,8 @@ export default function Settings() {
           {pwSaving ? "Changing..." : "Change Password"}
         </button>
       </PremiumCard>
+
+      <PushNotificationCard />
 
       <PremiumCard>
         <div className="flex items-center gap-2 mb-4">
