@@ -58,7 +58,14 @@ interface LeadNotificationContextType {
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
 
-const CHIME_URL = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/sounds/lead-chime.wav`;
+const BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+type SoundType = "new-lead" | "text-message" | "inbound-call" | "callback";
+const SOUND_URLS: Record<SoundType, string> = {
+  "new-lead": `${BASE}/sounds/new-lead.mp3`,
+  "text-message": `${BASE}/sounds/text-message.mp3`,
+  "inbound-call": `${BASE}/sounds/inbound-call.mp3`,
+  "callback": `${BASE}/sounds/callback.mp3`,
+};
 
 export function LeadNotificationProvider({ children }: { children: React.ReactNode }) {
   const { user, effectiveTenantId, isAgency } = useAuth();
@@ -67,7 +74,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const [latestPodiumNotification, setLatestPodiumNotification] = useState<PodiumNotificationData | null>(null);
   const [latestCallbackDue, setLatestCallbackDue] = useState<CallbackDueData | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioMapRef = useRef<Record<SoundType, HTMLAudioElement> | null>(null);
   const soundEnabledRef = useRef(soundEnabled);
   const tenantIdRef = useRef(effectiveTenantId);
   const audioUnlockedRef = useRef(false);
@@ -78,14 +85,20 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
 
   useEffect(() => {
-    const audio = new Audio(CHIME_URL);
-    audio.volume = 0.4;
-    audio.load();
-    audioRef.current = audio;
+    const map = {} as Record<SoundType, HTMLAudioElement>;
+    for (const [key, url] of Object.entries(SOUND_URLS)) {
+      const audio = new Audio(url);
+      audio.volume = 0.4;
+      audio.load();
+      map[key as SoundType] = audio;
+    }
+    audioMapRef.current = map;
     return () => {
-      audio.pause();
-      audio.src = "";
-      audioRef.current = null;
+      for (const audio of Object.values(map)) {
+        audio.pause();
+        audio.src = "";
+      }
+      audioMapRef.current = null;
     };
   }, []);
 
@@ -103,17 +116,17 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       } catch (err) {
         console.warn("[Notification] WebAudio unlock failed:", err);
       }
-      const audio = audioRef.current;
-      if (audio) {
-        audio.muted = true;
-        audio.play().then(() => {
-          audio.pause();
-          audio.muted = false;
-          audio.currentTime = 0;
+      const firstAudio = audioMapRef.current?.["new-lead"];
+      if (firstAudio) {
+        firstAudio.muted = true;
+        firstAudio.play().then(() => {
+          firstAudio.pause();
+          firstAudio.muted = false;
+          firstAudio.currentTime = 0;
           audioUnlockedRef.current = true;
           console.log("[Notification] Audio context unlocked by user gesture");
         }).catch((err) => {
-          audio.muted = false;
+          firstAudio.muted = false;
           console.warn("[Notification] HTMLAudio unlock failed:", err);
         });
       }
@@ -128,18 +141,16 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     };
   }, []);
 
-  const playNotification = useCallback((lead: LeadNotificationData) => {
+  const playSound = useCallback((type: SoundType, fallbackLabel?: string) => {
     if (!soundEnabledRef.current) return;
-    const audio = audioRef.current;
+    const audio = audioMapRef.current?.[type];
     if (!audio) return;
     audio.currentTime = 0;
     audio.play().catch((err) => {
-      console.warn("[Notification] Audio playback failed:", err);
-      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
-      toast({
-        title: "New Lead Arrived",
-        description: `${name}${lead.source ? ` from ${lead.source}` : ""}`,
-      });
+      console.warn(`[Notification] ${type} audio playback failed:`, err);
+      if (fallbackLabel) {
+        toast({ title: type === "new-lead" ? "New Lead Arrived" : "Notification", description: fallbackLabel });
+      }
     });
   }, []);
 
@@ -185,7 +196,8 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     socket.on("new-lead", (lead: LeadNotificationData) => {
       if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
       setLatestLead(lead);
-      playNotification(lead);
+      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
+      playSound("new-lead", `${name}${lead.source ? ` from ${lead.source}` : ""}`);
     });
     socket.on("podium-message", (msg: PodiumNotificationData) => {
       if (tenantIdRef.current && msg.tenantId && msg.tenantId !== tenantIdRef.current) return;
@@ -194,25 +206,26 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       });
       if (msg.direction === "inbound") {
         setLatestPodiumNotification(msg);
-        playNotification({ firstName: msg.leadName || msg.senderName || "Unknown" });
+        const isCall = msg.channelType === "phone" || msg.channelType === "call" || msg.channelType === "phone_call" || msg.channelType === "car_wars";
+        playSound(isCall ? "inbound-call" : "text-message");
       }
     });
     socket.on("callback-due", (data: CallbackDueData) => {
       if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
-      playNotification({ firstName: data.leadName });
+      playSound("callback");
     });
     socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
-  }, [user?.id, effectiveTenantId, isAgency, playNotification]);
+  }, [user?.id, effectiveTenantId, isAgency, playSound]);
 
   const clearLatestLead = useCallback(() => setLatestLead(null), []);
   const clearPodiumNotification = useCallback(() => setLatestPodiumNotification(null), []);
   const clearCallbackDue = useCallback(() => setLatestCallbackDue(null), []);
-  const playCallbackSound = useCallback((leadName: string) => {
-    playNotification({ firstName: leadName });
-  }, [playNotification]);
+  const playCallbackSound = useCallback((_leadName: string) => {
+    playSound("callback");
+  }, [playSound]);
 
   const registerOnReconnect = useCallback((cb: ReconnectCallback) => {
     reconnectListenersRef.current.add(cb);
