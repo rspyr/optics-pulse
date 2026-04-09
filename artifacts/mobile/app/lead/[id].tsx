@@ -1360,11 +1360,15 @@ export default function LeadDetailScreen() {
                                     {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                                   </Text>
                                   <View style={[styles.podiumBadge, { backgroundColor: "#3B82F615" }]}>
-                                    <Text style={{ fontSize: 9, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>Podium SMS</Text>
+                                    <Text style={{ fontSize: 9, color: "#3B82F6", fontFamily: "Inter_600SemiBold" }}>{entry.channelType === "form" ? "Podium Form" : "Podium SMS"}</Text>
                                   </View>
-                                  <Text style={{ fontSize: 9, color: entry.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
-                                    {entry.direction === "outbound" ? "Sent" : "Received"}
-                                  </Text>
+                                  {entry.channelType === "form" ? (
+                                    <Text style={{ fontSize: 9, color: "#F59E0B80", fontFamily: "Inter_400Regular", fontStyle: "italic" }}>Only visible in Podium</Text>
+                                  ) : (
+                                    <Text style={{ fontSize: 9, color: entry.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
+                                      {entry.direction === "outbound" ? "Sent" : "Received"}
+                                    </Text>
+                                  )}
                                   {entry.deliveryStatus === "failed" && (
                                     <Text style={{ fontSize: 9, color: "#EF4444", fontFamily: "Inter_600SemiBold" }}>Failed</Text>
                                   )}
@@ -1786,9 +1790,13 @@ export default function LeadDetailScreen() {
                               <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
                                 {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                               </Text>
-                              <Text style={{ fontSize: 9, color: msg.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
-                                {msg.direction === "outbound" ? "Sent" : "Received"}
-                              </Text>
+                              {msg.channelType === "form" ? (
+                                <Text style={{ fontSize: 9, color: "#F59E0B80", fontFamily: "Inter_400Regular", fontStyle: "italic" }}>Only visible in Podium</Text>
+                              ) : (
+                                <Text style={{ fontSize: 9, color: msg.direction === "outbound" ? "#3B82F680" : "#10B98180", fontFamily: "Inter_400Regular" }}>
+                                  {msg.direction === "outbound" ? "Sent" : "Received"}
+                                </Text>
+                              )}
                             </View>
                           </View>
                         );

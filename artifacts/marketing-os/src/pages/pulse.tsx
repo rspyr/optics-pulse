@@ -1171,13 +1171,17 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           <span className="text-[9px] text-white/20 font-mono">
             {formatDateTimeInTz(entry.timestamp, timezone)}
           </span>
-          <span className="text-[8px] px-1 rounded bg-blue-500/10 text-blue-400/60">Podium SMS</span>
-          <span className={cn(
-            "text-[8px]",
-            entry.direction === "outbound" ? "text-blue-400/40" : "text-emerald-400/40"
-          )}>
-            {entry.direction === "outbound" ? "Sent" : "Received"}
-          </span>
+          <span className="text-[8px] px-1 rounded bg-blue-500/10 text-blue-400/60">{entry.channelType === "form" ? "Podium Form" : "Podium SMS"}</span>
+          {entry.channelType === "form" ? (
+            <span className="text-[8px] italic text-amber-400/50">Only visible in Podium</span>
+          ) : (
+            <span className={cn(
+              "text-[8px]",
+              entry.direction === "outbound" ? "text-blue-400/40" : "text-emerald-400/40"
+            )}>
+              {entry.direction === "outbound" ? "Sent" : "Received"}
+            </span>
+          )}
           {entry.deliveryStatus === "failed" && (
             <span className="text-[8px] text-red-400">Failed</span>
           )}
@@ -1416,6 +1420,9 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
                     <span className="text-[9px] text-white/25">
                       {msg.podiumCreatedAt ? formatDateTimeInTz(msg.podiumCreatedAt, timezone) : ""}
                     </span>
+                    {msg.channelType === "form" && (
+                      <span className="text-[8px] italic text-amber-400/50">Only visible in Podium</span>
+                    )}
                     {msg.deliveryStatus && msg.direction === "outbound" && (
                       <span className={cn(
                         "text-[8px] px-1 py-0.5 rounded",
