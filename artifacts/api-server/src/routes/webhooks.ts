@@ -425,7 +425,7 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
             if (config.podiumWebhookSecret) {
               let hmacOk = false;
               if (!podiumSignature || !rawBody) {
-                console.warn(`[Podium Webhook] Missing signature or raw body for HMAC-configured user ${user.id}, falling back to verify-token check`);
+                console.debug(`[Podium Webhook] Missing signature or raw body for HMAC-configured user ${user.id}, falling back to verify-token check`);
                 if (config.podiumWebhookVerifyToken) {
                   const verifyToken = req.query.verify as string | undefined;
                   if (verifyToken && verifyToken === config.podiumWebhookVerifyToken) {
