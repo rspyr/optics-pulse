@@ -1119,7 +1119,7 @@ router.post("/leads-hub/my-pause", async (req, res) => {
       return;
     }
     const [updated] = await db.update(csrScheduleTable)
-      .set({ isPaused, pauseSource: isPaused ? "self" : "manager", pauseStart: isPaused ? new Date() : null, pauseEnd: null, updatedAt: new Date() })
+      .set({ isPaused, pauseSource: isPaused ? "self" : existing.pauseSource, pauseStart: isPaused ? new Date() : null, pauseEnd: null, updatedAt: new Date() })
       .where(eq(csrScheduleTable.id, existing.id))
       .returning();
     res.json({ isPaused: updated.isPaused, pauseSource: updated.pauseSource });
@@ -1128,7 +1128,7 @@ router.post("/leads-hub/my-pause", async (req, res) => {
       tenantId,
       userId,
       isPaused,
-      pauseSource: isPaused ? "self" : "manager",
+      pauseSource: "self",
       pauseStart: isPaused ? new Date() : null,
     }).returning();
     res.json({ isPaused: created.isPaused, pauseSource: created.pauseSource });
