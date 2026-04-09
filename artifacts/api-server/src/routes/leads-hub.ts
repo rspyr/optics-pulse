@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
-  tenantsTable, leadSourceAliasesTable,
+  tenantsTable, leadSourceAliasesTable, soldEstimatesTable,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
@@ -1482,6 +1482,26 @@ router.get("/leads-hub/stats/timeseries", async (req, res) => {
   });
 
   res.json({ series });
+});
+
+router.get("/leads-hub/:leadId/contract", async (req, res) => {
+  const leadId = parseInt(req.params.leadId, 10);
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.json({ estimates: [] }); return; }
+
+  const [lead] = await db.select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)))
+    .limit(1);
+  if (!lead) { res.json({ estimates: [] }); return; }
+
+  const estimates = await db.select().from(soldEstimatesTable)
+    .where(and(eq(soldEstimatesTable.leadId, leadId), eq(soldEstimatesTable.tenantId, tenantId)))
+    .orderBy(desc(soldEstimatesTable.soldOn));
+
+  res.json({ estimates });
 });
 
 export default router;

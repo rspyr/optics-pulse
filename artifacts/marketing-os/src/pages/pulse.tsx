@@ -218,6 +218,7 @@ interface LeadData {
   assignedAt?: string | null;
   lastAttemptAt?: string | null;
   attemptCount?: number;
+  hasSoldEstimate?: boolean;
 }
 
 interface HistoryEntry {
@@ -636,6 +637,14 @@ function DayBadge({ hubStatus }: { hubStatus: string }) {
   );
 }
 
+function ClosedBadge() {
+  return (
+    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border bg-amber-500/20 text-amber-400 border-amber-500/30">
+      CLOSED
+    </span>
+  );
+}
+
 function formatTimeAgo(dateStr: string): string {
   const diffMs = Date.now() - new Date(dateStr).getTime();
   const minutes = Math.floor(diffMs / 60000);
@@ -763,6 +772,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
               {lead.firstName} {lead.lastName}
             </h3>
             <DayBadge hubStatus={lead.hubStatus} />
+            {lead.hasSoldEstimate && <ClosedBadge />}
             <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
             {showReengageBadge && <ReengageBadge lastAttemptAt={lead.lastAttemptAt} attemptCount={lead.attemptCount} />}
           </div>
@@ -1632,6 +1642,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
             <div className="flex items-center gap-3 mb-2">
               <h2 className="font-display text-xl text-white">{lead.firstName} {lead.lastName}</h2>
               <DayBadge hubStatus={lead.hubStatus} />
+              {lead.hasSoldEstimate && <ClosedBadge />}
               <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
@@ -2271,10 +2282,86 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         </PremiumCard>
       )}
 
+      {lead.hasSoldEstimate && (
+        <ContractDetailsSection leadId={lead.id} timezone={timezone} />
+      )}
+
       <PremiumCard className="p-4">
         <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} />
       </PremiumCard>
     </div>
+  );
+}
+
+interface ContractEstimate {
+  id: number;
+  soldByName: string | null;
+  soldOn: string | null;
+  subtotal: number;
+  rebateAmount: number;
+  totalAmount: number;
+  stEstimateId: string;
+}
+
+function ContractDetailsSection({ leadId, timezone }: { leadId: number; timezone: string }) {
+  const [estimates, setEstimates] = useState<ContractEstimate[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/leads-hub/${leadId}/contract`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setEstimates(d.estimates || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [leadId]);
+
+  if (loading) return null;
+  if (estimates.length === 0) return null;
+
+  return (
+    <PremiumCard className="p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+        <span className="text-xs font-medium text-amber-400 uppercase tracking-wider">Signed Contract</span>
+      </div>
+      <div className="space-y-3">
+        {estimates.map(est => (
+          <div key={est.id} className="rounded-lg bg-amber-500/5 border border-amber-500/15 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-base font-bold text-amber-400">
+                ${(est.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              {est.soldOn && (
+                <span className="text-[10px] text-white/30 font-mono">
+                  {formatInTz(est.soldOn, timezone, { month: "short", day: "numeric", year: "numeric" })}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {est.soldByName && (
+                <div>
+                  <span className="text-white/30 block text-[10px] uppercase">Salesperson</span>
+                  <span className="text-white/70">{est.soldByName}</span>
+                </div>
+              )}
+              {est.subtotal > 0 && est.subtotal !== est.totalAmount && (
+                <div>
+                  <span className="text-white/30 block text-[10px] uppercase">Subtotal</span>
+                  <span className="text-white/70">${est.subtotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              )}
+              {est.rebateAmount > 0 && (
+                <div>
+                  <span className="text-white/30 block text-[10px] uppercase">Rebate</span>
+                  <span className="text-emerald-400">${est.rebateAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </PremiumCard>
   );
 }
 
@@ -2405,6 +2492,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
+                  {lead.hasSoldEstimate && <ClosedBadge />}
                   <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => refetch()} tenantId={tenantId} />
                 </div>
                 <div className="flex items-center gap-2">

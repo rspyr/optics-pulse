@@ -20,6 +20,7 @@ interface Lead {
   attemptCount?: number;
   contactPreferences?: string[];
   assignedUserName?: string;
+  hasSoldEstimate?: boolean;
 }
 
 interface LeadCardProps {
@@ -147,6 +148,11 @@ export function LeadCard({ lead, onPress, renderSourceOverride }: LeadCardProps)
             {dayBadge && (
               <View style={[styles.dayBadge, { backgroundColor: dayBadge.color + "20", borderColor: dayBadge.color + "30" }]}>
                 <Text style={[styles.dayBadgeText, { color: dayBadge.color }]}>{dayBadge.label}</Text>
+              </View>
+            )}
+            {lead.hasSoldEstimate && (
+              <View style={[styles.dayBadge, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30" }]}>
+                <Text style={[styles.dayBadgeText, { color: "#F59E0B" }]}>CLOSED</Text>
               </View>
             )}
           </View>

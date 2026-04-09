@@ -132,6 +132,7 @@ interface LeadDetail {
   addOns?: string;
   contactPreferences?: string[];
   deadReason?: string;
+  hasSoldEstimate?: boolean;
 }
 
 interface HistoryItem {
@@ -183,6 +184,58 @@ function formatPhone(phone: string): string {
   if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   if (digits.length === 11 && digits[0] === "1") return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
   return phone;
+}
+
+function ContractBanner({ leadId }: { leadId: number }) {
+  const colors = useColors();
+  const { apiFetch } = useApi();
+  const [estimates, setEstimates] = useState<Array<{
+    id: number;
+    soldByName: string | null;
+    soldOn: string | null;
+    totalAmount: number;
+    subtotal: number;
+    rebateAmount: number;
+  }>>([]);
+
+  useEffect(() => {
+    apiFetch(`/leads-hub/${leadId}/contract`)
+      .then((d: { estimates?: typeof estimates }) => setEstimates(d.estimates || []))
+      .catch(() => {});
+  }, [leadId, apiFetch]);
+
+  if (estimates.length === 0) return null;
+
+  return (
+    <View style={{ marginTop: 12 }}>
+      {estimates.map(est => (
+        <View key={est.id} style={{ backgroundColor: "#F59E0B10", borderWidth: 1, borderColor: "#F59E0B25", borderRadius: 10, padding: 12, marginBottom: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <Feather name="check-circle" size={14} color="#F59E0B" />
+            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#F59E0B" }}>Signed Contract</Text>
+          </View>
+          <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#F59E0B", marginBottom: 4 }}>
+            ${(est.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </Text>
+          {est.soldByName && (
+            <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>
+              Sold by: {est.soldByName}
+            </Text>
+          )}
+          {est.soldOn && (
+            <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: colors.mutedForeground, marginTop: 2 }}>
+              {new Date(est.soldOn).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+            </Text>
+          )}
+          {est.rebateAmount > 0 && (
+            <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: "#10B981", marginTop: 2 }}>
+              Rebate: ${est.rebateAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </Text>
+          )}
+        </View>
+      ))}
+    </View>
+  );
 }
 
 export default function LeadDetailScreen() {
@@ -721,6 +774,11 @@ export default function LeadDetailScreen() {
                       <Text style={[styles.dayBadgeText, { color: dayBadge.color }]}>{dayBadge.label}</Text>
                     </View>
                   )}
+                  {lead.hasSoldEstimate && (
+                    <View style={[styles.dayBadge, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30" }]}>
+                      <Text style={[styles.dayBadgeText, { color: "#F59E0B" }]}>CLOSED</Text>
+                    </View>
+                  )}
                 </View>
                 {lead.dayInSequence != null && (
                   <Text style={[styles.assignedText, { color: colors.mutedForeground }]}>
@@ -865,6 +923,10 @@ export default function LeadDetailScreen() {
                 </View>
               )}
             </View>
+
+            {lead.hasSoldEstimate && (
+              <ContractBanner leadId={lead.id} />
+            )}
           </View>
 
           <Modal

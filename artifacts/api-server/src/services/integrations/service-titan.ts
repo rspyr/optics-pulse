@@ -507,6 +507,161 @@ export function formatSTJobForSync(stJob: STJob) {
   };
 }
 
+export interface STEstimateItem {
+  id: number;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  type: string;
+  skuName?: string;
+}
+
+export interface STEstimate {
+  id: number;
+  jobId: number;
+  name: string;
+  status: { name: string; value: number };
+  summary: string;
+  soldBy: number | null;
+  soldOn: string | null;
+  subtotal: number;
+  total: number;
+  items: STEstimateItem[];
+  modifiedOn: string;
+  active: boolean;
+}
+
+interface STEstimatesResponse {
+  data: STEstimate[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
+interface STEmployee {
+  id: number;
+  name: string;
+  email?: string;
+}
+
+export async function fetchSoldEstimates(
+  config: STAuthConfig,
+  modifiedAfter?: string,
+  processBatch?: (estimates: STEstimate[]) => Promise<void>,
+): Promise<STEstimate[]> {
+  let page = 1;
+  const pageSize = 50;
+  let hasMore = true;
+  const allEstimates: STEstimate[] = [];
+  let batchEstimates: STEstimate[] = [];
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+      status: "Sold",
+    });
+    if (modifiedAfter) {
+      params.set("modifiedOnOrAfter", modifiedAfter);
+    }
+
+    const response = await stFetch<STEstimatesResponse>(
+      config,
+      `/estimates?${params.toString()}`,
+      {},
+      "sales",
+    );
+
+    const activeEstimates = response.data.filter((est) => est.active !== false);
+    batchEstimates.push(...activeEstimates);
+    hasMore = response.hasMore;
+
+    if (batchEstimates.length >= 50 || !hasMore) {
+      if (processBatch) {
+        await processBatch(batchEstimates);
+      } else {
+        allEstimates.push(...batchEstimates);
+      }
+      batchEstimates = [];
+    }
+
+    page++;
+    if (page > 100) break;
+  }
+
+  if (batchEstimates.length > 0) {
+    if (processBatch) {
+      await processBatch(batchEstimates);
+    } else {
+      allEstimates.push(...batchEstimates);
+    }
+  }
+
+  return allEstimates;
+}
+
+const employeeCache = new Map<string, Map<number, string>>();
+
+export async function resolveEmployeeName(
+  config: STAuthConfig,
+  employeeId: number,
+): Promise<string | null> {
+  const tenantKey = config.tenantId;
+  let cache = employeeCache.get(tenantKey);
+  if (!cache) {
+    cache = new Map();
+    employeeCache.set(tenantKey, cache);
+  }
+
+  if (cache.has(employeeId)) {
+    return cache.get(employeeId) || null;
+  }
+
+  try {
+    const employee = await stFetch<STEmployee>(
+      config,
+      `/employees/${employeeId}`,
+      {},
+      "settings",
+    );
+    const name = employee.name || null;
+    cache.set(employeeId, name || "");
+    return name;
+  } catch {
+    cache.set(employeeId, "");
+    return null;
+  }
+}
+
+export function clearEmployeeCache() {
+  employeeCache.clear();
+}
+
+export function parseEstimateData(estimate: STEstimate) {
+  const total = estimate.total || 0;
+  const subtotal = estimate.subtotal || 0;
+
+  let rebateAmount = 0;
+  for (const item of estimate.items || []) {
+    const itemTotal = item.total || 0;
+    if (itemTotal < 0) {
+      rebateAmount += Math.abs(itemTotal);
+    }
+  }
+
+  return {
+    stEstimateId: String(estimate.id),
+    stJobId: estimate.jobId ? String(estimate.jobId) : null,
+    subtotal,
+    rebateAmount,
+    totalAmount: total,
+    soldOn: estimate.soldOn ? new Date(estimate.soldOn) : null,
+    soldByEmployeeId: estimate.soldBy,
+  };
+}
+
 export function clearTokenCache() {
   tokenCache = new Map();
 }
