@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -16,6 +16,7 @@ export const usersTable = pgTable("users", {
   isActive: boolean("is_active").notNull().default(true),
   podiumConfig: text("podium_config"),
   podiumUserUid: text("podium_user_uid"),
+  preferences: jsonb("preferences").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

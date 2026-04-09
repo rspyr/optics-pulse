@@ -169,6 +169,13 @@
       "when": 1775424000000,
       "tag": "0024_podium_user_uid",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1775940000000,
+      "tag": "0029_user_preferences",
+      "breakpoints": true
     }
   ]
 }

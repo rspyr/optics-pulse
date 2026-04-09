@@ -69,7 +69,7 @@ const SOUND_URLS: Record<SoundType, string> = {
 
 export function LeadNotificationProvider({ children }: { children: React.ReactNode }) {
   const { user, effectiveTenantId, isAgency } = useAuth();
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabledRaw] = useState(true);
   const [latestLead, setLatestLead] = useState<LeadNotificationData | null>(null);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const [latestPodiumNotification, setLatestPodiumNotification] = useState<PodiumNotificationData | null>(null);
@@ -83,6 +83,37 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/users/me/preferences`, { credentials: "include" });
+        if (!res.ok || cancelled) return;
+        const prefs = await res.json();
+        if (cancelled) return;
+        if (typeof prefs.soundEnabled === "boolean") {
+          setSoundEnabledRaw(prefs.soundEnabled);
+        }
+      } catch (err) {
+        console.warn("[LeadNotification] Failed to load sound preference:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  const setSoundEnabled = useCallback((enabled: boolean) => {
+    setSoundEnabledRaw(enabled);
+    fetch(`${API}/api/users/me/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ soundEnabled: enabled }),
+    }).catch((err) => {
+      console.warn("[LeadNotification] Failed to save sound preference:", err);
+    });
+  }, []);
 
   useEffect(() => {
     const map = {} as Record<SoundType, HTMLAudioElement>;

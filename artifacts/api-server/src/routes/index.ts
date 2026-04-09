@@ -34,6 +34,7 @@ import podiumRoutesRouter from "./podium-routes";
 import pushTokensRouter from "./push-tokens";
 import webPushRouter from "./web-push";
 import notificationsRouter from "./notifications";
+import usersRouter from "./users";
 
 const router: IRouter = Router();
 
@@ -47,6 +48,8 @@ router.use(metaOAuthRouter);
 router.use(podiumOAuthRouter);
 
 router.use(requireAuth);
+
+router.use(usersRouter);
 
 router.use(enforceTenantScope);
 
