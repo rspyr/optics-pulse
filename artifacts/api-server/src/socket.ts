@@ -111,7 +111,7 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
           .then(async (rows) => {
             if (rows.length > 0 && rows[0].isPaused && (rows[0].pauseSource === "auto" || rows[0].pauseSource === "self")) {
               await db.update(csrScheduleTable)
-                .set({ isPaused: false, pauseSource: "manager", pauseStart: null, pauseEnd: null, updatedAt: new Date() })
+                .set({ isPaused: false, pauseStart: null, pauseEnd: null, updatedAt: new Date() })
                 .where(eq(csrScheduleTable.id, rows[0].id));
               console.log(`[Socket.IO] Auto-unpaused user ${uid} (was ${rows[0].pauseSource}-paused)`);
             }
