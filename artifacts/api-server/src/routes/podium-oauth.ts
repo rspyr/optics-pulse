@@ -12,6 +12,50 @@ const PODIUM_AUTH_URL = "https://api.podium.com/oauth/authorize";
 const PODIUM_TOKEN_URL = "https://api.podium.com/oauth/token";
 const SCOPES = "read_messages write_messages read_contacts write_contacts read_locations read_users";
 
+function getOAuthSigningKey(): string {
+  return process.env.SESSION_SECRET || "mos-dev-secret-change-in-production";
+}
+
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+function buildSignedState(userId: number): { state: string; nonce: string } {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const ts = Date.now().toString(36);
+  const payload = `${userId}:${nonce}:${ts}`;
+  const signature = crypto
+    .createHmac("sha256", getOAuthSigningKey())
+    .update(payload)
+    .digest("hex");
+  return { state: `${payload}:${signature}`, nonce };
+}
+
+function parseSignedState(state: string): { userId: number; nonce: string } | null {
+  try {
+    const parts = state.split(":");
+    if (parts.length !== 4) return null;
+    const [userIdStr, nonce, ts, signature] = parts;
+    const userId = parseInt(userIdStr, 10);
+    if (isNaN(userId)) return null;
+    if (!/^[0-9a-f]{64}$/i.test(signature)) return null;
+    const payload = `${userId}:${nonce}:${ts}`;
+    const expected = crypto
+      .createHmac("sha256", getOAuthSigningKey())
+      .update(payload)
+      .digest("hex");
+    if (!crypto.timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex"))) {
+      return null;
+    }
+    const issuedAt = parseInt(ts, 36);
+    if (isNaN(issuedAt) || Date.now() - issuedAt > OAUTH_STATE_MAX_AGE_MS) {
+      console.warn(`[Podium OAuth] State expired for user ${userId} (age ${Date.now() - issuedAt}ms)`);
+      return null;
+    }
+    return { userId, nonce };
+  } catch {
+    return null;
+  }
+}
+
 function getRedirectUri(): string {
   const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
   if (domain) {
@@ -33,8 +77,8 @@ router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
     return;
   }
 
-  const state = crypto.randomBytes(16).toString("hex");
-  req.session.podiumOAuthState = state;
+  const { state, nonce } = buildSignedState(userId);
+  req.session.podiumOAuthState = nonce;
 
   const redirectUri = getRedirectUri();
 
@@ -67,31 +111,55 @@ router.get("/oauth/podium/authorize", requireAuth, async (req, res) => {
 router.get("/oauth/podium/callback", async (req, res) => {
   const { code, state, error } = req.query;
 
-  console.log(`[Podium OAuth] Callback received: hasCode=${!!code}, hasState=${!!state}, hasError=${!!error}, hasSessionState=${!!req.session?.podiumOAuthState}, hasUserId=${!!req.session?.userId}`);
+  const sessionUserId = req.session?.userId as number | undefined;
+  const sessionNonce = req.session?.podiumOAuthState as string | undefined;
 
-  const userId = req.session?.userId;
+  const parsed = state ? parseSignedState(String(state)) : null;
+
+  let userId: number | undefined = sessionUserId;
+  let sessionRecovered = false;
+
+  if (!userId && parsed) {
+    userId = parsed.userId;
+    sessionRecovered = true;
+    console.warn(`[Podium OAuth] Session lost on callback — recovered userId=${userId} from signed state`);
+  }
+
+  console.log(`[Podium OAuth] Callback received: hasCode=${!!code}, hasState=${!!state}, hasError=${!!error}, hasSessionState=${!!sessionNonce}, hasSessionUserId=${!!sessionUserId}, recoveredFromState=${sessionRecovered}, resolvedUserId=${userId ?? "none"}`);
+
   if (!userId) {
+    console.error("[Podium OAuth] Callback failed: no session and state signature invalid or missing");
     res.redirect("/settings?podiumOAuth=error&message=not_authenticated");
     return;
   }
 
   if (error) {
+    console.error(`[Podium OAuth] Podium returned error for user ${userId}: ${String(error)}`);
     res.redirect(`/settings?podiumOAuth=error&message=${encodeURIComponent(String(error))}`);
     return;
   }
 
   if (!code || !state) {
+    console.error(`[Podium OAuth] Missing code or state for user ${userId}`);
     res.redirect("/settings?podiumOAuth=error&message=missing_code_or_state");
     return;
   }
 
-  if (state !== req.session.podiumOAuthState) {
-    console.error(`[Podium OAuth] State mismatch for user ${userId}: hasSessionState=${!!req.session.podiumOAuthState}, stateMatch=false`);
+  if (!parsed) {
+    console.error(`[Podium OAuth] State signature verification failed for user ${userId}`);
     res.redirect("/settings?podiumOAuth=error&message=invalid_state");
     return;
   }
 
-  delete req.session.podiumOAuthState;
+  if (sessionNonce && parsed.nonce !== sessionNonce) {
+    console.error(`[Podium OAuth] Nonce mismatch for user ${userId}: session nonce does not match state nonce`);
+    res.redirect("/settings?podiumOAuth=error&message=invalid_state");
+    return;
+  }
+
+  if (req.session?.podiumOAuthState) {
+    delete req.session.podiumOAuthState;
+  }
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) {
