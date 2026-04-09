@@ -86,6 +86,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         if (user?.tenantId) {
           socket.emit("join-tenant", user.tenantId);
         }
+        setTimeout(() => emitReconnect(), 500);
       });
 
       socket.on("disconnect", () => {
