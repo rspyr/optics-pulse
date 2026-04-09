@@ -1,6 +1,7 @@
 import { db, leadsTable } from "@workspace/db";
 import { and, lte, isNotNull, ne, asc } from "drizzle-orm";
 import { sendPushToUser } from "./push-notifications";
+import { emitCallbackDue } from "../socket";
 
 const CHECK_INTERVAL_MS = 60_000;
 const NOTIFIED_SET = new Map<number, number>();
@@ -23,6 +24,7 @@ async function checkDueCallbacks() {
       const dueLeads = await db
         .select({
           id: leadsTable.id,
+          tenantId: leadsTable.tenantId,
           firstName: leadsTable.firstName,
           lastName: leadsTable.lastName,
           phone: leadsTable.phone,
@@ -56,6 +58,14 @@ async function checkDueCallbacks() {
           `${name}${phone ? ` - ${phone}` : ""} is ready for a callback`,
           { type: "callback", leadId: lead.id },
         );
+
+        emitCallbackDue(lead.tenantId, {
+          leadId: lead.id,
+          targetUserId: lead.assignedCsrId,
+          leadName: name,
+          phone: phone || undefined,
+          callbackAt: lead.callbackAt?.toISOString(),
+        });
 
         NOTIFIED_SET.set(lead.id, Date.now());
         console.log(`[CallbackScheduler] Sent push for lead ${lead.id} to user ${lead.assignedCsrId}`);

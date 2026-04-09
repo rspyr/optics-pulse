@@ -317,6 +317,13 @@ export function emitPodiumMessage(tenantId: number, message: Record<string, unkn
   }
 }
 
+export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("callback-due", data);
+    console.log(`[Socket.IO] Emitted callback-due for tenant-${tenantId} lead ${data.leadId} -> user ${data.targetUserId}`);
+  }
+}
+
 async function loadFunnelTypesCache(): Promise<void> {
   try {
     const rows = await db.select({

@@ -376,7 +376,7 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
 }
 
 function usePulseSocketIO(onReconnectCb?: () => void) {
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage } = useLeadNotification();
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, onReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue } = useLeadNotification();
   const onReconnectCbRef = useRef(onReconnectCb);
   useEffect(() => { onReconnectCbRef.current = onReconnectCb; }, [onReconnectCb]);
 
@@ -386,7 +386,7 @@ function usePulseSocketIO(onReconnectCb?: () => void) {
     });
   }, [onReconnect]);
 
-  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, onPodiumMessage };
+  return { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, onPodiumMessage, latestCallbackDue, clearCallbackDue };
 }
 
 function formatElapsed(ms: number): string {
@@ -2496,7 +2496,7 @@ export default function Leads() {
 
   const { data: queueData, loading, refetch } = useLeadsHubQueue(effectiveTenantId, isAgency, selectedCsrId);
   const { stats, refetch: refetchStats } = useHudStats(effectiveTenantId, isAgency, selectedCsrId, hudTimeframe);
-  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification } = usePulseSocketIO(fetchMyPause);
+  const { latestLead, clearLatestLead, leadUpdatedSignal, soundEnabled, setSoundEnabled, latestPodiumNotification, clearPodiumNotification, latestCallbackDue, clearCallbackDue } = usePulseSocketIO(fetchMyPause);
   const funnelMap = useFunnelTypes(effectiveTenantId);
   const { filters: searchFilters, updateFilters: updateSearchFilters, results: searchResults, searching, searchActive, clearSearch } = useLeadSearch(effectiveTenantId);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2537,6 +2537,7 @@ export default function Leads() {
   const spiffIdRef = useRef(0);
   const [callbackNotification, setCallbackNotification] = useState<LeadData | null>(null);
   const notifiedCallbackKeysRef = useRef<Set<string>>(new Set());
+  const callbackNotifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSpiffEarned = useCallback((amount: number) => {
     spiffIdRef.current += 1;
@@ -2586,7 +2587,32 @@ export default function Leads() {
     }
   }, [queueData.callbacks, callbackNotification]);
 
+  useEffect(() => {
+    if (!latestCallbackDue) return;
+    const allLeads = [...queueData.newLeads, ...queueData.callbacks, ...queueData.reengagement, ...queueData.oldLeads];
+    const existingLead = allLeads.find((l: LeadData) => l.id === latestCallbackDue.leadId);
+    const cbLead: LeadData = existingLead || {
+      id: latestCallbackDue.leadId,
+      firstName: latestCallbackDue.leadName.split(" ")[0] || "",
+      lastName: latestCallbackDue.leadName.split(" ").slice(1).join(" ") || "",
+      phone: latestCallbackDue.phone || "",
+      callbackAt: latestCallbackDue.callbackAt || null,
+    } as LeadData;
+    const key = `${effectiveTenantId}:${cbLead.id}:${cbLead.callbackAt}`;
+    if (!notifiedCallbackKeysRef.current.has(key)) {
+      notifiedCallbackKeysRef.current.add(key);
+      setCallbackNotification(cbLead);
+      if (callbackNotifTimerRef.current) clearTimeout(callbackNotifTimerRef.current);
+      callbackNotifTimerRef.current = setTimeout(() => {
+        setCallbackNotification(null);
+      }, 30000);
+    }
+    clearCallbackDue();
+    refetch();
+  }, [latestCallbackDue, clearCallbackDue, queueData, effectiveTenantId, refetch]);
+
   const dismissCallbackNotification = useCallback(() => {
+    if (callbackNotifTimerRef.current) clearTimeout(callbackNotifTimerRef.current);
     setCallbackNotification(null);
   }, []);
 
@@ -2610,6 +2636,7 @@ export default function Leads() {
     return () => {
       if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
       if (podiumNotifTimerRef.current) clearTimeout(podiumNotifTimerRef.current);
+      if (callbackNotifTimerRef.current) clearTimeout(callbackNotifTimerRef.current);
     };
   }, []);
 

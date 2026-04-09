@@ -17,6 +17,14 @@ export interface LeadNotificationData {
   [key: string]: unknown;
 }
 
+export interface CallbackDueData {
+  leadId: number;
+  targetUserId: number;
+  leadName: string;
+  phone?: string;
+  callbackAt?: string;
+}
+
 export interface PodiumNotificationData {
   id?: number;
   leadId?: number;
@@ -43,6 +51,8 @@ interface LeadNotificationContextType {
   latestPodiumNotification: PodiumNotificationData | null;
   clearPodiumNotification: () => void;
   onPodiumMessage: (cb: PodiumMessageCallback) => () => void;
+  latestCallbackDue: CallbackDueData | null;
+  clearCallbackDue: () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -55,6 +65,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const [latestLead, setLatestLead] = useState<LeadNotificationData | null>(null);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
   const [latestPodiumNotification, setLatestPodiumNotification] = useState<PodiumNotificationData | null>(null);
+  const [latestCallbackDue, setLatestCallbackDue] = useState<CallbackDueData | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const soundEnabledRef = useRef(soundEnabled);
   const tenantIdRef = useRef(effectiveTenantId);
@@ -185,6 +196,11 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         playNotification({ firstName: msg.leadName || msg.senderName || "Unknown" });
       }
     });
+    socket.on("callback-due", (data: CallbackDueData) => {
+      if (user?.id && data.targetUserId !== user.id) return;
+      setLatestCallbackDue(data);
+      playNotification({ firstName: data.leadName });
+    });
     socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
@@ -192,6 +208,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
 
   const clearLatestLead = useCallback(() => setLatestLead(null), []);
   const clearPodiumNotification = useCallback(() => setLatestPodiumNotification(null), []);
+  const clearCallbackDue = useCallback(() => setLatestCallbackDue(null), []);
 
   const registerOnReconnect = useCallback((cb: ReconnectCallback) => {
     reconnectListenersRef.current.add(cb);
@@ -204,7 +221,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>
