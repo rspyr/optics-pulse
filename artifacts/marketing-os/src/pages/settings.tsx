@@ -319,6 +319,11 @@ export default function Settings() {
 
   async function handleSave() {
     if (!tenantId) return;
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const isMasked = (v: string) => v.startsWith("••••") || v.startsWith("****");
+    if (form.podiumLocationId && !isMasked(form.podiumLocationId) && !uuidRe.test(form.podiumLocationId)) {
+      return;
+    }
     setSaving(true);
     try {
       const integrationConfig: Record<string, string | null> = {};
@@ -748,14 +753,17 @@ export default function Settings() {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-300">Podium Location ID</label>
+            <label className="text-sm font-medium text-gray-300">Podium Location UID</label>
             <input
               type="text"
               value={form.podiumLocationId}
               onChange={e => { trackField("podiumLocationId"); setForm({ ...form, podiumLocationId: e.target.value }); }}
               className={inputClass}
-              placeholder="e.g. loc_abc123"
+              placeholder="e.g. 12345678-abcd-1234-abcd-123456789012"
             />
+            {form.podiumLocationId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(form.podiumLocationId) && !form.podiumLocationId.startsWith("••••") && !form.podiumLocationId.startsWith("****") && (
+              <p className="text-xs text-red-400">Must be a valid UUID format</p>
+            )}
           </div>
           <button
             onClick={handleSave}

@@ -37,13 +37,24 @@ async function podiumFetch(userId: number, path: string, options: RequestInit = 
   return fetch(`${PODIUM_API}${path}`, { ...options, headers });
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 async function getLocationUid(userId: number): Promise<string> {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) throw new Error("User not found");
 
   const config = getPodiumConfig(user);
   const userLocationUid = config.podiumLocationUid as string | undefined;
-  if (userLocationUid) return userLocationUid;
+  if (userLocationUid) {
+    if (isValidUuid(userLocationUid)) {
+      return userLocationUid;
+    }
+    console.warn(`[Podium API] User ${userId} has non-UUID podiumLocationUid "${userLocationUid}", falling through to resolve`);
+  }
 
   if (user.tenantId) {
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId));
@@ -51,11 +62,14 @@ async function getLocationUid(userId: number): Promise<string> {
       const tenantConfig = tenant.apiConfig as Record<string, unknown>;
       const tenantLocationId = tenantConfig.podiumLocationId as string | undefined;
       if (tenantLocationId) {
-        config.podiumLocationUid = tenantLocationId;
-        await db.update(usersTable)
-          .set({ podiumConfig: encryptConfig(config) as unknown as string, updatedAt: new Date() })
-          .where(eq(usersTable.id, userId));
-        return tenantLocationId;
+        if (isValidUuid(tenantLocationId)) {
+          config.podiumLocationUid = tenantLocationId;
+          await db.update(usersTable)
+            .set({ podiumConfig: encryptConfig(config) as unknown as string, updatedAt: new Date() })
+            .where(eq(usersTable.id, userId));
+          return tenantLocationId;
+        }
+        console.warn(`[Podium API] Tenant ${user.tenantId} has non-UUID podiumLocationId "${tenantLocationId}", falling through to live fetch`);
       }
     }
   }
