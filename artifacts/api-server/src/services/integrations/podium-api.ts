@@ -210,7 +210,7 @@ export async function sendMessage(userId: number, phone: string, body: string, c
     const payload: Record<string, unknown> = {
       body,
       channel: {
-        type: "sms",
+        type: "phone",
         identifier: cleanPhone,
       },
       locationUid,

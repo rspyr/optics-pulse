@@ -442,7 +442,23 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
             matchedTenantId = user.tenantId;
             break;
           }
-        } catch {}
+        } catch (err) {
+          console.warn(`[Podium Webhook] Error decrypting podiumConfig for user ${user.id}:`, err);
+        }
+      }
+
+      if (!matchedTenantId) {
+        const allTenants = await db.select({ id: tenantsTable.id, apiConfig: tenantsTable.apiConfig }).from(tenantsTable);
+        for (const t of allTenants) {
+          if (t.apiConfig && typeof t.apiConfig === "object") {
+            const cfg = t.apiConfig as Record<string, unknown>;
+            if (cfg.podiumLocationId === locationUid) {
+              matchedTenantId = t.id;
+              console.log(`[Podium Webhook] Matched location ${locationUid} to tenant ${t.id} via tenant api_config fallback`);
+              break;
+            }
+          }
+        }
       }
     }
 
