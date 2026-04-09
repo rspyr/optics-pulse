@@ -450,7 +450,7 @@ export default function LeadDetailScreen() {
   const handleText = async () => {
     const claimed = await tryClaimLead();
     if (!claimed) return;
-    if (lead?.phone) {
+    if (lead?.phone && commConfig.textPlatform !== "podium") {
       try {
         const smsUrl = `sms:${lead.phone.replace(/\D/g, "")}`;
         const canOpen = await Linking.canOpenURL(smsUrl);

@@ -2105,7 +2105,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
                 </div>
               )}
 
-              {lead.phone && commConfig.textPlatform !== "none" && (
+              {lead.phone && commConfig.textPlatform !== "none" && commConfig.textPlatform !== "podium" && (
                 <a
                   href={`sms:${lead.phone.replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(substituteSmartFields(SMART_FIELD_SCRIPTS.text[0].content))}`}
                   className="flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-lg bg-blue-500/15 text-blue-400 text-xs font-medium hover:bg-blue-500/25 mb-3 transition-colors"
