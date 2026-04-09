@@ -4,7 +4,7 @@ import { eq, and } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-router.get("/web-push/vapid-key", (_req, res) => {
+router.get("/web-push/vapid-public-key", (_req, res) => {
   const key = process.env.VAPID_PUBLIC_KEY;
   if (!key) {
     res.status(500).json({ error: "VAPID not configured" });

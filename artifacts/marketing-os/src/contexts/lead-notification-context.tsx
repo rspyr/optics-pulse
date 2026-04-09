@@ -2,9 +2,11 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { io as socketIOClient } from "socket.io-client";
 import { useAuth } from "@/components/auth-context";
 import { toast } from "@/hooks/use-toast";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
 
 const SW_BASE_URL = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 const API = import.meta.env.VITE_API_URL || "";
+const PUSH_BANNER_DISMISSED_KEY = "pulse_push_banner_dismissed";
 
 export interface LeadNotificationData {
   id?: number;
@@ -169,7 +171,82 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   return (
     <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect }}>
       {children}
+      <PushPromptBanner />
     </LeadNotificationContext.Provider>
+  );
+}
+
+function PushPromptBanner() {
+  const { user } = useAuth();
+  const { supported, permission, subscribed, subscribe } = usePushNotifications();
+  const [visible, setVisible] = useState(false);
+  const [acting, setActing] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!supported) return;
+    if (permission !== "default") return;
+    if (subscribed) return;
+    try {
+      if (localStorage.getItem(PUSH_BANNER_DISMISSED_KEY)) return;
+    } catch {}
+    const timer = setTimeout(() => setVisible(true), 3000);
+    return () => clearTimeout(timer);
+  }, [user?.id, supported, permission, subscribed]);
+
+  const handleEnable = async () => {
+    setActing(true);
+    await subscribe();
+    setActing(false);
+    dismiss();
+  };
+
+  const dismiss = () => {
+    setVisible(false);
+    try { localStorage.setItem(PUSH_BANNER_DISMISSED_KEY, "1"); } catch {}
+  };
+
+  if (!visible) return null;
+
+  return (
+    <div style={{
+      position: "fixed", bottom: 24, right: 24, zIndex: 9999,
+      maxWidth: 360, padding: "16px 20px",
+      background: "linear-gradient(135deg, #0B1224 0%, #002D5E 100%)",
+      border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12,
+      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+      display: "flex", flexDirection: "column", gap: 12,
+      animation: "slideUp 0.3s ease-out",
+    }}>
+      <style>{`@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span style={{ fontSize: 22, lineHeight: 1 }}>🔔</span>
+        <div>
+          <p style={{ color: "#fff", fontSize: 14, fontWeight: 600, margin: 0 }}>Enable push notifications?</p>
+          <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, margin: "4px 0 0" }}>Get browser alerts when new leads come in, even if this tab isn't active.</p>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button
+          onClick={dismiss}
+          style={{
+            background: "transparent", border: "1px solid rgba(255,255,255,0.15)",
+            color: "rgba(255,255,255,0.5)", borderRadius: 8, padding: "6px 14px",
+            fontSize: 13, cursor: "pointer",
+          }}
+        >Not now</button>
+        <button
+          onClick={handleEnable}
+          disabled={acting}
+          style={{
+            background: "#0ea5e9", border: "none", color: "#fff",
+            borderRadius: 8, padding: "6px 14px", fontSize: 13,
+            fontWeight: 600, cursor: acting ? "wait" : "pointer",
+            opacity: acting ? 0.7 : 1,
+          }}
+        >{acting ? "Enabling..." : "Enable"}</button>
+      </div>
+    </div>
   );
 }
 

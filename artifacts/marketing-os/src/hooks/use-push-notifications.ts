@@ -41,7 +41,7 @@ export function usePushNotifications() {
   const fetchVapidKey = useCallback(async (): Promise<string | null> => {
     if (vapidKeyRef.current) return vapidKeyRef.current;
     try {
-      const res = await fetch(`${API}/api/web-push/vapid-key`, { credentials: "include" });
+      const res = await fetch(`${API}/api/web-push/vapid-public-key`, { credentials: "include" });
       if (!res.ok) return null;
       const data = await res.json();
       vapidKeyRef.current = data.publicKey;
