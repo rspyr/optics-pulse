@@ -3,6 +3,9 @@ import { io as socketIOClient } from "socket.io-client";
 import { useAuth } from "@/components/auth-context";
 import { toast } from "@/hooks/use-toast";
 
+const SW_BASE_URL = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+const API = import.meta.env.VITE_API_URL || "";
+
 export interface LeadNotificationData {
   id?: number;
   tenantId?: number;
@@ -106,6 +109,34 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       });
     });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    (async () => {
+      try {
+        let reg = await navigator.serviceWorker.getRegistration(`${SW_BASE_URL}/sw.js`);
+        if (!reg) {
+          reg = await navigator.serviceWorker.register(`${SW_BASE_URL}/sw.js`, { scope: `${SW_BASE_URL}/` });
+        }
+        await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await fetch(`${API}/api/web-push/subscribe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ subscription: sub.toJSON() }),
+          }).catch(() => {});
+        }
+        console.log("[LeadNotification] Service worker registered on app load");
+      } catch (err) {
+        console.warn("[LeadNotification] SW registration on load failed:", err);
+      }
+    })();
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user) return;

@@ -74,7 +74,7 @@ async function sendWebPushToUser(
 
   for (const sub of webSubs) {
     try {
-      const payload = JSON.stringify({ title, body, url: "/pulse", ...data });
+      const payload = JSON.stringify({ title, body, ...data });
       await webpush.sendNotification(sub.subscription as webpush.PushSubscription, payload);
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;

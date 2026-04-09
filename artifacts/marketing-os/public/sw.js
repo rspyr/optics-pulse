@@ -1,5 +1,5 @@
 self.addEventListener("push", (event) => {
-  let data = { title: "New Lead", body: "You have a new lead!", url: "/" };
+  let data = { title: "New Lead", body: "You have a new lead!" };
   try {
     if (event.data) {
       data = Object.assign(data, event.data.json());
@@ -8,12 +8,14 @@ self.addEventListener("push", (event) => {
     console.warn("[SW] Failed to parse push data:", e);
   }
 
+  const scope = self.registration.scope;
+
   const options = {
     body: data.body,
-    icon: "/favicon.ico",
-    badge: "/favicon.ico",
+    icon: new URL("favicon.ico", scope).href,
+    badge: new URL("favicon.ico", scope).href,
     tag: "new-lead-" + (data.leadId || Date.now()),
-    data: { url: data.url || "/pulse", leadId: data.leadId },
+    data: { url: new URL("pulse", scope).href, leadId: data.leadId },
     requireInteraction: true,
   };
 
@@ -22,17 +24,17 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || "/pulse";
+  const targetUrl = event.notification.data?.url || self.registration.scope;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if (client.url.includes("/marketing-os") && "focus" in client) {
-          client.navigate(url);
+        if (new URL(client.url).origin === new URL(targetUrl).origin && "focus" in client) {
+          client.navigate(targetUrl);
           return client.focus();
         }
       }
-      return self.clients.openWindow(url);
+      return self.clients.openWindow(targetUrl);
     })
   );
 });
