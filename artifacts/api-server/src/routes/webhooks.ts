@@ -423,14 +423,28 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
           const config = decryptConfig(user.podiumConfig);
           if (config.podiumLocationUid === locationUid) {
             if (config.podiumWebhookSecret) {
+              let hmacOk = false;
               if (!podiumSignature || !rawBody) {
-                console.warn(`[Podium Webhook] Missing signature or raw body for HMAC-configured user ${user.id}`);
-                continue;
-              }
-              const sig = podiumSignature.startsWith("sha256=") ? podiumSignature.slice(7) : podiumSignature;
-              if (!verifyPodiumSignature(rawBody, sig, config.podiumWebhookSecret as string)) {
-                console.warn(`[Podium Webhook] HMAC signature mismatch for user ${user.id}`);
-                continue;
+                console.warn(`[Podium Webhook] Missing signature or raw body for HMAC-configured user ${user.id}, falling back to verify-token check`);
+                if (config.podiumWebhookVerifyToken) {
+                  const verifyToken = req.query.verify as string | undefined;
+                  if (verifyToken && verifyToken === config.podiumWebhookVerifyToken) {
+                    hmacOk = true;
+                  } else {
+                    console.warn(`[Podium Webhook] Verify token fallback also failed for user ${user.id}`);
+                    continue;
+                  }
+                } else {
+                  continue;
+                }
+              } else {
+                const sig = podiumSignature.startsWith("sha256=") ? podiumSignature.slice(7) : podiumSignature;
+                if (verifyPodiumSignature(rawBody, sig, config.podiumWebhookSecret as string)) {
+                  hmacOk = true;
+                } else {
+                  console.warn(`[Podium Webhook] HMAC signature mismatch for user ${user.id}`);
+                  continue;
+                }
               }
             } else if (config.podiumWebhookVerifyToken) {
               const verifyToken = req.query.verify as string | undefined;

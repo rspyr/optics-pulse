@@ -119,15 +119,17 @@ import express from "express";
 
 let app: express.Express;
 
+const captureRawBody = (req: unknown, _res: unknown, buf: Buffer) => {
+  (req as Record<string, unknown>).rawBody = buf;
+};
+
 async function setupApp() {
   vi.resetModules();
   const mod = await import("./webhooks");
   app = express();
-  app.use(express.json({
-    verify: (req: unknown, _res, buf) => {
-      (req as Record<string, unknown>).rawBody = buf;
-    },
-  }));
+  app.use(express.json({ verify: captureRawBody }));
+  app.use(express.urlencoded({ extended: true, verify: captureRawBody }));
+  app.use("/webhooks", express.raw({ type: "*/*", verify: captureRawBody }));
   app.use(mod.default);
 }
 

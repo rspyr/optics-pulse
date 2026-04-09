@@ -40,12 +40,13 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({
-  verify: (req: unknown, _res, buf) => {
-    (req as Record<string, unknown>).rawBody = buf;
-  },
-}));
-app.use(express.urlencoded({ extended: true }));
+const captureRawBody = (req: unknown, _res: unknown, buf: Buffer) => {
+  (req as Record<string, unknown>).rawBody = buf;
+};
+
+app.use(express.json({ verify: captureRawBody }));
+app.use(express.urlencoded({ extended: true, verify: captureRawBody }));
+app.use("/api/webhooks", express.raw({ type: "*/*", verify: captureRawBody }));
 
 app.use((req, _res, next) => {
   const authHeader = req.headers.authorization;
