@@ -188,7 +188,7 @@ function PushPromptBanner() {
     if (permission !== "default") return;
     if (subscribed) return;
     try {
-      if (localStorage.getItem(PUSH_BANNER_DISMISSED_KEY)) return;
+      if (localStorage.getItem(`${PUSH_BANNER_DISMISSED_KEY}_${user.id}`)) return;
     } catch {}
     const timer = setTimeout(() => setVisible(true), 3000);
     return () => clearTimeout(timer);
@@ -203,7 +203,7 @@ function PushPromptBanner() {
 
   const dismiss = () => {
     setVisible(false);
-    try { localStorage.setItem(PUSH_BANNER_DISMISSED_KEY, "1"); } catch {}
+    try { localStorage.setItem(`${PUSH_BANNER_DISMISSED_KEY}_${user?.id}`, "1"); } catch {}
   };
 
   if (!visible) return null;
