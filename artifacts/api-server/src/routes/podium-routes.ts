@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, or, desc, inArray } from "drizzle-orm";
 import { getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
@@ -44,6 +44,16 @@ async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Pr
   if (isCrossTenant && isAgencyOrSuperAdmin) {
     const agencyConnected = await isPodiumConnected(loggedInUserId);
     if (agencyConnected) return loggedInUserId;
+  }
+
+  const agencyLevelUsers = await db.select({ id: usersTable.id })
+    .from(usersTable)
+    .where(and(
+      eq(usersTable.isActive, true),
+      or(eq(usersTable.role, "super_admin"), eq(usersTable.role, "agency_user")),
+    ));
+  for (const u of agencyLevelUsers) {
+    if (await isPodiumConnected(u.id)) return u.id;
   }
 
   return null;

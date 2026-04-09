@@ -1307,6 +1307,18 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [conversationUid, setConversationUid] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const lineHeight = 20;
+    const paddingY = 16;
+    const maxHeight = lineHeight * 5 + paddingY;
+    ta.style.height = `${Math.min(ta.scrollHeight, maxHeight)}px`;
+    ta.style.overflowY = ta.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [messageText]);
 
   const fetchMessages = useCallback(() => {
     fetch(`${API_BASE}/podium/conversations/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
@@ -1405,14 +1417,16 @@ function PodiumChatPanel({ leadId, tenantId, timezone, onClose }: { leadId: numb
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={textareaRef}
+          rows={1}
           value={messageText}
           onChange={e => setMessageText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
           placeholder="Type a message..."
-          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-blue-500/30"
+          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-blue-500/30 resize-none"
+          style={{ overflowY: "hidden" }}
         />
         <button
           onClick={handleSend}

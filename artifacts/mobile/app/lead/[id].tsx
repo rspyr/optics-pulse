@@ -1891,7 +1891,7 @@ const styles = StyleSheet.create({
   msgBody: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20 },
   msgTime: { fontSize: 10, fontFamily: "Inter_400Regular" },
   msgInputRow: { flexDirection: "row", gap: 8, paddingTop: 12, borderTopWidth: 1, alignItems: "flex-end" },
-  msgInput: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, fontFamily: "Inter_400Regular", maxHeight: 80 },
+  msgInput: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14, fontFamily: "Inter_400Regular", maxHeight: 120 },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   historyContainer: { paddingHorizontal: 16, gap: 6, marginTop: 8 },
   historyNotes: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" as const, marginTop: 2 },
