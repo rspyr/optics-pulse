@@ -78,7 +78,10 @@ async function syncPodiumMessagesForLead(podiumUserId: number, tenantId: number,
             podiumMessageUid: msg.uid,
             direction: msg.direction === "inbound" ? "inbound" : "outbound",
             body: msg.body,
-            channelType: msg.channelType || conv.channelType,
+            channelType: (() => {
+              const raw = msg.channelType || conv.channelType;
+              return raw === "phone" ? "sms" : raw;
+            })(),
             senderName: msg.senderName || null,
             deliveryStatus: msg.deliveryStatus || "delivered",
             messageItems: msg.items || null,
@@ -248,7 +251,7 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   }
 
   for (const pm of podiumMessages) {
-    const isPodiumCall = pm.channelType === "phone" || pm.channelType === "car_wars" || pm.channelType === "call" || pm.channelType === "phone_call";
+    const isPodiumCall = pm.channelType === "car_wars" || pm.channelType === "call" || pm.channelType === "phone_call";
     const podiumDeepLink = pm.podiumConversationUid ? `${PODIUM_INBOX_BASE}/${pm.podiumConversationUid}` : null;
     timeline.push({
       type: isPodiumCall ? "podium_call" : "podium_text",

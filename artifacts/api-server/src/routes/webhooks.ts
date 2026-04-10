@@ -398,7 +398,8 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
     const conversationUid = String(conversation?.uid || data.conversationUid || data.conversation_uid || "");
     const messageBody = String(data.body || data.text || "");
     const direction = eventType === "message.received" ? "inbound" : "outbound";
-    const channelType = String(channel?.type || data.channelType || data.channel_type || "sms");
+    const channelTypeRaw = String(channel?.type || data.channelType || data.channel_type || "sms");
+    const channelType = channelTypeRaw === "phone" ? "sms" : channelTypeRaw;
     const senderName = String(contact?.name || data.senderName || data.sender_name || "");
     const deliveryStatus = eventType === "message.failed" ? "failed" : (String(data.deliveryStatus || data.delivery_status || "delivered"));
     const podiumCreatedAt = data.createdAt ? new Date(String(data.createdAt)) : new Date();
@@ -552,7 +553,7 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
 
     if (direction === "inbound" && matchedTenantId) {
       const { sendPushToUser, sendPushToTenantUsers } = await import("../services/push-notifications");
-      const isCall = channelType === "phone" || channelType === "call" || channelType === "phone_call" || channelType === "car_wars";
+      const isCall = channelType === "call" || channelType === "phone_call" || channelType === "car_wars";
       const pushTitle = isCall ? "Incoming Call" : "Inbound Text";
       const contactName = leadName || senderName || "Unknown Contact";
       const pushBody = isCall

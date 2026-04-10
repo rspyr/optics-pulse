@@ -50,7 +50,7 @@ function PodiumToastBanner({ data, onPress, onDismiss }: { data: PodiumToast; on
   const slideAnim = useRef(new Animated.Value(-120)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
 
-  const isCall = data.channelType === "phone" || data.channelType === "call" || data.channelType === "phone_call" || data.channelType === "car_wars";
+  const isCall = data.channelType === "call" || data.channelType === "phone_call" || data.channelType === "car_wars";
 
   useEffect(() => {
     Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 300 }).start();

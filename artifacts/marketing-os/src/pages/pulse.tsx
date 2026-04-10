@@ -2909,13 +2909,13 @@ export default function Leads() {
                     <span className="relative flex h-5 w-5">
                       <motion.span className="absolute inline-flex h-full w-full rounded-full bg-blue-500" animate={{ scale: [1, 1.8, 1], opacity: [0.75, 0, 0.75] }} transition={{ duration: 1.2, repeat: Infinity }} />
                       <span className="relative inline-flex rounded-full h-5 w-5 bg-blue-500 items-center justify-center">
-                        {podiumNotif.channelType === "phone" || podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
+                        {podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
                           ? <Phone className="w-3 h-3 text-white" />
                           : <MessageSquare className="w-3 h-3 text-white" />}
                       </span>
                     </span>
                     <span className="text-sm font-display font-bold text-blue-400">
-                      {podiumNotif.channelType === "phone" || podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
+                      {podiumNotif.channelType === "call" || podiumNotif.channelType === "phone_call" || podiumNotif.channelType === "car_wars"
                         ? "Incoming Call"
                         : "Inbound Text"}
                     </span>

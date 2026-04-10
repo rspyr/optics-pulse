@@ -237,7 +237,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       });
       if (msg.direction === "inbound") {
         setLatestPodiumNotification(msg);
-        const isCall = msg.channelType === "phone" || msg.channelType === "call" || msg.channelType === "phone_call" || msg.channelType === "car_wars";
+        const isCall = msg.channelType === "call" || msg.channelType === "phone_call" || msg.channelType === "car_wars";
         playSound(isCall ? "inbound-call" : "text-message");
       }
     });

@@ -160,7 +160,10 @@ export async function getConversationMessages(userId: number, conversationUid: s
       uid: String(m.uid || ""),
       body: String(m.body || ""),
       direction: String(m.sourceType || m.direction || "outbound"),
-      channelType: String(((m.conversation as Record<string, unknown>)?.channel as Record<string, unknown> | undefined)?.type || m.channelType || "sms"),
+      channelType: (() => {
+        const raw = String(((m.conversation as Record<string, unknown>)?.channel as Record<string, unknown> | undefined)?.type || m.channelType || "sms");
+        return raw === "phone" ? "sms" : raw;
+      })(),
       senderName: m.senderName as string | undefined,
       deliveryStatus: m.deliveryStatus as string | undefined,
       createdAt: String(m.createdAt || ""),
