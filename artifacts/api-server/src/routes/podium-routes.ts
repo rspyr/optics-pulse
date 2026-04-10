@@ -20,6 +20,8 @@ function resolveTenantId(req: { query?: Record<string, unknown>; body?: unknown;
 
 type PodiumMessageRow = typeof podiumMessagesTable.$inferSelect;
 
+const CALL_CHANNEL_TYPES = ["call", "phone_call", "car_wars"];
+
 async function resolvePodiumUserId(loggedInUserId: number, tenantId: number): Promise<number | null> {
   const [loggedInUser] = await db.select({ id: usersTable.id, tenantId: usersTable.tenantId, role: usersTable.role })
     .from(usersTable).where(eq(usersTable.id, loggedInUserId));
@@ -118,7 +120,8 @@ router.get("/podium/conversations/:leadId", async (req, res) => {
   if (!podiumUserId) { res.json({ messages: [], notConnected: true }); return; }
 
   try {
-    const messages = await syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone);
+    const allMessages = await syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone);
+    const messages = allMessages.filter(m => !CALL_CHANNEL_TYPES.includes(m.channelType));
     const conversationUid = messages.length > 0 ? messages[0].podiumConversationUid : null;
     const podiumDeepLink = conversationUid ? `${PODIUM_INBOX_BASE}/${conversationUid}` : null;
     res.json({ messages, conversationUid, podiumDeepLink });
@@ -251,7 +254,7 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   }
 
   for (const pm of podiumMessages) {
-    const isPodiumCall = pm.channelType === "car_wars" || pm.channelType === "call" || pm.channelType === "phone_call";
+    const isPodiumCall = CALL_CHANNEL_TYPES.includes(pm.channelType);
     const podiumDeepLink = pm.podiumConversationUid ? `${PODIUM_INBOX_BASE}/${pm.podiumConversationUid}` : null;
     timeline.push({
       type: isPodiumCall ? "podium_call" : "podium_text",

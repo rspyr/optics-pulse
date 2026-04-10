@@ -1806,37 +1806,6 @@ export default function LeadDetailScreen() {
                   ) : (
                     <View style={[styles.messagesList, { marginTop: 12 }]}>
                       {[...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(msg => {
-                        const isCall = msg.channelType === "call" || msg.channelType === "phone_call" || msg.channelType === "car_wars";
-                        if (isCall) {
-                          const isExp = expandedCallIds.has(msg.id + 100000);
-                          return (
-                            <View key={msg.id}>
-                              <TouchableOpacity
-                                style={[styles.podiumCallBtn, { backgroundColor: "#06B6D408", borderColor: "#06B6D420" }]}
-                                onPress={() => toggleCallExpand(msg.id + 100000)}
-                                activeOpacity={0.7}
-                              >
-                                <View style={styles.podiumCallRow}>
-                                  <Feather name="phone" size={12} color="#06B6D4" />
-                                  <Text style={{ fontSize: 13, color: "#67E8F9", fontFamily: "Inter_600SemiBold", flex: 1 }}>
-                                    {msg.direction === "outbound" ? "Outgoing" : "Incoming"} Call
-                                  </Text>
-                                  {msg.senderName && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>— {msg.senderName}</Text>}
-                                  <Feather name="chevron-down" size={14} color="#06B6D480" style={isExp ? { transform: [{ rotate: "180deg" }] } : {}} />
-                                </View>
-                                <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
-                                  {new Date(msg.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                                </Text>
-                              </TouchableOpacity>
-                              {isExp && msg.body && (
-                                <View style={[styles.transcriptBlock, { borderLeftColor: "#06B6D420" }]}>
-                                  <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1, marginBottom: 4 }}>TRANSCRIPT / NOTES</Text>
-                                  <Text style={{ fontSize: 12, color: colors.foreground, fontFamily: "Inter_400Regular", lineHeight: 18 }}>{msg.body}</Text>
-                                </View>
-                              )}
-                            </View>
-                          );
-                        }
                         return (
                           <View
                             key={msg.id}
