@@ -1,4 +1,4 @@
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable } from "@workspace/db";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitNewLead, emitLeadUpdated } from "../socket";
@@ -39,7 +39,12 @@ async function syncAllSheets(): Promise<void> {
   if (syncing) return;
   syncing = true;
   try {
-    const configs = await db.select().from(googleSheetConfigsTable)
+    const trackerOnlyTenants = await db.select({ id: tenantsTable.id })
+      .from(tenantsTable)
+      .where(eq(tenantsTable.leadIngestionMode, "tracker"));
+    const trackerOnlyIds = new Set(trackerOnlyTenants.map(t => t.id));
+
+    const allConfigs = await db.select().from(googleSheetConfigsTable)
       .where(and(
         isNotNull(googleSheetConfigsTable.googleSheetId),
         isNotNull(googleSheetConfigsTable.googleSheetTab),
@@ -48,6 +53,8 @@ async function syncAllSheets(): Promise<void> {
         isNotNull(googleSheetConfigsTable.syncRowWatermark),
         ne(googleSheetConfigsTable.syncPaused, true),
       ));
+
+    const configs = allConfigs.filter(c => !trackerOnlyIds.has(c.tenantId));
 
     if (configs.length === 0) return;
 

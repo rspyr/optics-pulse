@@ -11,6 +11,8 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
 import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rate-limit";
+import { detectFields } from "../services/field-detection";
+import { normalizeFunnel } from "../services/funnel-normalizer";
 
 const TrackerSubmitPayload = TrackerSubmitBody.extend({
   submitted_at: z.string().optional(),
@@ -143,7 +145,7 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
       return;
     }
 
-    const [tenant] = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+    const [tenant] = await db.select({ id: tenantsTable.id, name: tenantsTable.name, leadIngestionMode: tenantsTable.leadIngestionMode })
       .from(tenantsTable)
       .where(eq(tenantsTable.clientSlug, clientId))
       .limit(1);
@@ -181,13 +183,46 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
     const formId = (form.id as string) || null;
     const formName = (form.name as string) || null;
 
-    const pii = extractPiiFromFields(fields);
+    const detection = await detectFields(tenantId, fields, pageUrl, formId, formName);
+    const pii = detection.pii;
     const hashedPhone = pii.phone ? hashValue(normalizePhone(pii.phone)) : null;
     const hashedEmail = pii.email ? hashValue(pii.email) : null;
-    const billingAddress = extractAddressFromFields(fields);
+
+    const addressStr = [
+      detection.addressParts.street,
+      detection.addressParts.city,
+      [detection.addressParts.state, detection.addressParts.zip].filter(Boolean).join(" "),
+    ].filter(Boolean).join(", ");
+    const billingAddress = addressStr ? normalizeAddress(addressStr) : null;
+
+    const resolvedSourceStr = await normalizeSource(tenantId, utmSource || "form");
+    let resolvedFunnelStr: string | null = null;
+    let resolvedFunnelId: number | null = null;
+
+    const funnelSlug = (custom.funnel as string) || null;
+    const funnelResolved = funnelSlug
+      ? await resolveFunnelType(tenantId, funnelSlug)
+      : null;
+
+    if (funnelResolved) {
+      resolvedFunnelStr = funnelResolved.name;
+      resolvedFunnelId = funnelResolved.id;
+    } else if (detection.funnelRawValue) {
+      const aliasMatch = await normalizeFunnel(tenantId, detection.funnelRawValue);
+      if (aliasMatch) {
+        resolvedFunnelStr = aliasMatch.funnelName;
+        resolvedFunnelId = aliasMatch.funnelTypeId;
+      } else {
+        resolvedFunnelStr = detection.funnelRawValue;
+      }
+    }
 
     const formFieldsToStore = Object.keys(fields).length > 0
       ? { ...fields, ...(Object.keys(custom).length > 0 ? { _custom: custom } : {}) }
+      : null;
+
+    const detectedMappings = detection.fields.length > 0
+      ? Object.fromEntries(detection.fields.map(f => [f.fieldName, { mapsTo: f.mapsTo, method: f.method, confidence: f.confidence }]))
       : null;
 
     const matchLevel = gclid ? "diamond" as const
@@ -221,23 +256,40 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
       formId,
       formName,
       formFields: formFieldsToStore,
+      detectedMappings,
+      resolvedLeadSource: resolvedSourceStr,
+      resolvedFunnel: resolvedFunnelStr,
       submittedAt,
       matchLevel,
       matchConfidence,
     }).returning();
 
-    if (pii.firstName || pii.phone || pii.email) {
+    const ingestionMode = tenant.leadIngestionMode || "sheets";
+    const shouldCreateLead = ingestionMode === "tracker" || ingestionMode === "both";
+
+    if (shouldCreateLead && (pii.firstName || pii.phone || pii.email)) {
       const nameFields = [pii.firstName, pii.lastName].filter(Boolean).join(" ").toLowerCase();
       const isTestLead = nameFields.includes("test");
 
       if (!isTestLead) {
-        const funnelSlug = (custom.funnel as string) || null;
-        const resolved = await resolveFunnelType(tenantId, funnelSlug);
-        const resolvedLeadType = resolved?.name || (utmSource || "form");
-        const resolvedFunnelId = resolved?.id || null;
+        const resolvedLeadType = resolvedFunnelStr || (utmSource || "form");
 
-        const rawApptDate = (fields.appointment_date as string) || (fields.appointmentDate as string) || null;
-        const rawApptTime = (fields.appointment_time as string) || (fields.appointmentTime as string) || null;
+        if (ingestionMode === "both" && pii.phone) {
+          const normalizedPhone = normalizePhone(pii.phone);
+          const allTenantLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+            .from(leadsTable)
+            .where(eq(leadsTable.tenantId, tenantId));
+          const existsByPhone = allTenantLeads.some(l =>
+            l.phone && normalizePhone(l.phone) === normalizedPhone
+          );
+          if (existsByPhone) {
+            res.json({ success: true, eventId: event.id, deduplicated: true });
+            return;
+          }
+        }
+
+        const rawApptDate = detection.fields.find(f => f.mapsTo === "appointmentDate")?.value || null;
+        const rawApptTime = detection.fields.find(f => f.mapsTo === "appointmentTime")?.value || null;
         const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
 
         const [newLead] = await db.insert(leadsTable).values({
@@ -246,7 +298,7 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
           lastName: pii.lastName || "",
           phone: pii.phone || null,
           email: pii.email || null,
-          source: await normalizeSource(tenantId, utmSource || "form"),
+          source: resolvedSourceStr,
           matchedGclid: gclid || null,
           interestType: null,
           leadType: resolvedLeadType,
@@ -257,10 +309,10 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
           preBooked: hasApptDetails,
           dayInSequence: 1,
           status: "new",
-          address: (fields.address as string) || null,
-          city: (fields.city as string) || null,
-          state: (fields.state as string) || null,
-          zip: (fields.zip as string) || (fields.zipcode as string) || (fields.postal_code as string) || null,
+          address: detection.addressParts.street || null,
+          city: detection.addressParts.city || null,
+          state: detection.addressParts.state || null,
+          zip: detection.addressParts.zip || null,
         }).returning();
 
         if (newLead) {

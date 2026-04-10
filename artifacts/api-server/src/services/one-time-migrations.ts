@@ -868,6 +868,56 @@ const migrations: Migration[] = [
       console.log("[Migration] Added subscription column to push_tokens");
     },
   },
+  {
+    id: "2026-04-10_gtm-attribution-adaptive-detection",
+    description: "Create funnel_aliases, field_mapping_rules tables; add detection columns to attribution_events; add leadIngestionMode to tenants",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS funnel_aliases (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          funnel_type_id INTEGER NOT NULL REFERENCES funnel_types(id) ON DELETE CASCADE,
+          alias TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_funnel_alias ON funnel_aliases(tenant_id, alias)
+      `);
+
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS field_mapping_rules (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          page_url_pattern TEXT NOT NULL,
+          form_identifier TEXT NOT NULL,
+          field_name TEXT NOT NULL,
+          maps_to TEXT NOT NULL,
+          priority INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_page_form_field ON field_mapping_rules(tenant_id, page_url_pattern, form_identifier, field_name)
+      `);
+
+      await db.execute(sql`
+        ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS detected_mappings JSONB
+      `);
+      await db.execute(sql`
+        ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS resolved_lead_source TEXT
+      `);
+      await db.execute(sql`
+        ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS resolved_funnel TEXT
+      `);
+
+      await db.execute(sql`
+        ALTER TABLE tenants ADD COLUMN IF NOT EXISTS lead_ingestion_mode TEXT NOT NULL DEFAULT 'sheets'
+      `);
+
+      console.log("[Migration] Created funnel_aliases, field_mapping_rules tables; added detection columns to attribution_events; added leadIngestionMode to tenants");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
