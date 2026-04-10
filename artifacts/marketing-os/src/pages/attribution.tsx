@@ -443,7 +443,15 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   const resolvedSource = (event as Record<string, unknown>).resolvedLeadSource as string | undefined;
   const resolvedFunnel = (event as Record<string, unknown>).resolvedFunnel as string | undefined;
   const rawSource = event.utmSource || event.referrer || null;
-  const rawFunnel = (event as Record<string, unknown>).resolvedFunnel as string | null;
+
+  const detectedMappings = (event as Record<string, unknown>).detectedMappings as Record<string, { mapsTo: string }> | null;
+  const funnelFieldEntry = detectedMappings
+    ? Object.entries(detectedMappings).find(([, v]) => v.mapsTo === "funnel")
+    : null;
+  const formFields = event.formFields as Record<string, unknown> | null;
+  const rawFunnel = funnelFieldEntry && formFields
+    ? (formFields[funnelFieldEntry[0]] as string) || resolvedFunnel || null
+    : resolvedFunnel || null;
 
   const [editingSource, setEditingSource] = useState(false);
   const [editingFunnel, setEditingFunnel] = useState(false);

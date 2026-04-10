@@ -164,6 +164,8 @@ function matchFieldName(normalizedKey: string, semantic: SemanticField): boolean
   return false;
 }
 
+const NAME_REGEX = /^[A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{1,20}){0,3}$/;
+
 function detectByValuePattern(value: string): SemanticField | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -172,6 +174,12 @@ function detectByValuePattern(value: string): SemanticField | null {
 
   const digits = trimmed.replace(/[^\d]/g, "");
   if (digits.length >= PHONE_DIGIT_MIN && PHONE_REGEX.test(trimmed)) return "phone";
+
+  if (NAME_REGEX.test(trimmed) && trimmed.length >= 2 && trimmed.length <= 50) {
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 2) return "fullName";
+    return "firstName";
+  }
 
   return null;
 }

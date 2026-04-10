@@ -217,6 +217,17 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
       }
     }
 
+    if (!resolvedFunnelId && pageUrl) {
+      try {
+        const pagePath = new URL(pageUrl).pathname.toLowerCase();
+        const urlAliasMatch = await normalizeFunnel(tenantId, pagePath);
+        if (urlAliasMatch) {
+          resolvedFunnelId = urlAliasMatch.funnelTypeId;
+          resolvedFunnelStr = urlAliasMatch.funnelName;
+        }
+      } catch {}
+    }
+
     if (!resolvedFunnelId) {
       const [defaultAssoc] = await db
         .select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId, funnelName: funnelTypesTable.name })

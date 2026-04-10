@@ -50,7 +50,7 @@ router.put("/ingestion-mode", async (req, res) => {
     return;
   }
 
-  const role = (req as any).session?.role || (req as any).user?.role;
+  const role = (req as any).session?.userRole;
   if (!role || !["super_admin", "agency_user"].includes(role)) {
     res.status(403).json({ error: "Only agency admins can change ingestion mode" });
     return;
