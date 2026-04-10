@@ -1361,8 +1361,9 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
 
   useEffect(() => {
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
+    const CALL_TYPES = ["call", "phone_call", "car_wars"];
     socket.on("podium-message", (msg: PodiumMsg & { leadId?: number }) => {
-      if (msg.leadId === leadId) {
+      if (msg.leadId === leadId && !CALL_TYPES.includes(msg.channelType || "")) {
         setMessages(prev => {
           if (prev.some(m => m.id === msg.id)) return prev;
           return [...prev, msg];
