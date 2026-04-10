@@ -894,6 +894,10 @@ export default function Settings() {
         </div>
       </PremiumCard>}
 
+      {!isClientUser && tenantId && (
+        <IngestionModeSettings tenantId={tenantId} />
+      )}
+
       {isClientUser && (
         <PremiumCard>
           <h3 className="text-xl font-display text-white mb-4">Account Information</h3>
@@ -914,5 +918,117 @@ export default function Settings() {
         </PremiumCard>
       )}
     </div>
+  );
+}
+
+function IngestionModeSettings({ tenantId }: { tenantId: number }) {
+  const [mode, setMode] = useState("sheets");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [snippet, setSnippet] = useState<string | null>(null);
+  const [snippetError, setSnippetError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setMode(d.mode || "sheets"))
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  const updateMode = async (newMode: string) => {
+    setSaving(true);
+    const res = await fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ mode: newMode }),
+    });
+    if (res.ok) setMode(newMode);
+    setSaving(false);
+  };
+
+  const loadSnippet = async () => {
+    setSnippetError(null);
+    const res = await fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${tenantId}`, { credentials: "include" });
+    const d = await res.json();
+    if (!res.ok) {
+      setSnippetError(d.error || "Failed to generate snippet");
+      return;
+    }
+    setSnippet(d.snippet);
+  };
+
+  if (loading) return null;
+
+  const steps = [
+    { key: "sheets", label: "Sheets Only", desc: "Leads from sheet sync only" },
+    { key: "both", label: "Dual Mode", desc: "Both sheet sync and tracker" },
+    { key: "tracker", label: "Tracker Only", desc: "All leads from tracker" },
+  ];
+
+  return (
+    <>
+      <PremiumCard>
+        <div className="flex items-center gap-2 mb-4">
+          <Wifi className="w-5 h-5 text-primary" />
+          <h3 className="text-xl font-display text-white">Lead Ingestion Mode</h3>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">Control how leads enter the system for this tenant.</p>
+        <div className="grid gap-3 md:grid-cols-3">
+          {steps.map(step => (
+            <button
+              key={step.key}
+              disabled={saving}
+              onClick={() => updateMode(step.key)}
+              className={cn(
+                "p-4 rounded-xl border text-left transition-all",
+                mode === step.key
+                  ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                  : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"
+              )}
+            >
+              {mode === step.key && <Check className="w-4 h-4 text-primary float-right" />}
+              <h4 className="font-medium text-sm text-white mb-1">{step.label}</h4>
+              <p className="text-xs text-muted-foreground">{step.desc}</p>
+            </button>
+          ))}
+        </div>
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-primary" />
+            <h3 className="text-xl font-display text-white">GTM Tracking Snippet</h3>
+          </div>
+          <button
+            onClick={loadSnippet}
+            className="px-3 py-1.5 text-xs bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 text-white transition-colors"
+          >
+            Generate
+          </button>
+        </div>
+        {snippetError && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
+            <p className="text-xs text-red-400">{snippetError}</p>
+          </div>
+        )}
+        {snippet && (
+          <div className="relative">
+            <button
+              onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+              className="absolute top-3 right-3 p-1.5 rounded-md bg-white/10 hover:bg-white/20 transition-colors"
+            >
+              {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-white/60" />}
+            </button>
+            <pre className="bg-black/40 border border-white/10 rounded-lg p-4 text-xs text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">
+              {snippet}
+            </pre>
+          </div>
+        )}
+      </PremiumCard>
+    </>
   );
 }

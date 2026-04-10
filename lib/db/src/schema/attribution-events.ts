@@ -2,6 +2,7 @@ import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb } from "
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
+import { leadsTable } from "./leads";
 
 export const eventTypeEnum = pgEnum("event_type", ["click", "call", "form_fill"]);
 export const matchLevelEnum = pgEnum("match_level", ["diamond", "golden", "silver", "bronze", "unmatched"]);
@@ -39,6 +40,7 @@ export const attributionEventsTable = pgTable("attribution_events", {
   submittedAt: timestamp("submitted_at"),
   matchLevel: matchLevelEnum("match_level"),
   matchConfidence: real("match_confidence"),
+  createdLeadId: integer("created_lead_id").references(() => leadsTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

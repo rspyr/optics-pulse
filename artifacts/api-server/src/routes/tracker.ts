@@ -360,6 +360,10 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
         }).returning();
 
         if (newLead) {
+          await db.update(attributionEventsTable)
+            .set({ createdLeadId: newLead.id })
+            .where(eq(attributionEventsTable.id, event.id));
+
           try {
             const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
             if (result.assignedCsrId && result.passIntervalMinutes != null) {

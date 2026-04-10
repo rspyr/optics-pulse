@@ -235,6 +235,7 @@ export default function Attribution() {
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Funnel</th>
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Page</th>
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Match</th>
+                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Lead</th>
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                     </tr>
                   </thead>
@@ -260,6 +261,13 @@ export default function Attribution() {
                             {ev.pageUrl ? (() => { try { return new URL(ev.pageUrl).pathname; } catch { return ev.pageUrl; } })() : <span className="text-white/20">—</span>}
                           </td>
                           <td className="p-4">{getMatchBadge(ev.matchLevel)}</td>
+                          <td className="p-4">
+                            {extended.createdLeadId ? (
+                              <span className="text-xs text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full">created</span>
+                            ) : (
+                              <span className="text-white/20">—</span>
+                            )}
+                          </td>
                           <td className="p-4">
                             {detectedCount > 0 ? (
                               <span className="text-xs text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-0.5 rounded-full">

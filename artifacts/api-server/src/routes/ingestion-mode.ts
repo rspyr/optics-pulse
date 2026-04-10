@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable } from "@workspace/db";
+import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable, ingestionAuditLogTable } from "@workspace/db";
 import { eq, and, gte, isNotNull, ne, sql, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -66,21 +66,37 @@ router.put("/ingestion-mode", async (req, res) => {
 
   const [tenant] = await db.select({ currentMode: tenantsTable.leadIngestionMode })
     .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  const previousMode = tenant?.currentMode || "sheets";
 
-  await db.update(tenantsTable)
-    .set({ leadIngestionMode: mode, updatedAt: new Date() })
-    .where(eq(tenantsTable.id, tenantId));
-
-  if (mode === "tracker" && previousMode !== "tracker") {
-    await db.update(googleSheetConfigsTable)
-      .set({ syncPaused: true })
-      .where(eq(googleSheetConfigsTable.tenantId, tenantId));
-  } else if (mode === "sheets" && previousMode === "tracker") {
-    await db.update(googleSheetConfigsTable)
-      .set({ syncPaused: false })
-      .where(eq(googleSheetConfigsTable.tenantId, tenantId));
+  if (!tenant) {
+    res.status(404).json({ error: "Tenant not found" });
+    return;
   }
+
+  const previousMode = tenant.currentMode || "sheets";
+  const userId = (req.session as Record<string, unknown>)?.userId;
+
+  await db.transaction(async (tx) => {
+    await tx.update(tenantsTable)
+      .set({ leadIngestionMode: mode, updatedAt: new Date() })
+      .where(eq(tenantsTable.id, tenantId));
+
+    if (mode === "tracker" && previousMode !== "tracker") {
+      await tx.update(googleSheetConfigsTable)
+        .set({ syncPaused: true })
+        .where(eq(googleSheetConfigsTable.tenantId, tenantId));
+    } else if (mode === "sheets" && previousMode === "tracker") {
+      await tx.update(googleSheetConfigsTable)
+        .set({ syncPaused: false })
+        .where(eq(googleSheetConfigsTable.tenantId, tenantId));
+    }
+
+    await tx.insert(ingestionAuditLogTable).values({
+      tenantId,
+      previousMode,
+      newMode: mode,
+      changedBy: userId ? String(userId) : role,
+    });
+  });
 
   console.log(`[IngestionMode] Tenant ${tenantId}: ${previousMode} → ${mode} (changed by ${role})`);
 

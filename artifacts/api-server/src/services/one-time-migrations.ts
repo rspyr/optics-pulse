@@ -918,6 +918,28 @@ const migrations: Migration[] = [
       console.log("[Migration] Created funnel_aliases, field_mapping_rules tables; added detection columns to attribution_events; added leadIngestionMode to tenants");
     },
   },
+  {
+    id: "017_ingestion_audit_log",
+    description: "Create ingestion audit log table and add created_lead_id to attribution_events",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS ingestion_audit_log (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          previous_mode TEXT NOT NULL,
+          new_mode TEXT NOT NULL,
+          changed_by TEXT,
+          changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await db.execute(sql`
+        ALTER TABLE attribution_events ADD COLUMN IF NOT EXISTS created_lead_id INTEGER REFERENCES leads(id)
+      `);
+
+      console.log("[Migration] Created ingestion_audit_log table; added created_lead_id to attribution_events");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
