@@ -870,7 +870,7 @@ export function startSyncScheduler() {
   }, callRailSyncInterval);
 
   syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 60min, Podium/CallRail PAUSED");
+  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 15min, Podium/CallRail PAUSED");
 }
 
 export function stopSyncScheduler() {

@@ -2283,7 +2283,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       )}
 
       {lead.hasSoldEstimate && (
-        <ContractDetailsSection leadId={lead.id} timezone={timezone} />
+        <ContractDetailsSection leadId={lead.id} tenantId={tenantId} timezone={timezone} />
       )}
 
       <PremiumCard className="p-4">
@@ -2303,18 +2303,19 @@ interface ContractEstimate {
   stEstimateId: string;
 }
 
-function ContractDetailsSection({ leadId, timezone }: { leadId: number; timezone: string }) {
+function ContractDetailsSection({ leadId, tenantId, timezone }: { leadId: number; tenantId: number | null; timezone: string }) {
   const [estimates, setEstimates] = useState<ContractEstimate[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/leads-hub/${leadId}/contract`, { credentials: "include" })
+    const qs = tenantId ? `?tenantId=${tenantId}` : "";
+    fetch(`${API_BASE}/leads-hub/${leadId}/contract${qs}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => setEstimates(d.estimates || []))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [leadId]);
+  }, [leadId, tenantId]);
 
   if (loading) return null;
   if (estimates.length === 0) return null;
