@@ -216,6 +216,8 @@ export default function AdminFunnels() {
           )}
         </div>
       )}
+
+      {tab === "tracking" && <AdminTrackingPanel tenants={tenants} />}
     </div>
   );
 }
@@ -550,14 +552,13 @@ function ScriptTagsTab({ tenants, health, copiedId, setCopiedId }: { tenants: Te
         );
       })}
 
-      {tab === "tracking" && <AdminTrackingPanel tenants={tenants} />}
     </div>
   );
 }
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
-interface FunnelAlias { id: number; tenantId: number; alias: string; canonicalFunnel: string; createdAt: string; }
+interface AliasGroup { funnelTypeId: number; funnelName: string; aliases: { id: number; alias: string }[] }
 
 function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
   const [selectedTid, setSelectedTid] = useState<number | null>(tenants[0]?.id || null);
@@ -566,16 +567,25 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
   const [snippet, setSnippet] = useState<string | null>(null);
   const [snippetErr, setSnippetErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [aliases, setAliases] = useState<FunnelAlias[]>([]);
+  const [aliasGroups, setAliasGroups] = useState<AliasGroup[]>([]);
+  const [tenantFunnels, setTenantFunnels] = useState<{ id: number; name: string }[]>([]);
   const [newAlias, setNewAlias] = useState("");
-  const [newCanonical, setNewCanonical] = useState("");
+  const [newFunnelTypeId, setNewFunnelTypeId] = useState<number | "">("");
+
+  const loadAliases = async (tid: number) => {
+    const r = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tid}`, { credentials: "include" });
+    const d = await r.json();
+    setAliasGroups(d.aliases || []);
+  };
 
   useEffect(() => {
     if (!selectedTid) return;
     fetch(`${API_BASE}/api/ingestion-mode?tenantId=${selectedTid}`, { credentials: "include" })
       .then(r => r.json()).then(d => setMode(d.mode || "sheets")).catch(() => {});
-    fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, { credentials: "include" })
-      .then(r => r.json()).then(d => setAliases(Array.isArray(d) ? d : [])).catch(() => {});
+    loadAliases(selectedTid);
+    fetch(`${API}/api/tenants/${selectedTid}/funnel-types`, { credentials: "include" })
+      .then(r => r.json()).then(d => setTenantFunnels(Array.isArray(d) ? d.map((f: Record<string, unknown>) => ({ id: Number(f.funnelTypeId || f.id), name: String(f.funnelName || f.name || "") })) : []))
+      .catch(() => setTenantFunnels([]));
     setSnippet(null);
     setSnippetErr(null);
   }, [selectedTid]);
@@ -601,20 +611,19 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
   };
 
   const addAlias = async () => {
-    if (!selectedTid || !newAlias.trim() || !newCanonical.trim()) return;
+    if (!selectedTid || !newAlias.trim() || !newFunnelTypeId) return;
     await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-      body: JSON.stringify({ alias: newAlias.trim(), canonicalFunnel: newCanonical.trim() }),
+      body: JSON.stringify({ funnelTypeId: newFunnelTypeId, alias: newAlias.trim() }),
     });
-    setNewAlias(""); setNewCanonical("");
-    const r = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, { credentials: "include" });
-    setAliases(await r.json());
+    setNewAlias(""); setNewFunnelTypeId("");
+    loadAliases(selectedTid);
   };
 
   const deleteAlias = async (id: number) => {
     if (!selectedTid) return;
     await fetch(`${API_BASE}/api/funnel-aliases/${id}?tenantId=${selectedTid}`, { method: "DELETE", credentials: "include" });
-    setAliases(prev => prev.filter(a => a.id !== id));
+    if (selectedTid) loadAliases(selectedTid);
   };
 
   const modeSteps = [
@@ -669,26 +678,32 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
       <PremiumCard>
         <h3 className="font-display text-lg text-white mb-3">Funnel Aliases</h3>
         <div className="flex gap-2 mb-3">
+          <select value={newFunnelTypeId} onChange={e => setNewFunnelTypeId(e.target.value ? Number(e.target.value) : "")}
+            className="bg-background border border-white/10 text-white rounded-lg px-3 py-2 text-sm min-w-[140px]">
+            <option value="">Select funnel...</option>
+            {tenantFunnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
           <input value={newAlias} onChange={e => setNewAlias(e.target.value)} placeholder="Alias (e.g. fb-funnel)"
-            className="flex-1 bg-background border border-white/10 text-white rounded-lg px-3 py-2 text-sm" />
-          <input value={newCanonical} onChange={e => setNewCanonical(e.target.value)} placeholder="Maps to (e.g. fit-funnel)"
             className="flex-1 bg-background border border-white/10 text-white rounded-lg px-3 py-2 text-sm" />
           <button onClick={addAlias} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg text-sm font-medium">
             <Plus className="w-4 h-4" />
           </button>
         </div>
-        {aliases.length === 0 ? (
+        {aliasGroups.length === 0 ? (
           <p className="text-sm text-muted-foreground">No funnel aliases configured.</p>
         ) : (
-          <div className="space-y-1">
-            {aliases.map(a => (
-              <div key={a.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
-                <div className="text-sm">
-                  <span className="text-white">{a.alias}</span>
-                  <span className="text-muted-foreground mx-2">&rarr;</span>
-                  <span className="text-emerald-400">{a.canonicalFunnel}</span>
+          <div className="space-y-3">
+            {aliasGroups.map(g => (
+              <div key={g.funnelTypeId}>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{g.funnelName}</p>
+                <div className="space-y-1">
+                  {g.aliases.map(a => (
+                    <div key={a.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
+                      <span className="text-sm text-white">{a.alias}</span>
+                      <button onClick={() => deleteAlias(a.id)} className="text-muted-foreground hover:text-red-400 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ))}
                 </div>
-                <button onClick={() => deleteAlias(a.id)} className="text-muted-foreground hover:text-red-400 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>
             ))}
           </div>
