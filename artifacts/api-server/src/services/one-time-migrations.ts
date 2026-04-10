@@ -940,6 +940,20 @@ const migrations: Migration[] = [
       console.log("[Migration] Created ingestion_audit_log table; added created_lead_id to attribution_events");
     },
   },
+  {
+    id: "018_ingestion_mode_check_constraint",
+    description: "Add check constraint for lead_ingestion_mode column",
+    run: async () => {
+      await db.execute(sql`
+        DO $$ BEGIN
+          ALTER TABLE tenants ADD CONSTRAINT chk_lead_ingestion_mode
+            CHECK (lead_ingestion_mode IN ('sheets', 'both', 'tracker'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `);
+      console.log("[Migration] Added check constraint for lead_ingestion_mode");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
