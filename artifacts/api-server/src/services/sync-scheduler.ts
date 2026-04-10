@@ -695,7 +695,7 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
         const parsed = parseEstimateData(estimate);
         if (!parsed.stEstimateId) continue;
 
-        const [existing] = await db.select({ id: soldEstimatesTable.id })
+        const [existing] = await db.select({ id: soldEstimatesTable.id, leadId: soldEstimatesTable.leadId })
           .from(soldEstimatesTable)
           .where(and(
             eq(soldEstimatesTable.tenantId, tenantId),
@@ -726,6 +726,9 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
           }
         }
 
+        const wasUnlinked = existing && !existing.leadId;
+        const nowLinked = !!matchedLeadId;
+
         if (existing) {
           await db.update(soldEstimatesTable)
             .set({
@@ -741,6 +744,26 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
               updatedAt: new Date(),
             })
             .where(eq(soldEstimatesTable.id, existing.id));
+
+          if (wasUnlinked && nowLinked && matchedLeadId) {
+            const dollarStr = `$${(parsed.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const salesperson = soldByName ? ` (Sold by: ${soldByName})` : "";
+            const noteText = `Contract signed — ${dollarStr}${salesperson}`;
+            const [lead] = await db.select({ assignedCsrId: leadsTable.assignedCsrId })
+              .from(leadsTable).where(eq(leadsTable.id, matchedLeadId)).limit(1);
+            const userId = lead?.assignedCsrId ?? fallbackUserId;
+
+            await db.insert(callAttemptsTable).values({
+              leadId: matchedLeadId,
+              userId,
+              actionType: "system",
+              method: "system",
+              outcome: "system",
+              platform: "service_titan",
+              notes: noteText,
+              attemptedAt: parsed.soldOn ?? new Date(),
+            });
+          }
         } else {
           await db.insert(soldEstimatesTable).values({
             tenantId,
@@ -826,23 +849,15 @@ export function startSyncScheduler() {
     }
   }, campaignSyncInterval);
 
-  const invoiceSyncInterval = 60 * 60 * 1000;
+  const invoiceSyncInterval = 15 * 60 * 1000;
   const invoiceTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting ServiceTitan invoice sync for all tenants");
+    console.log("[SyncScheduler] Starting ServiceTitan invoice + estimates sync for all tenants");
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
     for (const tenant of tenants) {
       await syncServiceTitanInvoices(tenant.id);
-    }
-  }, invoiceSyncInterval);
-
-  const estimateSyncInterval = 60 * 60 * 1000;
-  const estimateTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting ServiceTitan estimates sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
       await syncServiceTitanEstimates(tenant.id);
     }
-  }, estimateSyncInterval);
+  }, invoiceSyncInterval);
 
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
   const reviewTimer = setInterval(async () => {
@@ -854,8 +869,8 @@ export function startSyncScheduler() {
     console.log("[SyncScheduler] CallRail sync PAUSED — integration disabled");
   }, callRailSyncInterval);
 
-  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, estimateTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices every 60min, estimates every 60min, Podium/CallRail PAUSED");
+  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer, callRailTimer];
+  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 60min, Podium/CallRail PAUSED");
 }
 
 export function stopSyncScheduler() {

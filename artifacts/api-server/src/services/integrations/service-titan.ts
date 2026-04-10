@@ -640,7 +640,6 @@ export function clearEmployeeCache() {
 }
 
 export function parseEstimateData(estimate: STEstimate) {
-  const total = estimate.total || 0;
   const subtotal = estimate.subtotal || 0;
 
   let rebateAmount = 0;
@@ -651,12 +650,14 @@ export function parseEstimateData(estimate: STEstimate) {
     }
   }
 
+  const totalAmount = subtotal + rebateAmount;
+
   return {
     stEstimateId: String(estimate.id),
     stJobId: estimate.jobId ? String(estimate.jobId) : null,
     subtotal,
     rebateAmount,
-    totalAmount: total,
+    totalAmount,
     soldOn: estimate.soldOn ? new Date(estimate.soldOn) : null,
     soldByEmployeeId: estimate.soldBy,
   };
