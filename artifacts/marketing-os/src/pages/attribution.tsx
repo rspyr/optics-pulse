@@ -522,9 +522,10 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
     ? (formFields[funnelFieldEntry[0]] as string) || resolvedFunnel || null
     : resolvedFunnel || null;
 
-  const [editingSource, setEditingSource] = useState(false);
-  const [editingFunnel, setEditingFunnel] = useState(false);
-  const [sourceAlias, setSourceAlias] = useState("");
+  const currentSourceDisplay = resolvedSource || rawSource || "";
+  const currentFunnelDisplay = resolvedFunnel || rawFunnel || "";
+
+  const [sourceAlias, setSourceAlias] = useState(currentSourceDisplay);
   const [customSourceMode, setCustomSourceMode] = useState(false);
   const [funnelTypeId, setFunnelTypeId] = useState("");
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
@@ -537,7 +538,14 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   useEffect(() => {
     fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
-      .then(d => setFunnelTypes(d.funnelTypes || d || []))
+      .then(d => {
+        const types = d.funnelTypes || d || [];
+        setFunnelTypes(types);
+        if (currentFunnelDisplay) {
+          const match = types.find((ft: { id: number; name: string }) => ft.name === currentFunnelDisplay);
+          if (match) setFunnelTypeId(String(match.id));
+        }
+      })
       .catch(() => {});
     fetch(`${API_BASE}/api/lead-source-aliases?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
@@ -545,12 +553,30 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         const aliases: { canonicalName: string }[] = d.aliases || [];
         const names = [...new Set(aliases.map(a => a.canonicalName))].sort();
         setKnownSources(names);
+        if (currentSourceDisplay && names.includes(currentSourceDisplay)) {
+          setSourceAlias(currentSourceDisplay);
+        }
       })
       .catch(() => {});
   }, [tenantId]);
 
+  useEffect(() => {
+    if (savedSource) {
+      const t = setTimeout(() => setSavedSource(false), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [savedSource]);
+
+  useEffect(() => {
+    if (savedFunnel) {
+      const t = setTimeout(() => setSavedFunnel(false), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [savedFunnel]);
+
   const saveSourceAlias = async () => {
-    if (!rawSource || !sourceAlias.trim()) return;
+    if (!sourceAlias.trim()) return;
+    const aliasKey = rawSource || sourceAlias.trim();
     setSaving(true);
     setError(null);
     try {
@@ -558,21 +584,27 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ alias: rawSource, canonicalName: sourceAlias.trim() }),
+        body: JSON.stringify({ alias: aliasKey, canonicalName: sourceAlias.trim() }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save source alias");
       } else {
         setSavedSource(true);
-        setEditingSource(false);
+        setCustomSourceMode(false);
+        setKnownSources(prev => {
+          const updated = [...new Set([...prev, sourceAlias.trim()])].sort();
+          return updated;
+        });
       }
     } catch { setError("Network error"); }
     setSaving(false);
   };
 
   const saveFunnelAlias = async () => {
-    if (!rawFunnel || !funnelTypeId) return;
+    if (!funnelTypeId) return;
+    const aliasKey = rawFunnel || funnelTypes.find(ft => ft.id === parseInt(funnelTypeId))?.name || "";
+    if (!aliasKey) return;
     setSaving(true);
     setError(null);
     try {
@@ -580,18 +612,23 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ alias: rawFunnel, funnelTypeId: parseInt(funnelTypeId) }),
+        body: JSON.stringify({ alias: aliasKey, funnelTypeId: parseInt(funnelTypeId) }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save funnel alias");
       } else {
         setSavedFunnel(true);
-        setEditingFunnel(false);
       }
     } catch { setError("Network error"); }
     setSaving(false);
   };
+
+  const sourceChanged = sourceAlias.trim() !== "" && sourceAlias !== currentSourceDisplay;
+  const funnelChanged = funnelTypeId !== "" && (() => {
+    const match = funnelTypes.find(ft => ft.name === currentFunnelDisplay);
+    return !match || String(match.id) !== funnelTypeId;
+  })();
 
   return (
     <DetailSection title="Resolved Identity" icon={<Zap className="w-4 h-4" />}>
@@ -601,22 +638,10 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         </div>
       )}
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Source</span>
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Source</span>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-white">{resolvedSource || rawSource || "—"}</span>
-            {rawSource && !savedSource && (
-              <button onClick={() => setEditingSource(!editingSource)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
-                <Edit3 className="w-3 h-3 text-white/40" />
-              </button>
-            )}
-            {savedSource && <Check className="w-3 h-3 text-emerald-400" />}
-          </div>
-        </div>
-        {editingSource && rawSource && (
-          <div className="flex items-center gap-2 pl-4">
-            <span className="text-[10px] text-muted-foreground whitespace-nowrap">Map &quot;{rawSource}&quot; →</span>
             {knownSources.length > 0 && !customSourceMode ? (
               <select
                 value={sourceAlias}
@@ -628,10 +653,13 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
                     setSourceAlias(e.target.value);
                   }
                 }}
-                className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+                className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1.5 h-8"
               >
                 <option value="">Select source...</option>
                 {knownSources.map(s => <option key={s} value={s}>{s}</option>)}
+                {currentSourceDisplay && !knownSources.includes(currentSourceDisplay) && (
+                  <option value={currentSourceDisplay}>{currentSourceDisplay} (raw)</option>
+                )}
                 <option value="__custom__">+ New source...</option>
               </select>
             ) : (
@@ -639,54 +667,57 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
                 <Input
                   value={sourceAlias}
                   onChange={e => setSourceAlias(e.target.value)}
-                  placeholder="New source name"
-                  className="h-7 text-xs flex-1 bg-black/40 border-white/10"
+                  placeholder="Enter source name"
+                  className="h-8 text-xs flex-1 bg-black/40 border-white/10"
                   autoFocus={customSourceMode}
                 />
-                {customSourceMode && knownSources.length > 0 && (
+                {knownSources.length > 0 && (
                   <button
-                    onClick={() => { setCustomSourceMode(false); setSourceAlias(""); }}
-                    className="text-[10px] text-muted-foreground hover:text-white whitespace-nowrap"
+                    onClick={() => { setCustomSourceMode(false); setSourceAlias(currentSourceDisplay); }}
+                    className="text-[10px] text-muted-foreground hover:text-white whitespace-nowrap px-1"
                   >
                     ← list
                   </button>
                 )}
               </div>
             )}
-            <Button size="sm" variant="ghost" disabled={!sourceAlias.trim() || saving} onClick={saveSourceAlias} className="text-xs h-7 px-2">
-              Save
-            </Button>
-          </div>
-        )}
-
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Funnel</span>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-white">{resolvedFunnel || "—"}</span>
-            {rawFunnel && !savedFunnel && funnelTypes.length > 0 && (
-              <button onClick={() => setEditingFunnel(!editingFunnel)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
-                <Edit3 className="w-3 h-3 text-white/40" />
-              </button>
+            {sourceChanged && (
+              <Button size="sm" variant="ghost" disabled={saving} onClick={saveSourceAlias} className="text-xs h-8 px-2 shrink-0">
+                Save
+              </Button>
             )}
-            {savedFunnel && <Check className="w-3 h-3 text-emerald-400" />}
+            {savedSource && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
           </div>
+          {rawSource && sourceAlias && sourceAlias !== rawSource && sourceAlias !== "__custom__" && !customSourceMode && (
+            <p className="text-[10px] text-muted-foreground pl-0.5">Maps &quot;{rawSource}&quot; → {sourceAlias}</p>
+          )}
         </div>
-        {editingFunnel && rawFunnel && (
-          <div className="flex items-center gap-2 pl-4">
-            <span className="text-[10px] text-muted-foreground">Map &quot;{rawFunnel}&quot; →</span>
+
+        <div className="space-y-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Funnel</span>
+          <div className="flex items-center gap-2">
             <select
               value={funnelTypeId}
               onChange={e => setFunnelTypeId(e.target.value)}
-              className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+              className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1.5 h-8"
             >
-              <option value="">Select funnel type...</option>
+              <option value="">Select funnel...</option>
               {funnelTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
             </select>
-            <Button size="sm" variant="ghost" disabled={!funnelTypeId || saving} onClick={saveFunnelAlias} className="text-xs h-7 px-2">
-              Save
-            </Button>
+            {funnelChanged && (
+              <Button size="sm" variant="ghost" disabled={saving} onClick={saveFunnelAlias} className="text-xs h-8 px-2 shrink-0">
+                Save
+              </Button>
+            )}
+            {savedFunnel && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
           </div>
-        )}
+          {rawFunnel && funnelTypeId && (() => {
+            const selected = funnelTypes.find(ft => String(ft.id) === funnelTypeId);
+            return selected && selected.name !== rawFunnel ? (
+              <p className="text-[10px] text-muted-foreground pl-0.5">Maps &quot;{rawFunnel}&quot; → {selected.name}</p>
+            ) : null;
+          })()}
+        </div>
       </div>
     </DetailSection>
   );
