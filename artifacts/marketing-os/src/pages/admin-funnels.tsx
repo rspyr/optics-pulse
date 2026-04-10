@@ -182,8 +182,10 @@ export default function AdminFunnels() {
       )}
 
       {tab === "health" && (
-        <TrackerHealthTab health={health} onRefresh={() => {
-          fetch(`${API}/api/tracker/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
+        <TrackerHealthTab health={health} onRefresh={async () => {
+          const r = await fetch(`${API}/api/tracker/health`, { credentials: "include" });
+          const data = await r.json();
+          setHealth(data);
         }} />
       )}
 
@@ -268,18 +270,16 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
   );
 }
 
-function TrackerHealthTab({ health, onRefresh }: { health: TrackerHealth[]; onRefresh: () => void }) {
+function TrackerHealthTab({ health, onRefresh }: { health: TrackerHealth[]; onRefresh: () => Promise<void> }) {
   const [lastChecked, setLastChecked] = useState<Date>(new Date());
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await new Promise<void>((resolve) => {
-        onRefresh();
-        setTimeout(resolve, 500);
-      });
+      await onRefresh();
       setLastChecked(new Date());
+    } catch {
     } finally {
       setRefreshing(false);
     }

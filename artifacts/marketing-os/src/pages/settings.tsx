@@ -926,7 +926,7 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
       } else {
         setSnippetError(snippetResult.data.error || "Failed to load snippet");
       }
-    }).finally(() => setLoading(false));
+    }).catch(() => { setSnippetError("Failed to load snippet"); }).finally(() => setLoading(false));
     loadAliases();
     fetch(`${API}/api/tenants/${tenantId}/funnel-types`, { credentials: "include" })
       .then(r => r.json()).then(d => setTenantFunnels(Array.isArray(d) ? d.map((f: Record<string, unknown>) => ({ id: Number(f.funnelTypeId || f.id), name: String(f.funnelName || f.name || "") })) : []))
