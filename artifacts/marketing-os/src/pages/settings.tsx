@@ -921,6 +921,8 @@ export default function Settings() {
   );
 }
 
+interface FunnelAlias { id: number; tenantId: number; alias: string; canonicalFunnel: string; createdAt: string; }
+
 function IngestionModeSettings({ tenantId }: { tenantId: number }) {
   const [mode, setMode] = useState("sheets");
   const [loading, setLoading] = useState(true);
@@ -928,6 +930,9 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
   const [snippet, setSnippet] = useState<string | null>(null);
   const [snippetError, setSnippetError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [aliases, setAliases] = useState<FunnelAlias[]>([]);
+  const [newAlias, setNewAlias] = useState("");
+  const [newCanonical, setNewCanonical] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -935,7 +940,27 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
       .then(r => r.json())
       .then(d => setMode(d.mode || "sheets"))
       .finally(() => setLoading(false));
+    fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setAliases(Array.isArray(d) ? d : []))
+      .catch(() => {});
   }, [tenantId]);
+
+  const addAlias = async () => {
+    if (!newAlias.trim() || !newCanonical.trim()) return;
+    await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ alias: newAlias.trim(), canonicalFunnel: newCanonical.trim() }),
+    });
+    setNewAlias(""); setNewCanonical("");
+    const r = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, { credentials: "include" });
+    setAliases(await r.json());
+  };
+
+  const deleteAlias = async (id: number) => {
+    await fetch(`${API_BASE}/api/funnel-aliases/${id}?tenantId=${tenantId}`, { method: "DELETE", credentials: "include" });
+    setAliases(prev => prev.filter(a => a.id !== id));
+  };
 
   const updateMode = async (newMode: string) => {
     setSaving(true);
@@ -1026,6 +1051,41 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
             <pre className="bg-black/40 border border-white/10 rounded-lg p-4 text-xs text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">
               {snippet}
             </pre>
+          </div>
+        )}
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="flex items-center gap-2 mb-4">
+          <Link2 className="w-5 h-5 text-primary" />
+          <h3 className="text-xl font-display text-white">Funnel Aliases</h3>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">Map alternate funnel names to their canonical funnel types.</p>
+        <div className="flex gap-2 mb-4">
+          <input value={newAlias} onChange={e => setNewAlias(e.target.value)} placeholder="Alias (e.g. fb-funnel)"
+            className="flex-1 bg-background border border-white/10 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all" />
+          <input value={newCanonical} onChange={e => setNewCanonical(e.target.value)} placeholder="Maps to (e.g. fit-funnel)"
+            className="flex-1 bg-background border border-white/10 text-white rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all" />
+          <button onClick={addAlias} className="bg-primary hover:bg-primary/90 text-white px-4 py-3 rounded-lg text-sm font-medium transition-all shadow-[0_0_15px_rgba(242,5,5,0.3)]">
+            Add
+          </button>
+        </div>
+        {aliases.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No funnel aliases configured for this tenant.</p>
+        ) : (
+          <div className="space-y-2">
+            {aliases.map(a => (
+              <div key={a.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
+                <div className="text-sm">
+                  <span className="text-white font-medium">{a.alias}</span>
+                  <span className="text-muted-foreground mx-2">&rarr;</span>
+                  <span className="text-emerald-400">{a.canonicalFunnel}</span>
+                </div>
+                <button onClick={() => deleteAlias(a.id)} className="text-muted-foreground hover:text-red-400 p-1 transition-colors">
+                  <XCircle className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </PremiumCard>

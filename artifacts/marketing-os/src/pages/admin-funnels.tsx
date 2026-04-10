@@ -36,7 +36,7 @@ export default function AdminFunnels() {
   const [form, setForm] = useState({ name: "", slug: "", description: "" });
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"funnels" | "assignments" | "scripts" | "health">("funnels");
+  const [tab, setTab] = useState<"funnels" | "assignments" | "scripts" | "health" | "tracking">("funnels");
 
   useEffect(() => {
     fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
@@ -97,9 +97,9 @@ export default function AdminFunnels() {
       </header>
 
       <div className="flex gap-2">
-        {(["funnels", "assignments", "scripts", "health"] as const).map(t => (
+        {(["funnels", "assignments", "scripts", "health", "tracking"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-white/10 text-white" : "text-muted-foreground hover:text-white"}`}>
-            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "scripts" ? "Script Tags" : "Tracker Health"}
+            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "scripts" ? "Script Tags" : t === "health" ? "Tracker Health" : "GTM Tracking"}
           </button>
         ))}
       </div>
@@ -549,6 +549,151 @@ function ScriptTagsTab({ tenants, health, copiedId, setCopiedId }: { tenants: Te
           </PremiumCard>
         );
       })}
+
+      {tab === "tracking" && <AdminTrackingPanel tenants={tenants} />}
+    </div>
+  );
+}
+
+const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+
+interface FunnelAlias { id: number; tenantId: number; alias: string; canonicalFunnel: string; createdAt: string; }
+
+function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
+  const [selectedTid, setSelectedTid] = useState<number | null>(tenants[0]?.id || null);
+  const [mode, setMode] = useState("sheets");
+  const [saving, setSaving] = useState(false);
+  const [snippet, setSnippet] = useState<string | null>(null);
+  const [snippetErr, setSnippetErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [aliases, setAliases] = useState<FunnelAlias[]>([]);
+  const [newAlias, setNewAlias] = useState("");
+  const [newCanonical, setNewCanonical] = useState("");
+
+  useEffect(() => {
+    if (!selectedTid) return;
+    fetch(`${API_BASE}/api/ingestion-mode?tenantId=${selectedTid}`, { credentials: "include" })
+      .then(r => r.json()).then(d => setMode(d.mode || "sheets")).catch(() => {});
+    fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, { credentials: "include" })
+      .then(r => r.json()).then(d => setAliases(Array.isArray(d) ? d : [])).catch(() => {});
+    setSnippet(null);
+    setSnippetErr(null);
+  }, [selectedTid]);
+
+  const updateMode = async (m: string) => {
+    if (!selectedTid) return;
+    setSaving(true);
+    const res = await fetch(`${API_BASE}/api/ingestion-mode?tenantId=${selectedTid}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ mode: m }),
+    });
+    if (res.ok) setMode(m);
+    setSaving(false);
+  };
+
+  const loadSnippet = async () => {
+    if (!selectedTid) return;
+    setSnippetErr(null);
+    const res = await fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${selectedTid}`, { credentials: "include" });
+    const d = await res.json();
+    if (!res.ok) { setSnippetErr(d.error || "Failed"); return; }
+    setSnippet(d.snippet);
+  };
+
+  const addAlias = async () => {
+    if (!selectedTid || !newAlias.trim() || !newCanonical.trim()) return;
+    await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ alias: newAlias.trim(), canonicalFunnel: newCanonical.trim() }),
+    });
+    setNewAlias(""); setNewCanonical("");
+    const r = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${selectedTid}`, { credentials: "include" });
+    setAliases(await r.json());
+  };
+
+  const deleteAlias = async (id: number) => {
+    if (!selectedTid) return;
+    await fetch(`${API_BASE}/api/funnel-aliases/${id}?tenantId=${selectedTid}`, { method: "DELETE", credentials: "include" });
+    setAliases(prev => prev.filter(a => a.id !== id));
+  };
+
+  const modeSteps = [
+    { key: "sheets", label: "Sheets Only" },
+    { key: "both", label: "Dual Mode" },
+    { key: "tracker", label: "Tracker Only" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <select
+          value={selectedTid ?? ""}
+          onChange={e => setSelectedTid(Number(e.target.value))}
+          className="bg-background border border-white/10 text-white rounded-lg px-4 py-2 text-sm"
+        >
+          {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
+
+      <PremiumCard>
+        <div className="flex items-center gap-2 mb-3">
+          <Wifi className="w-4 h-4 text-primary" />
+          <h3 className="font-display text-lg text-white">Ingestion Mode</h3>
+        </div>
+        <div className="flex gap-2">
+          {modeSteps.map(s => (
+            <button key={s.key} disabled={saving} onClick={() => updateMode(s.key)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${mode === s.key ? "border-primary bg-primary/5 text-white" : "border-white/10 text-muted-foreground hover:text-white hover:bg-white/[0.04]"}`}
+            >{mode === s.key && <Check className="w-3 h-3 inline mr-1" />}{s.label}</button>
+          ))}
+        </div>
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display text-lg text-white">GTM Snippet</h3>
+          <button onClick={loadSnippet} className="px-3 py-1.5 text-xs bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 text-white">Generate</button>
+        </div>
+        {snippetErr && <p className="text-xs text-red-400 mb-2">{snippetErr}</p>}
+        {snippet && (
+          <div className="relative">
+            <button onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+              className="absolute top-2 right-2 p-1.5 rounded-md bg-white/10 hover:bg-white/20">
+              {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-white/60" />}
+            </button>
+            <pre className="bg-black/40 border border-white/10 rounded-lg p-3 text-xs text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">{snippet}</pre>
+          </div>
+        )}
+      </PremiumCard>
+
+      <PremiumCard>
+        <h3 className="font-display text-lg text-white mb-3">Funnel Aliases</h3>
+        <div className="flex gap-2 mb-3">
+          <input value={newAlias} onChange={e => setNewAlias(e.target.value)} placeholder="Alias (e.g. fb-funnel)"
+            className="flex-1 bg-background border border-white/10 text-white rounded-lg px-3 py-2 text-sm" />
+          <input value={newCanonical} onChange={e => setNewCanonical(e.target.value)} placeholder="Maps to (e.g. fit-funnel)"
+            className="flex-1 bg-background border border-white/10 text-white rounded-lg px-3 py-2 text-sm" />
+          <button onClick={addAlias} className="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+        {aliases.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No funnel aliases configured.</p>
+        ) : (
+          <div className="space-y-1">
+            {aliases.map(a => (
+              <div key={a.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/[0.02] border border-white/5">
+                <div className="text-sm">
+                  <span className="text-white">{a.alias}</span>
+                  <span className="text-muted-foreground mx-2">&rarr;</span>
+                  <span className="text-emerald-400">{a.canonicalFunnel}</span>
+                </div>
+                <button onClick={() => deleteAlias(a.id)} className="text-muted-foreground hover:text-red-400 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </PremiumCard>
     </div>
   );
 }

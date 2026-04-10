@@ -80,11 +80,11 @@ router.put("/ingestion-mode", async (req, res) => {
       .set({ leadIngestionMode: mode, updatedAt: new Date() })
       .where(eq(tenantsTable.id, tenantId));
 
-    if (mode === "tracker" && previousMode !== "tracker") {
+    if (mode === "tracker") {
       await tx.update(googleSheetConfigsTable)
         .set({ syncPaused: true })
         .where(eq(googleSheetConfigsTable.tenantId, tenantId));
-    } else if (mode === "sheets" && previousMode === "tracker") {
+    } else if ((mode === "sheets" || mode === "both") && previousMode === "tracker") {
       await tx.update(googleSheetConfigsTable)
         .set({ syncPaused: false })
         .where(eq(googleSheetConfigsTable.tenantId, tenantId));
