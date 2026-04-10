@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
+import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { invalidateFunnelCache, DEFAULT_FUNNEL_ALIASES } from "../services/funnel-normalizer";
+import { invalidateFunnelCache } from "../services/funnel-normalizer";
 
 const router: IRouter = Router();
 
@@ -170,26 +170,25 @@ router.post("/funnel-aliases/load-defaults", async (req, res) => {
     return;
   }
 
-  const tenantFunnels = await db
-    .select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId, slug: funnelTypesTable.slug })
-    .from(tenantFunnelTypesTable)
-    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
-    .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
+  const sheetConfigs = await db.select().from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.tenantId, tenantId));
 
-  const slugToId = new Map<string, number>();
-  for (const tf of tenantFunnels) {
-    slugToId.set(tf.slug, tf.funnelTypeId);
+  if (sheetConfigs.length === 0) {
+    res.status(404).json({ error: "No Google Sheet configurations found for this tenant" });
+    return;
   }
 
   let created = 0;
   let skipped = 0;
 
-  for (const group of DEFAULT_FUNNEL_ALIASES) {
-    const funnelTypeId = slugToId.get(group.funnelSlug);
-    if (!funnelTypeId) continue;
+  for (const config of sheetConfigs) {
+    const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
+    if (!funnelValueMap) continue;
 
-    for (const alias of group.aliases) {
-      const trimmedAlias = alias.toLowerCase().trim();
+    for (const [rawValue, funnelTypeId] of Object.entries(funnelValueMap)) {
+      const trimmedAlias = rawValue.toLowerCase().trim();
+      if (!trimmedAlias) continue;
+
       const existing = await db.select().from(funnelAliasesTable)
         .where(and(
           eq(funnelAliasesTable.tenantId, tenantId),

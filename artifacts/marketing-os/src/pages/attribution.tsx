@@ -1035,8 +1035,12 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
       if (res.ok) {
         const configs = await res.json();
         setHasSheetConfigs(Array.isArray(configs) && configs.length > 0);
+      } else {
+        setHasSheetConfigs(false);
       }
-    } catch {}
+    } catch {
+      setHasSheetConfigs(false);
+    }
   }, [tenantId]);
 
   useEffect(() => {
@@ -1114,7 +1118,7 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
         </div>
 
         {groups.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No funnel aliases configured yet. Load defaults to get started.</p>
+          <p className="text-sm text-muted-foreground">No funnel aliases configured yet.{hasSheetConfigs ? " Use 'Load from Spreadsheets' to import aliases from your connected sheets." : " Add aliases manually above."}</p>
         ) : (
           <div className="space-y-4">
             {groups.map(g => (
