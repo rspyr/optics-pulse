@@ -50,6 +50,12 @@ router.put("/ingestion-mode", async (req, res) => {
     return;
   }
 
+  const role = (req as any).session?.role || (req as any).user?.role;
+  if (!role || !["super_admin", "agency_user"].includes(role)) {
+    res.status(403).json({ error: "Only agency admins can change ingestion mode" });
+    return;
+  }
+
   const { mode } = req.body;
   const valid = ["sheets", "both", "tracker"];
   if (!mode || !valid.includes(mode)) {
@@ -57,11 +63,27 @@ router.put("/ingestion-mode", async (req, res) => {
     return;
   }
 
+  const [tenant] = await db.select({ currentMode: tenantsTable.leadIngestionMode })
+    .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  const previousMode = tenant?.currentMode || "sheets";
+
   await db.update(tenantsTable)
     .set({ leadIngestionMode: mode, updatedAt: new Date() })
     .where(eq(tenantsTable.id, tenantId));
 
-  res.json({ success: true, mode });
+  if (mode === "tracker" && previousMode !== "tracker") {
+    await db.update(googleSheetConfigsTable)
+      .set({ syncPaused: true })
+      .where(eq(googleSheetConfigsTable.tenantId, tenantId));
+  } else if (mode === "sheets" && previousMode === "tracker") {
+    await db.update(googleSheetConfigsTable)
+      .set({ syncPaused: false })
+      .where(eq(googleSheetConfigsTable.tenantId, tenantId));
+  }
+
+  console.log(`[IngestionMode] Tenant ${tenantId}: ${previousMode} → ${mode} (changed by ${role})`);
+
+  res.json({ success: true, mode, previousMode });
 });
 
 router.get("/ingestion-mode/status", async (req, res) => {

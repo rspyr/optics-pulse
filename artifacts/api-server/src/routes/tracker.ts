@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
 import { TrackerSubmitBody } from "@workspace/api-zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gte } from "drizzle-orm";
 import { z } from "zod";
 import crypto from "crypto";
 import { emitNewLead } from "../socket";
@@ -289,13 +289,17 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
         const resolvedLeadType = resolvedFunnelStr || (utmSource || "form");
 
         if (ingestionMode === "both") {
+          const overlapWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
           let isDuplicate = false;
           if (pii.phone) {
             const normalizedPhone = normalizePhone(pii.phone);
-            const allTenantLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+            const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
               .from(leadsTable)
-              .where(eq(leadsTable.tenantId, tenantId));
-            isDuplicate = allTenantLeads.some(l =>
+              .where(and(
+                eq(leadsTable.tenantId, tenantId),
+                gte(leadsTable.createdAt, overlapWindow),
+              ));
+            isDuplicate = recentLeads.some(l =>
               l.phone && normalizePhone(l.phone) === normalizedPhone
             );
           }
@@ -303,7 +307,11 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
             const emailLower = pii.email.toLowerCase().trim();
             const emailLeads = await db.select({ id: leadsTable.id })
               .from(leadsTable)
-              .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.email, emailLower)))
+              .where(and(
+                eq(leadsTable.tenantId, tenantId),
+                eq(leadsTable.email, emailLower),
+                gte(leadsTable.createdAt, overlapWindow),
+              ))
               .limit(1);
             isDuplicate = emailLeads.length > 0;
           }

@@ -276,11 +276,11 @@ export default function Attribution() {
                   )}
                 </DetailSection>
 
-                {((selectedEvent as Record<string, unknown>).resolvedLeadSource || (selectedEvent as Record<string, unknown>).resolvedFunnel) && (
-                  <DetailSection title="Resolved Identity" icon={<Zap className="w-4 h-4" />}>
-                    <DetailRow label="Resolved Source" value={(selectedEvent as Record<string, unknown>).resolvedLeadSource as string} />
-                    <DetailRow label="Resolved Funnel" value={(selectedEvent as Record<string, unknown>).resolvedFunnel as string} />
-                  </DetailSection>
+                {effectiveTenantId && (
+                  <InlineIdentityCorrection
+                    tenantId={effectiveTenantId}
+                    event={selectedEvent}
+                  />
                 )}
 
                 {(selectedEvent as Record<string, unknown>).detectedMappings && (
@@ -436,6 +436,142 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
       {icon}
       {label}
     </button>
+  );
+}
+
+function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+  const resolvedSource = (event as Record<string, unknown>).resolvedLeadSource as string | undefined;
+  const resolvedFunnel = (event as Record<string, unknown>).resolvedFunnel as string | undefined;
+  const rawSource = event.utmSource || event.referrer || null;
+  const rawFunnel = (event as Record<string, unknown>).resolvedFunnel as string | null;
+
+  const [editingSource, setEditingSource] = useState(false);
+  const [editingFunnel, setEditingFunnel] = useState(false);
+  const [sourceAlias, setSourceAlias] = useState("");
+  const [funnelTypeId, setFunnelTypeId] = useState("");
+  const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [savedSource, setSavedSource] = useState(false);
+  const [savedFunnel, setSavedFunnel] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setFunnelTypes(d.funnelTypes || d || []))
+      .catch(() => {});
+  }, [tenantId]);
+
+  const saveSourceAlias = async () => {
+    if (!rawSource || !sourceAlias.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/lead-source-aliases?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alias: rawSource, canonicalName: sourceAlias.trim() }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save source alias");
+      } else {
+        setSavedSource(true);
+        setEditingSource(false);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  const saveFunnelAlias = async () => {
+    if (!rawFunnel || !funnelTypeId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alias: rawFunnel, funnelTypeId: parseInt(funnelTypeId) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save funnel alias");
+      } else {
+        setSavedFunnel(true);
+        setEditingFunnel(false);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  return (
+    <DetailSection title="Resolved Identity" icon={<Zap className="w-4 h-4" />}>
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">Source</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-white">{resolvedSource || rawSource || "—"}</span>
+            {rawSource && !savedSource && (
+              <button onClick={() => setEditingSource(!editingSource)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
+                <Edit3 className="w-3 h-3 text-white/40" />
+              </button>
+            )}
+            {savedSource && <Check className="w-3 h-3 text-emerald-400" />}
+          </div>
+        </div>
+        {editingSource && rawSource && (
+          <div className="flex items-center gap-2 pl-4">
+            <span className="text-[10px] text-muted-foreground">Map &quot;{rawSource}&quot; →</span>
+            <Input
+              value={sourceAlias}
+              onChange={e => setSourceAlias(e.target.value)}
+              placeholder="Canonical source name"
+              className="h-7 text-xs flex-1 bg-black/40 border-white/10"
+            />
+            <Button size="sm" variant="ghost" disabled={!sourceAlias.trim() || saving} onClick={saveSourceAlias} className="text-xs h-7 px-2">
+              Save
+            </Button>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">Funnel</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-white">{resolvedFunnel || "—"}</span>
+            {rawFunnel && !savedFunnel && funnelTypes.length > 0 && (
+              <button onClick={() => setEditingFunnel(!editingFunnel)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
+                <Edit3 className="w-3 h-3 text-white/40" />
+              </button>
+            )}
+            {savedFunnel && <Check className="w-3 h-3 text-emerald-400" />}
+          </div>
+        </div>
+        {editingFunnel && rawFunnel && (
+          <div className="flex items-center gap-2 pl-4">
+            <span className="text-[10px] text-muted-foreground">Map &quot;{rawFunnel}&quot; →</span>
+            <select
+              value={funnelTypeId}
+              onChange={e => setFunnelTypeId(e.target.value)}
+              className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+            >
+              <option value="">Select funnel type...</option>
+              {funnelTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
+            </select>
+            <Button size="sm" variant="ghost" disabled={!funnelTypeId || saving} onClick={saveFunnelAlias} className="text-xs h-7 px-2">
+              Save
+            </Button>
+          </div>
+        )}
+      </div>
+    </DetailSection>
   );
 }
 
