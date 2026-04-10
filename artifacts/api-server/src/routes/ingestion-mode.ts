@@ -50,7 +50,8 @@ router.put("/ingestion-mode", async (req, res) => {
     return;
   }
 
-  const role = (req as any).session?.userRole;
+  const session = req.session as Record<string, unknown>;
+  const role = session?.userRole as string | undefined;
   if (!role || !["super_admin", "agency_user"].includes(role)) {
     res.status(403).json({ error: "Only agency admins can change ingestion mode" });
     return;
@@ -146,7 +147,12 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
 
   const apiBase = process.env.REPLIT_DEV_DOMAIN
     ? `https://${process.env.REPLIT_DEV_DOMAIN}/api-server`
-    : process.env.API_BASE_URL || "";
+    : process.env.API_BASE_URL || null;
+
+  if (!apiBase) {
+    res.status(500).json({ error: "API base URL not configured. Set API_BASE_URL or deploy to Replit." });
+    return;
+  }
 
   const trackerUrl = `${apiBase}/tracker.js`;
 

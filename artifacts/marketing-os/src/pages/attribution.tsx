@@ -29,6 +29,9 @@ export default function Attribution() {
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterMatch, setFilterMatch] = useState<string>("all");
+  const [filterSource, setFilterSource] = useState<string>("all");
+  const [filterFunnel, setFilterFunnel] = useState<string>("all");
+  const [filterDateRange, setFilterDateRange] = useState<string>("all");
   const [searchText, setSearchText] = useState("");
   const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases">("events");
 
@@ -42,9 +45,26 @@ export default function Attribution() {
 
   const events: AttributionEvent[] = data?.events || [];
 
+  const uniqueSources = [...new Set(events.map(ev => (ev as Record<string, unknown>).resolvedLeadSource as string || ev.utmSource || "").filter(Boolean))];
+  const uniqueFunnels = [...new Set(events.map(ev => (ev as Record<string, unknown>).resolvedFunnel as string || "").filter(Boolean))];
+
   const filteredEvents = events.filter(ev => {
     if (filterType !== "all" && ev.eventType !== filterType) return false;
     if (filterMatch !== "all" && ev.matchLevel !== filterMatch) return false;
+    if (filterSource !== "all") {
+      const evSource = (ev as Record<string, unknown>).resolvedLeadSource as string || ev.utmSource || "";
+      if (evSource !== filterSource) return false;
+    }
+    if (filterFunnel !== "all") {
+      const evFunnel = (ev as Record<string, unknown>).resolvedFunnel as string || "";
+      if (evFunnel !== filterFunnel) return false;
+    }
+    if (filterDateRange !== "all") {
+      const evDate = new Date(ev.createdAt);
+      const now = new Date();
+      const daysAgo = filterDateRange === "1d" ? 1 : filterDateRange === "7d" ? 7 : filterDateRange === "30d" ? 30 : 0;
+      if (daysAgo > 0 && evDate < new Date(now.getTime() - daysAgo * 86400000)) return false;
+    }
     if (searchText) {
       const s = searchText.toLowerCase();
       const searchable = [
@@ -141,6 +161,39 @@ export default function Attribution() {
                   <SelectItem value="unmatched">Unmatched</SelectItem>
                 </SelectContent>
               </Select>
+              {uniqueSources.length > 0 && (
+                <Select value={filterSource} onValueChange={setFilterSource}>
+                  <SelectTrigger className="w-[140px] bg-white/5 border border-white/10 text-sm">
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Sources</SelectItem>
+                    {uniqueSources.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {uniqueFunnels.length > 0 && (
+                <Select value={filterFunnel} onValueChange={setFilterFunnel}>
+                  <SelectTrigger className="w-[140px] bg-white/5 border border-white/10 text-sm">
+                    <SelectValue placeholder="Funnel" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Funnels</SelectItem>
+                    {uniqueFunnels.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              <Select value={filterDateRange} onValueChange={setFilterDateRange}>
+                <SelectTrigger className="w-[120px] bg-white/5 border border-white/10 text-sm">
+                  <SelectValue placeholder="Date Range" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="1d">Last 24h</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
+                </SelectContent>
+              </Select>
               <Input
                 placeholder="Search source, campaign, URL..."
                 value={searchText}
@@ -180,9 +233,9 @@ export default function Attribution() {
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</th>
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Source</th>
                       <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Funnel</th>
-                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Match Level</th>
-                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Detection</th>
-                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Join Key</th>
+                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Page</th>
+                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Match</th>
+                      <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -203,18 +256,24 @@ export default function Attribution() {
                           <td className="p-4 text-white uppercase">{ev.eventType.replace('_', ' ')}</td>
                           <td className="p-4 text-gray-400">{resolvedSource}</td>
                           <td className="p-4 text-gray-400">{resolvedFunnel || <span className="text-white/20">—</span>}</td>
+                          <td className="p-4 text-muted-foreground truncate max-w-[120px]" title={ev.pageUrl || ""}>
+                            {ev.pageUrl ? (() => { try { return new URL(ev.pageUrl).pathname; } catch { return ev.pageUrl; } })() : <span className="text-white/20">—</span>}
+                          </td>
                           <td className="p-4">{getMatchBadge(ev.matchLevel)}</td>
                           <td className="p-4">
                             {detectedCount > 0 ? (
                               <span className="text-xs text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-0.5 rounded-full">
-                                {detectedCount} field{detectedCount !== 1 ? "s" : ""}
+                                {detectedCount} detected
+                              </span>
+                            ) : ev.gclid || ev.hashedPhone ? (
+                              <span className="text-xs text-blue-400 bg-blue-400/10 border border-blue-400/20 px-2 py-0.5 rounded-full">
+                                matched
                               </span>
                             ) : (
-                              <span className="text-white/20">—</span>
+                              <span className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full">
+                                unresolved
+                              </span>
                             )}
-                          </td>
-                          <td className="p-4 text-muted-foreground truncate max-w-[160px]">
-                            {ev.gclid || ev.hashedPhone || ev.hashedEmail || ev.billingAddress || ev.fbclid || 'N/A'}
                           </td>
                         </tr>
                       );
