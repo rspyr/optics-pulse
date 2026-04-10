@@ -71,7 +71,11 @@ router.post("/lead-source-aliases", async (req, res) => {
     ));
 
   if (existing.length > 0) {
-    res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped to "${existing[0].canonicalName}"` });
+    if (existing[0].canonicalName === trimmedCanonical) {
+      res.json({ alias: existing[0] });
+      return;
+    }
+    res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped to "${existing[0].canonicalName}" — did you mean "${existing[0].canonicalName}"?` });
     return;
   }
 
