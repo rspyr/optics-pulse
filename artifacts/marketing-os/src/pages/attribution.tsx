@@ -345,6 +345,7 @@ export default function Attribution() {
 
                 {effectiveTenantId && (
                   <InlineIdentityCorrection
+                    key={selectedEvent.id}
                     tenantId={effectiveTenantId}
                     event={selectedEvent}
                   />
@@ -375,6 +376,7 @@ export default function Attribution() {
 
                 {effectiveTenantId && selectedEvent.formFields && (
                   <InlineFieldCorrection
+                    key={`field-${selectedEvent.id}`}
                     tenantId={effectiveTenantId}
                     event={selectedEvent}
                   />
@@ -523,8 +525,10 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   const [editingSource, setEditingSource] = useState(false);
   const [editingFunnel, setEditingFunnel] = useState(false);
   const [sourceAlias, setSourceAlias] = useState("");
+  const [customSourceMode, setCustomSourceMode] = useState(false);
   const [funnelTypeId, setFunnelTypeId] = useState("");
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [knownSources, setKnownSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedSource, setSavedSource] = useState(false);
   const [savedFunnel, setSavedFunnel] = useState(false);
@@ -534,6 +538,14 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
     fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => setFunnelTypes(d.funnelTypes || d || []))
+      .catch(() => {});
+    fetch(`${API_BASE}/api/lead-source-aliases?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const aliases: { canonicalName: string }[] = d.aliases || [];
+        const names = [...new Set(aliases.map(a => a.canonicalName))].sort();
+        setKnownSources(names);
+      })
       .catch(() => {});
   }, [tenantId]);
 
@@ -604,13 +616,43 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         </div>
         {editingSource && rawSource && (
           <div className="flex items-center gap-2 pl-4">
-            <span className="text-[10px] text-muted-foreground">Map &quot;{rawSource}&quot; →</span>
-            <Input
-              value={sourceAlias}
-              onChange={e => setSourceAlias(e.target.value)}
-              placeholder="Canonical source name"
-              className="h-7 text-xs flex-1 bg-black/40 border-white/10"
-            />
+            <span className="text-[10px] text-muted-foreground whitespace-nowrap">Map &quot;{rawSource}&quot; →</span>
+            {knownSources.length > 0 && !customSourceMode ? (
+              <select
+                value={sourceAlias}
+                onChange={e => {
+                  if (e.target.value === "__custom__") {
+                    setCustomSourceMode(true);
+                    setSourceAlias("");
+                  } else {
+                    setSourceAlias(e.target.value);
+                  }
+                }}
+                className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+              >
+                <option value="">Select source...</option>
+                {knownSources.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="__custom__">+ New source...</option>
+              </select>
+            ) : (
+              <div className="flex items-center gap-1 flex-1">
+                <Input
+                  value={sourceAlias}
+                  onChange={e => setSourceAlias(e.target.value)}
+                  placeholder="New source name"
+                  className="h-7 text-xs flex-1 bg-black/40 border-white/10"
+                  autoFocus={customSourceMode}
+                />
+                {customSourceMode && knownSources.length > 0 && (
+                  <button
+                    onClick={() => { setCustomSourceMode(false); setSourceAlias(""); }}
+                    className="text-[10px] text-muted-foreground hover:text-white whitespace-nowrap"
+                  >
+                    ← list
+                  </button>
+                )}
+              </div>
+            )}
             <Button size="sm" variant="ghost" disabled={!sourceAlias.trim() || saving} onClick={saveSourceAlias} className="text-xs h-7 px-2">
               Save
             </Button>
