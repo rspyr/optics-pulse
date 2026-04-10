@@ -11,7 +11,7 @@ import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
-  Zap, ArrowRight, ShieldCheck, Code, Settings2, Brain, Edit3, Activity, Settings,
+  Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -829,6 +829,7 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [snippet, setSnippet] = useState<string | null>(null);
+  const [snippetError, setSnippetError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<{
     trackerHealthy: boolean;
@@ -840,12 +841,20 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
 
   useEffect(() => {
     setLoading(true);
+    setSnippet(null);
+    setSnippetError(null);
     Promise.all([
       fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
       fetch(`${API_BASE}/api/ingestion-mode/status?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
-    ]).then(([modeData, statusData]) => {
+      fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json().then(d => ({ ok: r.ok, data: d }))),
+    ]).then(([modeData, statusData, snippetResult]) => {
       setMode(modeData.mode || "sheets");
       setStatus(statusData);
+      if (snippetResult.ok) {
+        setSnippet(snippetResult.data.snippet || null);
+      } else {
+        setSnippetError(snippetResult.data.error || "Failed to load snippet");
+      }
     }).finally(() => setLoading(false));
   }, [tenantId]);
 
@@ -859,12 +868,6 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
     });
     setMode(newMode);
     setSaving(false);
-  };
-
-  const loadSnippet = async () => {
-    const res = await fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${tenantId}`, { credentials: "include" });
-    const d = await res.json();
-    setSnippet(d.snippet);
   };
 
   const copySnippet = () => {
@@ -977,13 +980,14 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
             <h3 className="text-lg font-medium text-white mb-1">GTM Snippet</h3>
             <p className="text-sm text-muted-foreground">Copy this into your Google Tag Manager custom HTML tag.</p>
           </div>
-          <Button variant="outline" size="sm" onClick={loadSnippet} className="gap-2">
-            <Code className="w-4 h-4" />
-            Generate Snippet
-          </Button>
         </div>
 
-        {snippet && (
+        {snippetError && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
+            <p className="text-xs text-red-400">{snippetError}</p>
+          </div>
+        )}
+        {snippet ? (
           <div className="relative">
             <button
               onClick={copySnippet}
@@ -995,6 +999,8 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
               {snippet}
             </pre>
           </div>
+        ) : !snippetError && (
+          <p className="text-sm text-muted-foreground">Loading snippet...</p>
         )}
       </PremiumCard>
     </div>

@@ -246,8 +246,6 @@ export default function Settings() {
   }, [isAgency]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [scriptTag, setScriptTag] = useState("");
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
   const [commConfig, setCommConfig] = useState({
     callPlatform: "native" as string,
@@ -307,10 +305,6 @@ export default function Settings() {
       .then(data => setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage }))
       .catch(() => {});
 
-    fetch(`${API}/api/funnel-types/script/${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => setScriptTag(data.script || ""))
-      .catch(() => {});
   }, [tenantId, isClientUser]);
 
   function trackField(field: string) {
@@ -377,13 +371,6 @@ export default function Settings() {
     setCommSaving(false);
   }
 
-  async function handleCopyScript() {
-    try {
-      await navigator.clipboard.writeText(scriptTag);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
-  }
 
   const [apiIntegrationsOpen, setApiIntegrationsOpen] = useState(false);
   const [commPlatformOpen, setCommPlatformOpen] = useState(false);
@@ -878,22 +865,6 @@ export default function Settings() {
         </div> : null}
       </PremiumCard>}
 
-      {!isClientUser && tenantId && <PremiumCard>
-        <h3 className="text-xl font-display text-white mb-2">Capture Script</h3>
-        <p className="text-sm text-muted-foreground mb-6">Install this script in the &lt;head&gt; of your website to enable GCLID capture, cookie storage, and heartbeat monitoring.</p>
-
-        <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto relative group">
-          <pre>{scriptTag || "Loading..."}</pre>
-          <button
-            onClick={handleCopyScript}
-            className="absolute top-2 right-2 bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
-          >
-            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-            {copied ? "Copied!" : "Copy"}
-          </button>
-        </div>
-      </PremiumCard>}
-
       {!isClientUser && tenantId && (
         <IngestionModeSettings tenantId={tenantId} />
       )}
@@ -943,10 +914,19 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setMode(d.mode || "sheets"))
-      .finally(() => setLoading(false));
+    setSnippet(null);
+    setSnippetError(null);
+    Promise.all([
+      fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json().then(d => ({ ok: r.ok, data: d }))),
+    ]).then(([modeData, snippetResult]) => {
+      setMode(modeData.mode || "sheets");
+      if (snippetResult.ok) {
+        setSnippet(snippetResult.data.snippet || null);
+      } else {
+        setSnippetError(snippetResult.data.error || "Failed to load snippet");
+      }
+    }).finally(() => setLoading(false));
     loadAliases();
     fetch(`${API}/api/tenants/${tenantId}/funnel-types`, { credentials: "include" })
       .then(r => r.json()).then(d => setTenantFunnels(Array.isArray(d) ? d.map((f: Record<string, unknown>) => ({ id: Number(f.funnelTypeId || f.id), name: String(f.funnelName || f.name || "") })) : []))
@@ -978,17 +958,6 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
     });
     if (res.ok) setMode(newMode);
     setSaving(false);
-  };
-
-  const loadSnippet = async () => {
-    setSnippetError(null);
-    const res = await fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${tenantId}`, { credentials: "include" });
-    const d = await res.json();
-    if (!res.ok) {
-      setSnippetError(d.error || "Failed to generate snippet");
-      return;
-    }
-    setSnippet(d.snippet);
   };
 
   if (loading) return null;
@@ -1029,24 +998,17 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
       </PremiumCard>
 
       <PremiumCard>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Key className="w-5 h-5 text-primary" />
-            <h3 className="text-xl font-display text-white">GTM Tracking Snippet</h3>
-          </div>
-          <button
-            onClick={loadSnippet}
-            className="px-3 py-1.5 text-xs bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 text-white transition-colors"
-          >
-            Generate
-          </button>
+        <div className="flex items-center gap-2 mb-4">
+          <Key className="w-5 h-5 text-primary" />
+          <h3 className="text-xl font-display text-white">GTM Tracking Snippet</h3>
         </div>
+        <p className="text-sm text-muted-foreground mb-4">Copy this into your Google Tag Manager custom HTML tag.</p>
         {snippetError && (
           <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
             <p className="text-xs text-red-400">{snippetError}</p>
           </div>
         )}
-        {snippet && (
+        {snippet ? (
           <div className="relative">
             <button
               onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
@@ -1058,6 +1020,8 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
               {snippet}
             </pre>
           </div>
+        ) : !snippetError && (
+          <p className="text-sm text-muted-foreground">Loading snippet...</p>
         )}
       </PremiumCard>
 

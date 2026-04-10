@@ -66,44 +66,6 @@ router.delete("/funnel-types/:id", requireRole("super_admin", "agency_user"), as
   res.json({ success: true });
 });
 
-router.get("/funnel-types/script/:tenantId", async (req, res) => {
-  const tenantId = parseInt(String(req.params.tenantId));
-  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) { res.status(404).json({ error: "Tenant not found" }); return; }
-
-  const prodDomain = process.env.REPLIT_DOMAINS?.split(",")[0];
-  const devDomain = process.env.REPLIT_DEV_DOMAIN;
-  const baseUrl = prodDomain
-    ? `https://${prodDomain}`
-    : devDomain
-      ? `https://${devDomain}`
-      : "https://api.marketingos.app";
-
-  const clientSlug = tenant.clientSlug;
-  const baseScript = `<script src="${baseUrl}/tracker.js" data-client-id="${clientSlug}"></script>`;
-
-  const associations = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
-    .from(tenantFunnelTypesTable)
-    .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
-  const ids = associations.map(a => a.funnelTypeId);
-
-  let funnelScripts: { id: number; name: string; slug: string; script: string }[] = [];
-  if (ids.length > 0) {
-    const funnels = await db.select().from(funnelTypesTable)
-      .where(and(inArray(funnelTypesTable.id, ids), eq(funnelTypesTable.isActive, true)))
-      .orderBy(funnelTypesTable.name);
-
-    funnelScripts = funnels.map(f => ({
-      id: f.id,
-      name: f.name,
-      slug: f.slug,
-      script: `<script src="${baseUrl}/tracker.js" data-client-id="${clientSlug}" data-funnel="${f.slug}"></script>`,
-    }));
-  }
-
-  res.json({ tenantId, tenantName: tenant.name, clientSlug, script: baseScript, funnelScripts });
-});
-
 router.post("/tenants/:id/funnel-types", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const tenantId = parseInt(String(req.params.id));
   const { funnelTypeId } = req.body;

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink, BookOpen, MessageSquareText, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -35,8 +35,7 @@ export default function AdminFunnels() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: "", slug: "", description: "" });
   const [formError, setFormError] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"funnels" | "assignments" | "scripts" | "health" | "tracking">("funnels");
+  const [tab, setTab] = useState<"funnels" | "assignments" | "health" | "tracking">("funnels");
 
   useEffect(() => {
     fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
@@ -92,14 +91,14 @@ export default function AdminFunnels() {
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Funnel & Script Management</GradientHeading>
-          <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE FUNNEL TYPES, TENANT ASSIGNMENTS, TRACKING SCRIPTS & HEALTH</p>
+          <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE FUNNEL TYPES, TENANT ASSIGNMENTS, TRACKING & HEALTH</p>
         </div>
       </header>
 
       <div className="flex gap-2">
-        {(["funnels", "assignments", "scripts", "health", "tracking"] as const).map(t => (
+        {(["funnels", "assignments", "health", "tracking"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-white/10 text-white" : "text-muted-foreground hover:text-white"}`}>
-            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "scripts" ? "Script Tags" : t === "health" ? "Tracker Health" : "GTM Tracking"}
+            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "health" ? "Tracker Health" : "GTM Tracking"}
           </button>
         ))}
       </div>
@@ -182,39 +181,10 @@ export default function AdminFunnels() {
         <TenantAssignmentsTab tenants={tenants} funnels={funnels} />
       )}
 
-      {tab === "scripts" && (
-        <ScriptTagsTab tenants={tenants} health={health} copiedId={copiedId} setCopiedId={setCopiedId} />
-      )}
-
       {tab === "health" && (
-        <div className="space-y-4">
-          {health.map(h => (
-            <PremiumCard key={h.tenantId} className="p-5 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {h.isHealthy ? <Wifi className="w-5 h-5 text-emerald-400" /> : <WifiOff className="w-5 h-5 text-red-400" />}
-                <div>
-                  <p className="text-white font-medium">{h.tenantName}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {h.domain ? `Domain: ${h.domain}` : "No domain detected"}
-                  </p>
-                </div>
-              </div>
-              <div className="text-right">
-                <span className={`px-3 py-1 text-xs rounded-full font-medium ${h.isHealthy ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
-                  {h.isHealthy ? "Healthy" : "Inactive"}
-                </span>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {h.lastSeen ? `Last seen: ${new Date(h.lastSeen).toLocaleString()}` : "Never reported"}
-                </p>
-              </div>
-            </PremiumCard>
-          ))}
-          {health.length === 0 && (
-            <PremiumCard className="p-12 text-center">
-              <p className="text-muted-foreground">No heartbeat data yet. Install the tracker script on client websites to begin monitoring.</p>
-            </PremiumCard>
-          )}
-        </div>
+        <TrackerHealthTab health={health} onRefresh={() => {
+          fetch(`${API}/api/tracker/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
+        }} />
       )}
 
       {tab === "tracking" && <AdminTrackingPanel tenants={tenants} />}
@@ -298,260 +268,48 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
   );
 }
 
-interface ScriptData {
-  clientSlug: string;
-  script: string;
-  funnelScripts: { id: number; name: string; slug: string; script: string }[];
-}
+function TrackerHealthTab({ health, onRefresh }: { health: TrackerHealth[]; onRefresh: () => void }) {
+  const [lastChecked, setLastChecked] = useState<Date>(new Date());
 
-const INSTALLATION_INSTRUCTIONS = `Installation Instructions for Marketing OS Tracking Script
-===========================================================
-
-1. PLACEMENT
-   Copy the script tag provided below and paste it into the HTML of your website,
-   just before the closing </head> tag. This ensures the tracker loads early on
-   every page.
-
-   Example:
-   <head>
-     <!-- your existing tags -->
-     <script src="https://..." data-client-id="your-client-slug"></script>
-   </head>
-
-2. HOW IT WORKS
-   The tracker script automatically:
-   - Captures UTM parameters (utm_source, utm_medium, utm_campaign, etc.)
-   - Captures ad platform click IDs (gclid, fbclid, msclkid, wbraid, ttclid, li_fat_id)
-   - Persists attribution data in a first-party cookie across page views
-   - Intercepts form submissions and attaches attribution + form field data
-   - Sends a heartbeat so you can monitor installation health in Marketing OS
-   - Tracks the visitor's landing page and referrer
-
-3. DATA ATTRIBUTES
-   - data-client-id (required): Your unique client identifier (clientSlug)
-   - data-funnel (optional): Funnel slug for per-funnel attribution tracking
-
-4. WHICH PAGES
-   Install the base script on ALL pages of your website. The tracker detects
-   forms automatically using a MutationObserver, so dynamically loaded forms
-   are also captured.
-
-5. FUNNEL-SPECIFIC SCRIPTS (if applicable)
-   If you have per-funnel scripts, use those on the specific landing pages for
-   each funnel/campaign. The base script should still be on all other pages.
-   Do NOT install both the base script AND a funnel script on the same page.
-
-6. VERIFICATION
-   After installing, visit your website and then check the "Tracker Health" tab
-   in Marketing OS. You should see a green "Healthy" status with the detected
-   domain within a few minutes.
-
-7. COMMON ISSUES
-   - Script not firing: Make sure it is placed in the <head>, not at the
-     bottom of <body>.
-   - Forms inside iframes: The tracker cannot detect forms loaded in
-     cross-origin iframes.
-   - Cookie persistence: The tracker uses a first-party cookie (_mos_attr)
-     with a 90-day expiry. Cookie-blocking browser extensions may interfere.`;
-
-function buildDevPrompt(tenantName: string, clientSlug: string, baseScript: string, funnelScripts: { name: string; script: string }[]) {
-  const allScripts = [
-    `Base Script (install on all pages):\n${baseScript}`,
-    ...funnelScripts.map(fs => `${fs.name} (install on that funnel's landing pages only):\n${fs.script}`)
-  ].join("\n\n");
-
-  return `Hi there,
-
-We need a tracking script installed on the ${tenantName} website so we can properly attribute marketing leads. This is a lightweight JavaScript tag — similar to a Google Analytics snippet.
-
-Client ID: ${clientSlug}
-
-Here are the script tag(s) to install:
-
-${allScripts}
-
-Installation steps:
-1. Paste the script tag(s) above into the <head> section of the site, just before the closing </head> tag.
-2. The base script should go on ALL pages. If there are funnel-specific scripts listed above, those go only on the landing pages for that specific campaign/funnel.
-3. Do NOT install both the base script and a funnel-specific script on the same page — use one or the other.
-4. After installing, please let us know so we can verify the tracker is reporting correctly.
-
-What the script does:
-- Captures UTM parameters (utm_source, utm_medium, utm_campaign, utm_term, utm_content)
-- Captures ad platform click IDs (gclid, fbclid, msclkid, wbraid, ttclid, li_fat_id)
-- Persists attribution data in a first-party cookie so it survives across page navigations
-- Automatically intercepts form submissions and attaches attribution data as hidden fields
-- Sends a periodic heartbeat so we can verify installation health remotely
-
-The script loads asynchronously and will not affect page load speed.
-
-Thank you!`;
-}
-
-function CopyButton({ copyKey, copiedId, onClick, label }: { copyKey: string; copiedId: string | null; onClick: () => void; label: string }) {
-  const isCopied = copiedId === copyKey;
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-white transition-all shrink-0"
-    >
-      {isCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-      {isCopied ? "Copied!" : label}
-    </button>
-  );
-}
-
-function ScriptTagsTab({ tenants, health, copiedId, setCopiedId }: { tenants: Tenant[]; health: TrackerHealth[]; copiedId: string | null; setCopiedId: (id: string | null) => void }) {
-  const [scriptData, setScriptData] = useState<Record<number, ScriptData>>({});
-  const [showInstructions, setShowInstructions] = useState(false);
-
-  useEffect(() => {
-    tenants.forEach(t => {
-      fetch(`${API}/api/funnel-types/script/${t.id}`, { credentials: "include" })
-        .then(r => r.json())
-        .then(data => setScriptData(prev => ({ ...prev, [t.id]: { clientSlug: data.clientSlug, script: data.script, funnelScripts: data.funnelScripts || [] } })))
-        .catch(() => {});
-    });
-  }, [tenants]);
-
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { return () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current); }; }, []);
-  const handleCopy = (text: string, key: string) => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-    setCopiedId(key);
-    copyTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
+  const handleRefresh = () => {
+    onRefresh();
+    setLastChecked(new Date());
   };
 
   return (
     <div className="space-y-4">
-      <PremiumCard className="p-5">
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setShowInstructions(!showInstructions)}
-            className="flex items-center gap-2 text-white hover:text-white/80 transition-colors"
-          >
-            <BookOpen className="w-5 h-5 text-blue-400" />
-            <h3 className="font-display text-lg">Installation Instructions</h3>
-            {showInstructions ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-          </button>
-          <CopyButton
-            copyKey="instructions"
-            copiedId={copiedId}
-            onClick={() => handleCopy(INSTALLATION_INSTRUCTIONS, "instructions")}
-            label="Copy Instructions"
-          />
-        </div>
-        {showInstructions && (
-          <div className="mt-4 bg-background border border-white/10 rounded-lg p-5 font-mono text-xs text-blue-300/80 whitespace-pre-wrap leading-relaxed overflow-x-auto">
-            {INSTALLATION_INSTRUCTIONS}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">Last checked: {lastChecked.toLocaleTimeString()}</p>
+        <button onClick={handleRefresh} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-sm text-white transition-all">
+          <Wifi className="w-3.5 h-3.5" /> Refresh
+        </button>
+      </div>
+      {health.map(h => (
+        <PremiumCard key={h.tenantId} className="p-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {h.isHealthy ? <Wifi className="w-5 h-5 text-emerald-400" /> : <WifiOff className="w-5 h-5 text-red-400" />}
+            <div>
+              <p className="text-white font-medium">{h.tenantName}</p>
+              <p className="text-sm text-muted-foreground">
+                {h.domain ? `Domain: ${h.domain}` : "No domain detected"}
+              </p>
+            </div>
           </div>
-        )}
-      </PremiumCard>
-
-      {tenants.map(t => {
-        const data = scriptData[t.id];
-        const tenantHealth = health.find(h => h.tenantId === t.id);
-
-        if (!data) return (
-          <PremiumCard key={t.id} className="p-5">
-            <h3 className="font-display text-lg text-white">{t.name}</h3>
-            <p className="text-sm text-muted-foreground mt-2">Loading scripts...</p>
-          </PremiumCard>
-        );
-
-        const clientSlug = data.clientSlug || t.clientSlug;
-        const prompt = buildDevPrompt(t.name, clientSlug, data.script, data.funnelScripts);
-
-        return (
-          <PremiumCard key={t.id} className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <h3 className="font-display text-lg text-white">{t.name}</h3>
-                <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-xs font-mono text-muted-foreground">
-                  {clientSlug}
-                </span>
-              </div>
-              {tenantHealth && (
-                <div className="flex items-center gap-2">
-                  {tenantHealth.isHealthy ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-red-400" />}
-                  <div className="text-right">
-                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${tenantHealth.isHealthy ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
-                      {tenantHealth.isHealthy ? "Healthy" : "Inactive"}
-                    </span>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {tenantHealth.lastSeen ? `Last seen: ${new Date(tenantHealth.lastSeen).toLocaleString()}` : "Never reported"}
-                      {tenantHealth.domain ? ` · ${tenantHealth.domain}` : ""}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <MessageSquareText className="w-4 h-4 text-amber-400" />
-                    <p className="text-xs text-amber-400 uppercase tracking-wider font-medium">Developer Request Prompt</p>
-                  </div>
-                  <CopyButton
-                    copyKey={`prompt-${t.id}`}
-                    copiedId={copiedId}
-                    onClick={() => handleCopy(prompt, `prompt-${t.id}`)}
-                    label="Copy Prompt"
-                  />
-                </div>
-                <div className="bg-background/50 border border-white/10 rounded-lg p-4 text-sm text-white/70 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
-                  {prompt}
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Base Script (all pages)</p>
-                  <CopyButton
-                    copyKey={`base-${t.id}`}
-                    copiedId={copiedId}
-                    onClick={() => handleCopy(data.script, `base-${t.id}`)}
-                    label="Copy Base Script"
-                  />
-                </div>
-                <div className="bg-background border border-white/10 rounded-lg p-4 font-mono text-sm text-emerald-400 overflow-x-auto">
-                  {data.script}
-                </div>
-              </div>
-
-              {data.funnelScripts.length > 0 && (
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Per-Funnel Scripts ({data.funnelScripts.length})</p>
-                  <div className="space-y-2">
-                    {data.funnelScripts.map(fs => (
-                      <div key={fs.id} className="flex items-start gap-3">
-                        <div className="flex-1 bg-background border border-white/10 rounded-lg p-3 font-mono text-xs text-cyan-400 overflow-x-auto">
-                          <span className="text-muted-foreground text-[10px] block mb-1">{fs.name}</span>
-                          {fs.script}
-                        </div>
-                        <button
-                          onClick={() => handleCopy(fs.script, `funnel-${t.id}-${fs.id}`)}
-                          className="mt-1 p-1.5 rounded-lg hover:bg-white/10 text-muted-foreground hover:text-white"
-                          title="Copy"
-                        >
-                          {copiedId === `funnel-${t.id}-${fs.id}` ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {data.funnelScripts.length === 0 && (
-                <p className="text-sm text-muted-foreground">No funnel types assigned to this tenant. Go to Tenant Assignments to add some.</p>
-              )}
-            </div>
-          </PremiumCard>
-        );
-      })}
-
+          <div className="text-right">
+            <span className={`px-3 py-1 text-xs rounded-full font-medium ${h.isHealthy ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"}`}>
+              {h.isHealthy ? "Healthy" : "Inactive"}
+            </span>
+            <p className="text-xs text-muted-foreground mt-1">
+              {h.lastSeen ? `Last seen: ${new Date(h.lastSeen).toLocaleString()}` : "Never reported"}
+            </p>
+          </div>
+        </PremiumCard>
+      ))}
+      {health.length === 0 && (
+        <PremiumCard className="p-12 text-center">
+          <p className="text-muted-foreground">No heartbeat data yet. Install the tracker script on client websites to begin monitoring.</p>
+        </PremiumCard>
+      )}
     </div>
   );
 }
@@ -580,14 +338,23 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
 
   useEffect(() => {
     if (!selectedTid) return;
-    fetch(`${API_BASE}/api/ingestion-mode?tenantId=${selectedTid}`, { credentials: "include" })
-      .then(r => r.json()).then(d => setMode(d.mode || "sheets")).catch(() => {});
+    setSnippet(null);
+    setSnippetErr(null);
+    Promise.all([
+      fetch(`${API_BASE}/api/ingestion-mode?tenantId=${selectedTid}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${selectedTid}`, { credentials: "include" }).then(r => r.json().then(d => ({ ok: r.ok, data: d }))),
+    ]).then(([modeData, snippetResult]) => {
+      setMode(modeData.mode || "sheets");
+      if (snippetResult.ok) {
+        setSnippet(snippetResult.data.snippet || null);
+      } else {
+        setSnippetErr(snippetResult.data.error || "Failed to load snippet");
+      }
+    }).catch(() => {});
     loadAliases(selectedTid);
     fetch(`${API}/api/tenants/${selectedTid}/funnel-types`, { credentials: "include" })
       .then(r => r.json()).then(d => setTenantFunnels(Array.isArray(d) ? d.map((f: Record<string, unknown>) => ({ id: Number(f.funnelTypeId || f.id), name: String(f.funnelName || f.name || "") })) : []))
       .catch(() => setTenantFunnels([]));
-    setSnippet(null);
-    setSnippetErr(null);
   }, [selectedTid]);
 
   const updateMode = async (m: string) => {
@@ -599,15 +366,6 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
     });
     if (res.ok) setMode(m);
     setSaving(false);
-  };
-
-  const loadSnippet = async () => {
-    if (!selectedTid) return;
-    setSnippetErr(null);
-    const res = await fetch(`${API_BASE}/api/ingestion-mode/gtm-snippet?tenantId=${selectedTid}`, { credentials: "include" });
-    const d = await res.json();
-    if (!res.ok) { setSnippetErr(d.error || "Failed"); return; }
-    setSnippet(d.snippet);
   };
 
   const addAlias = async () => {
@@ -659,12 +417,10 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
       </PremiumCard>
 
       <PremiumCard>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-display text-lg text-white">GTM Snippet</h3>
-          <button onClick={loadSnippet} className="px-3 py-1.5 text-xs bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 text-white">Generate</button>
-        </div>
+        <h3 className="font-display text-lg text-white mb-3">GTM Snippet</h3>
+        <p className="text-xs text-muted-foreground mb-3">Copy this into your Google Tag Manager custom HTML tag.</p>
         {snippetErr && <p className="text-xs text-red-400 mb-2">{snippetErr}</p>}
-        {snippet && (
+        {snippet ? (
           <div className="relative">
             <button onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
               className="absolute top-2 right-2 p-1.5 rounded-md bg-white/10 hover:bg-white/20">
@@ -672,6 +428,8 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
             </button>
             <pre className="bg-black/40 border border-white/10 rounded-lg p-3 text-xs text-emerald-300/80 overflow-x-auto font-mono whitespace-pre-wrap">{snippet}</pre>
           </div>
+        ) : !snippetErr && (
+          <p className="text-sm text-muted-foreground">Loading snippet...</p>
         )}
       </PremiumCard>
 
