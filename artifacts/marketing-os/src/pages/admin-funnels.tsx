@@ -270,18 +270,27 @@ function TenantAssignmentsTab({ tenants, funnels }: { tenants: Tenant[]; funnels
 
 function TrackerHealthTab({ health, onRefresh }: { health: TrackerHealth[]; onRefresh: () => void }) {
   const [lastChecked, setLastChecked] = useState<Date>(new Date());
+  const [refreshing, setRefreshing] = useState(false);
 
-  const handleRefresh = () => {
-    onRefresh();
-    setLastChecked(new Date());
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await new Promise<void>((resolve) => {
+        onRefresh();
+        setTimeout(resolve, 500);
+      });
+      setLastChecked(new Date());
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">Last checked: {lastChecked.toLocaleTimeString()}</p>
-        <button onClick={handleRefresh} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-sm text-white transition-all">
-          <Wifi className="w-3.5 h-3.5" /> Refresh
+        <button onClick={handleRefresh} disabled={refreshing} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-sm text-white transition-all disabled:opacity-50">
+          <Wifi className="w-3.5 h-3.5" /> {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </div>
       {health.map(h => (
@@ -350,7 +359,7 @@ function AdminTrackingPanel({ tenants }: { tenants: Tenant[] }) {
       } else {
         setSnippetErr(snippetResult.data.error || "Failed to load snippet");
       }
-    }).catch(() => {});
+    }).catch(() => { setSnippetErr("Failed to load snippet"); });
     loadAliases(selectedTid);
     fetch(`${API}/api/tenants/${selectedTid}/funnel-types`, { credentials: "include" })
       .then(r => r.json()).then(d => setTenantFunnels(Array.isArray(d) ? d.map((f: Record<string, unknown>) => ({ id: Number(f.funnelTypeId || f.id), name: String(f.funnelName || f.name || "") })) : []))

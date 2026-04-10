@@ -855,6 +855,8 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
       } else {
         setSnippetError(snippetResult.data.error || "Failed to load snippet");
       }
+    }).catch(() => {
+      setSnippetError("Failed to load snippet");
     }).finally(() => setLoading(false));
   }, [tenantId]);
 
