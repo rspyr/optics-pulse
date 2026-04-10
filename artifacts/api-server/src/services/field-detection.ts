@@ -1,5 +1,5 @@
 import { db, fieldMappingRulesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 export type SemanticField =
   | "firstName"
@@ -102,6 +102,9 @@ async function loadRules(
   pageUrlPattern: string,
   formIdentifier: string,
 ): Promise<Map<string, SemanticField>> {
+  const identifiers = [formIdentifier];
+  if (formIdentifier !== "*") identifiers.push("*");
+
   const rows = await db
     .select()
     .from(fieldMappingRulesTable)
@@ -109,14 +112,17 @@ async function loadRules(
       and(
         eq(fieldMappingRulesTable.tenantId, tenantId),
         eq(fieldMappingRulesTable.pageUrlPattern, pageUrlPattern),
-        eq(fieldMappingRulesTable.formIdentifier, formIdentifier),
+        inArray(fieldMappingRulesTable.formIdentifier, identifiers),
       ),
     )
     .orderBy(fieldMappingRulesTable.priority);
 
   const map = new Map<string, SemanticField>();
   for (const row of rows) {
-    map.set(normalizeFieldKey(row.fieldName), row.mapsTo as SemanticField);
+    const key = normalizeFieldKey(row.fieldName);
+    if (!map.has(key)) {
+      map.set(key, row.mapsTo as SemanticField);
+    }
   }
   return map;
 }

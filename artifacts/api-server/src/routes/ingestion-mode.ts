@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, tenantsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable } from "@workspace/db";
+import { eq, and, gte, isNotNull, ne, sql, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -64,6 +64,48 @@ router.put("/ingestion-mode", async (req, res) => {
   res.json({ success: true, mode });
 });
 
+router.get("/ingestion-mode/status", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [latestHeartbeat] = await db.select().from(trackerHeartbeatsTable)
+    .where(eq(trackerHeartbeatsTable.tenantId, tenantId))
+    .orderBy(desc(trackerHeartbeatsTable.lastSeenAt))
+    .limit(1);
+  const trackerHealthy = latestHeartbeat
+    ? new Date(latestHeartbeat.lastSeenAt) > twentyFourHoursAgo
+    : false;
+
+  const [eventCount] = await db.select({ count: sql<number>`count(*)::int` })
+    .from(attributionEventsTable)
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      gte(attributionEventsTable.createdAt, sevenDaysAgo),
+    ));
+
+  const activeSheets = await db.select({ id: googleSheetConfigsTable.id })
+    .from(googleSheetConfigsTable)
+    .where(and(
+      eq(googleSheetConfigsTable.tenantId, tenantId),
+      ne(googleSheetConfigsTable.syncPaused, true),
+      isNotNull(googleSheetConfigsTable.columnMapping),
+    ));
+
+  res.json({
+    trackerHealthy,
+    lastHeartbeat: latestHeartbeat?.lastSeenAt || null,
+    heartbeatDomain: latestHeartbeat?.domain || null,
+    recentEventCount: eventCount?.count || 0,
+    activeSheetCount: activeSheets.length,
+  });
+});
+
 router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
@@ -84,76 +126,10 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
     ? `https://${process.env.REPLIT_DEV_DOMAIN}/api-server`
     : process.env.API_BASE_URL || "";
 
-  const snippet = `<script>
-(function(){
-  var TRACKER_URL = "${apiBase}/api/tracker/submit";
-  var CLIENT_ID = "${tenant.clientSlug}";
+  const trackerUrl = `${apiBase}/tracker.js`;
 
-  function getParams() {
-    var params = {};
-    var search = window.location.search.substring(1);
-    if (!search) return params;
-    search.split("&").forEach(function(pair) {
-      var kv = pair.split("=");
-      params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || "");
-    });
-    return params;
-  }
-
-  function getCookie(name) {
-    var match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-    return match ? match[2] : null;
-  }
-
-  function setCookie(name, value, days) {
-    var d = new Date();
-    d.setTime(d.getTime() + (days * 86400000));
-    document.cookie = name + "=" + value + ";expires=" + d.toUTCString() + ";path=/;SameSite=Lax";
-  }
-
-  var params = getParams();
-  var attrKeys = ["gclid","wbraid","fbclid","msclkid","ttclid","li_fat_id","utm_source","utm_medium","utm_campaign","utm_term","utm_content"];
-  attrKeys.forEach(function(k) {
-    if (params[k]) setCookie("_pulse_" + k, params[k], 90);
-  });
-
-  if (!getCookie("_pulse_landing")) {
-    setCookie("_pulse_landing", window.location.href, 90);
-  }
-
-  window.__pulseTracker = {
-    submitForm: function(formFields, options) {
-      options = options || {};
-      var attribution = {};
-      attrKeys.forEach(function(k) {
-        var v = getCookie("_pulse_" + k);
-        if (v) attribution[k] = v;
-      });
-
-      var payload = {
-        client_id: CLIENT_ID,
-        page_url: window.location.href,
-        landing_page: getCookie("_pulse_landing") || window.location.href,
-        referrer: document.referrer || null,
-        submitted_at: new Date().toISOString(),
-        attribution: attribution,
-        form: {
-          type: options.formType || "contact",
-          id: options.formId || null,
-          name: options.formName || null
-        },
-        fields: formFields || {},
-        custom: options.custom || {}
-      };
-
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", TRACKER_URL, true);
-      xhr.setRequestHeader("Content-Type", "application/json");
-      xhr.send(JSON.stringify(payload));
-    }
-  };
-})();
-</script>`;
+  const snippet = `<!-- Pulse Attribution Tracker -->
+<script src="${trackerUrl}" data-client-id="${tenant.clientSlug}"></script>`;
 
   res.json({ snippet, clientSlug: tenant.clientSlug });
 });

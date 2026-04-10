@@ -217,6 +217,20 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
       }
     }
 
+    if (!resolvedFunnelId) {
+      const [defaultAssoc] = await db
+        .select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId, funnelName: funnelTypesTable.name })
+        .from(tenantFunnelTypesTable)
+        .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+        .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
+        .orderBy(tenantFunnelTypesTable.funnelTypeId)
+        .limit(1);
+      if (defaultAssoc) {
+        resolvedFunnelId = defaultAssoc.funnelTypeId;
+        resolvedFunnelStr = defaultAssoc.funnelName;
+      }
+    }
+
     const formFieldsToStore = Object.keys(fields).length > 0
       ? { ...fields, ...(Object.keys(custom).length > 0 ? { _custom: custom } : {}) }
       : null;
@@ -274,15 +288,26 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
       if (!isTestLead) {
         const resolvedLeadType = resolvedFunnelStr || (utmSource || "form");
 
-        if (ingestionMode === "both" && pii.phone) {
-          const normalizedPhone = normalizePhone(pii.phone);
-          const allTenantLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-            .from(leadsTable)
-            .where(eq(leadsTable.tenantId, tenantId));
-          const existsByPhone = allTenantLeads.some(l =>
-            l.phone && normalizePhone(l.phone) === normalizedPhone
-          );
-          if (existsByPhone) {
+        if (ingestionMode === "both") {
+          let isDuplicate = false;
+          if (pii.phone) {
+            const normalizedPhone = normalizePhone(pii.phone);
+            const allTenantLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+              .from(leadsTable)
+              .where(eq(leadsTable.tenantId, tenantId));
+            isDuplicate = allTenantLeads.some(l =>
+              l.phone && normalizePhone(l.phone) === normalizedPhone
+            );
+          }
+          if (!isDuplicate && pii.email) {
+            const emailLower = pii.email.toLowerCase().trim();
+            const emailLeads = await db.select({ id: leadsTable.id })
+              .from(leadsTable)
+              .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.email, emailLower)))
+              .limit(1);
+            isDuplicate = emailLeads.length > 0;
+          }
+          if (isDuplicate) {
             res.json({ success: true, eventId: event.id, deduplicated: true });
             return;
           }

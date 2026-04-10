@@ -11,7 +11,7 @@ import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
-  Zap, ArrowRight, ShieldCheck, Code, Settings2, Brain,
+  Zap, ArrowRight, ShieldCheck, Code, Settings2, Brain, Edit3, Activity, Settings,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -306,6 +306,13 @@ export default function Attribution() {
                   </DetailSection>
                 )}
 
+                {effectiveTenantId && selectedEvent.formFields && (
+                  <InlineFieldCorrection
+                    tenantId={effectiveTenantId}
+                    event={selectedEvent}
+                  />
+                )}
+
                 <DetailSection title="Linked Records" icon={<Link2 className="w-4 h-4" />}>
                   {matchedJob ? (
                     <div className="space-y-3">
@@ -432,19 +439,132 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
+function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+  const [correcting, setCorrecting] = useState<string | null>(null);
+  const [selectedMapping, setSelectedMapping] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
+
+  const formFields = event.formFields as Record<string, unknown> | null;
+  if (!formFields || typeof formFields !== "object") return null;
+
+  const pageUrl = event.pageUrl || "";
+  const formId = (event as Record<string, unknown>).formId as string || "";
+  const formName = (event as Record<string, unknown>).formName as string || "";
+
+  const saveRule = async (fieldName: string, mapsTo: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      let pagePath = "*";
+      try { pagePath = new URL(pageUrl).pathname; } catch {}
+      const formIdentifier = formId || formName || "*";
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          pageUrlPattern: pagePath,
+          formIdentifier,
+          fieldName,
+          mapsTo,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save rule");
+        setSaving(false);
+        return;
+      }
+      setSaved(prev => [...prev, fieldName]);
+      setCorrecting(null);
+    } catch {
+      setError("Network error");
+    }
+    setSaving(false);
+  };
+
+  const entries = Object.entries(formFields).filter(([k]) => !k.startsWith("_"));
+  if (entries.length === 0) return null;
+
+  return (
+    <DetailSection title="Inline Field Correction" icon={<Settings className="w-4 h-4" />}>
+      <p className="text-xs text-muted-foreground mb-3">Click a field to create a mapping rule for this page + form scope.</p>
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {entries.map(([fieldName, value]) => (
+          <div key={fieldName} className="bg-white/[0.02] border border-white/5 rounded-lg p-2.5">
+            {correcting === fieldName ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-muted-foreground min-w-[100px]">{fieldName}</span>
+                <select
+                  value={selectedMapping}
+                  onChange={e => setSelectedMapping(e.target.value)}
+                  className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+                >
+                  <option value="">Select mapping...</option>
+                  {FIELD_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+                <Button size="sm" variant="ghost" disabled={!selectedMapping || saving} onClick={() => saveRule(fieldName, selectedMapping)} className="text-xs h-7 px-2">
+                  {saving ? "..." : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setCorrecting(null)} className="text-xs h-7 px-2 text-muted-foreground">
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <button
+                onClick={() => { setCorrecting(fieldName); setSelectedMapping(""); }}
+                disabled={saved.includes(fieldName)}
+                className="w-full flex items-center justify-between gap-2 text-left hover:bg-white/[0.03] rounded transition-colors"
+              >
+                <span className="text-xs font-mono text-muted-foreground">{fieldName}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-white/60 truncate max-w-[150px]">{String(value)}</span>
+                  {saved.includes(fieldName) ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Edit3 className="w-3 h-3 text-white/30" />
+                  )}
+                </div>
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </DetailSection>
+  );
+}
+
 function IngestionModePanel({ tenantId }: { tenantId: number }) {
   const [mode, setMode] = useState<IngestionMode>("sheets");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [snippet, setSnippet] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<{
+    trackerHealthy: boolean;
+    lastHeartbeat: string | null;
+    heartbeatDomain: string | null;
+    recentEventCount: number;
+    activeSheetCount: number;
+  } | null>(null);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setMode(d.mode || "sheets"))
-      .finally(() => setLoading(false));
+    Promise.all([
+      fetch(`${API_BASE}/api/ingestion-mode?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/ingestion-mode/status?tenantId=${tenantId}`, { credentials: "include" }).then(r => r.json()),
+    ]).then(([modeData, statusData]) => {
+      setMode(modeData.mode || "sheets");
+      setStatus(statusData);
+    }).finally(() => setLoading(false));
   }, [tenantId]);
 
   const updateMode = async (newMode: IngestionMode) => {
@@ -479,43 +599,93 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
 
   const steps = [
     { key: "sheets" as const, label: "Google Sheets Only", desc: "Leads come from sheet sync. Tracker records attribution events only — safe for testing.", icon: <FileText className="w-5 h-5" /> },
-    { key: "both" as const, label: "Dual Mode", desc: "Both sheet sync and tracker create leads. Phone deduplication prevents doubles.", icon: <ShieldCheck className="w-5 h-5" /> },
+    { key: "both" as const, label: "Dual Mode", desc: "Both sheet sync and tracker create leads. Phone + email dedup prevents doubles.", icon: <ShieldCheck className="w-5 h-5" /> },
     { key: "tracker" as const, label: "Tracker Only", desc: "Sheet sync is disabled. All leads come from the JavaScript tracker.", icon: <Zap className="w-5 h-5" /> },
   ];
 
+  const canAdvanceToBoth = status && status.trackerHealthy && status.recentEventCount > 0;
+  const canAdvanceToTracker = status && status.trackerHealthy && status.recentEventCount >= 10;
+
   return (
     <div className="space-y-6">
+      {status && (
+        <PremiumCard className="p-6">
+          <h3 className="text-lg font-medium text-white mb-4">System Health</h3>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`w-2 h-2 rounded-full ${status.trackerHealthy ? "bg-emerald-400" : "bg-red-400"}`} />
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Tracker Heartbeat</span>
+              </div>
+              <p className="text-sm text-white font-medium">{status.trackerHealthy ? "Healthy" : "Not detected"}</p>
+              {status.lastHeartbeat && (
+                <p className="text-xs text-muted-foreground mt-1">Last seen: {new Date(status.lastHeartbeat).toLocaleString()}</p>
+              )}
+              {status.heartbeatDomain && (
+                <p className="text-xs text-muted-foreground">Domain: {status.heartbeatDomain}</p>
+              )}
+            </div>
+            <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Activity className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Tracker Events (7d)</span>
+              </div>
+              <p className="text-2xl text-white font-semibold">{status.recentEventCount}</p>
+            </div>
+            <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Active Sheet Configs</span>
+              </div>
+              <p className="text-2xl text-white font-semibold">{status.activeSheetCount}</p>
+            </div>
+          </div>
+        </PremiumCard>
+      )}
+
       <PremiumCard className="p-6">
         <h3 className="text-lg font-medium text-white mb-1">Lead Ingestion Mode</h3>
         <p className="text-sm text-muted-foreground mb-6">Control how leads flow into the system. Progress through these stages as you verify tracker accuracy.</p>
 
         <div className="grid gap-4 md:grid-cols-3">
-          {steps.map((step, i) => (
-            <button
-              key={step.key}
-              disabled={saving}
-              onClick={() => updateMode(step.key)}
-              className={`relative p-5 rounded-xl border text-left transition-all ${
-                mode === step.key
-                  ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                  : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/20"
-              }`}
-            >
-              {mode === step.key && (
-                <div className="absolute top-3 right-3">
-                  <Check className="w-4 h-4 text-primary" />
+          {steps.map((step, i) => {
+            const disabled = saving
+              || (step.key === "both" && mode === "sheets" && !canAdvanceToBoth)
+              || (step.key === "tracker" && mode !== "tracker" && !canAdvanceToTracker);
+            return (
+              <button
+                key={step.key}
+                disabled={disabled}
+                onClick={() => updateMode(step.key)}
+                className={`relative p-5 rounded-xl border text-left transition-all ${
+                  mode === step.key
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                    : disabled
+                      ? "border-white/5 bg-white/[0.01] opacity-50 cursor-not-allowed"
+                      : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/20"
+                }`}
+              >
+                {mode === step.key && (
+                  <div className="absolute top-3 right-3">
+                    <Check className="w-4 h-4 text-primary" />
+                  </div>
+                )}
+                <div className={`mb-3 ${mode === step.key ? "text-primary" : "text-muted-foreground"}`}>
+                  {step.icon}
                 </div>
-              )}
-              <div className={`mb-3 ${mode === step.key ? "text-primary" : "text-muted-foreground"}`}>
-                {step.icon}
-              </div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs text-muted-foreground">Step {i + 1}</span>
-              </div>
-              <h4 className={`font-medium text-sm mb-1 ${mode === step.key ? "text-white" : "text-white/70"}`}>{step.label}</h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
-            </button>
-          ))}
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs text-muted-foreground">Step {i + 1}</span>
+                </div>
+                <h4 className={`font-medium text-sm mb-1 ${mode === step.key ? "text-white" : "text-white/70"}`}>{step.label}</h4>
+                <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
+                {disabled && step.key !== mode && (
+                  <p className="text-[10px] text-amber-400/70 mt-2">
+                    {step.key === "both" ? "Requires active tracker heartbeat + at least 1 event" : "Requires active tracker + at least 10 events"}
+                  </p>
+                )}
+              </button>
+            );
+          })}
         </div>
       </PremiumCard>
 
