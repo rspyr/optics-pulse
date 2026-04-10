@@ -1015,6 +1015,7 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
   const [newAlias, setNewAlias] = useState("");
   const [selectedFunnelId, setSelectedFunnelId] = useState<string>("");
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [hasSheetConfigs, setHasSheetConfigs] = useState(false);
 
   const loadAliases = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, { credentials: "include" });
@@ -1028,10 +1029,20 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
     setFunnelTypes(d.funnelTypes || d || []);
   }, [tenantId]);
 
+  const checkSheetConfigs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/tenants/${tenantId}/sheet-configs`, { credentials: "include" });
+      if (res.ok) {
+        const configs = await res.json();
+        setHasSheetConfigs(Array.isArray(configs) && configs.length > 0);
+      }
+    } catch {}
+  }, [tenantId]);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadAliases(), loadFunnelTypes()]).finally(() => setLoading(false));
-  }, [loadAliases, loadFunnelTypes]);
+    Promise.all([loadAliases(), loadFunnelTypes(), checkSheetConfigs()]).finally(() => setLoading(false));
+  }, [loadAliases, loadFunnelTypes, checkSheetConfigs]);
 
   const addAlias = async () => {
     if (!newAlias.trim() || !selectedFunnelId) return;
@@ -1073,10 +1084,12 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
             <h3 className="text-lg font-medium text-white mb-1">Funnel Aliases</h3>
             <p className="text-sm text-muted-foreground">Map raw form values to canonical funnel types. When a form submission says "ac repair", the system maps it to your "Repair" funnel.</p>
           </div>
-          <Button variant="outline" size="sm" onClick={loadDefaults} className="gap-2">
-            <Zap className="w-4 h-4" />
-            Load HVAC Defaults
-          </Button>
+          {hasSheetConfigs && (
+            <Button variant="outline" size="sm" onClick={loadDefaults} className="gap-2">
+              <Zap className="w-4 h-4" />
+              Load from Spreadsheets
+            </Button>
+          )}
         </div>
 
         <div className="flex gap-2 mb-6">
