@@ -90,7 +90,7 @@ export default function AdminFunnels() {
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <GradientHeading className="text-3xl md:text-4xl mb-2">Funnel & Script Management</GradientHeading>
+          <GradientHeading className="text-3xl md:text-4xl mb-2">Funnel & Tracking Management</GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-wide">MANAGE FUNNEL TYPES, TENANT ASSIGNMENTS, TRACKING & HEALTH</p>
         </div>
       </header>
