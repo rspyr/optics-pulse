@@ -1034,7 +1034,11 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
       const res = await fetch(`${API_BASE}/api/tenants/${tenantId}/sheet-configs`, { credentials: "include" });
       if (res.ok) {
         const configs = await res.json();
-        setHasSheetConfigs(Array.isArray(configs) && configs.length > 0);
+        const hasUsableConfigs = Array.isArray(configs) && configs.some((c: { columnMapping?: Record<string, string> | null; defaultFunnelTypeId?: number | null }) => {
+          if (!c.columnMapping || !c.defaultFunnelTypeId) return false;
+          return Object.values(c.columnMapping).some(field => field === "__funnel__" || field === "serviceType");
+        });
+        setHasSheetConfigs(hasUsableConfigs);
       } else {
         setHasSheetConfigs(false);
       }

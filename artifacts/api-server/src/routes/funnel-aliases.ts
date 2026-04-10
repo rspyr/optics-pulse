@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
+import { readRawSheetData } from "../services/integrations/google-sheets";
 
 const router: IRouter = Router();
 
@@ -182,30 +183,65 @@ router.post("/funnel-aliases/load-defaults", async (req, res) => {
   let skipped = 0;
 
   for (const config of sheetConfigs) {
-    const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
-    if (!funnelValueMap) continue;
+    const columnMapping = config.columnMapping as Record<string, string> | null;
+    if (!columnMapping) continue;
 
-    for (const [rawValue, funnelTypeId] of Object.entries(funnelValueMap)) {
-      const trimmedAlias = rawValue.toLowerCase().trim();
-      if (!trimmedAlias) continue;
+    const funnelColumns: string[] = [];
+    const serviceTypeColumns: string[] = [];
+    for (const [header, field] of Object.entries(columnMapping)) {
+      if (field === "__funnel__") funnelColumns.push(header);
+      if (field === "serviceType") serviceTypeColumns.push(header);
+    }
 
-      const existing = await db.select().from(funnelAliasesTable)
-        .where(and(
-          eq(funnelAliasesTable.tenantId, tenantId),
-          eq(funnelAliasesTable.alias, trimmedAlias)
-        ));
+    const relevantColumns = [...funnelColumns, ...serviceTypeColumns];
+    if (relevantColumns.length === 0) continue;
 
-      if (existing.length > 0) {
-        skipped++;
-        continue;
+    const defaultFunnelTypeId = config.defaultFunnelTypeId;
+    if (!defaultFunnelTypeId) continue;
+
+    try {
+      const { headers, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+      if (headers.length === 0) continue;
+
+      const columnIndices = relevantColumns
+        .map(col => headers.indexOf(col))
+        .filter(i => i >= 0);
+
+      if (columnIndices.length === 0) continue;
+
+      const distinctValues = new Set<string>();
+      for (const row of rawRows) {
+        for (const idx of columnIndices) {
+          const val = (row[idx] || "").trim().toLowerCase();
+          if (val) distinctValues.add(val);
+        }
       }
 
-      await db.insert(funnelAliasesTable).values({
-        tenantId,
-        funnelTypeId,
-        alias: trimmedAlias,
-      });
-      created++;
+      const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
+
+      for (const alias of distinctValues) {
+        const funnelTypeId = funnelValueMap?.[alias] ?? defaultFunnelTypeId;
+
+        const existing = await db.select().from(funnelAliasesTable)
+          .where(and(
+            eq(funnelAliasesTable.tenantId, tenantId),
+            eq(funnelAliasesTable.alias, alias)
+          ));
+
+        if (existing.length > 0) {
+          skipped++;
+          continue;
+        }
+
+        await db.insert(funnelAliasesTable).values({
+          tenantId,
+          funnelTypeId,
+          alias,
+        });
+        created++;
+      }
+    } catch (err) {
+      console.error(`[FunnelAliases] Failed to read sheet ${config.googleSheetId}:`, err);
     }
   }
 
