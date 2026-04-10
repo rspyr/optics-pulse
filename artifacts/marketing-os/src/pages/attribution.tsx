@@ -642,7 +642,7 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         <div className="space-y-1">
           <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Source</span>
           <div className="flex items-center gap-2">
-            {knownSources.length > 0 && !customSourceMode ? (
+            {!customSourceMode ? (
               <select
                 value={sourceAlias}
                 onChange={e => {
@@ -669,16 +669,14 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
                   onChange={e => setSourceAlias(e.target.value)}
                   placeholder="Enter source name"
                   className="h-8 text-xs flex-1 bg-black/40 border-white/10"
-                  autoFocus={customSourceMode}
+                  autoFocus
                 />
-                {knownSources.length > 0 && (
-                  <button
-                    onClick={() => { setCustomSourceMode(false); setSourceAlias(currentSourceDisplay); }}
-                    className="text-[10px] text-muted-foreground hover:text-white whitespace-nowrap px-1"
-                  >
-                    ← list
-                  </button>
-                )}
+                <button
+                  onClick={() => { setCustomSourceMode(false); setSourceAlias(currentSourceDisplay); }}
+                  className="text-[10px] text-muted-foreground hover:text-white whitespace-nowrap px-1"
+                >
+                  ← list
+                </button>
               </div>
             )}
             {sourceChanged && (
