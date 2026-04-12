@@ -168,17 +168,22 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       }
     }
 
+    const hasDirectIdentifiers = !!(job.customerPhone || job.customerEmail);
+
     const phoneLeads = job.customerPhone
       ? await db.select().from(leadsTable)
           .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.phone, job.customerPhone)))
           .limit(10)
       : [];
 
-    const nameConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
-    if (lastName) nameConditions.push(eq(leadsTable.lastName, lastName));
-    const nameLeads = await db.select().from(leadsTable)
-      .where(and(...nameConditions))
-      .limit(20);
+    let nameLeads: typeof phoneLeads = [];
+    if (!hasDirectIdentifiers) {
+      const nameConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
+      if (lastName) nameConditions.push(eq(leadsTable.lastName, lastName));
+      nameLeads = await db.select().from(leadsTable)
+        .where(and(...nameConditions))
+        .limit(20);
+    }
 
     const seenLeadIds = new Set<number>();
     const allLeads = [...phoneLeads, ...nameLeads].filter((l) => {
@@ -580,7 +585,7 @@ async function pushConversionsToExternalAPIs(
           capiEvents,
         );
 
-        if (result.eventsReceived > 0) {
+        if (result.eventsReceived === capiEvents.length) {
           const capiJobIds = capiOciPayloads.map((p) => p.jobId);
           if (capiJobIds.length > 0) {
             await db.update(jobsTable)

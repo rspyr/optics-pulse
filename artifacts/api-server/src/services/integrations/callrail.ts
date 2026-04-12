@@ -117,7 +117,6 @@ export async function fetchCallRailCalls(
     allCalls.push(...result.calls);
     totalPages = result.totalPages;
     page++;
-    if (page > 100) break;
   }
 
   return allCalls;
