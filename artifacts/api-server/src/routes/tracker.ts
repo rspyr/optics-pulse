@@ -3,7 +3,6 @@ import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leads
 import { TrackerSubmitBody } from "@workspace/api-zod";
 import { eq, and, gte } from "drizzle-orm";
 import { z } from "zod";
-import crypto from "crypto";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
@@ -13,20 +12,15 @@ import { normalizeAddress } from "../services/reconciliation";
 import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rate-limit";
 import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
+import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
+
+export { hashValue, normalizePhone };
 
 const TrackerSubmitPayload = TrackerSubmitBody.extend({
   submitted_at: z.string().optional(),
 });
 
 const router: IRouter = Router();
-
-export function hashValue(value: string): string {
-  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
-}
-
-export function normalizePhone(phone: string): string {
-  return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
-}
 
 async function resolveFunnelType(tenantId: number, funnelSlug: string | null | undefined): Promise<{ name: string; id: number } | null> {
   if (!funnelSlug) return null;
@@ -185,7 +179,7 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
 
     const detection = await detectFields(tenantId, fields, pageUrl, formId, formName);
     const pii = detection.pii;
-    const hashedPhone = pii.phone ? hashValue(normalizePhone(pii.phone)) : null;
+    const hashedPhone = pii.phone ? hashPhone(pii.phone) : null;
     const hashedEmail = pii.email ? hashValue(pii.email) : null;
 
     const addressStr = [

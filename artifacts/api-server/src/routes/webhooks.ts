@@ -10,16 +10,9 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
 import { webhookLimiter } from "../middleware/rate-limit";
+import { hashValue, hashPhone } from "../lib/phone-utils";
 
 const router: IRouter = Router();
-
-function hashValue(value: string): string {
-  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
-}
-
-function normalizePhone(phone: string): string {
-  return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
-}
 
 function verifySignature(payload: string, signature: string | undefined): boolean {
   const secret = process.env.WEBHOOK_SECRET;
@@ -98,7 +91,7 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
 
     const { source, tenantId, data } = body;
 
-    const hashedPhone = data.phone ? hashValue(normalizePhone(data.phone)) : null;
+    const hashedPhone = data.phone ? hashPhone(data.phone) : null;
     const hashedEmail = data.email ? hashValue(data.email) : null;
 
     let eventType: "click" | "call" | "form_fill" = "form_fill";
@@ -253,7 +246,7 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
     const lastName = String(contact.lastName || contact.last_name || "").trim() || null;
     const fullName = String(contact.fullName || contact.full_name || "").trim() || null;
 
-    const hashedPhone = phone ? hashValue(normalizePhone(phone)) : null;
+    const hashedPhone = phone ? hashPhone(phone) : null;
     const hashedEmail = email ? hashValue(email) : null;
 
     const gclid = String(customData.gclid || body.gclid || "").trim() || null;

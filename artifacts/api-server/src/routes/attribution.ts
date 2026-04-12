@@ -4,7 +4,7 @@ import { eq, and, or, count, desc, sql, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
-import crypto from "crypto";
+import { hashValue, hashPhone } from "../lib/phone-utils";
 
 const router: IRouter = Router();
 
@@ -72,8 +72,6 @@ router.get("/attribution/events/:id", async (req, res) => {
       leadId: jobsTable.leadId,
     };
 
-    const hashValue = (v: string) => crypto.createHash("sha256").update(v.trim().toLowerCase()).digest("hex");
-    const normalizePhone = (p: string) => p.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 
     if (event.gclid) {
       const [job] = await db.select(jobSelect).from(jobsTable)
@@ -91,7 +89,7 @@ router.get("/attribution/events/:id", async (req, res) => {
       }).from(leadsTable).where(eq(leadsTable.tenantId, event.tenantId));
 
       for (const lead of leads) {
-        if (lead.phone && hashValue(normalizePhone(lead.phone)) === event.hashedPhone) {
+        if (lead.phone && hashPhone(lead.phone) === event.hashedPhone) {
           const [job] = await db.select(jobSelect).from(jobsTable)
             .where(and(eq(jobsTable.tenantId, event.tenantId), eq(jobsTable.leadId, lead.id), eq(jobsTable.matchLevel, "golden")))
             .limit(1);

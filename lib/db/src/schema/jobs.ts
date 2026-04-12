@@ -35,6 +35,9 @@ export const jobsTable = pgTable("jobs", {
   stInvoiceId: text("st_invoice_id"),
   invoiceDate: timestamp("invoice_date"),
   invoicePaidOn: timestamp("invoice_paid_on"),
+  ociUploadedAt: timestamp("oci_uploaded_at"),
+  enhancedConversionUploadedAt: timestamp("enhanced_conversion_uploaded_at"),
+  capiUploadedAt: timestamp("capi_uploaded_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

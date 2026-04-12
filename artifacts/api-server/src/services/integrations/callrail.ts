@@ -1,7 +1,9 @@
 import crypto from "crypto";
-import { db, attributionEventsTable, leadsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { emitNewLead } from "../../socket";
+import { hashPhone } from "../../lib/phone-utils";
+import { withRetry } from "./rate-limiter";
 
 export function verifyCallRailSignature(
   payload: string,
@@ -48,46 +50,9 @@ interface CallRailCall {
   callType: string;
 }
 
-function normalizePhone(phone: string): string {
-  const digits = phone.replace(/[^0-9]/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return `+${digits}`;
-}
-
-function hashValue(value: string): string {
-  return crypto.createHash("sha256").update(value.toLowerCase().trim()).digest("hex");
-}
-
-export async function fetchCallRailCalls(
-  config: CallRailConfig,
-  sinceDate?: string,
-): Promise<CallRailCall[]> {
-  const url = new URL(`https://api.callrail.com/v3/a/${config.accountId}/calls.json`);
-  url.searchParams.set("per_page", "250");
-  url.searchParams.set("sort", "start_time");
-  url.searchParams.set("order", "desc");
-  if (sinceDate) {
-    url.searchParams.set("start_date", sinceDate);
-  }
-  if (config.companyId) {
-    url.searchParams.set("company_id", config.companyId);
-  }
-
-  const res = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Token token=${config.apiKey}`,
-      Accept: "application/json",
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`CallRail API error ${res.status}: ${text}`);
-  }
-
-  const data = await res.json() as { calls?: Record<string, unknown>[] };
-  return (data.calls || []).map((c: Record<string, unknown>) => ({
+function parseCallsPage(data: Record<string, unknown>): CallRailCall[] {
+  const calls = (data.calls || []) as Record<string, unknown>[];
+  return calls.map((c) => ({
     id: String(c.id || ""),
     customerPhoneNumber: c.customer_phone_number ? String(c.customer_phone_number) : null,
     customerName: c.customer_name ? String(c.customer_name) : null,
@@ -103,80 +68,161 @@ export async function fetchCallRailCalls(
   }));
 }
 
+async function fetchCallRailPage(
+  config: CallRailConfig,
+  sinceDate: string | undefined,
+  page: number,
+): Promise<{ calls: CallRailCall[]; totalPages: number }> {
+  return withRetry(async () => {
+    const url = new URL(`https://api.callrail.com/v3/a/${config.accountId}/calls.json`);
+    url.searchParams.set("per_page", "250");
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("sort", "start_time");
+    url.searchParams.set("order", "desc");
+    if (sinceDate) {
+      url.searchParams.set("start_date", sinceDate);
+    }
+    if (config.companyId) {
+      url.searchParams.set("company_id", config.companyId);
+    }
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Token token=${config.apiKey}`,
+        Accept: "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`CallRail API error ${res.status}: ${text}`);
+    }
+
+    const data = await res.json() as Record<string, unknown>;
+    const totalPages = Number(data.total_pages || 1);
+    return { calls: parseCallsPage(data), totalPages };
+  }, { label: `CallRail calls page ${page}`, maxRetries: 3 });
+}
+
+export async function fetchCallRailCalls(
+  config: CallRailConfig,
+  sinceDate?: string,
+): Promise<CallRailCall[]> {
+  const allCalls: CallRailCall[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const result = await fetchCallRailPage(config, sinceDate, page);
+    allCalls.push(...result.calls);
+    totalPages = result.totalPages;
+    page++;
+    if (page > 100) break;
+  }
+
+  return allCalls;
+}
+
 export async function syncCallRailCalls(
   tenantId: number,
   config: CallRailConfig,
 ): Promise<{ synced: number; newCalls: number }> {
   const sinceDate = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
 
-  const calls = await fetchCallRailCalls(config, sinceDate);
+  const syncLog = await db.insert(integrationSyncLogsTable).values({
+    tenantId,
+    integration: "callrail",
+    syncType: "calls",
+    status: "running",
+    startedAt: new Date(),
+  }).returning();
+  const logId = syncLog[0]?.id;
 
-  let newCalls = 0;
-  for (const call of calls) {
-    if (!call.id) continue;
+  try {
+    const calls = await fetchCallRailCalls(config, sinceDate);
 
-    const externalId = `callrail:${call.id}`;
-    const existing = await db.select({ id: attributionEventsTable.id }).from(attributionEventsTable)
-      .where(and(
-        eq(attributionEventsTable.tenantId, tenantId),
-        eq(attributionEventsTable.externalId, externalId),
-      ))
-      .limit(1);
+    let newCalls = 0;
+    for (const call of calls) {
+      if (!call.id) continue;
 
-    if (existing.length > 0) continue;
+      const externalId = `callrail:${call.id}`;
+      const existing = await db.select({ id: attributionEventsTable.id }).from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, tenantId),
+          eq(attributionEventsTable.externalId, externalId),
+        ))
+        .limit(1);
 
-    const hashedPhone = call.customerPhoneNumber
-      ? hashValue(normalizePhone(call.customerPhoneNumber))
-      : null;
+      if (existing.length > 0) continue;
 
-    await db.insert(attributionEventsTable).values({
-      tenantId,
-      eventType: "call",
-      gclid: call.gclid || null,
-      hashedPhone,
-      utmSource: call.source || "callrail",
-      utmCampaign: call.campaign || null,
-      utmMedium: call.medium || null,
-      landingPage: call.landingPageUrl || null,
-      matchLevel: call.gclid ? "diamond" : hashedPhone ? "golden" : "unmatched",
-      matchConfidence: call.gclid ? 1.0 : hashedPhone ? 0.9 : 0,
-      externalId,
-    });
+      const hashedPhoneValue = call.customerPhoneNumber
+        ? hashPhone(call.customerPhoneNumber)
+        : null;
 
-    if (call.customerPhoneNumber || call.customerName) {
-      const nameParts = (call.customerName || "").split(" ");
-      const firstName = nameParts[0] || "Unknown";
-      const lastName = nameParts.slice(1).join(" ") || "";
+      await db.insert(attributionEventsTable).values({
+        tenantId,
+        eventType: "call",
+        gclid: call.gclid || null,
+        hashedPhone: hashedPhoneValue,
+        utmSource: call.source || "callrail",
+        utmCampaign: call.campaign || null,
+        utmMedium: call.medium || null,
+        landingPage: call.landingPageUrl || null,
+        matchLevel: call.gclid ? "diamond" : hashedPhoneValue ? "golden" : "unmatched",
+        matchConfidence: call.gclid ? 1.0 : hashedPhoneValue ? 0.9 : 0,
+        externalId,
+      });
 
-      const existingLead = call.customerPhoneNumber
-        ? await db.select({ id: leadsTable.id }).from(leadsTable)
-            .where(and(
-              eq(leadsTable.tenantId, tenantId),
-              eq(leadsTable.phone, call.customerPhoneNumber),
-            ))
-            .limit(1)
-        : [];
+      if (call.customerPhoneNumber || call.customerName) {
+        const nameParts = (call.customerName || "").split(" ");
+        const firstName = nameParts[0] || "Unknown";
+        const lastName = nameParts.slice(1).join(" ") || "";
 
-      if (existingLead.length === 0) {
-        const [newLead] = await db.insert(leadsTable).values({
-          tenantId,
-          firstName,
-          lastName,
-          phone: call.customerPhoneNumber || null,
-          source: call.source || "callrail",
-          leadType: "CallRail",
-          interestType: null,
-        }).returning();
+        const existingLead = call.customerPhoneNumber
+          ? await db.select({ id: leadsTable.id }).from(leadsTable)
+              .where(and(
+                eq(leadsTable.tenantId, tenantId),
+                eq(leadsTable.phone, call.customerPhoneNumber),
+              ))
+              .limit(1)
+          : [];
 
-        if (newLead) {
-          emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+        if (existingLead.length === 0) {
+          const [newLead] = await db.insert(leadsTable).values({
+            tenantId,
+            firstName,
+            lastName,
+            phone: call.customerPhoneNumber || null,
+            source: call.source || "callrail",
+            leadType: "CallRail",
+            interestType: null,
+          }).returning();
+
+          if (newLead) {
+            emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+          }
         }
       }
+
+      newCalls++;
     }
 
-    newCalls++;
-  }
+    if (logId) {
+      await db.update(integrationSyncLogsTable)
+        .set({ status: "completed", recordsProcessed: newCalls, completedAt: new Date() })
+        .where(eq(integrationSyncLogsTable.id, logId));
+    }
 
-  console.log(`[CallRail] Synced ${calls.length} calls for tenant ${tenantId} (${newCalls} new)`);
-  return { synced: calls.length, newCalls };
+    console.log(`[CallRail] Synced ${calls.length} calls for tenant ${tenantId} (${newCalls} new)`);
+    return { synced: calls.length, newCalls };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (logId) {
+      await db.update(integrationSyncLogsTable)
+        .set({ status: "error", recordsProcessed: 0, completedAt: new Date(), errorMessage: message })
+        .where(eq(integrationSyncLogsTable.id, logId));
+    }
+    console.error(`[CallRail] Sync error for tenant ${tenantId}:`, message);
+    throw err;
+  }
 }

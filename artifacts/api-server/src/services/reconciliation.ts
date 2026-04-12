@@ -1,18 +1,14 @@
 import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, or, isNull, isNotNull, desc } from "drizzle-orm";
-import crypto from "crypto";
+import { eq, and, or, isNull, isNotNull, desc, gte, sql } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrations/google-ads";
 import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
 import { patchJobCustomField } from "./integrations/service-titan";
+import { normalizePhone, hashValue, hashPhone, hashEmail } from "../lib/phone-utils";
 
-export function hashValue(value: string): string {
-  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
-}
+export { hashValue, normalizePhone };
 
-export function normalizePhone(phone: string): string {
-  return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
-}
+const LOOKBACK_DAYS = 90;
 
 export function normalizeAddress(address: string): string {
   return address
@@ -59,6 +55,8 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const ociPayloads: OciPayload[] = [];
   const allMatchedJobIds: number[] = [];
 
+  const lookbackDate = new Date(Date.now() - LOOKBACK_DAYS * 86400000);
+
   const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
   const baseConditions = [matchCondition, eq(jobsTable.status, "completed"), isNotNull(jobsTable.customerName)];
   if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));
@@ -66,6 +64,8 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     id: jobsTable.id,
     tenantId: jobsTable.tenantId,
     customerName: jobsTable.customerName,
+    customerPhone: jobsTable.customerPhone,
+    customerEmail: jobsTable.customerEmail,
     matchedGclid: jobsTable.matchedGclid,
     serviceAddress: jobsTable.serviceAddress,
     revenue: jobsTable.revenue,
@@ -87,7 +87,8 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       const [event] = await db.select().from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.gclid, job.matchedGclid),
-          eq(attributionEventsTable.tenantId, job.tenantId)
+          eq(attributionEventsTable.tenantId, job.tenantId),
+          gte(attributionEventsTable.createdAt, lookbackDate)
         ))
         .limit(1);
       if (event) {
@@ -109,19 +110,91 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       }
     }
 
-    const leadConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
-    if (lastName) leadConditions.push(eq(leadsTable.lastName, lastName));
-    const matchingLeads = await db.select().from(leadsTable)
-      .where(and(...leadConditions))
+    if (job.customerPhone) {
+      const jobHashedPhone = hashPhone(job.customerPhone);
+      const [phoneEvent] = await db.select().from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, job.tenantId),
+          eq(attributionEventsTable.hashedPhone, jobHashedPhone),
+          gte(attributionEventsTable.createdAt, lookbackDate)
+        ))
+        .limit(1);
+      if (phoneEvent) {
+        matchedGclid = phoneEvent.gclid || null;
+        await db.update(jobsTable).set({
+          matchLevel: "golden",
+          matchedGclid: matchedGclid,
+          updatedAt: new Date(),
+        }).where(eq(jobsTable.id, job.id));
+        await db.update(attributionEventsTable).set({
+          matchLevel: "golden",
+          matchConfidence: 0.9,
+        }).where(eq(attributionEventsTable.id, phoneEvent.id));
+        results.golden++;
+        allMatchedJobIds.push(job.id);
+        if (matchedGclid && job.revenue > 0) {
+          ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+        }
+        continue;
+      }
+    }
+
+    if (job.customerEmail) {
+      const jobHashedEmail = hashEmail(job.customerEmail);
+      const [emailEvent] = await db.select().from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, job.tenantId),
+          eq(attributionEventsTable.hashedEmail, jobHashedEmail),
+          gte(attributionEventsTable.createdAt, lookbackDate)
+        ))
+        .limit(1);
+      if (emailEvent) {
+        matchedGclid = emailEvent.gclid || null;
+        await db.update(jobsTable).set({
+          matchLevel: "silver",
+          matchedGclid: matchedGclid,
+          updatedAt: new Date(),
+        }).where(eq(jobsTable.id, job.id));
+        await db.update(attributionEventsTable).set({
+          matchLevel: "silver",
+          matchConfidence: 0.8,
+        }).where(eq(attributionEventsTable.id, emailEvent.id));
+        results.silver++;
+        allMatchedJobIds.push(job.id);
+        if (matchedGclid && job.revenue > 0) {
+          ociPayloads.push(buildOciPayload(matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+        }
+        continue;
+      }
+    }
+
+    const phoneLeads = job.customerPhone
+      ? await db.select().from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.phone, job.customerPhone)))
+          .limit(10)
+      : [];
+
+    const nameConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
+    if (lastName) nameConditions.push(eq(leadsTable.lastName, lastName));
+    const nameLeads = await db.select().from(leadsTable)
+      .where(and(...nameConditions))
       .limit(20);
 
+    const seenLeadIds = new Set<number>();
+    const allLeads = [...phoneLeads, ...nameLeads].filter((l) => {
+      if (seenLeadIds.has(l.id)) return false;
+      seenLeadIds.add(l.id);
+      return true;
+    });
+
     let diamondViaLead = false;
-    for (const lead of matchingLeads) {
+    for (const lead of allLeads) {
       if (!lead.matchedGclid) continue;
       const [gclidEvent] = await db.select().from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.tenantId, job.tenantId),
-          eq(attributionEventsTable.gclid, lead.matchedGclid)
+          eq(attributionEventsTable.gclid, lead.matchedGclid),
+          gte(attributionEventsTable.createdAt, lookbackDate)
         ))
         .limit(1);
       if (gclidEvent) {
@@ -146,16 +219,14 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     }
     if (diamondViaLead) continue;
 
-    const leads = matchingLeads;
-
-    for (const lead of leads) {
+    for (const lead of allLeads) {
       if (lead.phone) {
-        const normalizedPhone = normalizePhone(lead.phone);
-        const hashedPhone = hashValue(normalizedPhone);
+        const hashedLeadPhone = hashPhone(lead.phone);
         const [phoneEvent] = await db.select().from(attributionEventsTable)
           .where(and(
             eq(attributionEventsTable.tenantId, job.tenantId),
-            eq(attributionEventsTable.hashedPhone, hashedPhone)
+            eq(attributionEventsTable.hashedPhone, hashedLeadPhone),
+            gte(attributionEventsTable.createdAt, lookbackDate)
           ))
           .limit(1);
         if (phoneEvent) {
@@ -180,11 +251,12 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       }
 
       if (lead.email) {
-        const hashedEmail = hashValue(lead.email);
+        const hashedLeadEmail = hashEmail(lead.email);
         const [emailEvent] = await db.select().from(attributionEventsTable)
           .where(and(
             eq(attributionEventsTable.tenantId, job.tenantId),
-            eq(attributionEventsTable.hashedEmail, hashedEmail)
+            eq(attributionEventsTable.hashedEmail, hashedLeadEmail),
+            gte(attributionEventsTable.createdAt, lookbackDate)
           ))
           .limit(1);
         if (emailEvent) {
@@ -218,9 +290,9 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       const addressEvents = await db.select().from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.tenantId, job.tenantId),
-          isNotNull(attributionEventsTable.billingAddress)
-        ))
-        .limit(50);
+          isNotNull(attributionEventsTable.billingAddress),
+          gte(attributionEventsTable.createdAt, lookbackDate)
+        ));
 
       for (const addrEvent of addressEvents) {
         if (!addrEvent.billingAddress) continue;
@@ -276,10 +348,12 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
 
   if ((ociPayloads.length > 0 || allMatchedJobIds.length > 0) && tenantId) {
     const jobIdsToFetch = [...new Set([...ociPayloads.map((p) => p.jobId), ...allMatchedJobIds])];
-    const matchedJobRows = await db.select().from(jobsTable).where(
-      and(eq(jobsTable.tenantId, tenantId), or(...jobIdsToFetch.map((id) => eq(jobsTable.id, id)))),
-    );
-    await pushConversionsToExternalAPIs(tenantId, ociPayloads, matchedJobRows);
+    if (jobIdsToFetch.length > 0) {
+      const matchedJobRows = await db.select().from(jobsTable).where(
+        and(eq(jobsTable.tenantId, tenantId), or(...jobIdsToFetch.map((id) => eq(jobsTable.id, id)))),
+      );
+      await pushConversionsToExternalAPIs(tenantId, ociPayloads, matchedJobRows);
+    }
   }
 
   return {
@@ -317,10 +391,32 @@ function getTenantApiConfig(tenant: typeof tenantsTable.$inferSelect): TenantApi
   }
 }
 
+async function findLeadForJob(
+  tenantId: number,
+  job: { customerName: string | null; customerPhone: string | null; customerEmail: string | null },
+): Promise<{ email: string | null; phone: string | null } | null> {
+  if (job.customerPhone) {
+    const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.phone, job.customerPhone)))
+      .limit(1);
+    if (lead) return lead;
+  }
+  if (job.customerName) {
+    const nameParts = job.customerName.split(" ");
+    const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.firstName, nameParts[0] || "")))
+      .limit(1);
+    if (lead) return lead;
+  }
+  return null;
+}
+
 async function pushConversionsToExternalAPIs(
   tenantId: number,
   ociPayloads: OciPayload[],
-  matchedJobs: Array<{ id: number; stJobId: string | null; matchedGclid: string | null; revenue: number; customerName: string | null; completedAt: Date | null }>,
+  matchedJobs: Array<typeof jobsTable.$inferSelect>,
 ): Promise<void> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return;
@@ -331,8 +427,13 @@ async function pushConversionsToExternalAPIs(
     return;
   }
 
+  const ociNotYetUploaded = ociPayloads.filter((p) => {
+    const job = matchedJobs.find((j) => j.id === p.jobId);
+    return job && !job.ociUploadedAt;
+  });
+
   const hasGoogleAdsCredentials = (config.googleAdsApiKey || (config.googleAdsRefreshToken && config.googleAdsClientId && config.googleAdsClientSecret));
-  if (hasGoogleAdsCredentials && config.googleAdsCustomerId && config.googleAdsDeveloperToken && ociPayloads.length > 0) {
+  if (hasGoogleAdsCredentials && config.googleAdsCustomerId && config.googleAdsDeveloperToken && ociNotYetUploaded.length > 0) {
     const startedAt = new Date();
     try {
       const gaConfig = {
@@ -345,7 +446,17 @@ async function pushConversionsToExternalAPIs(
         loginCustomerId: config.googleAdsLoginCustomerId,
       };
       const conversionAction = `customers/${config.googleAdsCustomerId.replace(/-/g, "")}/conversionActions/ServiceTitan_Installation_Revenue`;
-      const result = await uploadOfflineConversions(gaConfig, ociPayloads, conversionAction);
+      const result = await uploadOfflineConversions(gaConfig, ociNotYetUploaded, conversionAction);
+
+      if (result.errorCount === 0) {
+        const uploadedJobIds = ociNotYetUploaded.map((p) => p.jobId);
+        if (uploadedJobIds.length > 0) {
+          await db.update(jobsTable)
+            .set({ ociUploadedAt: new Date() })
+            .where(and(eq(jobsTable.tenantId, tenantId), or(...uploadedJobIds.map((id) => eq(jobsTable.id, id)))));
+        }
+      }
+
       await db.insert(integrationSyncLogsTable).values({
         tenantId,
         integration: "google_ads",
@@ -375,7 +486,7 @@ async function pushConversionsToExternalAPIs(
 
   const accessToken = config.googleAdsAccessToken || config.googleAdsApiKey || "";
   if ((accessToken || hasGoogleAdsCredentials) && config.googleAdsCustomerId && config.googleAdsDeveloperToken) {
-    const nonGclidJobs = matchedJobs.filter(j => !j.matchedGclid && j.revenue > 0);
+    const nonGclidJobs = matchedJobs.filter(j => !j.matchedGclid && j.revenue > 0 && !j.enhancedConversionUploadedAt);
     if (nonGclidJobs.length > 0) {
       const startedAt = new Date();
       try {
@@ -397,26 +508,31 @@ async function pushConversionsToExternalAPIs(
           hashedEmail?: string;
           hashedPhone?: string;
         }> = [];
+        const enhancedJobIds: number[] = [];
         for (const job of nonGclidJobs) {
-          const nameParts = (job.customerName || "").split(" ");
-          const leads = await db.select().from(leadsTable)
-            .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.firstName, nameParts[0] || "")))
-            .limit(1);
-          const lead = leads[0];
+          const lead = await findLeadForJob(tenantId, job);
           if (lead && (lead.email || lead.phone)) {
             enhancedPayloads.push({
               conversionAction: `customers/${config.googleAdsCustomerId!.replace(/-/g, "")}/conversionActions/ServiceTitan_Installation_Revenue`,
               conversionDateTime: (job.completedAt || new Date()).toISOString().replace("T", " ").replace("Z", "+00:00"),
               conversionValue: job.revenue,
               currencyCode: "USD",
-              ...(lead.email ? { hashedEmail: hashValue(lead.email) } : {}),
-              ...(lead.phone ? { hashedPhone: hashValue(normalizePhone(lead.phone)) } : {}),
+              ...(lead.email ? { hashedEmail: hashEmail(lead.email) } : {}),
+              ...(lead.phone ? { hashedPhone: hashPhone(lead.phone) } : {}),
             });
+            enhancedJobIds.push(job.id);
           }
         }
 
         if (enhancedPayloads.length > 0) {
           const result = await uploadEnhancedConversions(gaConfig, enhancedPayloads);
+
+          if (result.errorCount === 0 && enhancedJobIds.length > 0) {
+            await db.update(jobsTable)
+              .set({ enhancedConversionUploadedAt: new Date() })
+              .where(and(eq(jobsTable.tenantId, tenantId), or(...enhancedJobIds.map((id) => eq(jobsTable.id, id)))));
+          }
+
           await db.insert(integrationSyncLogsTable).values({
             tenantId,
             integration: "google_ads",
@@ -447,38 +563,56 @@ async function pushConversionsToExternalAPIs(
   }
 
   if (config.metaAccessToken && config.metaPixelId) {
-    const startedAt = new Date();
-    try {
-      const capiEvents = ociPayloads.map((p) =>
-        buildCAPILeadEvent(null, null, p.conversionValue, new Date(p.conversionDateTime)),
-      );
-      const result = await sendCAPIEvents(
-        { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "", pixelId: config.metaPixelId },
-        capiEvents,
-      );
-      await db.insert(integrationSyncLogsTable).values({
-        tenantId,
-        integration: "meta",
-        syncType: "capi_upload",
-        status: "completed",
-        recordsProcessed: result.eventsReceived,
-        startedAt,
-        completedAt: new Date(),
-      });
-      console.log(`[Outbound] Meta CAPI: ${result.eventsReceived} events sent for tenant ${tenantId}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await db.insert(integrationSyncLogsTable).values({
-        tenantId,
-        integration: "meta",
-        syncType: "capi_upload",
-        status: "error",
-        recordsProcessed: 0,
-        errorMessage: message,
-        startedAt,
-        completedAt: new Date(),
-      });
-      console.error(`[Outbound] Meta CAPI error for tenant ${tenantId}:`, message);
+    const capiJobs = matchedJobs.filter((j) => !j.capiUploadedAt);
+    const capiOciPayloads = ociPayloads.filter((p) => capiJobs.some((j) => j.id === p.jobId));
+    if (capiOciPayloads.length > 0) {
+      const startedAt = new Date();
+      try {
+        const capiEvents = await Promise.all(capiOciPayloads.map(async (p) => {
+          const job = matchedJobs.find((j) => j.id === p.jobId);
+          const lead = job ? await findLeadForJob(tenantId, job) : null;
+          const hashedLeadEmail = lead?.email ? hashEmail(lead.email) : null;
+          const hashedLeadPhone = lead?.phone ? hashPhone(lead.phone) : null;
+          return buildCAPILeadEvent(hashedLeadEmail, hashedLeadPhone, p.conversionValue, new Date(p.conversionDateTime));
+        }));
+        const result = await sendCAPIEvents(
+          { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "", pixelId: config.metaPixelId },
+          capiEvents,
+        );
+
+        if (result.eventsReceived > 0) {
+          const capiJobIds = capiOciPayloads.map((p) => p.jobId);
+          if (capiJobIds.length > 0) {
+            await db.update(jobsTable)
+              .set({ capiUploadedAt: new Date() })
+              .where(and(eq(jobsTable.tenantId, tenantId), or(...capiJobIds.map((id) => eq(jobsTable.id, id)))));
+          }
+        }
+
+        await db.insert(integrationSyncLogsTable).values({
+          tenantId,
+          integration: "meta",
+          syncType: "capi_upload",
+          status: "completed",
+          recordsProcessed: result.eventsReceived,
+          startedAt,
+          completedAt: new Date(),
+        });
+        console.log(`[Outbound] Meta CAPI: ${result.eventsReceived} events sent for tenant ${tenantId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await db.insert(integrationSyncLogsTable).values({
+          tenantId,
+          integration: "meta",
+          syncType: "capi_upload",
+          status: "error",
+          recordsProcessed: 0,
+          errorMessage: message,
+          startedAt,
+          completedAt: new Date(),
+        });
+        console.error(`[Outbound] Meta CAPI error for tenant ${tenantId}:`, message);
+      }
     }
   }
 
