@@ -17,6 +17,8 @@ The attribution engine is the core system that connects marketing spend to actua
   - [Event Types](#event-types)
   - [Ingestion Endpoints](#ingestion-endpoints)
   - [Universal Form Attribution Script](#universal-form-attribution-script-trackerjs)
+  - [Phone Normalization](#phone-normalization)
+  - [CallRail Sync](#callrail-sync)
 - [Auto-Adaptive Field Detection](#auto-adaptive-field-detection)
   - [Three-Layer Detection](#three-layer-detection)
   - [Field Mapping Rules](#field-mapping-rules)
@@ -30,9 +32,11 @@ The attribution engine is the core system that connects marketing spend to actua
   - [Audit Log](#audit-log)
   - [GTM Snippet Generation](#gtm-snippet-generation)
 - [Reconciliation Engine](#reconciliation-engine)
+  - [Lookback Window](#lookback-window)
   - [Match Levels](#match-levels)
   - [Matching Pipeline](#matching-pipeline)
   - [External Conversion Sync](#external-conversion-sync)
+  - [Outbound Push Deduplication](#outbound-push-deduplication)
 - [Data Privacy & PII Purge](#data-privacy--pii-purge)
 - [Integration Status Monitoring](#integration-status-monitoring)
   - [Integration States](#integration-states)
@@ -151,7 +155,7 @@ Attribution events represent a marketing touchpoint — the moment a potential c
 | Source | Method | Data Captured |
 |:-------|:-------|:-------------|
 | **Tracker Script** | IIFE on client website (`tracker.js`) | All UTM params (source, medium, campaign, term, content), click IDs (GCLID, FBCLID, MSCLKID, TTCLID, li_fat_id, wbraid), landing page, referrer, form fields |
-| CallRail | API sync | Caller phone number (hashed), call duration, tracking number |
+| CallRail | API sync (paginated, with retry) | Caller phone number (hashed), call duration, tracking number, source/medium/campaign, GCLID |
 | GHL (GoHighLevel) | Webhook | Form fields, hashed email/phone |
 | Podium | Webhook | SMS/call conversations, contact data |
 
@@ -256,7 +260,7 @@ Each submission POSTs this JSON to `/api/tracker/submit`:
 3. Runs **funnel normalization** to resolve the canonical funnel (see below)
 4. Creates an `attribution_event` with all UTM params, click IDs, referrer, page URL, form metadata, form fields (JSONB), `detectedMappings`, `resolvedLeadSource`, and `resolvedFunnel`
 5. Pre-assigns match level: Diamond if GCLID present, Golden if phone detected, Silver if email detected
-6. Hashes phone/email (SHA-256) for reconciliation matching
+6. Hashes phone/email using the shared phone normalization utility (see below) for reconciliation matching
 7. Checks **ingestion mode** — if `sheets`, stops here (event-only); if `both` or `tracker`, continues to lead creation
 8. In `both` mode: runs **48-hour dedup** against existing leads (phone then email) to avoid duplicates with sheet sync
 9. If PII is found and not deduplicated: creates a lead with round-robin CSR assignment, stamps `createdLeadId` on the attribution event, triggers auto-pass timer, and emits real-time Socket.IO notification
@@ -268,6 +272,50 @@ Each tenant has a unique `clientSlug` stored on the tenants table. It is:
 - Collision-safe: if a slug already exists, a numeric suffix is appended (`acme-hvac-2`)
 - Seeded for existing tenants via a one-time migration
 - Enforced as NOT NULL with a unique index
+
+### Phone Normalization
+
+All phone numbers across the pipeline are normalized and hashed through a single shared utility (`phone-utils.ts`) to ensure consistent matching. This is critical because phone numbers arrive in many formats across different sources: `+15551234567` from CallRail, `(555) 123-4567` from form fills, `5551234567` from CRM webhooks.
+
+**Normalization rules:**
+
+1. Strip all non-digit characters
+2. If the result is 11 digits starting with `1` (US country code), strip the leading `1`
+3. The canonical form is always bare 10-digit US format: `5551234567`
+
+**Hashing:**
+
+- Phone numbers are normalized first, then hashed with SHA-256 (lowercase, trimmed)
+- Email addresses are hashed with SHA-256 (lowercase, trimmed) without phone normalization
+- The same utility is used in: tracker submissions, webhook ingestion, CallRail sync, reconciliation matching, attribution event lookup, and outbound conversion payloads
+
+This centralization replaced five separate inline implementations that used inconsistent normalization rules, which previously caused phone hashes to mismatch across pipeline stages.
+
+### CallRail Sync
+
+CallRail calls are synced via the CallRail API v3 with full pagination and retry logic.
+
+**Sync behavior:**
+
+- Fetches calls from the last 7 days on each sync run
+- Paginates through all available pages (250 calls per page) until the API reports no more pages
+- Each API request is wrapped with exponential-backoff retry (up to 3 retries) to handle transient rate-limit or network errors
+- Deduplicates by `externalId` (`callrail:{call_id}`) — if a call already exists as an attribution event, it is skipped
+- Creates an attribution event for each new call with hashed phone, source/medium/campaign, GCLID (if present), and pre-assigned match level
+- Creates a new lead if the caller doesn't already exist (matched by phone number)
+
+**Sync logging:**
+
+Every CallRail sync run is tracked in the `integration_sync_logs` table:
+
+| Field | Value |
+|:------|:------|
+| `integration` | `callrail` |
+| `syncType` | `calls` |
+| `status` | `running` → `completed` or `error` |
+| `recordsProcessed` | Number of new calls ingested |
+| `errorMessage` | Error details (on failure only) |
+| `startedAt` / `completedAt` | Sync duration tracking |
 
 ---
 
@@ -406,7 +454,13 @@ The API provides a GTM-ready tracking snippet via `GET /api/ingestion-mode/gtm-s
 
 ## Reconciliation Engine
 
-The reconciliation engine is the core matching process that links marketing attribution events to revenue-generating jobs. It runs automatically after every ServiceTitan jobs sync.
+The reconciliation engine is the core matching process that links marketing attribution events to revenue-generating jobs. It runs automatically after every ServiceTitan jobs sync and on a 6-hour scheduled fallback.
+
+### Lookback Window
+
+The reconciliation engine only considers attribution events created within the last **90 days**. This prevents stale events (e.g., a form fill from a year ago) from being incorrectly matched to a recent job. The lookback is enforced on every attribution event query across all match tiers (Diamond, Golden, Silver, and Bronze).
+
+Events older than 90 days are not deleted — they remain in the database for historical reporting — but they are excluded from the active matching pool.
 
 ### Match Levels
 
@@ -414,34 +468,68 @@ The engine uses a five-tier confidence waterfall. Each level represents a differ
 
 | Level | Confidence | Matching Criteria |
 |:------|:-----------|:-----------------|
-| **Diamond** | 1.0 | Direct GCLID match — the job's lead has a Google Click ID that matches an attribution event |
-| **Golden** | 0.9 | Hashed phone match — the lead's phone number (SHA-256) matches an attribution event's hashed phone |
-| **Silver** | 0.8 | Hashed email match — the lead's email (SHA-256) matches an attribution event's hashed email |
+| **Diamond** | 1.0 | Direct GCLID match — the job or a linked lead has a Google Click ID that matches an attribution event |
+| **Golden** | 0.9 | Hashed phone match — the job's customer phone or a linked lead's phone (SHA-256, normalized) matches an attribution event's hashed phone |
+| **Silver** | 0.8 | Hashed email match — the job's customer email or a linked lead's email (SHA-256) matches an attribution event's hashed email |
 | **Bronze** | 0.6 | Address match — the job's service address (normalized) matches the billing address on an attribution event |
 | **Unmatched** | 0.0 | No match found after all tiers are attempted |
 
 ### Matching Pipeline
 
-For each completed job with revenue > 0 that is currently unmatched:
+For each completed job that is currently unmatched or has no match level set:
 
-1. **Diamond**: Check if the job already has a `matchedGclid` (assigned at lead creation) or if a linked lead has a GCLID matching an attribution event
-2. **Golden**: Hash the lead's phone number and search for a matching attribution event
-3. **Silver**: Hash the lead's email and search for a matching attribution event
-4. **Bronze**: Normalize the job's service address and compare against attribution event billing addresses
-5. **Unmatched**: If no match is found at any tier, the job remains unmatched
+**Phase 1 — Direct job-level matching (no lead lookup required):**
 
-When a match is found, both the job and the attribution event are updated with the match level and linked GCLID.
+1. **Diamond (direct GCLID)**: If the job already has a `matchedGclid`, look for an attribution event with that GCLID within the lookback window
+2. **Golden (direct phone)**: If the job has a `customerPhone`, hash it via the shared phone normalization utility and search for a matching attribution event by `hashedPhone`
+3. **Silver (direct email)**: If the job has a `customerEmail`, hash it and search for a matching attribution event by `hashedEmail`
+
+**Phase 2 — Lead-based matching:**
+
+4. **Find candidate leads**: Look up leads by the job's customer phone and email. If the job has neither phone nor email, fall back to name-based lead lookup (first name + last name). Leads found by phone/email are prioritized; name-only matching is a last resort and only used when no deterministic identifiers are available.
+5. **Diamond (via lead GCLID)**: Check if any candidate lead has a `matchedGclid` that corresponds to an attribution event
+6. **Golden (via lead phone)**: Hash each candidate lead's phone and search for a matching attribution event
+7. **Silver (via lead email)**: Hash each candidate lead's email and search for a matching attribution event
+
+**Phase 3 — Address matching:**
+
+8. **Bronze**: Normalize the job's service address (abbreviations, punctuation, whitespace) and compare against all attribution events with a billing address for this tenant. There is no row cap on this query — all events with billing addresses within the lookback window are checked. A partial index on `(tenant_id, billing_address) WHERE billing_address IS NOT NULL` supports this scan.
+
+**Phase 4 — Fallthrough:**
+
+9. **Unmatched**: If no match is found at any tier, the job is marked `unmatched`
+
+When a match is found, both the job and the attribution event are updated with the match level, confidence score, and linked GCLID (if applicable).
 
 ### External Conversion Sync
 
-After matching, the engine pushes conversion data back to the ad platforms:
+After matching, the engine pushes conversion data back to the ad platforms. Each push is deduplicated to prevent the same job from being uploaded more than once (see Outbound Push Deduplication below).
 
-| Destination | Sync Type | What Gets Sent |
-|:------------|:----------|:---------------|
-| Google Ads | `oci_upload` | Offline conversions for GCLID-matched jobs (Diamond tier) |
-| Google Ads | `enhanced_conversions` | Enhanced conversions using hashed PII for non-GCLID matches (Golden/Silver) |
-| Meta | `capi_upload` | Conversions API events for Meta-attributed jobs |
-| ServiceTitan | `attribution_writeback` | Patches the `Attribution_GCLID` custom field on the job record |
+| Destination | Sync Type | What Gets Sent | User Identifiers |
+|:------------|:----------|:---------------|:-----------------|
+| Google Ads | `oci_upload` | Offline conversions for GCLID-matched jobs (Diamond tier) | GCLID |
+| Google Ads | `enhanced_conversions` | Enhanced conversions for non-GCLID matches with revenue > 0 | Hashed email and/or hashed phone from linked lead |
+| Meta | `capi_upload` | Conversions API events for matched jobs with GCLID | Hashed email and/or hashed phone from linked lead |
+| ServiceTitan | `attribution_writeback` | Patches the `Attribution_GCLID` custom field on the job record | N/A |
+
+**Lead resolution for outbound payloads:** When building Enhanced Conversion or Meta CAPI payloads, the system resolves the associated lead for each job using a priority chain: match by phone first, then email, then name. This ensures outbound conversion events carry actual hashed user identifiers rather than empty values.
+
+### Outbound Push Deduplication
+
+Each job tracks whether its conversion data has already been successfully uploaded to each external platform via timestamp columns on the `jobs` table:
+
+| Column | Platform | Set When |
+|:-------|:---------|:---------|
+| `oci_uploaded_at` | Google Ads OCI | All conversions in the batch uploaded with zero errors |
+| `enhanced_conversion_uploaded_at` | Google Ads Enhanced | All conversions in the batch uploaded with zero errors |
+| `capi_uploaded_at` | Meta CAPI | All events in the batch were accepted (events received = events sent) |
+
+**Key behaviors:**
+
+- Before each outbound push, jobs with an existing upload timestamp for that platform are filtered out
+- Upload timestamps are only set on **confirmed full-batch success** — if the API reports any partial failures or errors, no timestamps are set, and those jobs will be retried on the next reconciliation run
+- This all-or-nothing approach prevents the scenario where a failed push permanently suppresses retries
+- Each outbound push (success or failure) is logged in `integration_sync_logs` with record counts, error messages, and timing
 
 ---
 
@@ -549,7 +637,9 @@ The Attribution page includes a system health panel showing:
 | `artifacts/api-server/src/routes/field-mapping-rules.ts` | CRUD routes for field mapping rule management |
 | `artifacts/api-server/src/routes/ingestion-mode.ts` | Ingestion mode GET/PUT, system health status, GTM snippet generation |
 | `artifacts/api-server/src/routes/sheet-configs.ts` | Google Sheet config management (sync paused by ingestion mode) |
-| `artifacts/api-server/src/services/reconciliation.ts` | Core matching engine — waterfall logic, external conversion push |
+| `artifacts/api-server/src/lib/phone-utils.ts` | Shared phone normalization and hashing utility — single source of truth for phone/email hashing across all pipeline stages |
+| `artifacts/api-server/src/services/reconciliation.ts` | Core matching engine — waterfall logic, lookback window, external conversion push with outbound dedup |
+| `artifacts/api-server/src/services/integrations/callrail.ts` | CallRail API client — paginated call fetching with retry, sync logging |
 | `artifacts/api-server/src/services/sync-scheduler.ts` | Scheduled sync orchestration for all integrations |
 | `artifacts/api-server/src/services/st-data-purge.ts` | PII redaction worker for ServiceTitan data |
 | `artifacts/api-server/src/services/integrations/service-titan.ts` | ServiceTitan API client |
@@ -565,5 +655,5 @@ The Attribution page includes a system health panel showing:
 | `lib/db/src/schema/field-mapping-rules.ts` | Field mapping rules table schema |
 | `lib/db/src/schema/ingestion-audit-log.ts` | Ingestion mode change audit log schema |
 | `lib/db/src/schema/tenants.ts` | Tenants table schema (includes `clientSlug`, `leadIngestionMode` with check constraint) |
-| `lib/db/src/schema/jobs.ts` | Jobs table schema (match level, GCLID fields) |
+| `lib/db/src/schema/jobs.ts` | Jobs table schema (match level, GCLID fields, outbound push dedup timestamps) |
 | `lib/db/src/schema/integration-sync-logs.ts` | Sync log table schema |
