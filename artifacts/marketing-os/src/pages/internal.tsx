@@ -4,7 +4,7 @@ import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2, ArrowUpRight, Upload } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
 type SortDir = "asc" | "desc";
@@ -25,9 +25,11 @@ export default function Internal() {
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
 
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
+  const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
     statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
+    outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -226,6 +228,8 @@ export default function Internal() {
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span>Match Rate: {reconMutation.data.matchRate}%</span>
               <span>OCI Payloads: {reconMutation.data.ociPayloadsGenerated}</span>
+              <span>Enhanced Conv: {(reconMutation.data as unknown as { enhancedConversionPayloads?: number }).enhancedConversionPayloads ?? 0}</span>
+              <span>CAPI Events: {(reconMutation.data as unknown as { capiPayloads?: number }).capiPayloads ?? 0}</span>
             </div>
           </div>
         )}
@@ -384,21 +388,82 @@ export default function Internal() {
           <div className="mt-4">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Sync Activity</p>
             <div className="space-y-1">
-              {syncStatus.recentLogs.slice(0, 8).map((log) => (
-                <div key={log.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02]">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-1.5 h-1.5 rounded-full ${log.status === "completed" ? "bg-emerald-400" : log.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
-                    <span className="text-muted-foreground">{log.completedAt ? new Date(log.completedAt).toLocaleString() : "Running..."}</span>
-                    <Badge variant="neutral">{log.integration.replace(/_/g, " ")}</Badge>
-                    <span className="text-white/30 capitalize">{log.syncType.replace(/_/g, " ")}</span>
+              {syncStatus.recentLogs.slice(0, 12).map((log) => {
+                const isOutbound = OUTBOUND_SYNC_TYPES.includes(log.syncType);
+                return (
+                  <div key={log.id} className={`flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02] ${isOutbound ? "border-l-2 border-l-orange-400/50" : ""}`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-1.5 h-1.5 rounded-full ${log.status === "completed" ? "bg-emerald-400" : log.status === "error" ? "bg-red-400" : log.status === "partial" ? "bg-amber-400" : "bg-amber-400"}`} />
+                      <span className="text-muted-foreground">{log.completedAt ? new Date(log.completedAt).toLocaleString() : "Running..."}</span>
+                      {isOutbound && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-orange-400/10 border border-orange-400/20 rounded text-orange-400 text-[10px] font-medium uppercase">
+                          <ArrowUpRight className="w-2.5 h-2.5" /> Out
+                        </span>
+                      )}
+                      <Badge variant="neutral">{log.integration.replace(/_/g, " ")}</Badge>
+                      <span className="text-white/30 capitalize">{log.syncType.replace(/_/g, " ")}</span>
+                    </div>
+                    <span className="text-muted-foreground">{log.recordsProcessed.toLocaleString()} records</span>
                   </div>
-                  <span className="text-muted-foreground">{log.recordsProcessed.toLocaleString()} records</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
       </PremiumCard>
+
+      {syncStatus?.outboundPushStatus && (
+        <PremiumCard className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <Upload className="w-5 h-5 text-orange-400" />
+              <h3 className="font-display text-lg text-white">Outbound Conversion Sync</h3>
+            </div>
+            <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
+              <RefreshCw className="w-3 h-3" /> Refresh
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {([
+              { key: "oci_upload", label: "OCI Upload", color: "text-yellow-400", desc: "Google Ads Offline Click Import" },
+              { key: "enhanced_conversions", label: "Enhanced Conversions", color: "text-blue-400", desc: "Google Ads non-GCLID conversions" },
+              { key: "capi_upload", label: "CAPI Upload", color: "text-purple-400", desc: "Meta Conversions API" },
+            ] as const).map(({ key, label, color, desc }) => {
+              const push = syncStatus.outboundPushStatus?.[key];
+              return (
+                <div key={key} className="p-4 bg-white/[0.03] rounded-lg border border-white/5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`font-medium text-sm ${color}`}>{label}</span>
+                    {push?.lastStatus === "completed" ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Success</span>
+                    ) : push?.lastStatus === "error" ? (
+                      <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Error</span>
+                    ) : push?.lastStatus === "partial" ? (
+                      <span className="flex items-center gap-1 text-xs text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> Partial</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Never pushed</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mb-2">{desc}</p>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <p>Last success: {push?.lastSuccess ? new Date(push.lastSuccess).toLocaleString() : "—"}</p>
+                    <p>Records pushed: {push?.recordsPushed?.toLocaleString() ?? 0}</p>
+                    <div className="flex items-center gap-1">
+                      <span>Pending:</span>
+                      <span className={push?.pendingCount && push.pendingCount > 0 ? "text-amber-400 font-medium" : ""}>{push?.pendingCount ?? 0}</span>
+                    </div>
+                    {push?.lastError && (
+                      <p className="text-red-400 text-[10px] mt-1 line-clamp-2" title={push.lastError}>
+                        {push.lastError.length > 120 ? push.lastError.slice(0, 120) + "…" : push.lastError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </PremiumCard>
+      )}
 
       <PremiumCard className="p-0 overflow-hidden">
         <div className="overflow-x-auto">

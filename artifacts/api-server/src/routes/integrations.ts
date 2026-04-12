@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
-import { eq, desc, and, notInArray } from "drizzle-orm";
+import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
+import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
@@ -48,8 +48,11 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
   const tenantCond = tenantId ? eq(integrationSyncLogsTable.tenantId, tenantId) : undefined;
 
   const MAINTENANCE_SYNC_TYPES = ["st_data_purge", "oci_upload", "enhanced_conversions", "capi_upload", "attribution_writeback"];
+  const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
 
-  const [dataSyncLogs, purgeLogs, runningLogs] = await Promise.all([
+  const tenantCondJobs = tenantId ? eq(jobsTable.tenantId, tenantId) : undefined;
+
+  const [dataSyncLogs, purgeLogs, runningLogs, outboundLogs, pendingCounts] = await Promise.all([
     db.select()
       .from(integrationSyncLogsTable)
       .where(tenantCond
@@ -71,6 +74,22 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         : and(eq(integrationSyncLogsTable.status, "running"), notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES)))
       .orderBy(desc(integrationSyncLogsTable.createdAt))
       .limit(10),
+    db.select()
+      .from(integrationSyncLogsTable)
+      .where(tenantCond
+        ? and(tenantCond, inArray(integrationSyncLogsTable.syncType, OUTBOUND_SYNC_TYPES))
+        : inArray(integrationSyncLogsTable.syncType, OUTBOUND_SYNC_TYPES))
+      .orderBy(desc(integrationSyncLogsTable.createdAt))
+      .limit(30),
+    db.select({
+      ociPending: count(sql`CASE WHEN matched_gclid IS NOT NULL AND oci_uploaded_at IS NULL AND revenue > 0 THEN 1 END`),
+      enhancedPending: count(sql`CASE WHEN matched_gclid IS NULL AND revenue > 0 AND enhanced_conversion_uploaded_at IS NULL AND match_level IS NOT NULL THEN 1 END`),
+      capiPending: count(sql`CASE WHEN capi_uploaded_at IS NULL AND match_level IS NOT NULL THEN 1 END`),
+    })
+      .from(jobsTable)
+      .where(tenantCondJobs
+        ? and(tenantCondJobs, isNotNull(jobsTable.matchLevel))
+        : isNotNull(jobsTable.matchLevel)),
   ]);
 
   const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
@@ -144,9 +163,43 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
 
   const lastPurge = purgeLogs[0];
 
+  const outboundPushTypes = ["oci_upload", "enhanced_conversions", "capi_upload"] as const;
+  const outboundPushStatus: Record<string, {
+    lastSuccess: string | null;
+    lastStatus: string;
+    recordsPushed: number;
+    lastError: string | null;
+    pendingCount: number;
+  }> = {};
+
+  const pending = pendingCounts[0] || { ociPending: 0, enhancedPending: 0, capiPending: 0 };
+
+  for (const pushType of outboundPushTypes) {
+    const typeLogs = outboundLogs.filter((l) => l.syncType === pushType);
+    const lastSuccessful = typeLogs.find((l) => l.status === "completed" || l.status === "partial");
+    const lastWithError = typeLogs.find((l) => l.status === "error" || l.status === "partial");
+
+    outboundPushStatus[pushType] = {
+      lastSuccess: lastSuccessful?.completedAt?.toISOString() || null,
+      lastStatus: typeLogs[0]?.status || "never",
+      recordsPushed: lastSuccessful?.recordsProcessed || 0,
+      lastError: lastWithError?.errorMessage || null,
+      pendingCount: pushType === "oci_upload"
+        ? Number(pending.ociPending)
+        : pushType === "enhanced_conversions"
+          ? Number(pending.enhancedPending)
+          : Number(pending.capiPending),
+    };
+  }
+
+  const allLogs = [...dataSyncLogs, ...outboundLogs]
+    .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0))
+    .slice(0, 20);
+
   res.json({
     statusByIntegration,
-    recentLogs: dataSyncLogs.slice(0, 20),
+    recentLogs: allLogs,
+    outboundPushStatus,
     purgeStatus: lastPurge ? {
       lastRun: lastPurge.completedAt?.toISOString() || null,
       status: lastPurge.status,

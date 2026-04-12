@@ -37,6 +37,8 @@ export interface ReconciliationResult {
   unmatched: number;
   matchRate: number;
   ociPayloads: OciPayload[];
+  enhancedConversionEligible: number;
+  capiEligible: number;
 }
 
 export interface OciPayload {
@@ -357,14 +359,25 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   console.log(`[Reconciliation] ${triggerType} run complete: ${jobsProcessed} jobs processed, ${totalMatched} matched (${matchRate}% rate)`);
   console.log(`[Reconciliation] Breakdown: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.unmatched} unmatched`);
 
+  let enhancedConversionEligible = 0;
+  let capiEligible = 0;
+
   if ((ociPayloads.length > 0 || allMatchedJobIds.length > 0) && tenantId) {
     const jobIdsToFetch = [...new Set([...ociPayloads.map((p) => p.jobId), ...allMatchedJobIds])];
     if (jobIdsToFetch.length > 0) {
       const matchedJobRows = await db.select().from(jobsTable).where(
         and(eq(jobsTable.tenantId, tenantId), or(...jobIdsToFetch.map((id) => eq(jobsTable.id, id)))),
       );
+      enhancedConversionEligible = matchedJobRows.filter((j: any) => !j.matchedGclid && j.revenue > 0 && !j.enhancedConversionUploadedAt).length;
+      capiEligible = matchedJobRows.filter((j: any) => !j.capiUploadedAt).length;
       await pushConversionsToExternalAPIs(tenantId, ociPayloads, matchedJobRows);
     }
+  } else if (tenantId) {
+    const allMatchedRows = await db.select().from(jobsTable).where(
+      and(eq(jobsTable.tenantId, tenantId), isNotNull(jobsTable.matchLevel)),
+    );
+    enhancedConversionEligible = allMatchedRows.filter((j: any) => !j.matchedGclid && j.revenue > 0 && !j.enhancedConversionUploadedAt).length;
+    capiEligible = allMatchedRows.filter((j: any) => !j.capiUploadedAt).length;
   }
 
   return {
@@ -373,6 +386,8 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     ...results,
     matchRate,
     ociPayloads,
+    enhancedConversionEligible,
+    capiEligible,
   };
 }
 

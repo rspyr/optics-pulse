@@ -13,5 +13,7 @@ export interface ReconciliationResult {
   breakdown: ReconciliationResultBreakdown;
   matchRate: number;
   ociPayloadsGenerated: number;
+  enhancedConversionPayloads?: number;
+  capiPayloads?: number;
   message: string;
 }

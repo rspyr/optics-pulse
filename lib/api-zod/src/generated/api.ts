@@ -458,9 +458,10 @@ export const RunReconciliationResponse = zod.object({
 }),
   "matchRate": zod.number(),
   "ociPayloadsGenerated": zod.number(),
+  "enhancedConversionPayloads": zod.number().optional(),
+  "capiPayloads": zod.number().optional(),
   "message": zod.string()
 })
-
 
 /**
  * @summary Get reconciliation engine status and history

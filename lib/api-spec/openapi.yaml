@@ -2120,6 +2120,10 @@ components:
           type: number
         ociPayloadsGenerated:
           type: integer
+        enhancedConversionPayloads:
+          type: integer
+        capiPayloads:
+          type: integer
         message:
           type: string
       required: [success, reconciled, breakdown, matchRate, ociPayloadsGenerated, message]
