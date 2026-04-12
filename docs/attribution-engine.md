@@ -512,7 +512,7 @@ After matching, the engine pushes conversion data back to the ad platforms. Each
 |:------------|:----------|:---------------|:-----------------|
 | Google Ads | `oci_upload` | Offline conversions for GCLID-matched jobs (Diamond tier) | GCLID |
 | Google Ads | `enhanced_conversions` | Enhanced conversions for non-GCLID matches with revenue > 0 | Hashed email and/or hashed phone from linked lead |
-| Meta | `capi_upload` | Conversions API events for matched jobs with GCLID | Hashed email and/or hashed phone from linked lead |
+| Meta | `capi_upload` | Conversions API events for all matched jobs with resolvable user identifiers | Hashed email and/or hashed phone from linked lead |
 | ServiceTitan | `attribution_writeback` | Patches the `Attribution_GCLID` custom field on the job record | N/A |
 
 **Lead resolution for outbound payloads:** When building Enhanced Conversion or Meta CAPI payloads, the system resolves the associated lead for each job using a priority chain: match by phone first, then email, then name. This ensures outbound conversion events carry actual hashed user identifiers rather than empty values.
@@ -594,7 +594,7 @@ The admin dashboard includes a dedicated **Outbound Conversion Sync** section th
 |:-----|:---------|:------|:---------------|
 | **OCI Upload** | Google Ads | Yellow | Offline Click Import — GCLID-matched jobs with revenue |
 | **Enhanced Conversions** | Google Ads | Blue | Non-GCLID matched jobs with revenue |
-| **CAPI Upload** | Meta | Purple | GCLID-matched jobs pushed via Conversions API |
+| **CAPI Upload** | Meta | Purple | All matched jobs pushed via Conversions API (with resolvable user identifiers) |
 
 Each card shows:
 
@@ -611,8 +611,6 @@ Each card shows:
 | Enhanced | Job has no `matchedGclid`, revenue > 0, `matchLevel` is set, and `enhancedConversionUploadedAt` is null |
 | CAPI | Job has `matchLevel` set and `capiUploadedAt` is null |
 
-**Note on CAPI scope:** The CAPI pending count in the admin UI uses a broad filter (`matchLevel IS NOT NULL`) for visibility, but the actual CAPI push logic in reconciliation only sends events for GCLID-matched jobs (it filters from the OCI payload set). This means the pending count may be higher than the number of jobs that will actually be pushed in the next reconciliation run.
-
 **Outbound events in the sync log:** The recent sync activity log now includes outbound push events alongside inbound sync events. Outbound events are visually distinguished with:
 
 - An orange left border on the log row
@@ -628,7 +626,7 @@ The admin dashboard's Attribution Reconciliation section displays a detailed bre
 - **Match rate** as a percentage
 - **OCI Payloads** — count of Diamond-tier jobs eligible for Google Ads offline conversion upload in this run
 - **Enhanced Conv** — count of non-GCLID matched jobs eligible for Enhanced Conversion upload in this run
-- **CAPI Events** — count of GCLID-matched jobs eligible for Meta Conversions API push in this run
+- **CAPI Events** — count of all matched jobs eligible for Meta Conversions API push in this run (jobs with resolvable user identifiers via lead resolution)
 - **Tiered match counts** — individual counts for Diamond, Golden, Silver, and Bronze matches
 - **Recent run history** — last 5 runs with status indicators, processed job counts, and match rates
 - **Manual trigger** — a "Run Now" button to trigger reconciliation on demand

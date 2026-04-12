@@ -595,41 +595,49 @@ async function pushConversionsToExternalAPIs(
 
   if (config.metaAccessToken && config.metaPixelId) {
     const capiJobs = matchedJobs.filter((j) => !j.capiUploadedAt);
-    const capiOciPayloads = ociPayloads.filter((p) => capiJobs.some((j) => j.id === p.jobId));
-    if (capiOciPayloads.length > 0) {
+    if (capiJobs.length > 0) {
       const startedAt = new Date();
       try {
-        const capiEvents = await Promise.all(capiOciPayloads.map(async (p) => {
-          const job = matchedJobs.find((j) => j.id === p.jobId);
-          const lead = job ? await findLeadForJob(tenantId, job) : null;
+        const capiEventsWithIds: Array<{ jobId: number; event: ReturnType<typeof buildCAPILeadEvent> }> = [];
+        for (const job of capiJobs) {
+          const lead = await findLeadForJob(tenantId, job);
           const hashedLeadEmail = lead?.email ? hashEmail(lead.email) : null;
           const hashedLeadPhone = lead?.phone ? hashPhone(lead.phone) : null;
-          return buildCAPILeadEvent(hashedLeadEmail, hashedLeadPhone, p.conversionValue, new Date(p.conversionDateTime));
-        }));
-        const result = await sendCAPIEvents(
-          { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "", pixelId: config.metaPixelId },
-          capiEvents,
-        );
-
-        if (result.eventsReceived === capiEvents.length) {
-          const capiJobIds = capiOciPayloads.map((p) => p.jobId);
-          if (capiJobIds.length > 0) {
-            await db.update(jobsTable)
-              .set({ capiUploadedAt: new Date() })
-              .where(and(eq(jobsTable.tenantId, tenantId), or(...capiJobIds.map((id) => eq(jobsTable.id, id)))));
+          if (!hashedLeadEmail && !hashedLeadPhone) {
+            continue;
           }
+          capiEventsWithIds.push({
+            jobId: job.id,
+            event: buildCAPILeadEvent(hashedLeadEmail, hashedLeadPhone, job.revenue, job.completedAt || new Date()),
+          });
         }
 
-        await db.insert(integrationSyncLogsTable).values({
-          tenantId,
-          integration: "meta",
-          syncType: "capi_upload",
-          status: "completed",
-          recordsProcessed: result.eventsReceived,
-          startedAt,
-          completedAt: new Date(),
-        });
-        console.log(`[Outbound] Meta CAPI: ${result.eventsReceived} events sent for tenant ${tenantId}`);
+        if (capiEventsWithIds.length > 0) {
+          const result = await sendCAPIEvents(
+            { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "", pixelId: config.metaPixelId },
+            capiEventsWithIds.map((e) => e.event),
+          );
+
+          if (result.eventsReceived === capiEventsWithIds.length) {
+            const capiJobIds = capiEventsWithIds.map((e) => e.jobId);
+            if (capiJobIds.length > 0) {
+              await db.update(jobsTable)
+                .set({ capiUploadedAt: new Date() })
+                .where(and(eq(jobsTable.tenantId, tenantId), or(...capiJobIds.map((id) => eq(jobsTable.id, id)))));
+            }
+          }
+
+          await db.insert(integrationSyncLogsTable).values({
+            tenantId,
+            integration: "meta",
+            syncType: "capi_upload",
+            status: "completed",
+            recordsProcessed: result.eventsReceived,
+            startedAt,
+            completedAt: new Date(),
+          });
+          console.log(`[Outbound] Meta CAPI: ${result.eventsReceived} events sent for tenant ${tenantId}`);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await db.insert(integrationSyncLogsTable).values({
