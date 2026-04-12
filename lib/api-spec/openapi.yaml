@@ -1523,6 +1523,18 @@ components:
         leadId:
           type: integer
           nullable: true
+        ociUploadedAt:
+          type: string
+          format: date-time
+          nullable: true
+        enhancedConversionUploadedAt:
+          type: string
+          format: date-time
+          nullable: true
+        capiUploadedAt:
+          type: string
+          format: date-time
+          nullable: true
       required: [id, revenue]
 
     AttributionMatchedLead:
@@ -1563,6 +1575,18 @@ components:
           enum: [diamond, golden, silver, bronze, unmatched]
           nullable: true
         completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        ociUploadedAt:
+          type: string
+          format: date-time
+          nullable: true
+        enhancedConversionUploadedAt:
+          type: string
+          format: date-time
+          nullable: true
+        capiUploadedAt:
           type: string
           format: date-time
           nullable: true

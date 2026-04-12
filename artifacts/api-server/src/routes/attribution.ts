@@ -58,7 +58,7 @@ router.get("/attribution/events/:id", async (req, res) => {
       return;
     }
 
-    type MatchedJobRow = { id: number; customerName: string | null; stJobId: string | null; matchLevel: string | null; matchedGclid: string | null; revenue: number; leadId: number | null };
+    type MatchedJobRow = { id: number; customerName: string | null; stJobId: string | null; matchLevel: string | null; matchedGclid: string | null; revenue: number; leadId: number | null; ociUploadedAt: Date | null; enhancedConversionUploadedAt: Date | null; capiUploadedAt: Date | null };
     let matchedJob: MatchedJobRow | null = null;
     let matchedLead: { id: number; firstName: string; lastName: string } | null = null;
 
@@ -70,6 +70,9 @@ router.get("/attribution/events/:id", async (req, res) => {
       matchedGclid: jobsTable.matchedGclid,
       revenue: jobsTable.revenue,
       leadId: jobsTable.leadId,
+      ociUploadedAt: jobsTable.ociUploadedAt,
+      enhancedConversionUploadedAt: jobsTable.enhancedConversionUploadedAt,
+      capiUploadedAt: jobsTable.capiUploadedAt,
     };
 
 

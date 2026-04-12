@@ -12,6 +12,7 @@ import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
+  Upload, Info, Clock,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -203,6 +204,11 @@ export default function Attribution() {
               <span className="text-xs text-muted-foreground ml-auto">{filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}</span>
             </div>
           </PremiumCard>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
+            <Info className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>Matching considers attribution events from the last 90 days only. Older events will not be matched to jobs.</span>
+          </div>
 
           {filteredEvents.length === 0 ? (
             <PremiumCard className="p-10">
@@ -425,6 +431,36 @@ export default function Attribution() {
                     <p className="text-sm text-muted-foreground">No matched job or lead found for this event.</p>
                   )}
                 </DetailSection>
+
+                {matchedJob && (
+                  <DetailSection title="Outbound Push Status" icon={<Upload className="w-4 h-4" />}>
+                    <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+                      {[
+                        { label: "Google OCI", value: matchedJob.ociUploadedAt },
+                        { label: "Enhanced Conversions", value: matchedJob.enhancedConversionUploadedAt },
+                        { label: "Meta CAPI", value: matchedJob.capiUploadedAt },
+                      ].map(({ label, value: val }) => {
+                        const uploaded = val != null;
+                        return (
+                          <div key={label} className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">{label}</span>
+                            {uploaded ? (
+                              <span className="text-xs text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <Check className="w-3 h-3" />
+                                {format(new Date(val as string), 'MM/dd HH:mm')}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                Pending
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </DetailSection>
+                )}
 
                 <DetailSection title="Attribution (UTM)" icon={<Tag className="w-4 h-4" />}>
                   <DetailRow label="Source" value={selectedEvent.utmSource} />
