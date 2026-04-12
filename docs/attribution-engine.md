@@ -41,8 +41,11 @@ The attribution engine is the core system that connects marketing spend to actua
 - [Integration Status Monitoring](#integration-status-monitoring)
   - [Integration States](#integration-states)
   - [Sync Type Breakdown](#sync-type-breakdown)
+  - [Outbound Conversion Sync](#outbound-conversion-sync)
+  - [Reconciliation Run Summary](#reconciliation-run-summary)
 - [Attribution Page UI](#attribution-page-ui)
   - [Filters](#filters)
+  - [Event Detail Panel](#event-detail-panel)
   - [Inline Corrections](#inline-corrections)
   - [System Health Panel](#system-health-panel)
 - [Key Files](#key-files)
@@ -289,7 +292,7 @@ All phone numbers across the pipeline are normalized and hashed through a single
 - Email addresses are hashed with SHA-256 (lowercase, trimmed) without phone normalization
 - The same utility is used in: tracker submissions, webhook ingestion, CallRail sync, reconciliation matching, attribution event lookup, and outbound conversion payloads
 
-This centralization replaced five separate inline implementations that used inconsistent normalization rules, which previously caused phone hashes to mismatch across pipeline stages.
+All pipeline files import directly from `phone-utils.ts` — there are no re-exports or shims in other modules. This centralization replaced five separate inline implementations that used inconsistent normalization rules, which previously caused phone hashes to mismatch across pipeline stages.
 
 ### CallRail Sync
 
@@ -514,6 +517,8 @@ After matching, the engine pushes conversion data back to the ad platforms. Each
 
 **Lead resolution for outbound payloads:** When building Enhanced Conversion or Meta CAPI payloads, the system resolves the associated lead for each job using a priority chain: match by phone first, then email, then name. This ensures outbound conversion events carry actual hashed user identifiers rather than empty values.
 
+**Reconciliation result counts:** After each reconciliation run, the API returns payload counts for all three outbound types — OCI payloads, Enhanced Conversion payloads, and CAPI payloads — alongside the match breakdown (Diamond/Golden/Silver/Bronze). These counts are displayed in the admin dashboard's reconciliation summary banner.
+
 ### Outbound Push Deduplication
 
 Each job tracks whether its conversion data has already been successfully uploaded to each external platform via timestamp columns on the `jobs` table:
@@ -579,6 +584,57 @@ Each integration card displays a per-sync-type breakdown showing:
 
 Maintenance activities (PII purge, conversion uploads, attribution writebacks) are displayed separately from primary data syncs to keep the status view focused on data freshness.
 
+### Outbound Conversion Sync
+
+The admin dashboard includes a dedicated **Outbound Conversion Sync** section that provides visibility into whether conversion data is actually reaching the ad platforms. This complements the inbound sync status cards above.
+
+**Three status cards** are displayed, one for each outbound push type:
+
+| Card | Platform | Color | What It Tracks |
+|:-----|:---------|:------|:---------------|
+| **OCI Upload** | Google Ads | Yellow | Offline Click Import — GCLID-matched jobs with revenue |
+| **Enhanced Conversions** | Google Ads | Blue | Non-GCLID matched jobs with revenue |
+| **CAPI Upload** | Meta | Purple | GCLID-matched jobs pushed via Conversions API |
+
+Each card shows:
+
+- **Last success** — Timestamp of the most recent successful push
+- **Records pushed** — Number of conversions uploaded in the last successful push
+- **Pending** — Count of matched jobs that haven't been uploaded yet (highlighted in amber when > 0)
+- **Last error** — Truncated error message from the most recent failed push (if any)
+
+**Pending count calculation:** The API calculates pending counts directly from the jobs table using conditional aggregation:
+
+| Platform | Pending When |
+|:---------|:-------------|
+| OCI | Job has `matchedGclid`, revenue > 0, and `ociUploadedAt` is null |
+| Enhanced | Job has no `matchedGclid`, revenue > 0, `matchLevel` is set, and `enhancedConversionUploadedAt` is null |
+| CAPI | Job has `matchLevel` set and `capiUploadedAt` is null |
+
+**Note on CAPI scope:** The CAPI pending count in the admin UI uses a broad filter (`matchLevel IS NOT NULL`) for visibility, but the actual CAPI push logic in reconciliation only sends events for GCLID-matched jobs (it filters from the OCI payload set). This means the pending count may be higher than the number of jobs that will actually be pushed in the next reconciliation run.
+
+**Outbound events in the sync log:** The recent sync activity log now includes outbound push events alongside inbound sync events. Outbound events are visually distinguished with:
+
+- An orange left border on the log row
+- An "Out" badge with an arrow icon
+- Standard status indicators (green for success, red for error)
+
+The sync log merges both inbound and outbound logs into a single chronological list (newest first, capped at 20 entries).
+
+### Reconciliation Run Summary
+
+The admin dashboard's Attribution Reconciliation section displays a detailed breakdown after each run:
+
+- **Match rate** as a percentage
+- **OCI Payloads** — count of Diamond-tier jobs eligible for Google Ads offline conversion upload in this run
+- **Enhanced Conv** — count of non-GCLID matched jobs eligible for Enhanced Conversion upload in this run
+- **CAPI Events** — count of GCLID-matched jobs eligible for Meta Conversions API push in this run
+- **Tiered match counts** — individual counts for Diamond, Golden, Silver, and Bronze matches
+- **Recent run history** — last 5 runs with status indicators, processed job counts, and match rates
+- **Manual trigger** — a "Run Now" button to trigger reconciliation on demand
+
+Payload counts represent jobs eligible in the current reconciliation run (excluding those already uploaded). If no new matches are found in the current run, the counts fall back to the global backlog of matched jobs still awaiting upload.
+
 ---
 
 ## Attribution Page UI
@@ -608,6 +664,34 @@ The Attribution page (`attribution.tsx`) provides a full operational view of all
 | Match | Match level badge (diamond/golden/silver/bronze/unmatched) |
 | Lead | Shows "created" badge when a lead was generated from this event (`createdLeadId`) |
 | Status | Detection status (detected count / matched / unresolved) |
+
+### Event Detail Panel
+
+Clicking any event row opens a slide-out detail panel showing the full context of that attribution event:
+
+**Header:** Event type icon, event ID, and formatted timestamp.
+
+**Match Status:** The match level badge (Diamond/Golden/Silver/Bronze/Unmatched) and numeric match confidence percentage.
+
+**Auto-Detected Fields:** A list of form fields with their detected semantic meaning (e.g., `email`, `phone`, `firstName`) and the detection method that resolved them (saved rule, value pattern, or heuristic).
+
+**Linked Records:** If the event matched a job, shows the Job ID, customer name, and revenue. If a lead was created or linked, shows the Lead ID and name with a link to the Pulse queue.
+
+**Outbound Push Status:** For matched jobs, displays per-platform upload status:
+
+| Platform | Badge When Uploaded | Badge When Not Yet Uploaded |
+|:---------|:-------------------|:---------------------------|
+| Google OCI | Green timestamp badge | Amber "Pending" badge |
+| Enhanced Conversions | Green timestamp badge | Amber "Pending" badge |
+| Meta CAPI | Green timestamp badge | Amber "Pending" badge |
+
+This lets operators see at a glance whether a matched job's conversion data has actually reached each ad platform.
+
+**UTM / Identity Data:** Full listing of UTM parameters (source, medium, campaign, term, content), click IDs (GCLID, FBCLID, etc.), landing page, and referrer.
+
+**Inline Corrections:** Source/funnel and field mapping corrections can be created directly from this panel (see below).
+
+**90-Day Lookback Callout:** The attribution log page displays a subtle informational note indicating that matching only considers events from the last 90 days. This prevents confusion when older events appear as "unmatched" despite having plausible matches — they are simply outside the lookback window.
 
 ### Inline Corrections
 
@@ -643,11 +727,11 @@ The Attribution page includes a system health panel showing:
 | `artifacts/api-server/src/services/sync-scheduler.ts` | Scheduled sync orchestration for all integrations |
 | `artifacts/api-server/src/services/st-data-purge.ts` | PII redaction worker for ServiceTitan data |
 | `artifacts/api-server/src/services/integrations/service-titan.ts` | ServiceTitan API client |
-| `artifacts/api-server/src/routes/integrations.ts` | Sync status endpoint and manual sync triggers |
+| `artifacts/api-server/src/routes/integrations.ts` | Sync status endpoint (inbound + outbound push health with pending counts) and manual sync triggers |
 | `artifacts/api-server/src/routes/webhooks.ts` | Attribution event ingestion via webhooks (CallRail, GHL, Podium) |
-| `artifacts/api-server/src/routes/attribution.ts` | Attribution event listing API |
-| `artifacts/marketing-os/src/pages/internal.tsx` | Admin dashboard with integration status UI |
-| `artifacts/marketing-os/src/pages/attribution.tsx` | Attribution log viewer with filters, inline corrections, system health, and ingestion mode controls |
+| `artifacts/api-server/src/routes/attribution.ts` | Attribution event listing and detail API (includes outbound push timestamps on matched jobs) |
+| `artifacts/marketing-os/src/pages/internal.tsx` | Admin dashboard with integration status, outbound push health, and reconciliation run summary |
+| `artifacts/marketing-os/src/pages/attribution.tsx` | Attribution log viewer with filters, event detail panel (outbound push status), inline corrections, 90-day lookback callout, system health, and ingestion mode controls |
 | `artifacts/marketing-os/src/pages/settings.tsx` | Tenant settings — includes ingestion mode switching, GTM snippet, and funnel alias management |
 | `artifacts/marketing-os/src/pages/admin-funnels.tsx` | Admin funnel management — includes GTM Tracking tab with per-tenant ingestion mode, snippet generation, and funnel alias CRUD |
 | `lib/db/src/schema/attribution-events.ts` | Attribution events table schema (includes formFields JSONB, detectedMappings, resolvedLeadSource, resolvedFunnel, createdLeadId) |
@@ -657,3 +741,4 @@ The Attribution page includes a system health panel showing:
 | `lib/db/src/schema/tenants.ts` | Tenants table schema (includes `clientSlug`, `leadIngestionMode` with check constraint) |
 | `lib/db/src/schema/jobs.ts` | Jobs table schema (match level, GCLID fields, outbound push dedup timestamps) |
 | `lib/db/src/schema/integration-sync-logs.ts` | Sync log table schema |
+| `lib/api-spec/openapi.yaml` | OpenAPI specification — Job and AttributionMatchedJob schemas include outbound push timestamp fields; ReconciliationResult includes payload counts |
