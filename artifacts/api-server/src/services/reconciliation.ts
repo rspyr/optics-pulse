@@ -176,6 +176,12 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
           .limit(10)
       : [];
 
+    const emailLeads = job.customerEmail
+      ? await db.select().from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.email, job.customerEmail)))
+          .limit(10)
+      : [];
+
     let nameLeads: typeof phoneLeads = [];
     if (!hasDirectIdentifiers) {
       const nameConditions = [eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.firstName, firstName)];
@@ -186,7 +192,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     }
 
     const seenLeadIds = new Set<number>();
-    const allLeads = [...phoneLeads, ...nameLeads].filter((l) => {
+    const allLeads = [...phoneLeads, ...emailLeads, ...nameLeads].filter((l) => {
       if (seenLeadIds.has(l.id)) return false;
       seenLeadIds.add(l.id);
       return true;
@@ -404,6 +410,13 @@ async function findLeadForJob(
     const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })
       .from(leadsTable)
       .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.phone, job.customerPhone)))
+      .limit(1);
+    if (lead) return lead;
+  }
+  if (job.customerEmail) {
+    const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.email, job.customerEmail)))
       .limit(1);
     if (lead) return lead;
   }
