@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import crypto from "crypto";
+import { normalizePhone } from "../lib/phone-utils";
 
 const mockDb = {
   insertCalls: [] as Array<{ table: unknown; values: unknown }>,
@@ -14,10 +15,16 @@ const mockDb = {
   },
 };
 
-function makeThenable(result: unknown[]) {
-  const obj: Record<string, unknown> = {};
-  obj.then = (resolve: Function, reject?: Function) => Promise.resolve(result).then(resolve as any, reject as any);
-  obj[Symbol.iterator] = function* () { yield* result; };
+interface ThenableIterable extends Record<string, unknown> {
+  then: (resolve: Function, reject?: Function) => Promise<unknown>;
+  [Symbol.iterator]: () => Generator<unknown>;
+}
+
+function makeThenable(result: unknown[]): ThenableIterable {
+  const obj: ThenableIterable = {
+    then: (resolve: Function, reject?: Function) => Promise.resolve(result).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
+    [Symbol.iterator]: function* () { yield* result; },
+  };
   return obj;
 }
 
@@ -27,7 +34,7 @@ function makeSelectChain(results: () => unknown[]) {
   chain.from = vi.fn().mockReturnValue(chain);
   chain.where = vi.fn().mockReturnValue(Object.assign(thenable(), { limit: vi.fn().mockImplementation(() => Promise.resolve(results())) }));
   chain.limit = vi.fn().mockImplementation(() => Promise.resolve(results()));
-  chain.then = (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as any, reject as any);
+  chain.then = (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown);
   return chain;
 }
 
@@ -37,7 +44,7 @@ function makeInsertChain(results: () => unknown[], onValues?: (v: unknown) => vo
       onValues?.(vals);
       return {
         returning: vi.fn().mockResolvedValue(results()),
-        then: (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as any, reject as any),
+        then: (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
       };
     }),
   };
@@ -178,10 +185,6 @@ function expectedHash(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
 
-function normalizePhone(phone: string): string {
-  return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
-}
-
 describe("POST /webhooks/ingest", () => {
   beforeEach(async () => {
     delete process.env.WEBHOOK_SECRET;
@@ -212,7 +215,10 @@ describe("POST /webhooks/ingest", () => {
     expect(res.json().success).toBe(false);
   });
 
-  it("returns paused message for callrail source", async () => {
+  it("processes callrail source successfully", async () => {
+    const fakeEvent = { id: 50, tenantId: 1 };
+    mockDb.insertResults = [[fakeEvent]];
+
     const res = await sendRequest(app, "/webhooks/ingest", {
       source: "callrail",
       tenantId: 1,
@@ -220,11 +226,14 @@ describe("POST /webhooks/ingest", () => {
     });
     expect(res.status).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.message).toContain("paused");
+    expect(body.success).toBe(true);
+    expect(body.eventId).toBe(50);
   });
 
-  it("returns paused message for ghl source", async () => {
+  it("processes ghl source successfully", async () => {
+    const fakeEvent = { id: 51, tenantId: 1 };
+    mockDb.insertResults = [[fakeEvent]];
+
     const res = await sendRequest(app, "/webhooks/ingest", {
       source: "ghl",
       tenantId: 1,
@@ -232,8 +241,8 @@ describe("POST /webhooks/ingest", () => {
     });
     expect(res.status).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.message).toContain("paused");
+    expect(body.success).toBe(true);
+    expect(body.eventId).toBe(51);
   });
 
   it("rejects invalid signature when WEBHOOK_SECRET is set", async () => {
@@ -425,13 +434,17 @@ describe("POST /webhooks/ingest", () => {
   });
 
   it("stores externalId with callrail prefix for callrail source", async () => {
-    const res = await sendRequest(app, "/webhooks/ingest", {
+    const fakeEvent = { id: 60, tenantId: 1 };
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/webhooks/ingest", {
       source: "callrail",
       tenantId: 1,
       data: { phone: "5551234567", externalId: "CR12345" },
     });
 
-    expect(res.json().message).toContain("paused");
+    const eventInsert = mockDb.insertCalls[0]?.values as Record<string, unknown>;
+    expect(eventInsert.externalId).toBe("callrail:CR12345");
   });
 
   it("stores UTM and landing page data in event", async () => {
@@ -465,11 +478,15 @@ describe("POST /webhooks/ghl", () => {
     await setupApp();
   });
 
-  it("returns paused message", async () => {
+  it("rejects requests with invalid signature when WEBHOOK_SECRET is set", async () => {
+    process.env.WEBHOOK_SECRET = "test-secret";
+
     const res = await sendRequest(app, "/webhooks/ghl", {});
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
     const body = res.json();
     expect(body.success).toBe(false);
-    expect(body.message).toContain("paused");
+    expect(body.message).toContain("Invalid webhook signature");
+
+    delete process.env.WEBHOOK_SECRET;
   });
 });

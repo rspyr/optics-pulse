@@ -6,8 +6,6 @@ import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
 import { patchJobCustomField } from "./integrations/service-titan";
 import { normalizePhone, hashValue, hashPhone, hashEmail } from "../lib/phone-utils";
 
-export { hashValue, normalizePhone };
-
 const LOOKBACK_DAYS = 90;
 
 export function normalizeAddress(address: string): string {

@@ -5,7 +5,7 @@ import { processQuestionStream, generateSuggestions, type ConversationTurn } fro
 
 const router: IRouter = Router();
 
-async function resolveTenantId(req: { session: { userRole?: string; tenantId?: number; userId?: number } }, queryOrBodyTenantId?: number | string | null): Promise<number | null> {
+async function resolveTenantId(req: { session: { userRole?: string; tenantId?: number | null; userId?: number } }, queryOrBodyTenantId?: number | string | null): Promise<number | null> {
   const role = req.session.userRole;
   const sessionTenantId = req.session.tenantId;
   const isAgency = role === "super_admin" || role === "agency_user";
@@ -99,7 +99,7 @@ router.get("/chat/suggestions", async (req, res) => {
     return;
   }
 
-  const tenantId = await resolveTenantId(req, req.query.tenantId);
+  const tenantId = await resolveTenantId(req, req.query.tenantId as string | undefined);
   if (!tenantId) {
     res.json({ suggestions: ["How am I performing this month?", "What's my cost per lead?", "Show all campaigns"] });
     return;
@@ -121,7 +121,7 @@ router.get("/chat/saved-questions", async (req, res) => {
     return;
   }
 
-  const tenantId = await resolveTenantId(req, req.query.tenantId);
+  const tenantId = await resolveTenantId(req, req.query.tenantId as string | undefined);
   if (!tenantId) {
     res.json({ questions: [] });
     return;
@@ -171,7 +171,7 @@ router.delete("/chat/saved-questions/:id", async (req, res) => {
     return;
   }
 
-  const tenantId = await resolveTenantId(req, req.query.tenantId);
+  const tenantId = await resolveTenantId(req, req.query.tenantId as string | undefined);
   if (!tenantId) {
     res.status(400).json({ error: "Tenant context required" });
     return;

@@ -8,7 +8,7 @@ import { decryptConfig } from "../lib/encryption";
 const router: IRouter = Router();
 
 router.post("/integrations/sync/:integration", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const { integration } = req.params;
+  const integration = String(req.params.integration);
   const { tenantId } = req.body as { tenantId?: number };
 
   if (!tenantId) {

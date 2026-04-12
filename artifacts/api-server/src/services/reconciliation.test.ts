@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { hashValue, normalizePhone, normalizeAddress } from "./reconciliation";
+import { hashValue, normalizePhone } from "../lib/phone-utils";
+import { normalizeAddress } from "./reconciliation";
 
 describe("hashValue", () => {
   it("returns a sha256 hex digest", () => {

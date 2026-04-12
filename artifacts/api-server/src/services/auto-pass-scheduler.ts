@@ -105,7 +105,7 @@ export function hasActiveClaim(leadId: number): { claimed: boolean; csrId?: numb
   return { claimed: true, csrId: claim.csrId };
 }
 
-const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"];
+const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"] as const;
 
 function isStickyTerminalAtRest(
   config: { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null },
@@ -248,7 +248,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
     console.log(`[auto-pass] Lead ${leadId}: manually transferred, skipping auto-pass`);
     return;
   }
-  if (!AUTO_PASS_STATUSES.includes(lead.hubStatus)) return;
+  if (!(AUTO_PASS_STATUSES as readonly string[]).includes(lead.hubStatus)) return;
 
   const claimInfo = hasActiveClaim(leadId);
   if (claimInfo.claimed) {

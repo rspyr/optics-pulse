@@ -184,7 +184,7 @@ router.post("/sheet-configs/:configId/funnel-value-map", requireRole("super_admi
 
 router.get("/sheet-configs/:configId/column-values/:headerName", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const configId = parseInt(String(req.params.configId));
-  const headerName = req.params.headerName;
+  const headerName = String(req.params.headerName);
 
   const [config] = await db.select().from(googleSheetConfigsTable).where(eq(googleSheetConfigsTable.id, configId));
   if (!config) {

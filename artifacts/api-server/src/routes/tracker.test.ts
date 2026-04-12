@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { hashValue, normalizePhone, extractPiiFromFields } from "./tracker";
+import { hashValue, normalizePhone } from "../lib/phone-utils";
+import { extractPiiFromFields } from "./tracker";
 
 describe("tracker hashValue", () => {
   it("returns a sha256 hex digest", () => {

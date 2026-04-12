@@ -158,7 +158,7 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
     const isTestLead = webhookNameFields.includes("test");
 
     if (!isTestLead && (data.firstName || data.lastName || data.phone || data.email)) {
-      const funnelSlug = data.funnel || (dataObj._mos_funnel as string) || null;
+      const funnelSlug = (dataObj.funnel as string) || (dataObj._mos_funnel as string) || null;
       const resolved = await resolveFunnelType(tenantId, funnelSlug);
       const resolvedLeadType = resolved?.name || source;
       const resolvedFunnelId = resolved?.id || null;

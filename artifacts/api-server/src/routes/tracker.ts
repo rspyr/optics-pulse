@@ -14,8 +14,6 @@ import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
 import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
 
-export { hashValue, normalizePhone };
-
 const TrackerSubmitPayload = TrackerSubmitBody.extend({
   submitted_at: z.string().optional(),
 });

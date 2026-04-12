@@ -262,7 +262,17 @@ const migrations: Migration[] = [
       `);
 
       let totalDeleted = 0;
-      for (const group of dupeGroups.rows as DupeGroup[]) {
+      const rows: DupeGroup[] = Array.isArray(dupeGroups.rows) ? dupeGroups.rows.map((r: Record<string, unknown>) => ({
+        name: String(r.name ?? ""),
+        condition_type: String(r.condition_type ?? ""),
+        condition_value: Number(r.condition_value),
+        action_type: String(r.action_type ?? ""),
+        platform: String(r.platform ?? ""),
+        tenant_id: String(r.tenant_id ?? ""),
+        keep_id: Number(r.keep_id),
+        cnt: Number(r.cnt),
+      })) : [];
+      for (const group of rows) {
         const keepId = Number(group.keep_id);
         const tenantFilter = group.tenant_id === ''
           ? sql`tenant_id IS NULL`

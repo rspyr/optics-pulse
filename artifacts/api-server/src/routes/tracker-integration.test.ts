@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import crypto from "crypto";
+import { normalizePhone } from "../lib/phone-utils";
 
 const mockDb = {
   insertCalls: [] as Array<{ table: unknown; values: unknown }>,
@@ -14,10 +15,16 @@ const mockDb = {
   },
 };
 
-function makeThenable(result: unknown[]) {
-  const obj: Record<string, unknown> = {};
-  obj.then = (resolve: Function, reject?: Function) => Promise.resolve(result).then(resolve as any, reject as any);
-  obj[Symbol.iterator] = function* () { yield* result; };
+interface ThenableIterable extends Record<string, unknown> {
+  then: (resolve: Function, reject?: Function) => Promise<unknown>;
+  [Symbol.iterator]: () => Generator<unknown>;
+}
+
+function makeThenable(result: unknown[]): ThenableIterable {
+  const obj: ThenableIterable = {
+    then: (resolve: Function, reject?: Function) => Promise.resolve(result).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
+    [Symbol.iterator]: function* () { yield* result; },
+  };
   return obj;
 }
 
@@ -25,9 +32,15 @@ function makeSelectChain(results: () => unknown[]) {
   const chain: Record<string, unknown> = {};
   const thenResult = () => makeThenable(results());
   chain.from = vi.fn().mockReturnValue(chain);
-  chain.where = vi.fn().mockReturnValue(Object.assign(thenResult(), { limit: vi.fn().mockImplementation(() => Promise.resolve(results())) }));
+  chain.innerJoin = vi.fn().mockReturnValue(chain);
+  chain.leftJoin = vi.fn().mockReturnValue(chain);
+  chain.where = vi.fn().mockReturnValue(Object.assign(thenResult(), {
+    limit: vi.fn().mockImplementation(() => Promise.resolve(results())),
+    orderBy: vi.fn().mockReturnValue(Object.assign(thenResult(), { limit: vi.fn().mockImplementation(() => Promise.resolve(results())) })),
+  }));
+  chain.orderBy = vi.fn().mockReturnValue(Object.assign(thenResult(), { limit: vi.fn().mockImplementation(() => Promise.resolve(results())) }));
   chain.limit = vi.fn().mockImplementation(() => Promise.resolve(results()));
-  chain.then = (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as any, reject as any);
+  chain.then = (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown);
   return chain;
 }
 
@@ -37,7 +50,7 @@ function makeInsertChain(results: () => unknown[], onValues?: (v: unknown) => vo
       onValues?.(vals);
       return {
         returning: vi.fn().mockResolvedValue(results()),
-        then: (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as any, reject as any),
+        then: (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
       };
     }),
   };
@@ -67,6 +80,8 @@ vi.mock("@workspace/db", () => ({
   funnelTypesTable: Symbol("funnelTypesTable"),
   tenantFunnelTypesTable: Symbol("tenantFunnelTypesTable"),
   callAttemptsTable: Symbol("callAttemptsTable"),
+  fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
+  funnelAliasesTable: Symbol("funnelAliasesTable"),
 }));
 
 vi.mock("../socket", () => ({
@@ -89,9 +104,41 @@ vi.mock("../services/source-normalizer", () => ({
   normalizeSource: vi.fn().mockImplementation((_tid: number, src: string) => Promise.resolve(src)),
 }));
 
+vi.mock("../services/field-detection", () => ({
+  detectFields: vi.fn().mockImplementation((_tid: number, fields: Record<string, unknown>) => {
+    const firstName = (fields?.first_name as string) || null;
+    const lastName = (fields?.last_name as string) || null;
+    const email = (fields?.email as string) || null;
+    const phone = (fields?.phone as string) || null;
+    let nameFromFull = null as string | null;
+    if (!firstName && fields?.name && typeof fields.name === "string") {
+      nameFromFull = fields.name;
+    }
+    return Promise.resolve({
+      pii: { firstName: firstName || nameFromFull?.split(" ")[0] || null, lastName: lastName || (nameFromFull ? nameFromFull.split(" ").slice(1).join(" ") : null), email, phone },
+      source: null,
+      funnel: null,
+      serviceType: null,
+      addressParts: { street: null, city: null, state: null, zip: null },
+      formFields: fields || null,
+      fields: [],
+    });
+  }),
+}));
+
+vi.mock("../services/funnel-normalizer", () => ({
+  normalizeFunnel: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../services/reconciliation", () => ({
+  normalizeAddress: vi.fn().mockImplementation((addr: string) => addr),
+}));
+
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((...args: unknown[]) => args),
   and: vi.fn((...args: unknown[]) => args),
+  gte: vi.fn((...args: unknown[]) => args),
+  inArray: vi.fn((...args: unknown[]) => args),
 }));
 
 import express from "express";
@@ -148,10 +195,6 @@ function sendRequest(
 
 function expectedHash(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
-}
-
-function normalizePhone(phone: string): string {
-  return phone.replace(/[\s\-\(\)\+]/g, "").replace(/^1/, "");
 }
 
 describe("POST /tracker/submit", () => {
@@ -271,7 +314,7 @@ describe("POST /tracker/submit", () => {
   });
 
   it("does not create lead for test submissions", async () => {
-    const tenant = { id: 5, name: "Tenant" };
+    const tenant = { id: 5, name: "Tenant", leadIngestionMode: "tracker" };
     const fakeEvent = { id: 100, tenantId: 5 };
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
@@ -285,7 +328,7 @@ describe("POST /tracker/submit", () => {
   });
 
   it("creates lead with correct PII fields", async () => {
-    const tenant = { id: 6, name: "Tenant" };
+    const tenant = { id: 6, name: "Tenant", leadIngestionMode: "tracker" };
     const fakeEvent = { id: 200, tenantId: 6 };
     const fakeLead = { id: 40, tenantId: 6 };
     mockDb.selectResults = [[tenant], [fakeLead]];
@@ -357,7 +400,7 @@ describe("POST /tracker/submit", () => {
   });
 
   it("extracts full name from 'name' field when first_name is absent", async () => {
-    const tenant = { id: 8, name: "Tenant" };
+    const tenant = { id: 8, name: "Tenant", leadIngestionMode: "tracker" };
     const fakeEvent = { id: 500, tenantId: 8 };
     const fakeLead = { id: 50, tenantId: 8 };
     mockDb.selectResults = [[tenant], [fakeLead]];

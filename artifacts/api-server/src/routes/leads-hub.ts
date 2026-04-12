@@ -80,7 +80,7 @@ router.get("/leads-hub/queue", async (req, res) => {
   const baseConds = [eq(leadsTable.tenantId, tenantId), visibilityFilter];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
 
-  const activeStatuses = ["day_1", "day_2", "day_3", "day_4", "appt_booked"];
+  const activeStatuses = ["day_1", "day_2", "day_3", "day_4", "appt_booked"] as const;
   const terminalStatuses = ["appt_set", "dead"];
 
   try {
@@ -268,11 +268,11 @@ router.get("/leads-hub/archive", async (req, res) => {
     : req.query.csrId ? Number(req.query.csrId) : null;
   const status = req.query.status as string | undefined;
 
-  const conds = [eq(leadsTable.tenantId, tenantId), inArray(leadsTable.hubStatus, ["appt_set", "dead"])];
+  const conds = [eq(leadsTable.tenantId, tenantId), inArray(leadsTable.hubStatus, ["appt_set", "dead"] as const)];
   if (source) conds.push(eq(leadsTable.source, source));
   if (serviceType) conds.push(eq(leadsTable.serviceType, serviceType));
   if (csrId) conds.push(eq(leadsTable.assignedCsrId, csrId));
-  if (status) conds.push(eq(leadsTable.hubStatus, status));
+  if (status) conds.push(eq(leadsTable.hubStatus, status as typeof leadsTable.hubStatus.enumValues[number]));
   if (month) {
     const [year, m] = month.split("-").map(Number);
     const start = new Date(year, m - 1, 1);

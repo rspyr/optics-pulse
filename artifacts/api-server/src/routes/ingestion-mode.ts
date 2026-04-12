@@ -5,7 +5,7 @@ import { eq, and, gte, isNotNull, ne, sql, desc } from "drizzle-orm";
 const router: IRouter = Router();
 
 function requireManagerRole(req: Request, res: Response, next: NextFunction) {
-  const role = (req.session as Record<string, unknown>)?.userRole as string | undefined;
+  const role = req.session.userRole;
   if (!role || !["super_admin", "agency_user", "client_admin"].includes(role)) {
     res.status(403).json({ error: "Access denied. Requires manager role." });
     return;
@@ -14,12 +14,12 @@ function requireManagerRole(req: Request, res: Response, next: NextFunction) {
 }
 
 function resolveTenantId(req: Request): number | null {
-  const session = req.session as Record<string, unknown>;
-  const role = session?.userRole as string | undefined;
+  const session = req.session;
+  const role = session.userRole;
   if (role === "super_admin" || role === "agency_user") {
-    return req.query.tenantId ? Number(req.query.tenantId) : (session.tenantId as number | null) ?? null;
+    return req.query.tenantId ? Number(req.query.tenantId) : session.tenantId ?? null;
   }
-  return (session?.tenantId as number | null) ?? null;
+  return session.tenantId ?? null;
 }
 
 router.use("/ingestion-mode", requireManagerRole);
@@ -50,8 +50,7 @@ router.put("/ingestion-mode", async (req, res) => {
     return;
   }
 
-  const session = req.session as Record<string, unknown>;
-  const role = session?.userRole as string | undefined;
+  const role = req.session.userRole;
   if (!role || !["super_admin", "agency_user"].includes(role)) {
     res.status(403).json({ error: "Only agency admins can change ingestion mode" });
     return;
@@ -73,7 +72,7 @@ router.put("/ingestion-mode", async (req, res) => {
   }
 
   const previousMode = tenant.currentMode || "sheets";
-  const userId = (req.session as Record<string, unknown>)?.userId;
+  const userId = req.session.userId;
 
   await db.transaction(async (tx) => {
     await tx.update(tenantsTable)

@@ -151,7 +151,7 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
 });
 
 router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
@@ -211,8 +211,8 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
 });
 
 router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
-  const versionId = parseInt(req.params.versionId);
+  const id = parseInt(String(req.params.id));
+  const versionId = parseInt(String(req.params.versionId));
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
@@ -258,7 +258,7 @@ router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_
 });
 
 router.delete("/scripts/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parseInt(String(req.params.id));
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
 
