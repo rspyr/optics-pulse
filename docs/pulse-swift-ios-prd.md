@@ -1464,6 +1464,33 @@ struct TimelineEntry: Codable, Identifiable {
 }
 ```
 
+### 7.13 TypeScript → Swift Interface Mapping
+
+For strict parity with the existing React Native app's type names:
+
+| Expo App Interface | Swift Struct | Notes |
+|--------------------|-------------|-------|
+| `AuthUser` (inline in AuthContext) | `User` (§7.2) | Flat login response fields |
+| `LeadDetail` (inline in lead/[id].tsx) | `Lead` (§7.1) | Same shape, Lead struct covers both list and detail |
+| `HistoryItem` (inline in lead/[id].tsx) | `CallAttempt` (§7.3) | Legacy type; timeline replaces direct history usage |
+| `TimelineEntry` (inline in lead/[id].tsx) | `TimelineEntry` (§7.12) | Exact 1:1 mapping |
+| `PodiumMessage` (inline in lead/[id].tsx) | `PodiumMessage` (§7.4) | Exact 1:1 mapping |
+| `HudStats` (inline in index.tsx) | `HudStats` (§7.6) | Exact 1:1 mapping |
+| `QueueResponse` (inline in queue.tsx) | `QueueResponse` (§7.5) | Response wrapper with sections |
+| `CommConfig` (inline in lead/[id].tsx) | `CommConfig` (§7.10) | Exact 1:1 mapping |
+| `PauseState` (inline in usePauseState) | `PauseState` (§7.11) | Exact 1:1 mapping |
+
+### 7.14 Intentional Enhancements Over Expo App
+
+The following behaviors are documented as **enhancements** the Swift client should implement that the Expo app does not currently have:
+
+| Enhancement | Section | Reason |
+|-------------|---------|--------|
+| Listen for `callback-due` socket event | §4.3 | Server emits this event but Expo app ignores it. Swift client should show local notification for callback reminders. |
+| APNs push notifications | §8 | Expo app uses Expo Push Tokens. Swift client uses native APNs (requires server-side adapter, see Appendix C). |
+
+All other behavior documented in this PRD matches the current Expo app exactly.
+
 ---
 
 ## 8. Push Notifications
