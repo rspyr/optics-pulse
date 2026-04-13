@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parse/node-apn": "^8.0.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/chat-genui": "workspace:*",
     "@workspace/db": "workspace:*",
