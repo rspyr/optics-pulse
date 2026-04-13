@@ -668,6 +668,70 @@ Authorization: Bearer <token>
 
 **Response 200:** `{ "success": true }`
 
+### 3.20 Canonical Sources
+
+```
+GET /api/leads-hub/canonical-sources?tenantId={id}
+Authorization: Bearer <token>
+```
+
+Returns the list of normalized/canonical lead source names for the tenant. Used by the `EditableSourcePicker` component on Lead Detail to show an autocomplete dropdown when editing a lead's source.
+
+**Response 200:**
+```json
+{
+  "sources": ["Google Ads", "Facebook", "Thumbtack", "Angi", "Referral", "Walk-In"]
+}
+```
+
+### 3.21 Update Lead Source
+
+```
+PATCH /api/leads-hub/{leadId}/source?tenantId={id}
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "source": "Google Ads"
+}
+```
+
+Updates the lead's source field. The server normalizes the source against the tenant's canonical source aliases.
+
+**Response 200:** Full updated `Lead` object (same shape as `GET /api/leads/{id}` response).
+
+**Error 400:** `{ "error": "source is required" }`
+**Error 404:** `{ "error": "Lead not found" }`
+
+### 3.22 Lead Contract (Sold Estimates)
+
+```
+GET /api/leads-hub/{leadId}/contract?tenantId={id}
+Authorization: Bearer <token>
+```
+
+Returns signed contract/sold estimate data for a lead. Used by the `ContractBanner` component on Lead Detail when `lead.hasSoldEstimate` is true.
+
+**Response 200:**
+```json
+{
+  "estimates": [
+    {
+      "id": 1,
+      "leadId": 100,
+      "tenantId": 1,
+      "soldByName": "Jane Doe",
+      "soldOn": "2026-04-10T14:00:00Z",
+      "totalAmount": 12500.00,
+      "subtotal": 11000.00,
+      "rebateAmount": 1500.00
+    }
+  ]
+}
+```
+
+If no estimates exist or lead not found, returns `{ "estimates": [] }`.
+
 ---
 
 ## 4. Real-Time Events (Socket.io)
@@ -706,7 +770,7 @@ socket.emit("join-tenant", tenantId)
 | `lead-updated` | `Lead` JSON | Update lead in queue/detail if visible |
 | `podium-message` | `PodiumMessage` JSON | Append to conversation if lead detail is open |
 | `hud-stats` | `HudStats` JSON | Refresh HUD counters |
-| `callback-due` | `{ leadId, leadName, callbackAt }` | Show local notification / in-app alert |
+| `callback-due` | `{ leadId, leadName, callbackAt, targetUserId }` | Show local notification / in-app alert (server emits this but Expo app does not currently listen; Swift client should implement) |
 
 ### 4.4 Lifecycle Management
 
@@ -1000,7 +1064,16 @@ Display for each estimate:
 - "Sold by: {name}" and date below
 - Rebate amount in green if > 0
 
-#### 5.5.10 Lead Info Section (expandable)
+#### 5.5.10 Editable Source Picker
+
+The lead's `source` field is editable inline on the Lead Detail screen via an `EditableSourcePicker` component:
+- Displays current source as a tappable badge/label
+- On tap: shows text input with autocomplete dropdown
+- Autocomplete suggestions from `GET /api/leads-hub/canonical-sources?tenantId={id}`
+- On save: `PATCH /api/leads-hub/{leadId}/source?tenantId={id}` with `{ source: "..." }`
+- Updates local lead state on success
+
+#### 5.5.11 Lead Info Section (expandable)
 - Notes / additional fields
 - Assignment info: assigned CSR name, assigned date
 - Auto-pass countdown if `nextPassAt` present
@@ -1886,7 +1959,7 @@ All other API endpoints, Socket.io events, and database schemas work as-is with 
 - [ ] Tab bar with 3 tabs (Dashboard, Queue, Settings)
 - [ ] HUD screen with 6 stat cards in 3×2 grid + bonus tier banner + timeframe picker (Today/7D/30D/90D) + tenant/CSR selectors
 - [ ] Queue screen with 5 sections (New/Re-engage/Callbacks/Old/Archive) + pull-to-refresh + real-time updates
-- [ ] Lead Detail screen with claim/release, action logging, transfer, unified timeline (single history tab) + expandable SMS conversation panel + contract banner
+- [ ] Lead Detail screen with claim/release, action logging, transfer, unified timeline (single history tab) + expandable SMS conversation panel + contract banner + editable source picker
 - [ ] Settings screen with password change, Podium connect/disconnect, sign out (no push toggle)
 - [ ] Deep link handling from push notification tap
 - [ ] Tenant selector for agency/super roles
@@ -1915,10 +1988,11 @@ This table maps each PRD section to the exact source files it was verified again
 | 3.7 Transfer | `artifacts/api-server/src/routes/leads-hub.ts` |
 | 3.8 Search | `artifacts/api-server/src/routes/leads.ts` (search endpoint, `dateType = created \| lastTouchpoint`) |
 | 3.9 Podium | `artifacts/api-server/src/routes/podium-routes.ts`, `artifacts/api-server/src/routes/podium-oauth.ts` |
+| 3.20-3.22 Sources/Contract | `artifacts/api-server/src/routes/leads-hub.ts` (canonical-sources, PATCH source, contract) |
 | 4. Socket.io | `artifacts/api-server/src/index.ts` (socket setup) |
 | 5.3 HUD Screen | `artifacts/mobile/app/(tabs)/index.tsx` (6 StatCards, 3×2 grid, bonus banner, header with logo+greeting+pause+live+logout) |
 | 5.4 Queue Screen | `artifacts/mobile/app/(tabs)/queue.tsx` |
-| 5.5 Lead Detail | `artifacts/mobile/app/lead/[id].tsx` (single `history` tab, `podiumExpanded` SMS panel, `ContractBanner` component) |
+| 5.5 Lead Detail | `artifacts/mobile/app/lead/[id].tsx` (single `history` tab, `podiumExpanded` SMS panel, `ContractBanner`, `EditableSourcePicker`) |
 | 5.6 Settings | `artifacts/mobile/app/(tabs)/settings.tsx` (Account + Password + Podium + Sign Out, NO push toggle) |
 | 6. Design System | `artifacts/mobile/hooks/useColors.ts`, component styles throughout |
 | 8. Push Notifications | `artifacts/api-server/src/services/push-notifications.ts` (Expo Push only, needs APNs adapter) |
