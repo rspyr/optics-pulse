@@ -101,8 +101,15 @@ export function usePushNotifications() {
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data;
-      if (data?.leadId) {
-        router.push({ pathname: "/lead/[id]", params: { id: String(data.leadId) } });
+      const rawLeadId = data?.leadId ?? data?.lead_id;
+      if (rawLeadId) {
+        const leadId = String(rawLeadId);
+        const intent = (data?.intent as string) || "open-lead";
+        if (intent === "open-lead-sms") {
+          router.push({ pathname: "/lead/[id]", params: { id: leadId, focusSms: "1" } });
+        } else {
+          router.push({ pathname: "/lead/[id]", params: { id: leadId } });
+        }
       }
     });
 

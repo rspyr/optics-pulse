@@ -552,7 +552,8 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
       const pushBody = isCall
         ? `${contactName} is calling`
         : `${contactName}: ${messageBody.slice(0, 100) || "(no message)"}`;
-      const pushData = { leadId: matchedLeadId, type: "podium_inbound", channelType };
+      const intent = isCall ? "open-lead" : "open-lead-sms";
+      const pushData = { leadId: matchedLeadId, type: "podium_inbound", channelType, intent };
       if (assignedCsrId) {
         sendPushToUser(assignedCsrId, pushTitle, pushBody, pushData)
           .catch(err => console.error("[Podium Webhook] Push notification error:", err));

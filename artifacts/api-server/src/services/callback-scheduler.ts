@@ -56,7 +56,7 @@ async function checkDueCallbacks() {
           lead.assignedCsrId,
           "Callback Due",
           `${name}${phone ? ` - ${phone}` : ""} is ready for a callback`,
-          { type: "callback", leadId: lead.id },
+          { type: "callback", leadId: lead.id, intent: "open-lead" },
         );
 
         emitCallbackDue(lead.tenantId, {

@@ -239,7 +239,7 @@ function ContractBanner({ leadId }: { leadId: number }) {
 }
 
 export default function LeadDetailScreen() {
-  const params = useLocalSearchParams<{ id: string; lead?: string }>();
+  const params = useLocalSearchParams<{ id: string; lead?: string; focusSms?: string }>();
   const { apiFetch } = useApi();
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -296,6 +296,9 @@ export default function LeadDetailScreen() {
 
   const claimedLeadId = useRef<number | null>(null);
 
+  const mainScrollRef = useRef<ScrollView>(null);
+  const podiumSectionY = useRef<number>(0);
+  const smsInputRef = useRef<TextInput>(null);
   const detailTabScrollRef = useRef<ScrollView>(null);
   const detailTabLayouts = useRef<Record<string, { x: number; width: number }>>({});
   const detailScrollViewWidth = useRef(Dimensions.get("window").width);
@@ -396,6 +399,30 @@ export default function LeadDetailScreen() {
     };
     init();
   }, []);
+
+  const focusSmsConsumed = useRef(false);
+  useEffect(() => {
+    if (params.focusSms !== "1" || focusSmsConsumed.current) return;
+    if (!lead) return;
+
+    focusSmsConsumed.current = true;
+    setPodiumExpanded(true);
+
+    let attempts = 0;
+    const maxAttempts = 15;
+    const tryScrollAndFocus = () => {
+      attempts++;
+      if (mainScrollRef.current && podiumSectionY.current > 0) {
+        mainScrollRef.current.scrollTo({ y: podiumSectionY.current, animated: true });
+      }
+      if (smsInputRef.current) {
+        smsInputRef.current.focus();
+      } else if (attempts < maxAttempts) {
+        setTimeout(tryScrollAndFocus, 200);
+      }
+    };
+    setTimeout(tryScrollAndFocus, 300);
+  }, [params.focusSms, lead]);
 
   useEffect(() => {
     if (isManager && effectiveTenantId) {
@@ -754,6 +781,7 @@ export default function LeadDetailScreen() {
         keyboardVerticalOffset={100}
       >
         <ScrollView
+          ref={mainScrollRef}
           style={[styles.container, { backgroundColor: colors.background }]}
           contentContainerStyle={{ paddingBottom: isWeb ? 34 + 20 : insets.bottom + 20 }}
         >
@@ -1772,7 +1800,10 @@ export default function LeadDetailScreen() {
           )}
 
           {isPodiumConnected && (
-            <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border, padding: 0, overflow: "hidden" }]}>
+            <View
+              style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border, padding: 0, overflow: "hidden" }]}
+              onLayout={(e) => { podiumSectionY.current = e.nativeEvent.layout.y; }}
+            >
               <TouchableOpacity
                 style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14 }}
                 onPress={() => setPodiumExpanded(e => !e)}
@@ -1837,6 +1868,7 @@ export default function LeadDetailScreen() {
 
                   <View style={[styles.msgInputRow, { borderTopColor: colors.border }]}>
                     <TextInput
+                      ref={smsInputRef}
                       style={[styles.msgInput, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
                       placeholder="Type a message..."
                       placeholderTextColor={colors.mutedForeground}

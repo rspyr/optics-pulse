@@ -55,6 +55,8 @@ if (apnsKeyId && apnsTeamId && apnsBundleId && apnsKeyPath) {
   console.warn("[Push] APNs env vars not configured (APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, APNS_KEY_PATH) — iOS native push disabled");
 }
 
+console.log(`[Push] Startup summary — APNs: ${apnsProvider ? "READY" : "DISABLED"}, Expo: ${expoAccessToken ? "READY" : "UNAUTHENTICATED"}, WebPush: ${vapidPublic && vapidPrivate ? "READY" : "DISABLED"}`);
+
 let invalidCredentialsWarned = false;
 
 interface ExpoPushMessage {
@@ -118,6 +120,8 @@ async function sendAPNsPush(
   notification.alert = { title, body };
   notification.sound = "default";
   notification.topic = apnsBundleId;
+  notification.contentAvailable = true;
+  notification.mutableContent = true;
   if (data) {
     notification.payload = data;
   }

@@ -296,7 +296,7 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
         assignedCsrId,
         "New Lead Assigned",
         `${name}${source ? ` from ${source}` : ""}`,
-        { leadId: lead.id, type: "new-lead" },
+        { leadId: lead.id, type: "new-lead", intent: "open-lead" },
       ).catch(err => console.error("[Push] emitNewLead push error:", err));
     }).catch(err => console.error("[Push] Failed to load push-notifications module:", err));
   } else {
