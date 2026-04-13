@@ -2,6 +2,7 @@ import { db, pushTokensTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import webpush from "web-push";
 import apn from "@parse/node-apn";
+import { existsSync } from "node:fs";
 
 const vapidPublic = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivate = process.env.VAPID_PRIVATE_KEY;
@@ -29,17 +30,22 @@ if (expoAccessToken) {
 let apnsProvider: apn.Provider | null = null;
 if (apnsKeyId && apnsTeamId && apnsBundleId && apnsKeyPath) {
   try {
-    apnsProvider = new apn.Provider({
-      token: {
-        key: apnsKeyPath,
-        keyId: apnsKeyId,
-        teamId: apnsTeamId,
-      },
-      production: process.env.NODE_ENV === "production",
-    });
-    console.log("[Push] APNs provider configured for iOS push notifications");
-  } catch (err) {
-    console.error("[Push] Failed to initialize APNs provider:", err);
+    if (!existsSync(apnsKeyPath)) {
+      console.warn(`[Push] APNs key file not found at "${apnsKeyPath}" — iOS native push disabled. Upload the .p8 file and restart.`);
+    } else {
+      apnsProvider = new apn.Provider({
+        token: {
+          key: apnsKeyPath,
+          keyId: apnsKeyId,
+          teamId: apnsTeamId,
+        },
+        production: process.env.NODE_ENV === "production",
+      });
+      console.log("[Push] APNs provider configured for iOS push notifications");
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[Push] Failed to initialize APNs provider:", msg);
   }
 } else {
   console.warn("[Push] APNs env vars not configured (APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, APNS_KEY_PATH) — iOS native push disabled");
