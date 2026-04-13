@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import webpush from "web-push";
 import apn from "@parse/node-apn";
 import { existsSync } from "node:fs";
+import { resolve, isAbsolute } from "node:path";
 
 const vapidPublic = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivate = process.env.VAPID_PRIVATE_KEY;
@@ -12,7 +13,10 @@ const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
 const apnsKeyId = process.env.APNS_KEY_ID;
 const apnsTeamId = process.env.APNS_TEAM_ID;
 const apnsBundleId = process.env.APNS_BUNDLE_ID;
-const apnsKeyPath = process.env.APNS_KEY_PATH;
+const rawApnsKeyPath = process.env.APNS_KEY_PATH;
+const apnsKeyPath = rawApnsKeyPath
+  ? (isAbsolute(rawApnsKeyPath) ? rawApnsKeyPath : resolve("/home/runner/workspace", rawApnsKeyPath))
+  : undefined;
 
 if (vapidPublic && vapidPrivate) {
   webpush.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
