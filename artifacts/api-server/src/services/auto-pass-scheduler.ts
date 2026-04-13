@@ -1,5 +1,5 @@
 import {
-  db, leadsTable, usersTable, routingConfigTable, csrScheduleTable, callAttemptsTable,
+  db, leadsTable, usersTable, routingConfigTable, csrScheduleTable, callAttemptsTable, podiumMessagesTable,
 } from "@workspace/db";
 import { eq, and, inArray, isNull, isNotNull, or, ne, sql } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
@@ -221,7 +221,7 @@ async function findConfigForLead(lead: { tenantId: number; funnelId: number | nu
 }
 
 export async function leadHasRealTouch(leadId: number): Promise<boolean> {
-  const [result] = await db.select({ id: callAttemptsTable.id })
+  const [callResult] = await db.select({ id: callAttemptsTable.id })
     .from(callAttemptsTable)
     .where(and(
       eq(callAttemptsTable.leadId, leadId),
@@ -229,7 +229,16 @@ export async function leadHasRealTouch(leadId: number): Promise<boolean> {
       ne(callAttemptsTable.actionType, "system"),
     ))
     .limit(1);
-  return !!result;
+  if (callResult) return true;
+
+  const [podiumResult] = await db.select({ id: podiumMessagesTable.id })
+    .from(podiumMessagesTable)
+    .where(and(
+      eq(podiumMessagesTable.leadId, leadId),
+      eq(podiumMessagesTable.direction, "outbound"),
+    ))
+    .limit(1);
+  return !!podiumResult;
 }
 
 async function fireAutoPass(leadId: number): Promise<void> {
@@ -443,6 +452,9 @@ export async function recoverTimers(): Promise<number> {
     const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
     leadConditions.push(noRealAttempts);
 
+    const noPodiumOutbound = sql`NOT EXISTS (SELECT 1 FROM podium_messages WHERE podium_messages.lead_id = ${leadsTable.id} AND podium_messages.direction = 'outbound')`;
+    leadConditions.push(noPodiumOutbound);
+
     const leads = await db.select({
       id: leadsTable.id,
       assignedAt: leadsTable.assignedAt,
@@ -453,6 +465,10 @@ export async function recoverTimers(): Promise<number> {
       .where(and(...leadConditions));
 
     const { order: activeRecoverOrder } = await getActiveOrderForConfig(config);
+
+    const RECOVERY_STAGGER_MS = 5_000;
+    const MAX_STALENESS_FACTOR = 2;
+    let staggerIndex = 0;
 
     for (const lead of leads) {
       if (timers.has(lead.id)) continue;
@@ -467,7 +483,23 @@ export async function recoverTimers(): Promise<number> {
       const baseTime = Math.max(assignedMs, visibleMs);
       const elapsed = Date.now() - baseTime;
       const remaining = passMs - elapsed;
-      scheduleAutoPass(lead.id, remaining);
+
+      if (remaining <= 0) {
+        const overdueMs = Math.abs(remaining);
+        const stalenessThreshold = passMs * MAX_STALENESS_FACTOR;
+
+        if (overdueMs > stalenessThreshold) {
+          console.warn(`[auto-pass][recovery] Lead ${lead.id}: timer expired ${Math.round(overdueMs / 60000)}m ago (threshold ${Math.round(stalenessThreshold / 60000)}m) — too stale, skipping`);
+          continue;
+        }
+
+        const staggerDelay = RECOVERY_STAGGER_MS * staggerIndex;
+        staggerIndex++;
+        console.log(`[auto-pass][recovery] Lead ${lead.id}: timer expired ${Math.round(overdueMs / 1000)}s ago, scheduling with ${Math.round(staggerDelay / 1000)}s stagger`);
+        scheduleAutoPass(lead.id, staggerDelay);
+      } else {
+        scheduleAutoPass(lead.id, remaining);
+      }
       scheduled++;
     }
   }
