@@ -466,8 +466,8 @@ export async function recoverTimers(): Promise<number> {
 
     const { order: activeRecoverOrder } = await getActiveOrderForConfig(config);
 
-    const RECOVERY_STAGGER_MS = 5_000;
-    const MAX_STALENESS_FACTOR = 2;
+    const RECOVERY_STAGGER_MS = parseInt(process.env.AUTOPASS_RECOVERY_STAGGER_MS || "5000", 10);
+    const MAX_STALENESS_FACTOR = parseFloat(process.env.AUTOPASS_MAX_STALENESS_FACTOR || "2");
     let staggerIndex = 0;
 
     for (const lead of leads) {
@@ -488,14 +488,16 @@ export async function recoverTimers(): Promise<number> {
         const overdueMs = Math.abs(remaining);
         const stalenessThreshold = passMs * MAX_STALENESS_FACTOR;
 
+        const expiryTime = new Date(baseTime + passMs).toISOString();
+
         if (overdueMs > stalenessThreshold) {
-          console.warn(`[auto-pass][recovery] Lead ${lead.id}: timer expired ${Math.round(overdueMs / 60000)}m ago (threshold ${Math.round(stalenessThreshold / 60000)}m) — too stale, skipping`);
+          console.warn(`[auto-pass][recovery] Lead ${lead.id}: timer expired at ${expiryTime} (${Math.round(overdueMs / 60000)}m ago, threshold ${Math.round(stalenessThreshold / 60000)}m) — too stale, skipping`);
           continue;
         }
 
         const staggerDelay = RECOVERY_STAGGER_MS * staggerIndex;
         staggerIndex++;
-        console.log(`[auto-pass][recovery] Lead ${lead.id}: timer expired ${Math.round(overdueMs / 1000)}s ago, scheduling with ${Math.round(staggerDelay / 1000)}s stagger`);
+        console.log(`[auto-pass][recovery] Lead ${lead.id}: timer expired at ${expiryTime} (${Math.round(overdueMs / 1000)}s ago), scheduling with ${Math.round(staggerDelay / 1000)}s stagger`);
         scheduleAutoPass(lead.id, staggerDelay);
       } else {
         scheduleAutoPass(lead.id, remaining);
