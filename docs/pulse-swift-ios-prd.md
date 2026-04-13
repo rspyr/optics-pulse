@@ -336,13 +336,17 @@ Content-Type: application/json
 
 **Action types**: `call`, `text`, `voicemail_drop`, `voicemail`
 
-**Call results**: `no_answer`, `left_voicemail`, `vm_full`, `vm_not_setup`, `bad_number`, `spoke_with_customer`, `hung_up`, `blocked`, `out_of_service_area`
+**Call results** (server-accepted values): `no_answer`, `left_voicemail`, `vm_full`, `vm_not_setup`, `hung_up`, `spoke_with_customer`, `bad_number`, `blocked`, `out_of_service_area`
 
-**Text results**: `yes`, `not_able_to`, `dead`, `no_need`, `reached_out`
+> Note: The Expo mobile UI only surfaces the first 6 results above. The server also accepts `bad_number`, `blocked`, and `out_of_service_area` (used by the edit-action flow). The Swift client should present all 6 UI results and accept the full server set on incoming data.
+
+**Spoke results** (shown after `spoke_with_customer`): `appointment_set`, `call_back`, `dead`
+
+**Text results**: `yes`, `reached_out`, `not_able_to`, `dead`, `no_need`
 
 **VM results**: `yes`, `no`, `bad_number`, `vm_full`, `vm_not_setup`, `spoke_with_customer`
 
-**Dead reasons**: Free-text string (e.g., `"not_interested"`, `"wrong_number"`, `"duplicate"`)
+**Dead reasons** (fixed set): `out_of_service_area`, `do_not_call`, `not_interested`, `too_expensive`, `no_response`, `other`, `custom` (custom shows a free-text note field)
 
 **Appointment booked outcomes** (only when `lead.hubStatus == "appt_booked"`): `confirmed`, `rescheduled`, `canceled`
 
@@ -462,7 +466,7 @@ GET /api/leads/search?q={term}&tenantId={id}&funnelId={id}&startDate={ISO}&endDa
 | `q` | string | Searches name, email, phone, source |
 | `funnelId` | int | Filter by funnel type |
 | `startDate` / `endDate` | ISO string | Date range filter |
-| `dateType` | string | `created` or `updated` |
+| `dateType` | string | `created` or `lastTouchpoint` |
 
 **Response 200:**
 ```json
@@ -752,39 +756,53 @@ Selected tint: `#F20505`. Unselected: `#8B919E`.
 
 **Data**: `GET /api/leads/hud/stats`
 
-**Header:**
-- Title "Dashboard" in 28pt bold white
-- If manager role: CSR filter dropdown (pill-shaped, shows "All CSRs" or selected name)
-- If agency/super: Tenant selector above CSR filter
-- Timeframe picker (horizontal pill buttons): Today | 7D | 30D | 90D
+**Header (top of screen, single row):**
+- **Left side**: Pulse logo image (36×36, 8pt radius) + greeting block:
+  - "Welcome back" in 13pt regular muted text
+  - User name in 22pt bold white (from `user.name`, fallback "Agent")
+- **Right side** (row of controls, 10pt gap):
+  - **Pause toggle** (CSRs only): pill button showing `PAUSED` (amber, pause icon) or `ACTIVE` (green, play icon). Disabled with 0.5 opacity when `isManagerPaused` is true.
+  - **LIVE/OFFLINE indicator**: colored dot (7pt, green `#10B981` or red `#EF4444`) + text in 11pt bold with 1pt letter spacing
+  - **Logout button**: circular 36pt button with log-out icon in card background color
 
-**Pause Banner** (CSRs only):
-- If paused: amber banner showing pause status with toggle button
-- If manager-paused: shows "Paused by manager" (non-toggleable)
+**Tenant Selector** (below header, agency/super users only):
+- Card with "TENANT" label (10pt bold, 1pt letter spacing) + briefcase icon
+- Dropdown showing tenant names. Tap to expand list. Checkmark on selected item.
 
-**Stat Cards** (2-column grid, 12pt gap):
+**CSR Selector** (below tenant selector, managers only):
+- Card with "CSR VIEW" label + users icon
+- Dropdown showing "All CSRs" default or individual CSR names
+- "Viewing as {name}" italic text when CSR selected
 
-| Card | Value | Label | Color |
-|------|-------|-------|-------|
-| Calls Made | `callsMadeToday` | "Calls Made" | Cyan `#06B6D4` |
-| New Leads | `newLeadsToday` | "New Leads" | Cyan `#06B6D4` |
-| Bookings | `bookingsToday` | "Bookings" | Emerald `#10B981` |
-| Booking Rate | `bookingRate` | "Booking %" | Emerald `#10B981` |
-| Commission | `commission` | "Commission" | Amber `#F59E0B` |
-| Avg Speed to Lead | `avgSpeedToLead` | "Speed to Lead" | Purple `#8B5CF6` |
-| Sold | `soldToday` | "Sold" | Emerald `#10B981` |
-| Bonus Tier | `bonusTier` | "Bonus Tier" | Gold/Silver/Bronze |
+**Timeframe Picker** (horizontal pill row):
+- 4 buttons: Today | 7D | 30D | 90D
+- Card background, 10pt radius, 3pt padding, 2pt gap
+- Selected: `rgba(255,255,255,0.1)` background, white text
+- Unselected: transparent, `rgba(255,255,255,0.4)` text
+
+**Bonus Tier Banner** (conditional, shown when `stats.bonusTier` exists and ≠ `"none"`):
+- Award icon + "{Tier} Tier — {bookingRate}% booking rate" text
+- Background: tier color at 15% opacity, border: tier color at 30% opacity
+- Tier colors: `"gold"` (#FFD700), `"silver"` (#C0C0C0), `"bronze"` (#CD7F32)
+
+**Stat Cards** (6 cards in 3 rows × 2 columns, 10pt gap between rows and columns):
+
+| Row | Left Card | Right Card |
+|-----|-----------|------------|
+| 1 | **Touchpoints {timeframe}** — `callsMadeToday` — icon `phone-call` — color `primary` | **Booked {timeframe}** — `bookingsToday` — icon `calendar` — color `emerald` |
+| 2 | **Book Rate** — `bookingRate` + "%" — icon `trending-up` — color `amber` | **Earned** — "$" + `commission` — icon `dollar-sign` — color `emerald` — subtitle "Commission" |
+| 3 | **Speed to Lead** — `avgSpeedToLead` (formatted) — icon `zap` — color `cyan` | **New Leads {timeframe}** — `newLeadsToday` — icon `inbox` — color `purple` |
 
 `avgSpeedToLead` is in seconds — format as "Xm Ys" or "Xh Ym".
-`bonusTier` values: `"gold"` (#FFD700), `"silver"` (#C0C0C0), `"bronze"` (#CD7F32), or empty (#8B919E).
 
-Each card:
+Each StatCard:
 - Background `#0B1224`, border `#1E2A3E`, corner radius 12pt
 - Value in 32pt bold, label in 12pt `#8B919E`
 - Subtle colored left accent bar (3pt wide)
 
 **Pull-to-refresh**: Re-fetch stats.
-**Socket**: Listen for `hud-stats` to update in real time.
+**Auto-refresh**: Poll every 10 seconds.
+**Socket**: Listen for `hud-stats` (full stats replacement), `lead-updated` (debounced refetch), `new-lead` (increment `newLeadsToday` + haptic feedback + debounced refetch), `_reconnect` (immediate refetch).
 
 ### 5.4 Queue Screen (Tab 2)
 
@@ -882,39 +900,42 @@ Horizontal row of action buttons (only show enabled ones from comm-config):
 | VM Drop | `recordingtape` | Purple | Log voicemail drop |
 | Transfer | `arrow.right.arrow.left` | Amber | Open transfer picker |
 
-#### 5.5.4 Action Sheet (Modal)
+#### 5.5.4 Action Logging (Multi-step flow)
 
-When "Call" is tapped:
-1. Open native dialer via `tel:{phone}`
-2. When user returns, show bottom sheet:
-   - "What happened?" title
-   - Call result picker (segmented or list):
-     - No Answer
-     - Left Voicemail
-     - VM Full
-     - VM Not Set Up
-     - Spoke with Customer
-     - Hung Up
-     - Bad Number
-     - Blocked
-     - Out of Service Area
-   - If "Spoke with Customer":
-     - "Set Appointment?" toggle
-     - "Schedule Callback?" with date/time picker
-   - "Mark as Dead?" toggle → shows dead reason text field
-   - Notes text field
-   - "Save" button
+Action logging uses a step-by-step state machine (`actionStep` state). Each step shows a bottom sheet with options.
 
-When "Text" is tapped:
-1. Show bottom sheet:
-   - Text result picker:
-     - Responded (yes)
-     - Not Able To
-     - Dead
-     - No Need
-     - Reached Out
-   - Notes text field
-   - "Save" button
+**When "Call" is tapped:**
+1. Open native dialer via `tel:{phone}` (if not `text_only` or `do_not_call` contact flag)
+2. When user returns, set `actionStep = "call_done"` → show call result picker:
+   - No Answer → log immediately
+   - Left Voicemail → log immediately
+   - VM Full → log immediately
+   - VM Not Setup → log immediately
+   - Hung Up → log immediately
+   - Spoke with Customer → advance to `actionStep = "spoke_result"`
+3. **Spoke result step** (`spoke_result`):
+   - Appointment Set → log with `spokeResult: "appointment_set"`
+   - Callback Requested → advance to `actionStep = "call_callback"` (date/time picker)
+   - Dead Lead → advance to `actionStep = "dead_reason"` (dead reason picker)
+4. **Dead reason step** (`dead_reason`): pick from fixed set → log. If "Custom" selected → advance to `actionStep = "dead_reason_custom"` (free-text input)
+
+**When "Text" is tapped:**
+1. If `commConfig.textPlatform !== "podium"`: open native SMS via `sms:{phone}`
+2. Set `actionStep = "text_done"` → show text result picker:
+   - Yes — Interested → log immediately
+   - Reached Out → log immediately
+   - Not Able To → log immediately
+   - Dead Lead → advance to `actionStep = "dead_reason"`
+   - No Need to Log → log immediately
+
+**When "VM Drop" is tapped:**
+1. Set `actionStep = "vm_done"` → show VM result picker:
+   - VM Dropped → log immediately
+   - No — Did Not Leave VM → log immediately
+   - Bad Number → log immediately
+   - VM Full → log immediately
+   - VM Not Setup → log immediately
+   - Spoke with Customer → advance to `actionStep = "spoke_result"`
 
 All actions call `POST /api/leads-hub/action`.
 
@@ -935,56 +956,89 @@ When Transfer is tapped:
 3. On select: `POST /api/leads-hub/{leadId}/transfer`
 4. Show success toast, pop back to queue
 
-#### 5.5.7 Messages Tab (Podium)
+#### 5.5.7 Unified Timeline (single "history" tab)
 
-Tab picker: "Activity" | "Messages"
+There is only ONE tab: `history`. There is no Activity/Messages tab picker.
 
-**Messages view:**
-- Chat-bubble UI (iMessage style)
-- Outbound messages: right-aligned, red/dark background
-- Inbound messages: left-aligned, `#1E2A3E` background
-- Sender name above inbound bubbles
-- Timestamp below each bubble (relative)
-- Compose bar at bottom: text field + send button
-- Send via `POST /api/podium/messages`
-- If `notConnected`: show banner "Podium not connected. Connect in Settings."
-
-**Activity/Timeline view:**
-- Merged chronological list from `GET /api/podium/timeline/{leadId}`
+**Timeline view** (from `GET /api/podium/timeline/{leadId}?tenantId={id}`):
+- Merged chronological list of all interactions
 - Three entry types:
-  - `pulse_action`: call/text/voicemail with icon + outcome + CSR name + timestamp + notes
-  - `podium_text`: SMS message with direction arrow + body + sender name
+  - `pulse_action`: Call/text/voicemail entries with Feather icon + outcome + CSR name + timestamp + expandable notes. Icons: `phone` for call, `message-square` for text, `voicemail` for VM. Background colors vary by method.
+  - `podium_text`: SMS message with direction arrow (↑ outbound / ↓ inbound) + body text + sender name + "Podium SMS" badge in blue. Form channel types show "Podium Form" badge + "Only visible in Podium" note.
   - `podium_call`: Phone call record with direction indicator
-- Pulse actions are editable: tap to edit via `PUT /api/leads-hub/action/{attemptId}`
-- Podium deep links open in Safari when tapped
+- Initially shows latest 5 entries; tap "Show More" to expand full timeline (`timelineExpanded` toggle)
+- Pulse actions are editable by the user who created them: tap edit icon → inline edit form via `PUT /api/leads-hub/action/{attemptId}`
 
-#### 5.5.8 Lead Info Section (expandable)
+**Expandable call details**: Each `pulse_action` has a chevron to expand/collapse detailed fields (outcome, notes, callback info). Tracked via `expandedCallIds` Set.
+
+#### 5.5.8 SMS Conversation Panel (expandable, below timeline)
+
+Below the timeline, a collapsible "SMS Conversation" panel (`podiumExpanded` state toggle):
+- **Header row**: message-circle icon + "SMS Conversation" title in blue + "via Podium" badge. Tap header to expand/collapse. Chevron-up/chevron-down indicator.
+- **When expanded** — chat-bubble UI (iMessage style):
+  - Outbound messages: right-aligned, `primary` color background
+  - Inbound messages: left-aligned, `#1E2A3E` background
+  - Sender name above inbound bubbles
+  - Timestamp below each bubble (relative)
+  - **Empty state**: message-square icon + "No messages yet" + "Send a message below to start a conversation"
+- **Compose bar** at bottom: text field + send button
+  - Send via `POST /api/podium/messages?tenantId={id}` with body `{ leadId: <int>, body: "<message text>" }`
+  - On success: clear input, refetch messages + timeline, haptic feedback
+  - On error: show alert "Failed to send message. Make sure Podium is connected."
+
+> Note: The SMS Conversation panel is only rendered when `commConfig.textPlatform === "podium"`. When Podium is not connected, the panel does not appear. Native SMS fallback (`sms:{phone}` URL) is handled separately in the Text action flow (§5.5.4), not in this panel.
+
+#### 5.5.9 Contract Banner
+
+If `lead.hasSoldEstimate` is true, fetch `GET /api/leads-hub/{leadId}/contract` on mount.
+
+Response: `{ estimates: [{ id, soldByName, soldOn, totalAmount, subtotal, rebateAmount }] }`
+
+Display for each estimate:
+- Amber card with check-circle icon + "Signed Contract" label
+- Total amount in 18pt bold amber
+- "Sold by: {name}" and date below
+- Rebate amount in green if > 0
+
+#### 5.5.10 Lead Info Section (expandable)
 - Notes / additional fields
 - Assignment info: assigned CSR name, assigned date
 - Auto-pass countdown if `nextPassAt` present
 
 ### 5.6 Settings Screen (Tab 3)
 
-**Layout** (grouped list):
+**Layout** (ScrollView, card-based groups):
 
-**Profile Section:**
-- User name (non-editable display)
+**Account Card** (user icon, blue):
+- Name (non-editable display)
 - Email (non-editable display)
-- Role badge
+- Role (formatted: underscores → spaces)
+- Tenant name (if present)
+- Divider between header and fields
 
-**Account Section:**
-- Change Password (navigates to sub-screen with old/new/confirm fields)
-- Podium Connection status
-  - If connected: "Connected" badge + "Disconnect" button
-  - If not connected: "Connect Podium" button → opens `ASWebAuthenticationSession` to `/api/oauth/podium/authorize`
+**Change Password Card** (lock icon, amber):
+- Current password field (secure)
+- New password field (secure, min 6 chars)
+- Confirm new password field (secure)
+- "Update Password" button → `POST /api/auth/change-password`
+- Success/error message banner (green/red background)
+- Validation: new password ≥ 6 chars, passwords must match
 
-**Preferences Section:**
-- Push Notifications toggle (registers/unregisters token)
+**Podium Integration Card** (message-circle icon, purple `#8B5CF6`):
+- Help text: "Connect your Podium account to send and receive text messages directly from the app."
+- Two buttons shown side by side (no connected/disconnected state detection):
+  - **"Connect Podium"** (purple outline, link icon) → calls `GET /api/oauth/podium/authorize`, opens returned URL in browser via `Linking.openURL`
+    - **Note**: Server returns `{ authUrl: "..." }` but the Expo app accesses `data.url`. Swift client should use `data.authUrl`.
+  - **"Disconnect"** (red outline, link-2 icon) → `POST /api/oauth/podium/disconnect` with confirmation alert
 
-**Danger Zone:**
-- Sign Out button (red text, no background)
+**Sign Out** (bottom):
+- Red "Sign Out" button with log-out icon
+- Confirmation alert on tap: "Are you sure you want to sign out?"
+- On confirm: call `logout()` (clears token, disconnects socket, navigates to login)
 
-**Version footer**: "Pulse v{version} ({build})"
+**Version footer**: "Pulse Mobile v1.0.0" centered in 12pt muted text, below sign out card.
+
+There is **no push notification toggle** on this screen. Push token registration is handled automatically at app launch after login (see Section 8).
 
 ---
 
@@ -1316,7 +1370,11 @@ struct TimelineEntry: Codable, Identifiable {
     let callResult: String?
     let vmResult: String?
     let textResult: String?
+    let spokeResult: String?
     let deadReason: String?
+    let callbackAt: String?         // ISO 8601
+    let appointmentDate: String?
+    let appointmentTime: String?
     let notes: String?
     let csrName: String?
 
@@ -1780,22 +1838,56 @@ HTTP status codes used:
 - `409` — Conflict (claim)
 - `500` — Server error
 
-## Appendix C: Checklist for Code Generation
+## Appendix C: Required Backend Changes for Native Swift Support
+
+> **These changes are NOT needed to generate the Swift app — they are needed on the server before the Swift app can fully work in production.** Prompt Replit Agent to make these changes in the existing project when ready.
+
+### C.1 APNs Push Notification Adapter
+
+**File to modify**: `artifacts/api-server/src/services/push-notifications.ts`
+
+**What it does now**: Sends push notifications exclusively via Expo Push Service (`https://exp.host/--/api/v2/push/send`). This works only for Expo Push Tokens (e.g., `ExponentPushToken[xxxxx]`). Native Swift APNs device tokens sent to this API will silently fail.
+
+**What to change**:
+1. Install `@parse/node-apn` (or use raw HTTP/2 to `api.push.apple.com`)
+2. In the `sendPushToUser` function, after the existing Expo push block, add a block that filters tokens by `platform === "ios"` and sends via APNs
+3. Add environment variables: `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, and the `.p8` key file path (`APNS_KEY_PATH`)
+4. The existing `push_tokens` table already has a `platform` column — Swift tokens should register with `platform: "ios"` to distinguish from Expo tokens
+
+**Prompt to use**:
+> "Add native APNs push notification support to `artifacts/api-server/src/services/push-notifications.ts`. After the existing Expo push block, add a block that filters tokens by `platform === 'ios'` and sends via APNs using `@parse/node-apn`. Add env vars `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, and `APNS_KEY_PATH` for the .p8 key. Keep the existing Expo push path working unchanged."
+
+### C.2 Podium OAuth Response Key Fix (Optional)
+
+**File**: `artifacts/api-server/src/routes/podium-oauth.ts` (Podium authorize endpoint)
+
+The server returns `{ authUrl: "..." }` but the existing React Native app accesses `data.url`. The Swift client should use `data.authUrl` (matching the server). Alternatively, the server can be updated to return both keys for backward compatibility:
+```typescript
+res.json({ authUrl, url: authUrl });
+```
+
+### C.3 No Other Server Changes Needed
+
+All other API endpoints, Socket.io events, and database schemas work as-is with a native Swift client. The `User-Agent: PulseSwift/1.0 (react-native)` header ensures the server returns `bearerToken` on login (the existing UA-gating regex already matches `react-native`).
+
+---
+
+## Appendix D: Checklist for Code Generation
 
 - [ ] Xcode project with SwiftUI lifecycle
 - [ ] Inter font bundled and registered in Info.plist
 - [ ] `PulseColors.swift` with all color tokens
-- [ ] `APIClient.swift` with Bearer token injection
+- [ ] `APIClient.swift` with Bearer token injection + `User-Agent: PulseSwift/1.0 (react-native)` header
 - [ ] `KeychainService.swift` for secure token storage
 - [ ] `AuthManager.swift` with login/logout/restore flow
 - [ ] `PulseSocketManager.swift` with all 5 event handlers
 - [ ] `PushManager.swift` with APNs registration + notification routing
 - [ ] Login screen with error handling
 - [ ] Tab bar with 3 tabs (Dashboard, Queue, Settings)
-- [ ] HUD screen with stat cards + timeframe picker (Today/7D/30D/90D) + CSR filter
+- [ ] HUD screen with 6 stat cards in 3×2 grid + bonus tier banner + timeframe picker (Today/7D/30D/90D) + tenant/CSR selectors
 - [ ] Queue screen with 5 sections (New/Re-engage/Callbacks/Old/Archive) + pull-to-refresh + real-time updates
-- [ ] Lead Detail screen with claim/release, action logging, transfer, timeline + messages
-- [ ] Settings screen with password change, Podium connect, sign out
+- [ ] Lead Detail screen with claim/release, action logging, transfer, unified timeline (single history tab) + expandable SMS conversation panel + contract banner
+- [ ] Settings screen with password change, Podium connect/disconnect, sign out (no push toggle)
 - [ ] Deep link handling from push notification tap
 - [ ] Tenant selector for agency/super roles
 - [ ] CSR filter for manager roles
@@ -1804,3 +1896,29 @@ HTTP status codes used:
 - [ ] Loading states on all screens
 - [ ] Empty states on all screens
 - [ ] Pull-to-refresh on HUD and Queue
+
+---
+
+## Appendix E: Source File Parity Reference
+
+This table maps each PRD section to the exact source files it was verified against. Use for auditing accuracy.
+
+| PRD Section | Source File(s) |
+|-------------|---------------|
+| 2. Auth | `artifacts/api-server/src/routes/auth.ts` |
+| 3.1 HUD Stats | `artifacts/api-server/src/routes/leads.ts` (hud/stats endpoint) |
+| 3.2 Queue | `artifacts/api-server/src/routes/leads-hub.ts` |
+| 3.3 Lead Actions | `artifacts/api-server/src/routes/leads-hub.ts` |
+| 3.4 Lead Detail | `artifacts/api-server/src/routes/leads.ts` |
+| 3.5 Comm Config | `artifacts/api-server/src/routes/leads.ts` |
+| 3.6 Pause | `artifacts/api-server/src/routes/leads-hub.ts` |
+| 3.7 Transfer | `artifacts/api-server/src/routes/leads-hub.ts` |
+| 3.8 Search | `artifacts/api-server/src/routes/leads.ts` (search endpoint, `dateType = created \| lastTouchpoint`) |
+| 3.9 Podium | `artifacts/api-server/src/routes/podium-routes.ts`, `artifacts/api-server/src/routes/podium-oauth.ts` |
+| 4. Socket.io | `artifacts/api-server/src/index.ts` (socket setup) |
+| 5.3 HUD Screen | `artifacts/mobile/app/(tabs)/index.tsx` (6 StatCards, 3×2 grid, bonus banner, header with logo+greeting+pause+live+logout) |
+| 5.4 Queue Screen | `artifacts/mobile/app/(tabs)/queue.tsx` |
+| 5.5 Lead Detail | `artifacts/mobile/app/lead/[id].tsx` (single `history` tab, `podiumExpanded` SMS panel, `ContractBanner` component) |
+| 5.6 Settings | `artifacts/mobile/app/(tabs)/settings.tsx` (Account + Password + Podium + Sign Out, NO push toggle) |
+| 6. Design System | `artifacts/mobile/hooks/useColors.ts`, component styles throughout |
+| 8. Push Notifications | `artifacts/api-server/src/services/push-notifications.ts` (Expo Push only, needs APNs adapter) |
