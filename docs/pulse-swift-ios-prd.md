@@ -1,6 +1,8 @@
 # Pulse iOS — Swift/SwiftUI Product Requirements Document
 
-> **Purpose**: This document fully specifies the Pulse Mobile app so that a code-generation agent (OpenAI Codex) can produce a native Swift/SwiftUI iOS client in a single pass. Every API contract, UI layout, color token, data model, and interaction is defined below. No server-side changes are required — the existing Node.js/Express API server is the source of truth.
+> **Purpose**: This document fully specifies the Pulse Mobile app so that a code-generation agent (OpenAI Codex) can produce a native Swift/SwiftUI iOS client in a single pass. Every API contract, UI layout, color token, data model, and interaction is defined below. The existing Node.js/Express API server is the source of truth.
+>
+> **Server change required**: Push notifications currently use Expo Push Notification Service. A native Swift app needs a server-side APNs adapter added to `services/push-notifications.ts` (see §8.5 for the exact change needed). All other features work with no server changes.
 
 ---
 
@@ -80,13 +82,28 @@ Content-Type: application/json
 { "error": "Invalid credentials" }
 ```
 
-### 2.2 Token Storage
+### 2.2 User-Agent Requirement
+
+The server only includes `bearerToken` and `sessionToken` in the login response when `User-Agent` matches `/expo|react-native|okhttp/i`. A native Swift `URLSession` will not match by default.
+
+**Required**: Set a custom `User-Agent` on all requests:
+```swift
+let config = URLSessionConfiguration.default
+config.httpAdditionalHeaders = [
+    "User-Agent": "PulseSwift/1.0 (react-native)"
+]
+let session = URLSession(configuration: config)
+```
+
+This ensures the server returns the `bearerToken` field on login and correctly identifies the client as mobile.
+
+### 2.3 Token Storage
 
 - Store `bearerToken` in the iOS **Keychain** under service `com.pulse.app`, key `bearer_token`.
 - Store the user object in `@AppStorage` or `UserDefaults` (non-sensitive).
 - All subsequent API requests must include `Authorization: Bearer <token>` header.
 
-### 2.3 Session Restore
+### 2.4 Session Restore
 
 On app launch, if a Keychain token exists, call:
 
@@ -111,7 +128,7 @@ Resume the session with the stored Keychain token.
 
 **Error 401:** Token expired. Clear Keychain and show login screen.
 
-### 2.4 Logout
+### 2.5 Logout
 
 ```
 POST /api/auth/logout
@@ -124,7 +141,7 @@ Before calling logout:
 3. Clear Keychain token and stored user.
 4. Navigate to login screen.
 
-### 2.5 Change Password
+### 2.6 Change Password
 
 ```
 POST /api/auth/change-password
@@ -1320,9 +1337,13 @@ struct TimelineEntry: Codable, Identifiable {
 
 ## 8. Push Notifications
 
-### 8.1 Registration
+### 8.1 Current Server Architecture (Expo Push)
 
-Use APNs (not FCM). Request notification permission on first launch after login.
+The server currently sends push notifications via the **Expo Push Notification Service** (`https://exp.host/--/api/v2/push/send`) in `services/push-notifications.ts`. This works because the existing mobile app is built with Expo, which provides Expo Push Tokens (e.g., `ExponentPushToken[xxxxx]`).
+
+A native Swift app cannot obtain Expo Push Tokens — it uses APNs device tokens instead. The `POST /api/push-tokens` endpoint accepts any string token, but the server will attempt to send it via Expo's API, which will fail for raw APNs tokens.
+
+### 8.2 Token Registration API (Existing)
 
 ```
 POST /api/push-tokens
@@ -1330,14 +1351,14 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "token": "<APNs device token hex string>",
+  "token": "<token string>",
   "platform": "ios"
 }
 ```
 
 **Response 200:** `{ "success": true, "id": 1 }`
 
-### 8.2 Unregistration
+### 8.3 Token Unregistration API (Existing)
 
 On logout or when user disables notifications:
 
@@ -1347,21 +1368,55 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "token": "<APNs device token hex string>"
+  "token": "<token string>"
 }
 ```
 
-### 8.3 Notification Payload Handling
+**Response 200:** `{ "success": true }`
 
-Expected push payload shape:
+### 8.4 Notification Data Shape
+
+The server sends notifications with this data payload (used by both Expo and the future APNs adapter):
 
 ```json
 {
+  "title": "New Lead Assigned",
+  "body": "John Smith — Google Ads",
+  "leadId": 100,
+  "type": "new-lead"
+}
+```
+
+**Notification types sent by server:**
+
+| Type | Trigger | Action on tap |
+|------|---------|---------------|
+| `new-lead` | Lead assigned to CSR | Navigate to Lead Detail for `leadId` |
+| `callback-due` | Callback time reached | Navigate to Lead Detail for `leadId` |
+
+### 8.5 Required Server Change: APNs Adapter
+
+To support native Swift push notifications, add an APNs sending path to `services/push-notifications.ts`. The change is localized to one file:
+
+**What to add**: In the `sendPushToUser` function, after the Expo token block (line ~120), add an APNs block:
+
+```typescript
+const apnsTokens = tokens.filter(t => t.platform === "ios");
+if (apnsTokens.length > 0) {
+  for (const t of apnsTokens) {
+    await sendAPNS(t.token, { title, body, data });
+  }
+}
+```
+
+The `sendAPNS` function should use the `@parse/node-apn` package (or raw HTTP/2 to `api.push.apple.com`) with:
+- **APNs key**: `.p8` key file from Apple Developer portal
+- **Key ID**, **Team ID**, **Bundle ID**: configured via environment variables
+- **Payload**:
+```json
+{
   "aps": {
-    "alert": {
-      "title": "New Lead",
-      "body": "John Smith from Google Ads"
-    },
+    "alert": { "title": "...", "body": "..." },
     "sound": "default",
     "badge": 1
   },
@@ -1370,16 +1425,29 @@ Expected push payload shape:
 }
 ```
 
-**Notification types:**
+The existing `platform` field in `push_tokens` table already supports `"ios"` to distinguish from Expo tokens (which use `"expo"` as default platform).
 
-| Type | Action on tap |
-|------|---------------|
-| `new-lead` | Navigate to Lead Detail for `leadId` |
-| `callback-due` | Navigate to Lead Detail for `leadId` |
-| `lead-updated` | Refresh lead if currently viewing |
-| `podium-message` | Navigate to Lead Detail → Messages tab |
+### 8.6 Swift Client Implementation
 
-### 8.4 Deep Link Handling
+**Registration:**
+```swift
+func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    let tokenString = deviceToken.map { String(format: "%02x", $0) }.joined()
+    // POST to /api/push-tokens with { token: tokenString, platform: "ios" }
+}
+```
+
+**Notification handling:**
+```swift
+func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) {
+    let userInfo = response.notification.request.content.userInfo
+    if let leadId = userInfo["leadId"] as? Int {
+        // Navigate to Lead Detail
+    }
+}
+```
+
+### 8.7 Deep Link Handling
 
 When notification is tapped:
 1. If app is in foreground: push Lead Detail onto navigation stack.
@@ -1481,9 +1549,19 @@ Single `APIClient` class:
 
 ```swift
 actor APIClient {
-    private let session = URLSession.shared
+    private let session: URLSession
     private let baseURL: URL
     private let authManager: AuthManager
+
+    init(baseURL: URL, authManager: AuthManager) {
+        self.baseURL = baseURL
+        self.authManager = authManager
+        let config = URLSessionConfiguration.default
+        config.httpAdditionalHeaders = [
+            "User-Agent": "PulseSwift/1.0 (react-native)"
+        ]
+        self.session = URLSession(configuration: config)
+    }
 
     func request<T: Decodable>(
         _ endpoint: APIEndpoint,
