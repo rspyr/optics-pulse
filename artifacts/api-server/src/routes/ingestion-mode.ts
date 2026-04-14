@@ -170,11 +170,12 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
   }
 
   const trackerUrl = `${apiBase}/tracker.js`;
+  const safeSlug = tenant.clientSlug.replace(/[\\'"<>&]/g, "");
 
   const snippet = `<!-- Pulse Attribution Tracker (GTM-compatible) -->
 <script>
 window.__pulseConfig = {
-  clientId: "${tenant.clientSlug}",
+  clientId: "${safeSlug}",
   endpoint: "${apiBase}/api/tracker/submit"
 };
 </script>
