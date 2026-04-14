@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
@@ -8,6 +8,7 @@ import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { parseDateInTimezone } from "../utils/parse-date-in-timezone";
 import { normalizeSource } from "../services/source-normalizer";
 
 const router: IRouter = Router();
@@ -350,6 +351,9 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
   const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
   const defaultFunnelTypeId = config.defaultFunnelTypeId;
 
+  const [tenant] = await db.select({ timezone: tenantsTable.timezone }).from(tenantsTable).where(eq(tenantsTable.id, config.tenantId));
+  const tenantTimezone = tenant?.timezone || "America/New_York";
+
   let allFunnels: Record<number, { name: string }> = {};
   const funnelIds = new Set<number>();
   if (defaultFunnelTypeId) funnelIds.add(defaultFunnelTypeId);
@@ -414,8 +418,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
 
       let parsedCreatedAt: Date | undefined;
       if (row.dateTime) {
-        const d = new Date(row.dateTime);
-        if (!isNaN(d.getTime())) parsedCreatedAt = d;
+        parsedCreatedAt = parseDateInTimezone(row.dateTime, tenantTimezone);
       }
 
       const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
