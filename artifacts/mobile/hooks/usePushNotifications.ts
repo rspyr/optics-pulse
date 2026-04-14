@@ -107,7 +107,7 @@ export function usePushNotifications() {
             const nativeTokenData = await Notifications.getDevicePushTokenAsync();
             const nativeToken = nativeTokenData.data as string;
             if (nativeToken && typeof nativeToken === "string") {
-              const apnsRegistered = await registerTokenWithRetry(apiFetch, nativeToken, "ios");
+              const apnsRegistered = await registerTokenWithRetry(apiFetch, nativeToken, "ios-native");
               if (apnsRegistered) {
                 console.log("[Push] APNs native token registered successfully");
               }
