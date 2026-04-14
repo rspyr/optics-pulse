@@ -18,6 +18,26 @@ Notifications.setNotificationHandler({
   }),
 });
 
+async function registerTokenWithRetry(
+  apiFetch: (url: string, opts?: RequestInit) => Promise<Response>,
+  token: string,
+  platform: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await apiFetch("/api/push-tokens", {
+        method: "POST",
+        body: JSON.stringify({ token, platform }),
+      });
+      return true;
+    } catch (regErr) {
+      console.warn(`[Push] Registration attempt ${attempt + 1} failed for ${platform}:`, regErr);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+  }
+  return false;
+}
+
 export function usePushNotifications() {
   const { user } = useAuth();
   const { apiFetch } = useApi();
@@ -72,22 +92,28 @@ export function usePushNotifications() {
         const tokenData = await Notifications.getExpoPushTokenAsync(
           projectId ? { projectId } : undefined
         );
-        const token = tokenData.data;
-        setExpoPushToken(token);
+        const expoToken = tokenData.data;
+        setExpoPushToken(expoToken);
 
-        await SecureStore.setItemAsync("pulse_push_token", token);
+        await SecureStore.setItemAsync("pulse_push_token", expoToken);
 
-        let registered = false;
-        for (let attempt = 0; attempt < 3 && !registered; attempt++) {
+        const expoRegistered = await registerTokenWithRetry(apiFetch, expoToken, "expo");
+        if (expoRegistered) {
+          console.log("[Push] Expo token registered successfully");
+        }
+
+        if (Platform.OS === "ios") {
           try {
-            await apiFetch("/api/push-tokens", {
-              method: "POST",
-              body: JSON.stringify({ token, platform: Platform.OS }),
-            });
-            registered = true;
-          } catch (regErr) {
-            console.warn(`[Push] Registration attempt ${attempt + 1} failed:`, regErr);
-            if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+            const nativeTokenData = await Notifications.getDevicePushTokenAsync();
+            const nativeToken = nativeTokenData.data as string;
+            if (nativeToken && typeof nativeToken === "string") {
+              const apnsRegistered = await registerTokenWithRetry(apiFetch, nativeToken, "ios");
+              if (apnsRegistered) {
+                console.log("[Push] APNs native token registered successfully");
+              }
+            }
+          } catch (nativeErr) {
+            console.warn("[Push] Failed to get native device token for APNs:", nativeErr);
           }
         }
       } catch (err) {

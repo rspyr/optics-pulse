@@ -59,6 +59,14 @@ console.log(`[Push] Startup summary — APNs: ${apnsProvider ? "READY" : "DISABL
 
 let invalidCredentialsWarned = false;
 
+function isExpoToken(token: string): boolean {
+  return token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken[");
+}
+
+function isApnsNativeToken(token: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(token);
+}
+
 interface ExpoPushMessage {
   to: string;
   title: string;
@@ -99,7 +107,7 @@ async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoPushTicket
       const result = await response.json() as { data: ExpoPushTicket[] };
       tickets.push(...(result.data || []));
     } catch (err) {
-      console.error("[Push] Failed to send chunk:", err);
+      console.error("[Push] Failed to send Expo chunk:", err);
     }
   }
 
@@ -191,12 +199,19 @@ export async function sendPushToUser(
       return;
     }
 
-    const expoTokens = tokens.filter(t => t.platform !== "web" && t.platform !== "ios");
-    const iosTokens = tokens.filter(t => t.platform === "ios");
+    const expoTokens = tokens.filter(t => t.platform !== "web" && isExpoToken(t.token));
+    const apnsTokens = tokens.filter(t => t.platform !== "web" && isApnsNativeToken(t.token));
     const hasWebTokens = tokens.some(t => t.platform === "web");
 
+    const unclassified = tokens.filter(t =>
+      t.platform !== "web" && !isExpoToken(t.token) && !isApnsNativeToken(t.token)
+    );
+    if (unclassified.length > 0) {
+      console.warn(`[Push] User ${userId} has ${unclassified.length} unclassified token(s) — tokens: ${unclassified.map(t => `"${t.token.substring(0, 20)}..." (platform=${t.platform})`).join(", ")}`);
+    }
+
     if (expoTokens.length > 0) {
-      console.log(`[Push] Sending "${title}" to user ${userId} (${expoTokens.length} expo token(s))`);
+      console.log(`[Push] Sending via Expo "${title}" to user ${userId} (${expoTokens.length} token(s))`);
 
       const messages: ExpoPushMessage[] = expoTokens.map(t => ({
         to: t.token,
@@ -227,24 +242,24 @@ export async function sendPushToUser(
             const tokenToRemove = expoTokens[i]?.token;
             if (tokenToRemove) {
               await db.delete(pushTokensTable).where(eq(pushTokensTable.token, tokenToRemove));
-              console.log(`[Push] Removed invalid token for user ${userId}`);
+              console.log(`[Push] Removed invalid Expo token for user ${userId}`);
             }
           } else {
-            console.error(`[Push] Ticket error for user ${userId}: ${errorType} — ${ticket.message ?? "no details"}`);
+            console.error(`[Push] Expo ticket error for user ${userId}: ${errorType} — ${ticket.message ?? "no details"}`);
           }
         }
       }
-      console.log(`[Push] Delivery result for user ${userId}: ${okCount} ok, ${errCount} error(s)`);
+      console.log(`[Push] Expo delivery result for user ${userId}: ${okCount} ok, ${errCount} error(s)`);
     }
 
-    if (iosTokens.length > 0) {
+    if (apnsTokens.length > 0) {
       if (!apnsProvider) {
-        console.warn(`[Push] Skipping ${iosTokens.length} iOS token(s) for user ${userId} — APNs not configured`);
+        console.warn(`[Push] Skipping ${apnsTokens.length} APNs token(s) for user ${userId} — APNs not configured`);
       } else {
-        console.log(`[Push] Sending "${title}" to user ${userId} (${iosTokens.length} APNs token(s))`);
+        console.log(`[Push] Sending via APNs "${title}" to user ${userId} (${apnsTokens.length} token(s))`);
         let apnsOk = 0;
         let apnsErr = 0;
-        for (const t of iosTokens) {
+        for (const t of apnsTokens) {
           const result = await sendAPNsPush(t.token, title, body, data);
           if (result.success) {
             apnsOk++;
