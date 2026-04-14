@@ -12,25 +12,50 @@
     funnelSlug: ""
   };
 
-  var scriptTag = document.currentScript;
+  var scriptTag = document.currentScript
+    || document.querySelector("script[src*='tracker.js'][data-client-id]")
+    || document.querySelector("script[src*='tracker.js'][data-tenant]")
+    || document.querySelector("script[src*='tracker.js']");
+
+  var inlineConfig = window.__pulseConfig || window.__pulse_config || null;
+
+  if (inlineConfig) {
+    CONFIG.clientId = inlineConfig.clientId || inlineConfig.client_id || "";
+    CONFIG.endpointUrl = inlineConfig.endpoint || inlineConfig.endpointUrl || "";
+    CONFIG.cookieDomain = inlineConfig.cookieDomain || "";
+    CONFIG.cookieTTL = inlineConfig.cookieTTL || 30;
+    CONFIG.funnelSlug = inlineConfig.funnel || inlineConfig.funnelSlug || "";
+    if (Array.isArray(inlineConfig.excludeFields)) CONFIG.excludeFields = inlineConfig.excludeFields;
+    if (Array.isArray(inlineConfig.captureFields)) CONFIG.captureFields = inlineConfig.captureFields;
+    if (inlineConfig.custom && typeof inlineConfig.custom === "object") CONFIG.customDimensions = inlineConfig.custom;
+  }
+
   if (scriptTag) {
-    CONFIG.clientId = scriptTag.getAttribute("data-client-id") || scriptTag.getAttribute("data-tenant") || "";
-    CONFIG.endpointUrl = scriptTag.getAttribute("data-endpoint") || "";
-    CONFIG.cookieDomain = scriptTag.getAttribute("data-cookie-domain") || "";
-    CONFIG.funnelSlug = scriptTag.getAttribute("data-funnel") || "";
+    if (!CONFIG.clientId) {
+      CONFIG.clientId = scriptTag.getAttribute("data-client-id") || scriptTag.getAttribute("data-tenant") || "";
+    }
+    if (!CONFIG.endpointUrl) {
+      CONFIG.endpointUrl = scriptTag.getAttribute("data-endpoint") || "";
+    }
+    if (!CONFIG.cookieDomain) {
+      CONFIG.cookieDomain = scriptTag.getAttribute("data-cookie-domain") || "";
+    }
+    if (!CONFIG.funnelSlug) {
+      CONFIG.funnelSlug = scriptTag.getAttribute("data-funnel") || "";
+    }
     try {
       var rawExclude = scriptTag.getAttribute("data-exclude-fields");
-      if (rawExclude) CONFIG.excludeFields = JSON.parse(rawExclude);
+      if (rawExclude && !CONFIG.excludeFields.length) CONFIG.excludeFields = JSON.parse(rawExclude);
     } catch(e) {}
     try {
       var rawCapture = scriptTag.getAttribute("data-capture-fields");
-      if (rawCapture) CONFIG.captureFields = JSON.parse(rawCapture);
+      if (rawCapture && !CONFIG.captureFields.length) CONFIG.captureFields = JSON.parse(rawCapture);
     } catch(e) {}
     try {
       var rawCustom = scriptTag.getAttribute("data-custom");
-      if (rawCustom) CONFIG.customDimensions = JSON.parse(rawCustom);
+      if (rawCustom && !Object.keys(CONFIG.customDimensions).length) CONFIG.customDimensions = JSON.parse(rawCustom);
     } catch(e) {}
-    if (!CONFIG.endpointUrl) {
+    if (!CONFIG.endpointUrl && scriptTag.src) {
       CONFIG.endpointUrl = scriptTag.src.replace(/\/tracker\.js.*$/, "") + "/api/tracker/submit";
     }
   }
@@ -316,13 +341,16 @@
     scanFormsInNode(document);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", scanForms);
-  } else {
-    scanForms();
-  }
-
-  if (typeof MutationObserver !== "undefined") {
+  function startObserver() {
+    if (typeof MutationObserver === "undefined") return;
+    if (!document.body) {
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", startObserver);
+      } else {
+        setTimeout(startObserver, 10);
+      }
+      return;
+    }
     new MutationObserver(function(mutations) {
       for (var i = 0; i < mutations.length; i++) {
         var added = mutations[i].addedNodes;
@@ -334,6 +362,16 @@
         }
       }
     }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function() {
+      scanForms();
+      startObserver();
+    });
+  } else {
+    scanForms();
+    startObserver();
   }
 
   window.addEventListener("message", function(event) {
@@ -445,8 +483,20 @@
     }, 500);
   }
 
-  var apiBase = scriptTag ? scriptTag.src.replace(/\/tracker\.js.*$/, "") : "";
-  var tenantIdAttr = scriptTag ? scriptTag.getAttribute("data-tenant") : null;
+  var apiBase = "";
+  var inlineEndpoint = inlineConfig && (inlineConfig.endpoint || inlineConfig.endpointUrl || inlineConfig.endpoint_url) || "";
+  if (inlineEndpoint) {
+    apiBase = inlineEndpoint.replace(/\/api\/tracker\/submit\/?$/, "");
+  } else if (scriptTag && scriptTag.src) {
+    apiBase = scriptTag.src.replace(/\/tracker\.js.*$/, "");
+  }
+
+  var tenantIdAttr = null;
+  if (inlineConfig && inlineConfig.tenantId) {
+    tenantIdAttr = String(inlineConfig.tenantId);
+  } else if (scriptTag) {
+    tenantIdAttr = scriptTag.getAttribute("data-tenant");
+  }
 
   function sendHeartbeat() {
     if ((!tenantIdAttr && !CONFIG.clientId) || !apiBase) return;

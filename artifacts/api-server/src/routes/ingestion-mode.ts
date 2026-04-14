@@ -171,8 +171,14 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
 
   const trackerUrl = `${apiBase}/tracker.js`;
 
-  const snippet = `<!-- Pulse Attribution Tracker -->
-<script src="${trackerUrl}" data-client-id="${tenant.clientSlug}"></script>`;
+  const snippet = `<!-- Pulse Attribution Tracker (GTM-compatible) -->
+<script>
+window.__pulseConfig = {
+  clientId: "${tenant.clientSlug}",
+  endpoint: "${apiBase}/api/tracker/submit"
+};
+</script>
+<script src="${trackerUrl}"></script>`;
 
   res.json({ snippet, clientSlug: tenant.clientSlug });
 });
