@@ -5,7 +5,6 @@ import { emitNewLead, emitLeadUpdated } from "../socket";
 import { assignLeadRoundRobin } from "./round-robin";
 import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
-import { parseDateInTimezone } from "../utils/parse-date-in-timezone";
 import { normalizeSource } from "./source-normalizer";
 
 const UPDATABLE_FIELDS = [
@@ -184,13 +183,6 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
   const funnelValueMap = config.funnelValueMap as Record<string, number> | null;
   const defaultFunnelTypeId = config.defaultFunnelTypeId;
 
-  const hasDateTimeMapping = Object.values(mapping).includes("dateTime");
-  let tenantTimezone = "America/New_York";
-  if (hasDateTimeMapping) {
-    const [tenant] = await db.select({ timezone: tenantsTable.timezone }).from(tenantsTable).where(eq(tenantsTable.id, config.tenantId));
-    if (tenant?.timezone) tenantTimezone = tenant.timezone;
-  }
-
   const { headers: currentHeaders, rawRows } = await readRawSheetData(sheetId, tab);
 
   if (!headersMatch(currentHeaders, savedHeaders)) {
@@ -251,11 +243,6 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
 
     if (normalizedPhone) existingPhones.add(normalizedPhone);
 
-    let parsedCreatedAt: Date | undefined;
-    if (row.dateTime) {
-      parsedCreatedAt = parseDateInTimezone(row.dateTime, tenantTimezone);
-    }
-
     const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
     const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
     const effectivePreBooked = isPreBooked || hasApptDetails;
@@ -291,7 +278,6 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
       status: "new",
       preBooked: effectivePreBooked,
       contactPreferences: [],
-      ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
     }).returning();
 
     if (lead) {
