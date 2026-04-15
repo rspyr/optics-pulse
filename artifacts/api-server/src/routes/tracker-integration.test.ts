@@ -197,7 +197,7 @@ function expectedHash(value: string): string {
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
 
-describe("POST /tracker/submit", () => {
+describe("POST /collect/submit", () => {
   beforeEach(async () => {
     mockDb.selectResults = [];
     mockDb.insertResults = [];
@@ -206,14 +206,14 @@ describe("POST /tracker/submit", () => {
   });
 
   it("returns 400 when client_id is missing", async () => {
-    const res = await sendRequest(app, "/tracker/submit", {});
+    const res = await sendRequest(app, "/collect/submit", {});
     expect(res.status).toBe(400);
     expect(res.json().success).toBe(false);
     expect(res.json().message).toContain("client_id");
   });
 
   it("returns 400 when client_id is empty string", async () => {
-    const res = await sendRequest(app, "/tracker/submit", { client_id: "  " });
+    const res = await sendRequest(app, "/collect/submit", { client_id: "  " });
     expect(res.status).toBe(400);
     expect(res.json().message).toContain("client_id");
   });
@@ -221,7 +221,7 @@ describe("POST /tracker/submit", () => {
   it("returns 404 for unknown client_id (no tenant found)", async () => {
     mockDb.selectResults = [[]];
 
-    const res = await sendRequest(app, "/tracker/submit", {
+    const res = await sendRequest(app, "/collect/submit", {
       client_id: "unknown-slug",
     });
     expect(res.status).toBe(404);
@@ -235,7 +235,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant], [fakeLead]];
     mockDb.insertResults = [[fakeEvent], [fakeLead]];
 
-    const res = await sendRequest(app, "/tracker/submit", {
+    const res = await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       attribution: { gclid: "abc123", utm_source: "google" },
       fields: { first_name: "John", last_name: "Doe", email: "john@example.com" },
@@ -261,7 +261,7 @@ describe("POST /tracker/submit", () => {
     mockDb.insertResults = [[fakeEvent], [fakeLead]];
 
     const phone = "555-123-4567";
-    const res = await sendRequest(app, "/tracker/submit", {
+    const res = await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       fields: { phone, first_name: "Jane" },
     });
@@ -282,7 +282,7 @@ describe("POST /tracker/submit", () => {
     mockDb.insertResults = [[fakeEvent], [fakeLead]];
 
     const email = "silver@test.com";
-    const res = await sendRequest(app, "/tracker/submit", {
+    const res = await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       fields: { email, first_name: "Silver" },
     });
@@ -301,7 +301,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
 
-    const res = await sendRequest(app, "/tracker/submit", {
+    const res = await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       attribution: {},
       fields: { some_field: "value" },
@@ -319,7 +319,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
 
-    await sendRequest(app, "/tracker/submit", {
+    await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       fields: { first_name: "Test", last_name: "User", email: "test@test.com" },
     });
@@ -334,7 +334,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant], [fakeLead]];
     mockDb.insertResults = [[fakeEvent], [fakeLead], []];
 
-    await sendRequest(app, "/tracker/submit", {
+    await sendRequest(app, "/collect/submit", {
       client_id: "lead-client",
       attribution: { gclid: "gclid999", utm_source: "google" },
       fields: {
@@ -361,7 +361,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
 
-    await sendRequest(app, "/tracker/submit", {
+    await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       attribution: {
         gclid: "g1",
@@ -406,7 +406,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant], [fakeLead]];
     mockDb.insertResults = [[fakeEvent], [fakeLead], []];
 
-    await sendRequest(app, "/tracker/submit", {
+    await sendRequest(app, "/collect/submit", {
       client_id: "name-client",
       fields: { name: "Mary Jane Watson", email: "mary@test.com" },
     });
@@ -422,7 +422,7 @@ describe("POST /tracker/submit", () => {
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
 
-    await sendRequest(app, "/tracker/submit", {
+    await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
       fields: { service_type: "HVAC", notes: "urgent" },
       custom: { funnel: "hvac-install" },

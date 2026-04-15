@@ -39,7 +39,7 @@ export default function AdminFunnels() {
 
   useEffect(() => {
     fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
-    fetch(`${API}/api/tracker/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
+    fetch(`${API}/api/collect/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
   }, []);
 
   const loadFunnels = () => {
@@ -183,7 +183,7 @@ export default function AdminFunnels() {
 
       {tab === "health" && (
         <TrackerHealthTab health={health} onRefresh={async () => {
-          const r = await fetch(`${API}/api/tracker/health`, { credentials: "include" });
+          const r = await fetch(`${API}/api/collect/health`, { credentials: "include" });
           const data = await r.json();
           setHealth(data);
         }} />

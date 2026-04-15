@@ -96,7 +96,7 @@ const publicDir = process.env.NODE_ENV === "production"
   : path.join(currentDir, "../public");
 app.use(express.static(publicDir));
 
-app.use("/api/tracker", cors({ origin: true, methods: ["GET", "POST", "OPTIONS"] }));
+app.use("/api/collect", cors({ origin: true, methods: ["GET", "POST", "OPTIONS"] }));
 
 app.use("/api", router);
 

@@ -13,9 +13,9 @@
   };
 
   var scriptTag = document.currentScript
-    || document.querySelector("script[src*='tracker.js'][data-client-id]")
-    || document.querySelector("script[src*='tracker.js'][data-tenant]")
-    || document.querySelector("script[src*='tracker.js']");
+    || document.querySelector("script[src*='pulse.js'][data-client-id]")
+    || document.querySelector("script[src*='pulse.js'][data-tenant]")
+    || document.querySelector("script[src*='pulse.js']");
 
   var inlineConfig = window.__pulseConfig || window.__pulse_config || null;
 
@@ -56,7 +56,7 @@
       if (rawCustom && !Object.keys(CONFIG.customDimensions).length) CONFIG.customDimensions = JSON.parse(rawCustom);
     } catch(e) {}
     if (!CONFIG.endpointUrl && scriptTag.src) {
-      CONFIG.endpointUrl = scriptTag.src.replace(/\/tracker\.js.*$/, "") + "/api/tracker/submit";
+      CONFIG.endpointUrl = scriptTag.src.replace(/\/pulse\.js.*$/, "") + "/api/collect/submit";
     }
   }
 
@@ -486,9 +486,9 @@
   var apiBase = "";
   var inlineEndpoint = inlineConfig && (inlineConfig.endpoint || inlineConfig.endpointUrl || inlineConfig.endpoint_url) || "";
   if (inlineEndpoint) {
-    apiBase = inlineEndpoint.replace(/\/api\/tracker\/submit\/?$/, "");
+    apiBase = inlineEndpoint.replace(/\/api\/collect\/submit\/?$/, "");
   } else if (scriptTag && scriptTag.src) {
-    apiBase = scriptTag.src.replace(/\/tracker\.js.*$/, "");
+    apiBase = scriptTag.src.replace(/\/pulse\.js.*$/, "");
   }
 
   var tenantIdAttr = null;
@@ -505,7 +505,7 @@
       if (tenantIdAttr) payload.tenantId = parseInt(tenantIdAttr, 10);
       if (CONFIG.clientId) payload.clientId = CONFIG.clientId;
       var xhr = new XMLHttpRequest();
-      xhr.open("POST", apiBase + "/api/tracker/heartbeat", true);
+      xhr.open("POST", apiBase + "/api/collect/heartbeat", true);
       xhr.setRequestHeader("Content-Type", "application/json");
       xhr.send(JSON.stringify(payload));
     } catch(e) {}

@@ -120,7 +120,7 @@ export function extractPiiFromFields(fields: Record<string, unknown>): { firstNa
   return result;
 }
 
-router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
+router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
   try {
     const parsed = TrackerSubmitPayload.safeParse(req.body);
     if (!parsed.success) {
@@ -388,7 +388,7 @@ router.post("/tracker/submit", trackerSubmitLimiter, async (req, res) => {
   }
 });
 
-router.post("/tracker/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
+router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
   try {
     let tenantId = req.body.tenantId ? Number(req.body.tenantId) : null;
     const clientId = typeof req.body.clientId === "string" ? req.body.clientId.trim() : null;
@@ -433,7 +433,7 @@ router.post("/tracker/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
   }
 });
 
-router.get("/tracker/health", async (_req, res) => {
+router.get("/collect/health", async (_req, res) => {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
