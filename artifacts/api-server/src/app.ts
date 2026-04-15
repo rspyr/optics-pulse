@@ -91,7 +91,10 @@ app.use(sessionMiddleware);
 const currentDir = typeof __dirname !== "undefined"
   ? __dirname
   : path.dirname(fileURLToPath(import.meta.url));
-app.use(express.static(path.join(currentDir, "../public")));
+const publicDir = process.env.NODE_ENV === "production"
+  ? path.join(currentDir, "public")
+  : path.join(currentDir, "../public");
+app.use(express.static(publicDir));
 
 app.use("/api/tracker", cors({ origin: true, methods: ["GET", "POST", "OPTIONS"] }));
 
