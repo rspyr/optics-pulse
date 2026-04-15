@@ -160,9 +160,16 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
     return;
   }
 
-  const apiBase = process.env.REPLIT_DEV_DOMAIN
-    ? `https://${process.env.REPLIT_DEV_DOMAIN}/api-server`
-    : process.env.API_BASE_URL || null;
+  let apiBase: string | null = process.env.API_BASE_URL || null;
+  if (!apiBase) {
+    const prodDomains = process.env.REPLIT_DOMAINS;
+    if (prodDomains) {
+      const primaryDomain = prodDomains.split(",")[0]?.trim();
+      apiBase = `https://${primaryDomain}/api-server`;
+    } else if (process.env.REPLIT_DEV_DOMAIN) {
+      apiBase = `https://${process.env.REPLIT_DEV_DOMAIN}/api-server`;
+    }
+  }
 
   if (!apiBase) {
     res.status(500).json({ error: "API base URL not configured. Set API_BASE_URL or deploy to Replit." });
