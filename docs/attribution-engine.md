@@ -16,7 +16,7 @@ The attribution engine is the core system that connects marketing spend to actua
   - [Event Sources](#event-sources)
   - [Event Types](#event-types)
   - [Ingestion Endpoints](#ingestion-endpoints)
-  - [Universal Form Attribution Script](#universal-form-attribution-script-trackerjs)
+  - [Universal Form Attribution Script](#universal-form-attribution-script-pulsejs)
   - [Phone Normalization](#phone-normalization)
   - [CallRail Sync](#callrail-sync)
 - [Auto-Adaptive Field Detection](#auto-adaptive-field-detection)
@@ -75,12 +75,12 @@ It does this by:
   Ad Click / Form Fill                  Inbound Call / CRM Webhook
         │                                       │
         ▼                                       ▼
-  tracker.js (IIFE)                     /webhooks/ingest
+  pulse.js (IIFE)                       /webhooks/ingest
   captures UTM, click IDs,             receives CallRail, GHL,
   cookies, intercepts form             Podium payloads
         │                                       │
         ▼                                       ▼
-  POST /api/tracker/submit ──────────────────────┘
+  POST /api/collect/submit ──────────────────────┘
         │
         ▼
   Auto-Adaptive Field Detection
@@ -101,9 +101,9 @@ It does this by:
         │
         ▼
   Sheet Sync (Google Sheets lead ingestion)
-  ├── Mode: sheets → leads from sheets only, tracker creates events only
+  ├── Mode: sheets → leads from sheets only, pulse script creates events only
   ├── Mode: both   → both create leads (48h dedup on phone+email)
-  └── Mode: tracker → sheet sync paused, tracker creates all leads
+  └── Mode: tracker → sheet sync paused, pulse script creates all leads
         │
         ▼
   ServiceTitan Job Synced (every 15 min)
@@ -157,16 +157,16 @@ Attribution events represent a marketing touchpoint — the moment a potential c
 
 | Source | Method | Data Captured |
 |:-------|:-------|:-------------|
-| **Tracker Script** | IIFE on client website (`tracker.js`) | All UTM params (source, medium, campaign, term, content), click IDs (GCLID, FBCLID, MSCLKID, TTCLID, li_fat_id, wbraid), landing page, referrer, form fields |
+| **Pulse Script** | IIFE on client website (`pulse.js`) | All UTM params (source, medium, campaign, term, content), click IDs (GCLID, FBCLID, MSCLKID, TTCLID, li_fat_id, wbraid), landing page, referrer, form fields |
 | CallRail | API sync (paginated, with retry) | Caller phone number (hashed), call duration, tracking number, source/medium/campaign, GCLID |
 | GHL (GoHighLevel) | Webhook | Form fields, hashed email/phone |
 | Podium | Webhook | SMS/call conversations, contact data |
 
 ### Event Types
 
-- **click** — Ad click captured by the tracker script (carries GCLID or FBCLID)
+- **click** — Ad click captured by the pulse script (carries GCLID or FBCLID)
 - **call** — Inbound phone call tracked via CallRail
-- **form_fill** — Form submission captured via tracker script or GHL webhook
+- **form_fill** — Form submission captured via pulse script or GHL webhook
 
 ### Ingestion Endpoints
 
@@ -174,15 +174,15 @@ Events enter the system via two endpoints:
 
 | Endpoint | Purpose | Auth |
 |:---------|:--------|:-----|
-| `POST /api/tracker/submit` | Client-side tracker script submissions (forms with attribution) | Open CORS (public, keyed by `client_id` slug) |
+| `POST /api/collect/submit` | Client-side pulse script submissions (forms with attribution) | Open CORS (public, keyed by `client_id` slug) |
 | `POST /webhooks/ingest` | Server-side webhooks from CallRail, GHL, Podium | Replit-domain CORS only |
 
-### Universal Form Attribution Script (`tracker.js`)
+### Universal Form Attribution Script (`pulse.js`)
 
-The tracker script is a self-contained IIFE served from `/tracker.js` on the API server. It replaces the earlier passive hidden-field injector with an active script that intercepts form submissions directly. It is embedded on each client's website via a single `<script>` tag:
+The pulse script is a self-contained IIFE served from `/pulse.js` on the API server. It replaces the earlier passive hidden-field injector with an active script that intercepts form submissions directly. The script and endpoints use neutral naming (`pulse.js`, `/collect/`) to avoid being blocked by browser ad blockers. It is embedded on each client's website via a single `<script>` tag:
 
 ```html
-<script src="https://{api-domain}/tracker.js" data-client-id="acme-hvac" defer></script>
+<script src="https://{api-domain}/pulse.js" data-client-id="acme-hvac" defer></script>
 ```
 
 **Capabilities:**
@@ -198,14 +198,14 @@ The tracker script is a self-contained IIFE served from `/tracker.js` on the API
 | **Submission Dedup** | 3-second sliding window dedup keyed on `type|id|name` prevents double POSTs when both native submit and plugin success hooks fire for the same form |
 | **Delivery** | `fetch` with `keepalive` + 2 retries (1.5s delay) → `navigator.sendBeacon` fallback (with `Blob` content-type) → `localStorage` queue (cap 10) flushed on next page load |
 | **Sensitive Field Filtering** | Automatically excludes `password`, `credit_card`, `cvv`, `ssn`, and similar fields; skips `hidden` and `password` input types |
-| **Heartbeat** | POST to `/api/tracker/heartbeat` every 6 hours for script health monitoring; accepts both `clientId` (slug) and legacy numeric `tenantId` |
+| **Heartbeat** | POST to `/api/collect/heartbeat` every 6 hours for script health monitoring; accepts both `clientId` (slug) and legacy numeric `tenantId` |
 
 **Script Attributes:**
 
 | Attribute | Required | Description |
 |:----------|:---------|:------------|
 | `data-client-id` | Yes | Tenant's `clientSlug` (e.g., `acme-hvac`) — auto-generated from tenant name, unique per tenant |
-| `data-endpoint` | No | Override submit URL (defaults to same origin `/api/tracker/submit`) |
+| `data-endpoint` | No | Override submit URL (defaults to same origin `/api/collect/submit`) |
 | `data-cookie-domain` | No | Cookie domain for cross-subdomain tracking |
 | `data-exclude-fields` | No | JSON array of field names to exclude from capture |
 | `data-capture-fields` | No | JSON array of field names to exclusively capture (allowlist mode) |
@@ -215,7 +215,7 @@ The tracker script is a self-contained IIFE served from `/tracker.js` on the API
 
 **Payload Structure:**
 
-Each submission POSTs this JSON to `/api/tracker/submit`:
+Each submission POSTs this JSON to `/api/collect/submit`:
 
 ```json
 {
@@ -256,7 +256,7 @@ Each submission POSTs this JSON to `/api/tracker/submit`:
 }
 ```
 
-**Backend Processing (`/api/tracker/submit`):**
+**Backend Processing (`/api/collect/submit`):**
 
 1. Resolves `client_id` string slug → tenant via `clientSlug` column (unique, not null)
 2. Runs **auto-adaptive field detection** on form fields (see below)
@@ -451,7 +451,7 @@ All ingestion mode changes are recorded in the `ingestion_audit_log` table:
 
 ### GTM Snippet Generation
 
-The API provides a GTM-ready tracking snippet via `GET /api/ingestion-mode/gtm-snippet`. It returns a `<script>` tag with an absolute URL pointing to `tracker.js` and the tenant's `clientSlug` as `data-client-id`. The endpoint fails closed — if `API_BASE_URL` is not configured, it returns an error rather than generating a broken snippet.
+The API provides a GTM-ready tracking snippet via `GET /api/ingestion-mode/gtm-snippet`. It returns a `<script>` tag with an absolute URL pointing to `pulse.js` and the tenant's `clientSlug` as the `clientId` in `window.__pulseConfig`. The endpoint uses production URLs when available (`REPLIT_DOMAINS` or `API_BASE_URL`) and only falls back to the dev domain for local testing. The endpoint fails closed — if no API base URL can be resolved, it returns an error rather than generating a broken snippet.
 
 ---
 
@@ -711,8 +711,8 @@ The Attribution page includes a system health panel showing:
 
 | File | Purpose |
 |:-----|:--------|
-| `artifacts/api-server/public/tracker.js` | Client-side universal form attribution IIFE script |
-| `artifacts/api-server/src/routes/tracker.ts` | `/api/tracker/submit` endpoint — processes form submissions with adaptive detection, funnel normalization, and ingestion-mode-aware lead creation |
+| `artifacts/api-server/public/pulse.js` | Client-side universal form attribution IIFE script (named to avoid ad blocker detection) |
+| `artifacts/api-server/src/routes/tracker.ts` | `/api/collect/submit` endpoint — processes form submissions with adaptive detection, funnel normalization, and ingestion-mode-aware lead creation |
 | `artifacts/api-server/src/services/field-detection.ts` | Auto-adaptive field detection service (3-layer: saved rules → value patterns → heuristics) |
 | `artifacts/api-server/src/services/funnel-normalizer.ts` | Funnel normalization service with alias resolution and caching |
 | `artifacts/api-server/src/routes/funnel-aliases.ts` | CRUD routes for funnel alias management |
