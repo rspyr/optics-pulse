@@ -179,10 +179,10 @@ Events enter the system via two endpoints:
 
 ### Universal Form Attribution Script (`pulse.js`)
 
-The pulse script is a self-contained IIFE served from `/pulse.js` on the API server. It replaces the earlier passive hidden-field injector with an active script that intercepts form submissions directly. The script and endpoints use neutral naming (`pulse.js`, `/collect/`) to avoid being blocked by browser ad blockers. It is embedded on each client's website via a single `<script>` tag:
+The pulse script is a self-contained IIFE served from `/api/pulse.js` on the API server. It replaces the earlier passive hidden-field injector with an active script that intercepts form submissions directly. The script and endpoints use neutral naming (`pulse.js`, `/collect/`) to avoid being blocked by browser ad blockers. The script is served under the `/api/` path prefix so it is routed through the API server's reverse-proxy mount (the API artifact only exposes `/api/*` in production). It is embedded on each client's website via a single `<script>` tag:
 
 ```html
-<script src="https://{api-domain}/pulse.js" data-client-id="acme-hvac" defer></script>
+<script src="https://{api-domain}/api/pulse.js" data-client-id="acme-hvac" defer></script>
 ```
 
 **Capabilities:**

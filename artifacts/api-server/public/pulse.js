@@ -56,7 +56,7 @@
       if (rawCustom && !Object.keys(CONFIG.customDimensions).length) CONFIG.customDimensions = JSON.parse(rawCustom);
     } catch(e) {}
     if (!CONFIG.endpointUrl && scriptTag.src) {
-      CONFIG.endpointUrl = scriptTag.src.replace(/\/pulse\.js.*$/, "") + "/api/collect/submit";
+      CONFIG.endpointUrl = scriptTag.src.replace(/\/(?:api\/)?pulse\.js.*$/, "") + "/api/collect/submit";
     }
   }
 
@@ -488,7 +488,7 @@
   if (inlineEndpoint) {
     apiBase = inlineEndpoint.replace(/\/api\/collect\/submit\/?$/, "");
   } else if (scriptTag && scriptTag.src) {
-    apiBase = scriptTag.src.replace(/\/pulse\.js.*$/, "");
+    apiBase = scriptTag.src.replace(/\/(?:api\/)?pulse\.js.*$/, "");
   }
 
   var tenantIdAttr = null;

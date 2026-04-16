@@ -165,9 +165,9 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
     const prodDomains = process.env.REPLIT_DOMAINS;
     if (prodDomains) {
       const primaryDomain = prodDomains.split(",")[0]?.trim();
-      apiBase = `https://${primaryDomain}/api-server`;
+      apiBase = `https://${primaryDomain}`;
     } else if (process.env.REPLIT_DEV_DOMAIN) {
-      apiBase = `https://${process.env.REPLIT_DEV_DOMAIN}/api-server`;
+      apiBase = `https://${process.env.REPLIT_DEV_DOMAIN}`;
     }
   }
 
@@ -176,14 +176,15 @@ router.get("/ingestion-mode/gtm-snippet", async (req, res) => {
     return;
   }
 
-  const scriptUrl = `${apiBase}/pulse.js`;
+  const normalizedBase = apiBase.replace(/\/+$/, "").replace(/\/api$/, "");
+  const scriptUrl = `${normalizedBase}/api/pulse.js`;
   const safeSlug = tenant.clientSlug.replace(/[\\'"<>&]/g, "");
 
   const snippet = `<!-- Pulse Attribution (GTM-compatible) -->
 <script>
 window.__pulseConfig = {
   clientId: "${safeSlug}",
-  endpoint: "${apiBase}/api/collect/submit"
+  endpoint: "${normalizedBase}/api/collect/submit"
 };
 </script>
 <script src="${scriptUrl}"></script>`;

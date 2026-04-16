@@ -94,7 +94,7 @@ const currentDir = typeof __dirname !== "undefined"
 const publicDir = process.env.NODE_ENV === "production"
   ? path.join(currentDir, "public")
   : path.join(currentDir, "../public");
-app.use(express.static(publicDir));
+app.use("/api", express.static(publicDir));
 
 app.use("/api/collect", cors({ origin: true, methods: ["GET", "POST", "OPTIONS"] }));
 
