@@ -42,9 +42,11 @@ function LoadingScreen() {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="text-center">
-        <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-[0_0_25px_rgba(242,5,5,0.5)] mx-auto mb-4 animate-pulse">
-          <span className="font-display text-white text-2xl leading-none pt-1">M</span>
-        </div>
+        <img
+          src={`${import.meta.env.BASE_URL}optics-logo.png`}
+          alt="Optics"
+          className="w-12 h-12 object-contain mx-auto mb-4 animate-pulse drop-shadow-[0_0_25px_rgba(242,5,5,0.5)]"
+        />
         <p className="text-muted-foreground text-sm">Loading...</p>
       </div>
     </div>
