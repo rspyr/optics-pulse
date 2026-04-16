@@ -1,23 +1,78 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Walk up from `process.cwd()` looking for `pnpm-workspace.yaml` to find
+// the repo root. This works in both environments:
+//   - dev (`pnpm --filter @workspace/api-server run dev`) runs with
+//     cwd = `artifacts/api-server`
+//   - production (`node artifacts/api-server/dist/index.cjs` per
+//     `.replit-artifact/artifact.toml`) runs with cwd = repo root
+function findRepoRoot(): string {
+  let dir = process.cwd();
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(
+    `[SchemaSync] Could not locate pnpm-workspace.yaml walking up from ${process.cwd()}.`,
+  );
+}
 
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
-const DB_DIR = path.join(REPO_ROOT, "lib", "db");
-const DRIZZLE_KIT_BIN = path.join(DB_DIR, "node_modules", ".bin", "drizzle-kit");
+function resolveDbDir(): string {
+  return path.resolve(findRepoRoot(), "lib", "db");
+}
 
+function resolveDrizzleKitBin(dbDir: string): string | null {
+  const candidates = [
+    path.join(dbDir, "node_modules", ".bin", "drizzle-kit"),
+    path.join(process.cwd(), "node_modules", ".bin", "drizzle-kit"),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return null;
+}
+
+/**
+ * Sync the DB schema from the canonical Drizzle definitions in
+ * `lib/db/src/schema/` using `drizzle-kit push --force`. Runs at
+ * api-server startup, before the server accepts traffic, so every
+ * deploy automatically picks up pending schema changes.
+ *
+ * Data-aware migrations (backfills, constraint tightening on existing
+ * rows) must run BEFORE this step, in `one-time-migrations.ts`, so that
+ * `push` does not fail trying to e.g. add a NOT NULL column on a
+ * populated table.
+ */
 export async function syncSchemaFromDrizzle(): Promise<void> {
-  console.log("[SchemaSync] Running drizzle-kit push --force to sync DB with canonical schema…");
+  const dbDir = resolveDbDir();
+
+  if (!existsSync(dbDir)) {
+    throw new Error(
+      `[SchemaSync] Expected lib/db at ${dbDir} but it does not exist. ` +
+        `cwd=${process.cwd()} — check api-server launch cwd.`,
+    );
+  }
+
+  const bin = resolveDrizzleKitBin(dbDir);
+  if (!bin) {
+    throw new Error(
+      `[SchemaSync] drizzle-kit binary not found in lib/db/node_modules or root node_modules. ` +
+        `Ensure devDependencies are installed in this environment so schema sync can run.`,
+    );
+  }
+
+  console.log(`[SchemaSync] Running ${bin} push --force (cwd=${dbDir})…`);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
-      DRIZZLE_KIT_BIN,
+      bin,
       ["push", "--force", "--config", "./drizzle.config.ts"],
       {
-        cwd: DB_DIR,
+        cwd: dbDir,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -44,7 +99,11 @@ export async function syncSchemaFromDrizzle(): Promise<void> {
         console.log("[SchemaSync] drizzle-kit push completed successfully.");
         resolve();
       } else {
-        reject(new Error(`drizzle-kit push exited with code ${code}. Output:\n${chunks.join("")}`));
+        reject(
+          new Error(
+            `drizzle-kit push exited with code ${code}. Output:\n${chunks.join("")}`,
+          ),
+        );
       }
     });
   });

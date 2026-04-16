@@ -48,24 +48,31 @@ async function bootstrap() {
   // sync with the shipped code. If this fails, crash hard — the supervisor
   // will restart us and we'd rather 5xx at the edge than serve a broken
   // dashboard backed by a drifted schema.
-  // 1) Sync DB schema from the canonical Drizzle schema in lib/db/src/schema
-  //    via `drizzle-kit push`. This is the same command the dev post-merge
-  //    script runs, but executing it here means every production deploy also
-  //    picks up pending schema changes automatically before serving traffic.
-  try {
-    await syncSchemaFromDrizzle();
-  } catch (err) {
-    console.error("[startup] Schema sync (drizzle-kit push) failed, aborting startup:", err);
-    process.exit(1);
-  }
-
-  // 2) Run data-aware one-time migrations (backfills, constraint tightening,
-  //    anything the schema-push step can't express). Tracked in
-  //    `_one_time_migrations` so each one runs exactly once.
+  // 1) Run data-aware one-time migrations FIRST (backfills, constraint
+  //    tightening, anything the schema-push step can't express safely).
+  //    Must precede the drizzle-kit push so that e.g. a new NOT NULL
+  //    column can be added, backfilled, and constrained in a single
+  //    idempotent step BEFORE push tries to enforce the same constraint
+  //    on a populated table and fails. Tracked in `_one_time_migrations`
+  //    so each entry runs exactly once.
   try {
     await runOneTimeMigrations();
   } catch (err) {
     console.error("[startup] One-time migrations failed, aborting startup:", err);
+    process.exit(1);
+  }
+
+  // 2) Sync DB schema from the canonical Drizzle schema in
+  //    lib/db/src/schema via `drizzle-kit push`. This is the same
+  //    command the dev post-merge script runs, but executing it here
+  //    means every production deploy also picks up pending schema
+  //    changes automatically before serving traffic. At this point the
+  //    one-time migrations above have already handled any data-aware
+  //    transitions, so push should always be a no-op or a safe ALTER.
+  try {
+    await syncSchemaFromDrizzle();
+  } catch (err) {
+    console.error("[startup] Schema sync (drizzle-kit push) failed, aborting startup:", err);
     process.exit(1);
   }
 
