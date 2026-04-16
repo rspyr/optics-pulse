@@ -8,6 +8,7 @@ import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
 import { startNightlyAggregation } from "./services/coordinator-stats";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
+import { runSchemaMigrations } from "./services/schema-migrations";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
@@ -42,20 +43,36 @@ httpServer.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-httpServer.listen(port, async () => {
-  console.log(`Server listening on port ${port}`);
-  await runOneTimeMigrations();
-  await closeStaleLoginSessions();
-  startLoginSessionExpiryJob();
-  startReconciliationCron(3, 0);
-  startSyncScheduler();
-  startTrainingAlertScheduler(6);
-  startAutomationScheduler();
-  startClientAlertScheduler();
-  startNightlyAggregation();
-  startStDataPurgeScheduler();
-  startSheetSyncScheduler();
-  recoverTimers().catch(err => console.error("[auto-pass] Recovery error:", err));
-  startCallbackScheduler();
-  startHeartbeatMonitor();
+async function startServer() {
+  try {
+    await runSchemaMigrations();
+  } catch (err) {
+    console.error("[startup] Schema migrations failed, exiting:", err);
+    process.exit(1);
+  }
+
+  httpServer.listen(port, async () => {
+    console.log(`Server listening on port ${port}`);
+    await runOneTimeMigrations();
+    await closeStaleLoginSessions();
+    startLoginSessionExpiryJob();
+    startReconciliationCron(3, 0);
+    startSyncScheduler();
+    startTrainingAlertScheduler(6);
+    startAutomationScheduler();
+    startClientAlertScheduler();
+    startNightlyAggregation();
+    startStDataPurgeScheduler();
+    startSheetSyncScheduler();
+    recoverTimers().catch((err) =>
+      console.error("[auto-pass] Recovery error:", err),
+    );
+    startCallbackScheduler();
+    startHeartbeatMonitor();
+  });
+}
+
+startServer().catch((err) => {
+  console.error("[startup] Fatal error:", err);
+  process.exit(1);
 });

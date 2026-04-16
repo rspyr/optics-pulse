@@ -73,6 +73,18 @@ async function buildAll() {
   const publicDest = path.resolve(distDir, "public");
   await cp(publicSrc, publicDest, { recursive: true });
   console.log("copied public/ → dist/public/");
+
+  // Bundle Drizzle migration SQL so the runtime schema-migration runner can
+  // find them when deployed. We intentionally skip the `meta/` directory —
+  // the runner relies on its own `_applied_migrations` tracking table and
+  // never reads the (often-stale) Drizzle journal.
+  const migrationsSrc = path.resolve(__dirname, "../../lib/db/drizzle");
+  const migrationsDest = path.resolve(distDir, "drizzle");
+  await cp(migrationsSrc, migrationsDest, {
+    recursive: true,
+    filter: (src: string) => !src.includes(`${path.sep}meta`),
+  });
+  console.log("copied lib/db/drizzle/*.sql → dist/drizzle/");
 }
 
 buildAll().catch((err) => {
