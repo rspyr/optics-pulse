@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -13,6 +13,7 @@ export const tenantsTable = pgTable("tenants", {
   communicationConfig: jsonb("communication_config"),
   leaderboardConfig: jsonb("leaderboard_config"),
   spiffConfig: jsonb("spiff_config"),
+  oldLeadThreshold: integer("old_lead_threshold"),
   isActive: boolean("is_active").notNull().default(true),
   isDemo: boolean("is_demo").notNull().default(false),
   stSyncPaused: boolean("st_sync_paused").notNull().default(true),

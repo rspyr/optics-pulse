@@ -405,6 +405,35 @@ router.put("/sales-manager/spiff-config", async (req, res) => {
   res.json({ spiffConfig: config });
 });
 
+router.get("/sales-manager/old-lead-threshold", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ oldLeadThreshold: 5 });
+    return;
+  }
+  const [tenant] = await db.select({ oldLeadThreshold: tenantsTable.oldLeadThreshold })
+    .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  res.json({ oldLeadThreshold: tenant?.oldLeadThreshold ?? 5 });
+});
+
+router.put("/sales-manager/old-lead-threshold", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+  const raw = req.body?.oldLeadThreshold;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    res.status(400).json({ error: "Old lead threshold must be an integer between 1 and 50" });
+    return;
+  }
+  await db.update(tenantsTable)
+    .set({ oldLeadThreshold: value, updatedAt: new Date() })
+    .where(eq(tenantsTable.id, tenantId));
+  res.json({ oldLeadThreshold: value });
+});
+
 router.get("/sales-manager/spiffs-audit", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {

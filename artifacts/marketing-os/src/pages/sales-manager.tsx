@@ -3136,6 +3136,126 @@ interface AliasGroup {
   aliases: { id: number; alias: string }[];
 }
 
+function OldLeadThresholdSection({ tenantId }: { tenantId: number | null }) {
+  const [value, setValue] = useState<number>(5);
+  const [savedValue, setSavedValue] = useState<number>(5);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!tenantId) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/sales-manager/old-lead-threshold?tenantId=${tenantId}`, { credentials: "include" });
+        if (!res.ok) {
+          if (!cancelled) setError("Couldn't load the current threshold. Showing default (5).");
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        const v = typeof data?.oldLeadThreshold === "number" ? data.oldLeadThreshold : 5;
+        setValue(v);
+        setSavedValue(v);
+      } catch {
+        if (!cancelled) setError("Couldn't load the current threshold. Showing default (5).");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId]);
+
+  const isDirty = value !== savedValue;
+  const isValid = Number.isInteger(value) && value >= 1 && value <= 50;
+
+  const handleSave = async () => {
+    if (!tenantId || !isValid) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/sales-manager/old-lead-threshold?tenantId=${tenantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ oldLeadThreshold: value }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data?.error || "Failed to save");
+      } else {
+        const data = await res.json();
+        const v = typeof data?.oldLeadThreshold === "number" ? data.oldLeadThreshold : value;
+        setValue(v);
+        setSavedValue(v);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Clock className="w-4 h-4 text-primary" />
+        <span className="text-sm font-display text-white">Old Lead Threshold</span>
+      </div>
+
+      <PremiumCard className="p-6 space-y-5">
+        <div>
+          <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Touchpoints Before Old</label>
+          <p className="text-[10px] text-white/30 mb-2">
+            Number of unresponsive touchpoints before a lead moves into the "old" list. Defaults to 5. Applies to newly logged touchpoints only.
+          </p>
+          <div className="w-40">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={value === 0 ? "" : String(value)}
+              onChange={e => {
+                const v = e.target.value.replace(/[^0-9]/g, "");
+                setValue(v === "" ? 0 : Number(v));
+              }}
+              placeholder="5"
+              className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </div>
+          {!isValid && (
+            <p className="text-[10px] text-red-400 mt-1.5">Enter a whole number between 1 and 50.</p>
+          )}
+          {error && (
+            <p className="text-[10px] text-red-400 mt-1.5">{error}</p>
+          )}
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving || !isDirty || !isValid}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
+            isDirty && isValid
+              ? "bg-primary hover:bg-primary/90 text-white"
+              : "bg-white/5 text-white/40 cursor-default",
+            saving && "opacity-50"
+          )}
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : !isDirty ? <CheckCircle2 className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+          {saving ? "Saving..." : !isDirty ? "Saved" : "Save Threshold"}
+        </button>
+      </PremiumCard>
+    </div>
+  );
+}
+
 function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   const [groups, setGroups] = useState<AliasGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3556,6 +3676,10 @@ function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} funnels={funnels} />
+
+      <div className="border-t border-white/5 pt-6">
+        <OldLeadThresholdSection tenantId={tenantId} />
+      </div>
 
       <div className="border-t border-white/5 pt-6">
         <LeadSourceAliasSection tenantId={tenantId} />

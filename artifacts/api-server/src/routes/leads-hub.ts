@@ -437,21 +437,25 @@ router.post("/leads-hub/action", async (req, res) => {
   }
 
 
+  const [tenantRow] = await db.select({ oldLeadThreshold: tenantsTable.oldLeadThreshold })
+    .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  const oldLeadThreshold = tenantRow?.oldLeadThreshold ?? 5;
+
   const shouldIncrementDay = (
     actionType === "call" && (callResult === "no_answer" || callResult === "left_voicemail" || callResult === "vm_full" || callResult === "vm_not_setup")
   ) || actionType === "voicemail_drop";
 
   if (shouldIncrementDay && !deadReason && !req.body.appointmentSet && !callbackAt && lead.hubStatus !== "appt_booked") {
-    const newDay = Math.min(lead.dayInSequence + 1, 5);
+    const newDay = Math.min(lead.dayInSequence + 1, oldLeadThreshold);
     updates.dayInSequence = newDay;
-    if (newDay >= 5 && lead.hubStatus !== "appt_set" && lead.hubStatus !== "dead") {
+    if (newDay >= oldLeadThreshold && lead.hubStatus !== "appt_set" && lead.hubStatus !== "dead") {
       updates.hubStatus = "day_5_old";
     } else if (newDay <= 4) {
       updates.hubStatus = `day_${newDay}`;
     }
   }
 
-  const UNRESPONSIVE_THRESHOLD = 5;
+  const UNRESPONSIVE_THRESHOLD = oldLeadThreshold;
   const skipAutoOld = ["appt_set", "appt_booked", "dead", "day_5_old"];
   const currentStatus = (updates.hubStatus as string) || lead.hubStatus;
   if (!skipAutoOld.includes(currentStatus)) {
@@ -478,7 +482,7 @@ router.post("/leads-hub/action", async (req, res) => {
 
     if (unresponsiveCount >= UNRESPONSIVE_THRESHOLD) {
       updates.hubStatus = "day_5_old";
-      updates.dayInSequence = 5;
+      updates.dayInSequence = oldLeadThreshold;
     }
   }
 
