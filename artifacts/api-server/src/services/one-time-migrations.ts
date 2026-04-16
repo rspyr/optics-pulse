@@ -979,7 +979,7 @@ const migrations: Migration[] = [
         // DEFAULT '' before this migration got to run).
         const backfilled = await tx.execute(sql`
           UPDATE "leads" SET "original_source" = "source"
-          WHERE "original_source" IS NULL OR "original_source" = ''
+          WHERE "original_source" IS NULL OR "original_source" = '' OR "original_source" = 'unknown'
         `);
         console.log(`[Migration] Backfilled leads.original_source from source for ${backfilled.rowCount ?? 0} row(s)`);
         await tx.execute(sql`ALTER TABLE "leads" ALTER COLUMN "original_source" SET NOT NULL`);
