@@ -31,6 +31,17 @@ if (Number.isNaN(port) || port <= 0) {
 const httpServer = createServer(app);
 initSocketIO(httpServer, sessionMiddleware);
 
+httpServer.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `[startup] Port ${port} is already in use. A previous instance likely did not exit cleanly. Exiting so the supervisor can restart.`,
+    );
+    process.exit(1);
+  }
+  console.error("[startup] HTTP server error:", err);
+  process.exit(1);
+});
+
 httpServer.listen(port, async () => {
   console.log(`Server listening on port ${port}`);
   await runOneTimeMigrations();
