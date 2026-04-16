@@ -14,6 +14,7 @@
     "backfill-funnels": "node --import tsx/esm migrations/backfill-funnel-types.ts"
   },
   "dependencies": {
+    "@workspace/api-zod": "workspace:*",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "catalog:",
     "drizzle-zod": "^0.8.3",

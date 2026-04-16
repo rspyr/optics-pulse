@@ -113,6 +113,7 @@ interface LeadDetail {
   phone?: string;
   email?: string;
   source?: string;
+  originalSource?: string;
   leadType?: string;
   interestType?: string;
   serviceType?: string;
@@ -927,6 +928,8 @@ export default function LeadDetailScreen() {
                   <EditableSourcePicker
                     leadId={lead.id}
                     source={lead.source || "Unknown"}
+                    originalSource={lead.originalSource}
+                    userRole={user?.role}
                     tenantId={effectiveTenantId}
                     onSourceChanged={(newSource) => setLead(prev => prev ? { ...prev, source: newSource } : prev)}
                   />

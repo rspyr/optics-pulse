@@ -390,6 +390,9 @@ importers:
       '@workspace/api-client-react':
         specifier: workspace:*
         version: link:../../lib/api-client-react
+      '@workspace/api-zod':
+        specifier: workspace:*
+        version: link:../../lib/api-zod
       '@workspace/chat-genui':
         specifier: workspace:*
         version: link:../../lib/chat-genui
@@ -520,6 +523,9 @@ importers:
       '@workspace/api-client-react':
         specifier: workspace:*
         version: link:../../lib/api-client-react
+      '@workspace/api-zod':
+        specifier: workspace:*
+        version: link:../../lib/api-zod
       babel-plugin-react-compiler:
         specifier: ^19.0.0-beta-e993439-20250117
         version: 19.0.0-beta-ebf51a3-20250411
@@ -832,6 +838,9 @@ importers:
 
   lib/db:
     dependencies:
+      '@workspace/api-zod':
+        specifier: workspace:*
+        version: link:../api-zod
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3

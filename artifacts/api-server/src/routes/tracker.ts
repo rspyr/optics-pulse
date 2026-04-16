@@ -335,6 +335,7 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
           phone: pii.phone || null,
           email: pii.email || null,
           source: resolvedSourceStr,
+          originalSource: resolvedSourceStr,
           matchedGclid: gclid || null,
           interestType: null,
           leadType: resolvedLeadType,

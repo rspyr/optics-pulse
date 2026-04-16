@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
-  tenantsTable, leadSourceAliasesTable, soldEstimatesTable,
+  tenantsTable, leadSourceAliasesTable, soldEstimatesTable, isUnknownSource,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated, emitNewLead } from "../socket";
@@ -884,6 +884,7 @@ router.post("/leads-hub/create", async (req, res) => {
     phone: phone || null,
     email: email || null,
     source: normalizedSource,
+    originalSource: normalizedSource,
     serviceType: serviceType || null,
     funnelId: funnelId || null,
     assignedCsrId: validatedCsrId,
@@ -1179,9 +1180,16 @@ router.patch("/leads-hub/:leadId/source", async (req, res) => {
   }
   const source = rawSource;
 
-  const [lead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+  const [lead] = await db.select({ id: leadsTable.id, originalSource: leadsTable.originalSource }).from(leadsTable)
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const role = (req.session as any)?.userRole as string | undefined;
+  const isClientRole = role === "client_user" || role === "client_admin";
+  if (isClientRole && !isUnknownSource(lead.originalSource)) {
+    res.status(403).json({ error: "Source can only be changed for leads whose original source is Unknown." });
+    return;
+  }
 
   const normalizedSource = await normalizeSource(tenantId, source);
 

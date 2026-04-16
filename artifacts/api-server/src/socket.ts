@@ -366,6 +366,7 @@ async function createDemoLead(): Promise<void> {
       phone: fakePhone(),
       email: fakeEmail(firstName, lastName),
       source,
+      originalSource: source,
       leadType,
       funnelId,
       interestType: randomFrom(DEMO_INTEREST_TYPES),

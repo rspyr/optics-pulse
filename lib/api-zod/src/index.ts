@@ -47,3 +47,10 @@ export {
   type UpdateUserInput, type UpdateUserInputRole, type WebhookIngestPayload,
   type WebhookIngestPayloadData, type WebhookIngestPayloadSource, type WebhookIngestResponse,
 } from "./generated/types";
+
+export function isUnknownSource(source: string | null | undefined): boolean {
+  if (source == null) return true;
+  const trimmed = String(source).trim();
+  if (trimmed === "") return true;
+  return trimmed.toLowerCase() === "unknown";
+}

@@ -21,6 +21,7 @@ export const leadsTable = pgTable("leads", {
   phone: text("phone"),
   email: text("email"),
   source: text("source").notNull(),
+  originalSource: text("original_source").notNull(),
   leadType: text("lead_type"),
   interestType: text("interest_type"),
   /** @deprecated Use hubStatus instead. Kept for backward compat. */
@@ -79,6 +80,8 @@ export const LEAD_SOURCES = [
   "Meta", "Google", "Facebook", "Instagram", "Direct Mail",
   "YouTube", "TikTok", "Email", "ETO Website", "EGIA",
 ] as const;
+
+export { isUnknownSource } from "@workspace/api-zod";
 
 export const DEAD_REASONS = [
   "out_of_service_area", "do_not_call", "not_interested",

@@ -19,6 +19,7 @@ import {
   Pencil, Timer, Send, ArrowDown, ExternalLink, Search,
   Pause, Play
 } from "lucide-react";
+import { isUnknownSource } from "@workspace/api-zod";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -188,6 +189,7 @@ interface LeadData {
   phone?: string | null;
   email?: string | null;
   source: string;
+  originalSource?: string | null;
   leadType?: string | null;
   serviceType?: string | null;
   interestType?: string | null;
@@ -679,7 +681,7 @@ function SourceTag({ source }: { source: string }) {
   return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
 }
 
-function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { leadId: number; source: string; onSourceChanged: (newSource: string) => void; tenantId?: number }) {
+function EditableSourceTag({ leadId, source, originalSource, userRole, onSourceChanged, tenantId }: { leadId: number; source: string; originalSource?: string | null; userRole?: string; onSourceChanged: (newSource: string) => void; tenantId?: number }) {
   const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -709,7 +711,10 @@ function EditableSourceTag({ leadId, source, onSourceChanged, tenantId }: { lead
     setSaving(false);
   };
 
-  if (canonicalSources.length === 0) {
+  const isClientRole = userRole === "client_user" || userRole === "client_admin";
+  const canEdit = !isClientRole || isUnknownSource(originalSource);
+
+  if (!canEdit || canonicalSources.length === 0) {
     return <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-medium border", getSourceColor(source))}>{source}</span>;
   }
 
@@ -1474,8 +1479,8 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false, userRole }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean; userRole?: string;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "dead_reason_custom" | "text_done" | "text_result" | "vm_done" | "appt_booked_spoke" | "appt_cancel_reason">(null);
   const [customDeadNote, setCustomDeadNote] = useState("");
@@ -1648,7 +1653,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => onUpdate()} tenantId={tenantId} />
+              <EditableSourceTag leadId={lead.id} source={lead.source} originalSource={lead.originalSource} userRole={userRole} onSourceChanged={() => onUpdate()} tenantId={tenantId} />
               {lead.serviceType && (
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
               )}
@@ -2412,6 +2417,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
         canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
         currentUserId={user?.id}
         isAdminRole={isAdmin}
+        userRole={user?.role}
         isArchived
       />
     );
@@ -2495,7 +2501,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
                   {lead.hasSoldEstimate && <ClosedBadge />}
-                  <EditableSourceTag leadId={lead.id} source={lead.source} onSourceChanged={() => refetch()} tenantId={tenantId} />
+                  <EditableSourceTag leadId={lead.id} source={lead.source} originalSource={lead.originalSource} userRole={user?.role} onSourceChanged={() => refetch()} tenantId={tenantId} />
                 </div>
                 <div className="flex items-center gap-2">
                   {lead.assignedTo && <span className="text-[10px] text-white/25">{lead.assignedTo}</span>}
@@ -3144,6 +3150,7 @@ export default function Leads() {
               canEditActions={!!user && ["super_admin", "agency_user", "client_admin", "client_user"].includes(user.role || "")}
               currentUserId={user?.id}
               isAdminRole={isAdmin}
+              userRole={user?.role}
             />
           ) : (
           <>

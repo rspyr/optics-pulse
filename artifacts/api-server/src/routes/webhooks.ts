@@ -166,13 +166,15 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
       const rawApptTime = (dataObj.appointmentTime as string) || null;
       const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
 
+      const normalizedIntakeSource = await normalizeSource(tenantId, data.utmSource || source);
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: data.firstName || "Unknown",
         lastName: data.lastName || "",
         phone: data.phone || null,
         email: data.email || null,
-        source: await normalizeSource(tenantId, data.utmSource || source),
+        source: normalizedIntakeSource,
+        originalSource: normalizedIntakeSource,
         matchedGclid: data.gclid || null,
         interestType: null,
         leadType: resolvedLeadType,
@@ -307,13 +309,15 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
       const rawApptTime = (customData.appointmentTime as string) || (contact.appointmentTime as string) || null;
       const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
 
+      const normalizedIntakeSource = await normalizeSource(tenantId, utmSource || "ghl");
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
         firstName: firstName || "Unknown",
         lastName: lastName || "",
         phone: phone || null,
         email: email || null,
-        source: await normalizeSource(tenantId, utmSource || "ghl"),
+        source: normalizedIntakeSource,
+        originalSource: normalizedIntakeSource,
         matchedGclid: gclid || null,
         interestType: null,
         leadType: resolvedLeadType,

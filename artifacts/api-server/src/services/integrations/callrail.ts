@@ -193,6 +193,7 @@ export async function syncCallRailCalls(
             lastName,
             phone: call.customerPhoneNumber || null,
             source: call.source || "callrail",
+            originalSource: call.source || "callrail",
             leadType: "CallRail",
             interestType: null,
           }).returning();

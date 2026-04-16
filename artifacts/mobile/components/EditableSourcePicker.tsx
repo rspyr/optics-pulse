@@ -11,10 +11,13 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { useApi } from "@/hooks/useApi";
 import { useColors } from "@/hooks/useColors";
+import { isUnknownSource } from "@workspace/api-zod";
 
 interface EditableSourcePickerProps {
   leadId: number;
   source: string;
+  originalSource?: string | null;
+  userRole?: string;
   tenantId?: number | null;
   onSourceChanged: (newSource: string) => void;
   compact?: boolean;
@@ -29,7 +32,7 @@ function getSourceColor(source: string): { bg: string; text: string; border: str
   return { bg: "#FFFFFF08", text: "#FFFFFF80", border: "#FFFFFF18" };
 }
 
-export function EditableSourcePicker({ leadId, source, tenantId, onSourceChanged, compact }: EditableSourcePickerProps) {
+export function EditableSourcePicker({ leadId, source, originalSource, userRole, tenantId, onSourceChanged, compact }: EditableSourcePickerProps) {
   const { apiFetch } = useApi();
   const colors = useColors();
   const [canonicalSources, setCanonicalSources] = useState<string[]>([]);
@@ -69,6 +72,24 @@ export function EditableSourcePicker({ leadId, source, tenantId, onSourceChanged
   const sourceColors = getSourceColor(source);
   const allOptions = canonicalSources.includes(source) ? canonicalSources : [source, ...canonicalSources];
   const hasOptions = canonicalSources.length > 0;
+  const isClientRole = userRole === "client_user" || userRole === "client_admin";
+  const canEdit = !isClientRole || isUnknownSource(originalSource);
+
+  if (!canEdit) {
+    return (
+      <View
+        style={[
+          styles.badge,
+          { backgroundColor: sourceColors.bg, borderColor: sourceColors.border },
+          compact && styles.badgeCompact,
+        ]}
+      >
+        <Text style={[styles.badgeText, { color: sourceColors.text }, compact && styles.badgeTextCompact]}>
+          {source}
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <>

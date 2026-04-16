@@ -423,13 +423,15 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         ? new Date(Date.now() + 10 * 60 * 1000)
         : null;
 
+      const normalizedIntakeSource = await normalizeSource(config.tenantId, row.source || "Unknown");
       const [lead] = await db.insert(leadsTable).values({
         tenantId: config.tenantId,
         firstName: row.firstName || "Unknown",
         lastName: row.lastName || "",
         phone: row.phone || null,
         email: row.email || null,
-        source: await normalizeSource(config.tenantId, row.source || "Unknown"),
+        source: normalizedIntakeSource,
+        originalSource: normalizedIntakeSource,
         serviceType: row.serviceType || null,
         notes: row.notes || null,
         address: row.address || null,
