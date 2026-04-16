@@ -18,27 +18,26 @@ const BOOTSTRAP_PENDING = new Set([
 function resolveMigrationsDir(): string {
   const candidates: string[] = [];
 
+  // Works in both tsx dev (ESM) and esbuild-bundled cjs — esbuild's
+  // node/cjs target rewrites `import.meta.url` to a valid runtime value.
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    candidates.push(path.resolve(here, "drizzle"));
-    candidates.push(path.resolve(here, "../drizzle"));
-    candidates.push(path.resolve(here, "../../drizzle"));
+    candidates.push(
+      path.resolve(here, "drizzle"),
+      path.resolve(here, "../drizzle"),
+      path.resolve(here, "../../drizzle"),
+      // tsx dev: this file lives at artifacts/api-server/src/services/,
+      // so the monorepo-root migrations live 4 directories up.
+      path.resolve(here, "../../../../lib/db/drizzle"),
+      // bundled prod: dist/index.cjs sibling copies drizzle/ next to it
+      path.resolve(here, "../dist/drizzle"),
+    );
   } catch {
-    // import.meta.url not available in bundled cjs — fall through
+    // import.meta.url unavailable — fall through to cwd fallbacks
   }
 
-  // esbuild replaces __dirname in the bundled dist/index.cjs
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const maybeDirname = (globalThis as any).__dirname as string | undefined;
-  if (typeof maybeDirname === "string") {
-    candidates.push(path.resolve(maybeDirname, "drizzle"));
-    candidates.push(path.resolve(maybeDirname, "../drizzle"));
-  }
-
-  // Dev / workspace-root fallbacks
-  candidates.push(path.resolve(process.cwd(), "lib/db/drizzle"));
-  candidates.push(path.resolve(process.cwd(), "../../lib/db/drizzle"));
   candidates.push(
+    path.resolve(process.cwd(), "lib/db/drizzle"),
     path.resolve(process.cwd(), "artifacts/api-server/dist/drizzle"),
   );
 
@@ -107,19 +106,38 @@ export async function runSchemaMigrations(): Promise<void> {
     const isFirstRun = Number(countRes.rows[0]?.count ?? "0") === 0;
 
     if (isFirstRun) {
-      let baselined = 0;
-      for (const f of files) {
-        const tag = path.basename(f, ".sql");
-        if (BOOTSTRAP_PENDING.has(tag)) continue;
-        await client.query(
-          `INSERT INTO _applied_migrations (tag) VALUES ($1) ON CONFLICT DO NOTHING`,
-          [tag],
-        );
-        baselined++;
-      }
-      console.log(
-        `[SchemaMigrations] Baselined ${baselined} migration(s) as applied; ${BOOTSTRAP_PENDING.size} bootstrap-pending eligible to run`,
+      // Detect whether this is a fresh database or a pre-existing one that
+      // needs baselining. The `tenants` table is created by migration
+      // 0000 and has existed since the first day of the project, so its
+      // presence is a reliable sentinel for "legacy DB".
+      const sentinelRes = await client.query<{ present: boolean }>(
+        `SELECT (to_regclass('public.tenants') IS NOT NULL) AS present`,
       );
+      const isLegacyDb = sentinelRes.rows[0]?.present === true;
+
+      if (isLegacyDb) {
+        // Legacy DB: record every file as applied EXCEPT the known-missing
+        // bootstrap set. This preserves correctness without re-running
+        // non-idempotent migrations (e.g. bare `CREATE TABLE`) that would
+        // fail against an already-populated schema.
+        let baselined = 0;
+        for (const f of files) {
+          const tag = path.basename(f, ".sql");
+          if (BOOTSTRAP_PENDING.has(tag)) continue;
+          await client.query(
+            `INSERT INTO _applied_migrations (tag) VALUES ($1) ON CONFLICT DO NOTHING`,
+            [tag],
+          );
+          baselined++;
+        }
+        console.log(
+          `[SchemaMigrations] Legacy DB detected; baselined ${baselined} migration(s) as applied. Bootstrap-pending: ${[...BOOTSTRAP_PENDING].join(", ")}`,
+        );
+      } else {
+        console.log(
+          `[SchemaMigrations] Fresh database detected (no tenants table) — all ${files.length} migration(s) will be applied from scratch`,
+        );
+      }
     }
 
     const appliedRes = await client.query<{ tag: string }>(
