@@ -21,7 +21,7 @@ export const leadsTable = pgTable("leads", {
   phone: text("phone"),
   email: text("email"),
   source: text("source").notNull(),
-  originalSource: text("original_source").notNull(),
+  originalSource: text("original_source").notNull().default(""),
   leadType: text("lead_type"),
   interestType: text("interest_type"),
   /** @deprecated Use hubStatus instead. Kept for backward compat. */

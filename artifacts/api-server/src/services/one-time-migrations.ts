@@ -974,8 +974,12 @@ const migrations: Migration[] = [
       // Backfill + SET NOT NULL inside a single transaction so a concurrent
       // INSERT can't slip a NULL in between the two statements.
       await db.transaction(async (tx) => {
+        // Backfill both NULLs (when api-server added the column itself) and
+        // empty strings (when the Replit publish flow added the column with
+        // DEFAULT '' before this migration got to run).
         const backfilled = await tx.execute(sql`
-          UPDATE "leads" SET "original_source" = "source" WHERE "original_source" IS NULL
+          UPDATE "leads" SET "original_source" = "source"
+          WHERE "original_source" IS NULL OR "original_source" = ''
         `);
         console.log(`[Migration] Backfilled leads.original_source from source for ${backfilled.rowCount ?? 0} row(s)`);
         await tx.execute(sql`ALTER TABLE "leads" ALTER COLUMN "original_source" SET NOT NULL`);
