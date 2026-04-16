@@ -8,6 +8,7 @@ import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
 import { startNightlyAggregation } from "./services/coordinator-stats";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
+import { syncSchemaFromDrizzle } from "./services/schema-sync";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
@@ -47,6 +48,20 @@ async function bootstrap() {
   // sync with the shipped code. If this fails, crash hard — the supervisor
   // will restart us and we'd rather 5xx at the edge than serve a broken
   // dashboard backed by a drifted schema.
+  // 1) Sync DB schema from the canonical Drizzle schema in lib/db/src/schema
+  //    via `drizzle-kit push`. This is the same command the dev post-merge
+  //    script runs, but executing it here means every production deploy also
+  //    picks up pending schema changes automatically before serving traffic.
+  try {
+    await syncSchemaFromDrizzle();
+  } catch (err) {
+    console.error("[startup] Schema sync (drizzle-kit push) failed, aborting startup:", err);
+    process.exit(1);
+  }
+
+  // 2) Run data-aware one-time migrations (backfills, constraint tightening,
+  //    anything the schema-push step can't express). Tracked in
+  //    `_one_time_migrations` so each one runs exactly once.
   try {
     await runOneTimeMigrations();
   } catch (err) {
