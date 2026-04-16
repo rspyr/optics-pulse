@@ -964,6 +964,25 @@ const migrations: Migration[] = [
       console.log("[Migration] Added check constraint for lead_ingestion_mode");
     },
   },
+  {
+    id: "2026-04-16_add-lead-original-source",
+    description: "Add leads.original_source column, backfill from source, enforce NOT NULL (mirrors drizzle/0033_lead_original_source.sql)",
+    run: async () => {
+      // ADD COLUMN must run outside a transaction block on some PG configs,
+      // and is idempotent via IF NOT EXISTS.
+      await db.execute(sql`ALTER TABLE "leads" ADD COLUMN IF NOT EXISTS "original_source" text`);
+      // Backfill + SET NOT NULL inside a single transaction so a concurrent
+      // INSERT can't slip a NULL in between the two statements.
+      await db.transaction(async (tx) => {
+        const backfilled = await tx.execute(sql`
+          UPDATE "leads" SET "original_source" = "source" WHERE "original_source" IS NULL
+        `);
+        console.log(`[Migration] Backfilled leads.original_source from source for ${backfilled.rowCount ?? 0} row(s)`);
+        await tx.execute(sql`ALTER TABLE "leads" ALTER COLUMN "original_source" SET NOT NULL`);
+        console.log("[Migration] Set leads.original_source NOT NULL");
+      });
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {
