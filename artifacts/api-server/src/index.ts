@@ -8,7 +8,6 @@ import { startAutomationScheduler } from "./services/automation-engine";
 import { startClientAlertScheduler } from "./services/client-alerts";
 import { startNightlyAggregation } from "./services/coordinator-stats";
 import { runOneTimeMigrations } from "./services/one-time-migrations";
-import { syncSchemaFromDrizzle } from "./services/schema-sync";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
@@ -48,31 +47,18 @@ async function bootstrap() {
   // sync with the shipped code. If this fails, crash hard — the supervisor
   // will restart us and we'd rather 5xx at the edge than serve a broken
   // dashboard backed by a drifted schema.
-  // 1) Run data-aware one-time migrations FIRST (backfills, constraint
-  //    tightening, anything the schema-push step can't express safely).
-  //    Must precede the drizzle-kit push so that e.g. a new NOT NULL
-  //    column can be added, backfilled, and constrained in a single
-  //    idempotent step BEFORE push tries to enforce the same constraint
-  //    on a populated table and fails. Tracked in `_one_time_migrations`
-  //    so each entry runs exactly once.
+  // Run data-aware one-time migrations. Each entry is an idempotent,
+  // hand-written SQL block tracked in `_one_time_migrations` so it runs
+  // exactly once per environment. We deliberately do NOT run
+  // `drizzle-kit push --force` here: `--force` is willing to execute
+  // destructive SQL (e.g. `TRUNCATE` when adding a NOT NULL column to a
+  // populated table), which is unsafe for production. Every schema
+  // change that must reach production should be mirrored as an
+  // idempotent entry in `one-time-migrations.ts`.
   try {
     await runOneTimeMigrations();
   } catch (err) {
     console.error("[startup] One-time migrations failed, aborting startup:", err);
-    process.exit(1);
-  }
-
-  // 2) Sync DB schema from the canonical Drizzle schema in
-  //    lib/db/src/schema via `drizzle-kit push`. This is the same
-  //    command the dev post-merge script runs, but executing it here
-  //    means every production deploy also picks up pending schema
-  //    changes automatically before serving traffic. At this point the
-  //    one-time migrations above have already handled any data-aware
-  //    transitions, so push should always be a no-op or a safe ALTER.
-  try {
-    await syncSchemaFromDrizzle();
-  } catch (err) {
-    console.error("[startup] Schema sync (drizzle-kit push) failed, aborting startup:", err);
     process.exit(1);
   }
 
