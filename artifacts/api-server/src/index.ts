@@ -42,45 +42,20 @@ httpServer.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-async function bootstrap() {
-  // Run schema/data migrations BEFORE accepting traffic so the DB is in
-  // sync with the shipped code. If this fails, crash hard — the supervisor
-  // will restart us and we'd rather 5xx at the edge than serve a broken
-  // dashboard backed by a drifted schema.
-  // Run data-aware one-time migrations. Each entry is an idempotent,
-  // hand-written SQL block tracked in `_one_time_migrations` so it runs
-  // exactly once per environment. We deliberately do NOT run
-  // `drizzle-kit push --force` here: `--force` is willing to execute
-  // destructive SQL (e.g. `TRUNCATE` when adding a NOT NULL column to a
-  // populated table), which is unsafe for production. Every schema
-  // change that must reach production should be mirrored as an
-  // idempotent entry in `one-time-migrations.ts`.
-  try {
-    await runOneTimeMigrations();
-  } catch (err) {
-    console.error("[startup] One-time migrations failed, aborting startup:", err);
-    process.exit(1);
-  }
-
-  httpServer.listen(port, async () => {
-    console.log(`Server listening on port ${port}`);
-    await closeStaleLoginSessions();
-    startLoginSessionExpiryJob();
-    startReconciliationCron(3, 0);
-    startSyncScheduler();
-    startTrainingAlertScheduler(6);
-    startAutomationScheduler();
-    startClientAlertScheduler();
-    startNightlyAggregation();
-    startStDataPurgeScheduler();
-    startSheetSyncScheduler();
-    recoverTimers().catch(err => console.error("[auto-pass] Recovery error:", err));
-    startCallbackScheduler();
-    startHeartbeatMonitor();
-  });
-}
-
-bootstrap().catch((err) => {
-  console.error("[startup] Fatal bootstrap error:", err);
-  process.exit(1);
+httpServer.listen(port, async () => {
+  console.log(`Server listening on port ${port}`);
+  await runOneTimeMigrations();
+  await closeStaleLoginSessions();
+  startLoginSessionExpiryJob();
+  startReconciliationCron(3, 0);
+  startSyncScheduler();
+  startTrainingAlertScheduler(6);
+  startAutomationScheduler();
+  startClientAlertScheduler();
+  startNightlyAggregation();
+  startStDataPurgeScheduler();
+  startSheetSyncScheduler();
+  recoverTimers().catch(err => console.error("[auto-pass] Recovery error:", err));
+  startCallbackScheduler();
+  startHeartbeatMonitor();
 });
