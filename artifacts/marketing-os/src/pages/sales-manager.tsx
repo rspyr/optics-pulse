@@ -3144,13 +3144,22 @@ function OldLeadThresholdSection({ tenantId }: { tenantId: number | null }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setLoading(false); setError(null); return; }
     let cancelled = false;
+    setError(null);
+    setLoading(true);
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/sales-manager/old-lead-threshold?tenantId=${tenantId}`, { credentials: "include" });
         if (!res.ok) {
-          if (!cancelled) setError("Couldn't load the current threshold. Showing default (5).");
+          if (cancelled) return;
+          if (res.status === 401) {
+            setError("Your session expired. Please sign in again.");
+          } else if (res.status === 403) {
+            setError("You don't have permission to view this setting.");
+          } else {
+            setError("Couldn't load the current threshold. Showing default (5).");
+          }
           return;
         }
         const data = await res.json();
@@ -3182,14 +3191,22 @@ function OldLeadThresholdSection({ tenantId }: { tenantId: number | null }) {
         body: JSON.stringify({ oldLeadThreshold: value }),
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data?.error || "Failed to save");
+        if (res.status === 401) {
+          setError("Your session expired. Please sign in again.");
+        } else if (res.status === 403) {
+          setError("You don't have permission to change this setting.");
+        } else {
+          const data = await res.json().catch(() => ({}));
+          setError(data?.error || "Failed to save");
+        }
       } else {
         const data = await res.json();
         const v = typeof data?.oldLeadThreshold === "number" ? data.oldLeadThreshold : value;
         setValue(v);
         setSavedValue(v);
       }
+    } catch {
+      setError("Failed to save");
     } finally {
       setSaving(false);
     }
@@ -3199,6 +3216,20 @@ function OldLeadThresholdSection({ tenantId }: { tenantId: number | null }) {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="w-5 h-5 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (!tenantId) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Clock className="w-4 h-4 text-primary" />
+          <span className="text-sm font-display text-white">Old Lead Threshold</span>
+        </div>
+        <PremiumCard className="p-6">
+          <p className="text-xs text-white/40">Select a tenant to view this setting.</p>
+        </PremiumCard>
       </div>
     );
   }
