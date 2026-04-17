@@ -11,22 +11,30 @@ export function verifyCallRailSignature(
   signingKey: string | undefined,
 ): boolean {
   if (!signingKey) {
-    if (process.env.NODE_ENV === "development") {
-      console.warn("[CallRail] No signing key configured, skipping verification in dev mode");
-      return true;
-    }
+    console.warn("[CallRail] No signing key configured for tenant — rejecting webhook (fail closed)");
     return false;
   }
 
   if (!signature) return false;
 
-  const expected = crypto
-    .createHmac("sha256", signingKey)
-    .update(payload)
-    .digest("hex");
+  const hmac = crypto.createHmac("sha1", signingKey).update(payload);
+  const expectedBase64 = hmac.digest("base64");
+  const expectedHex = crypto.createHmac("sha1", signingKey).update(payload).digest("hex");
 
-  if (signature.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const incoming = signature.replace(/^sha1=/i, "").trim();
+
+  for (const expected of [expectedBase64, expectedHex]) {
+    if (incoming.length === expected.length) {
+      try {
+        if (crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(expected))) {
+          return true;
+        }
+      } catch {
+        // length mismatch after Buffer conversion — ignore and continue
+      }
+    }
+  }
+  return false;
 }
 
 export interface CallRailConfig {

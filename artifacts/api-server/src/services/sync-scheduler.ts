@@ -864,13 +864,14 @@ export function startSyncScheduler() {
     console.log("[SyncScheduler] Podium review sync PAUSED — integration disabled");
   }, reviewSyncInterval);
 
-  const callRailSyncInterval = 30 * 60 * 1000;
-  const callRailTimer = setInterval(async () => {
-    console.log("[SyncScheduler] CallRail sync PAUSED — integration disabled");
-  }, callRailSyncInterval);
+  // CallRail intake is webhook-first (POST /api/webhooks/callrail/:tenantId).
+  // The previous polling backstop was a permanent no-op timer; it has been
+  // removed. If CallRail webhooks ever need a polling safety net, re-enable
+  // syncCallRailCalls here on a real interval rather than a logging stub.
+  void syncCallRailCalls;
 
-  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer, callRailTimer];
-  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 15min, Podium/CallRail PAUSED");
+  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer];
+  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 15min, Podium PAUSED, CallRail webhook-only");
 }
 
 export function stopSyncScheduler() {

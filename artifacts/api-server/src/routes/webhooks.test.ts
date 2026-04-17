@@ -97,6 +97,12 @@ vi.mock("../socket", () => ({
   emitPodiumMessage: vi.fn(),
 }));
 
+const mockDecryptConfig = vi.fn();
+vi.mock("../lib/encryption", () => ({
+  decryptConfig: (s: string) => mockDecryptConfig(s),
+  encryptConfig: (o: unknown) => JSON.stringify(o),
+}));
+
 vi.mock("../services/round-robin", () => ({
   assignLeadRoundRobin: vi.fn().mockResolvedValue({ assignedCsrId: null, reason: "no CSRs" }),
 }));
@@ -488,5 +494,202 @@ describe("POST /webhooks/ghl", () => {
     expect(body.message).toContain("Invalid webhook signature");
 
     delete process.env.WEBHOOK_SECRET;
+  });
+});
+
+describe("POST /webhooks/callrail/:tenantId", () => {
+  const SIGNING_KEY = "test-signing-key";
+
+  beforeEach(async () => {
+    delete process.env.WEBHOOK_SECRET;
+    mockDb.selectResults = [];
+    mockDb.insertResults = [];
+    mockDb.resetCounters();
+    mockDecryptConfig.mockReset();
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY });
+    await setupApp();
+  });
+
+  function signCallRail(payload: string): string {
+    return crypto.createHmac("sha1", SIGNING_KEY).update(payload).digest("base64");
+  }
+
+  it("rejects with 401 when signature is missing", async () => {
+    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }]];
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", {
+      id: "CAL123",
+      customer_phone_number: "+15551234567",
+      customer_name: "Jane Doe",
+    });
+
+    expect(res.status).toBe(401);
+    expect(res.json().message).toContain("Invalid webhook signature");
+  });
+
+  it("rejects with 401 when signature is wrong", async () => {
+    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }]];
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", {
+      id: "CAL123",
+      customer_phone_number: "+15551234567",
+    }, { signature: "deadbeef" });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 when tenant does not exist", async () => {
+    mockDb.selectResults = [[]];
+
+    const payload = { id: "CAL999" };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/999", payload, { signature: sig });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 when tenantId in URL is invalid", async () => {
+    const res = await sendRequest(app, "/webhooks/callrail/abc", { id: "CAL1" });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead", async () => {
+    const fakeEvent = { id: 700, tenantId: 1 };
+    const fakeLead = { id: 70, tenantId: 1 };
+    // selects in order: tenant lookup, dedup check, refreshed lead lookup
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [],
+      [fakeLead],
+    ];
+    // inserts in order: attribution event, lead
+    mockDb.insertResults = [[fakeEvent], [fakeLead]];
+
+    const payload = {
+      id: "CAL_abc123",
+      customer_phone_number: "+15551234567",
+      customer_name: "Jane Doe",
+      gclid: "GCLID_xyz",
+      source: "Google Ads",
+      medium: "ppc",
+      campaign: "Spring Sale",
+      landing_page_url: "https://example.com/landing",
+      customer_city: "Denver",
+      customer_state: "CO",
+    };
+    const payloadStr = JSON.stringify(payload);
+    const sig = signCallRail(payloadStr);
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+
+    expect(res.status).toBe(200);
+    expect(res.json().success).toBe(true);
+    expect(res.json().eventId).toBe(700);
+
+    const eventInsert = mockDb.insertCalls[0]?.values as Record<string, unknown>;
+    expect(eventInsert.eventType).toBe("call");
+    expect(eventInsert.externalId).toBe("callrail:CAL_abc123");
+    expect(eventInsert.gclid).toBe("GCLID_xyz");
+    expect(eventInsert.utmSource).toBe("Google Ads");
+    expect(eventInsert.utmCampaign).toBe("Spring Sale");
+    expect(eventInsert.utmMedium).toBe("ppc");
+    expect(eventInsert.landingPage).toBe("https://example.com/landing");
+    expect(eventInsert.matchLevel).toBe("diamond");
+    expect(eventInsert.matchConfidence).toBe(1.0);
+
+    const leadInsert = mockDb.insertCalls[1]?.values as Record<string, unknown>;
+    expect(leadInsert.firstName).toBe("Jane");
+    expect(leadInsert.lastName).toBe("Doe");
+    expect(leadInsert.phone).toBe("+15551234567");
+    expect(leadInsert.matchedGclid).toBe("GCLID_xyz");
+    expect(leadInsert.leadType).toBe("CallRail");
+  });
+
+  it("de-duplicates a repeat post of the same call id", async () => {
+    const existingEvent = { id: 555 };
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [existingEvent],
+    ];
+
+    const payload = { id: "CAL_dup", customer_phone_number: "+15551234567" };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+
+    expect(res.status).toBe(200);
+    const body = res.json();
+    expect(body.duplicate).toBe(true);
+    expect(body.eventId).toBe(555);
+    // No inserts should have happened
+    expect(mockDb.insertCalls.length).toBe(0);
+  });
+
+  it("returns 400 when CallRail payload is missing the call id", async () => {
+    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }]];
+
+    const payload = { customer_phone_number: "+15551234567" };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(400);
+    expect(res.json().message).toContain("call id");
+  });
+
+  it("skips lead creation for test-named callers", async () => {
+    const fakeEvent = { id: 800 };
+    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }], []];
+    mockDb.insertResults = [[fakeEvent]];
+
+    const payload = {
+      id: "CAL_test",
+      customer_phone_number: "+15551234567",
+      customer_name: "Test User",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(200);
+    // Only the event insert, no lead insert
+    expect(mockDb.insertCalls.length).toBe(1);
+  });
+});
+
+describe("verifyCallRailSignature (HMAC-SHA1)", () => {
+  it("accepts a valid base64 SHA1 signature", async () => {
+    const { verifyCallRailSignature } = await import("../services/integrations/callrail");
+    const key = "secret";
+    const payload = '{"id":"CAL1"}';
+    const sig = crypto.createHmac("sha1", key).update(payload).digest("base64");
+    expect(verifyCallRailSignature(payload, sig, key)).toBe(true);
+  });
+
+  it("accepts a valid hex SHA1 signature", async () => {
+    const { verifyCallRailSignature } = await import("../services/integrations/callrail");
+    const key = "secret";
+    const payload = '{"id":"CAL2"}';
+    const sig = crypto.createHmac("sha1", key).update(payload).digest("hex");
+    expect(verifyCallRailSignature(payload, sig, key)).toBe(true);
+  });
+
+  it("rejects an invalid signature", async () => {
+    const { verifyCallRailSignature } = await import("../services/integrations/callrail");
+    expect(verifyCallRailSignature('{"id":"CAL3"}', "not-a-real-sig", "secret")).toBe(false);
+  });
+
+  it("rejects when no signature is sent", async () => {
+    const { verifyCallRailSignature } = await import("../services/integrations/callrail");
+    expect(verifyCallRailSignature('{"id":"CAL4"}', undefined, "secret")).toBe(false);
+  });
+
+  it("fails closed when signing key is missing (does NOT bypass in any environment)", async () => {
+    const { verifyCallRailSignature } = await import("../services/integrations/callrail");
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    try {
+      expect(verifyCallRailSignature('{"id":"CAL5"}', "any-sig", undefined)).toBe(false);
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
   });
 });

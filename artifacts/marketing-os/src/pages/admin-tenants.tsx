@@ -538,29 +538,26 @@ export default function AdminTenants() {
                 <input type="text" value={form.callRailCompanyId} onChange={(e) => { trackFieldChange("callRailCompanyId"); setForm(f => ({ ...f, callRailCompanyId: e.target.value })); }} placeholder="e.g. COM123456" className={inputClass + " w-full"} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Tracking Number</label>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Tracking Number (optional)</label>
                 <input type="text" value={form.callRailTrackingNumber} onChange={(e) => { trackFieldChange("callRailTrackingNumber"); setForm(f => ({ ...f, callRailTrackingNumber: e.target.value })); }} placeholder="e.g. +18005551234" className={inputClass + " w-full"} />
+                <p className="text-[11px] text-muted-foreground mt-1">Reference field for the tracking number assigned to this tenant. Outbound SMS via CallRail is not yet wired up.</p>
               </div>
             </div>
             <SetupGuide title="CallRail Setup Instructions">
               <p className="font-medium text-white/90">1. Generate an API Key</p>
-              <p>In CallRail, go to <span className="text-white/80">Settings → API Access</span>. Click <span className="text-white/80">"Create API V3 Key"</span>. Copy the key and paste it into the <span className="text-white/80">API Key</span> field above.</p>
+              <p>In CallRail, go to <span className="text-white/80">Settings → API Access</span>. Click <span className="text-white/80">"Create API V3 Key"</span>. Copy the key and paste it into the <span className="text-white/80">API Key</span> field above. (Optional today — used by the polling backstop only; webhooks below are the primary path.)</p>
               <p className="font-medium text-white/90 pt-1">2. Find your Account ID &amp; Company ID</p>
               <p>Your <span className="text-white/80">Account ID</span> is in the URL when logged into CallRail (e.g. <span className="font-mono text-[11px]">app.callrail.com/a/<strong>123456789</strong>/…</span>). The <span className="text-white/80">Company ID</span> can be found under <span className="text-white/80">Settings → Companies</span> — click a company and note the ID from the URL.</p>
-              <p className="font-medium text-white/90 pt-1">3. Configure the Webhook</p>
-              <p>In CallRail, go to <span className="text-white/80">Settings → Webhooks → Custom Notifications</span>. Create a new POST webhook with this URL:</p>
-              <CopyableUrl url={`${window.location.origin}/api/webhooks/ingest`} />
-              <p>Set the webhook body to JSON and include these required fields in the payload:</p>
-              <ul className="list-disc list-inside space-y-0.5 pl-1">
-                <li><span className="font-mono text-[11px] text-white/80">source</span>: set to <span className="font-mono text-[11px] text-white/80">"callrail"</span></li>
-                <li><span className="font-mono text-[11px] text-white/80">tenantId</span>: set to <span className="font-mono text-[11px] text-white/80">{editId || "<TENANT_ID>"}</span></li>
-                <li><span className="font-mono text-[11px] text-white/80">data</span>: object with <span className="font-mono text-[11px] text-white/80">phone</span>, <span className="font-mono text-[11px] text-white/80">firstName</span>, <span className="font-mono text-[11px] text-white/80">lastName</span>, <span className="font-mono text-[11px] text-white/80">gclid</span>, <span className="font-mono text-[11px] text-white/80">utmSource</span>, <span className="font-mono text-[11px] text-white/80">utmCampaign</span>, <span className="font-mono text-[11px] text-white/80">utmMedium</span>, <span className="font-mono text-[11px] text-white/80">landingPage</span>, and <span className="font-mono text-[11px] text-white/80">externalId</span> (set to the call ID for deduplication)</li>
-              </ul>
-              <p className="text-white/60 italic">Note: The <span className="font-mono text-[11px]">tenantId</span> must be included in the JSON body — it is not part of the URL.</p>
-              <p className="font-medium text-white/90 pt-1">4. Set the Webhook Signing Key</p>
-              <p>In the same webhook settings, enable <span className="text-white/80">HMAC signature verification</span>. Copy the signing secret and paste it into the <span className="text-white/80">Webhook Signing Key</span> field above. This verifies incoming webhooks are authentic.</p>
-              <p className="font-medium text-white/90 pt-1">5. Tracking Number (for SMS)</p>
-              <p>If using CallRail as the text platform, enter a <span className="text-white/80">tracking number</span> assigned to this company. This is the number texts will be sent from. Find it under <span className="text-white/80">Settings → Numbers</span> in CallRail. Format: <span className="font-mono text-[11px]">+18005551234</span>.</p>
+              <p className="font-medium text-white/90 pt-1">3. Add the Webhook URL</p>
+              <p>In CallRail, go to <span className="text-white/80">Account → Integrations → Webhooks</span>. Find the <span className="text-white/80">Post-Call</span> event and click <span className="text-white/80">+ Add Another URL</span>. Paste this tenant-scoped URL:</p>
+              <CopyableUrl url={`${window.location.origin}/api/webhooks/callrail/${editId || "<TENANT_ID>"}`} />
+              <p className="text-white/60 italic">CallRail sends its own fixed JSON payload — you do not need to configure body fields, a <span className="font-mono text-[11px]">source</span> value, or a <span className="font-mono text-[11px]">tenantId</span> field. The tenant is identified by the URL above. The CallRail call <span className="font-mono text-[11px]">id</span> in the payload is used to de-duplicate retries.</p>
+              <p className="font-medium text-white/90 pt-1">4. Copy the Webhook Signing Key</p>
+              <p>On the same Webhooks page, expand <span className="text-white/80">Advanced settings</span> at the bottom. Copy the value of <span className="text-white/80">Webhook signature Secret Token</span> and paste it into the <span className="text-white/80">Webhook Signing Key</span> field above. This signs every webhook with HMAC-SHA1 so we can verify it's authentic — webhooks without a valid signature are rejected.</p>
+              <p className="font-medium text-white/90 pt-1">5. Activate the integration</p>
+              <p>Back at the top of the Webhooks page, the <span className="text-white/80">Webhooks integration</span> badge must show <span className="text-white/80">Active</span>. If it says <span className="text-white/80">Inactive</span>, click into it and enable it — webhooks will not fire otherwise.</p>
+              <p className="font-medium text-white/90 pt-1">6. Other event types (optional)</p>
+              <p>Only the <span className="text-white/80">Post-Call</span> event is wired up today. Pre-Call, Call Routing Complete, Call Modified, Outbound, and Text Message events are not consumed yet — adding URLs to those will not break anything but will be ignored.</p>
             </SetupGuide>
           </div>
           <div>

@@ -11,6 +11,8 @@ import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
 import { webhookLimiter } from "../middleware/rate-limit";
 import { hashValue, hashPhone } from "../lib/phone-utils";
+import { verifyCallRailSignature } from "../services/integrations/callrail";
+import { decryptConfig } from "../lib/encryption";
 
 const router: IRouter = Router();
 
@@ -217,6 +219,160 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to process webhook";
     res.status(400).json({ success: false, eventId: 0, message });
+  }
+});
+
+router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      res.status(400).json({ success: false, message: "Invalid tenantId in URL" });
+      return;
+    }
+
+    const rawBody = (req as typeof req & { rawBody?: Buffer }).rawBody
+      ? (req as typeof req & { rawBody?: Buffer }).rawBody!.toString("utf-8")
+      : JSON.stringify(req.body);
+    const signature = (req.headers["signature"] as string | undefined)
+      || (req.headers["x-callrail-signature"] as string | undefined);
+
+    const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    if (!tenant) {
+      res.status(404).json({ success: false, message: "Tenant not found" });
+      return;
+    }
+
+    let signingKey: string | undefined;
+    if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
+      try {
+        const cfg = decryptConfig(tenant.apiConfig);
+        signingKey = typeof cfg.callRailSigningKey === "string" ? cfg.callRailSigningKey : undefined;
+      } catch (err) {
+        console.warn(`[CallRail Webhook] Failed to decrypt apiConfig for tenant ${tenantId}:`, err);
+      }
+    }
+
+    if (!verifyCallRailSignature(rawBody, signature, signingKey)) {
+      console.warn(`[CallRail Webhook] Signature verification failed for tenant ${tenantId}`);
+      res.status(401).json({ success: false, message: "Invalid webhook signature" });
+      return;
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const callId = String(body.id || body.call_id || "");
+    if (!callId) {
+      res.status(400).json({ success: false, message: "Missing CallRail call id" });
+      return;
+    }
+
+    const externalId = `callrail:${callId}`;
+
+    const existing = await db.select({ id: attributionEventsTable.id })
+      .from(attributionEventsTable)
+      .where(and(
+        eq(attributionEventsTable.tenantId, tenantId),
+        eq(attributionEventsTable.externalId, externalId),
+      ))
+      .limit(1);
+
+    if (existing.length > 0) {
+      res.json({ success: true, eventId: existing[0].id, message: "Duplicate CallRail call ignored", duplicate: true });
+      return;
+    }
+
+    const customerPhone = typeof body.customer_phone_number === "string" ? body.customer_phone_number : null;
+    const customerName = typeof body.customer_name === "string" ? body.customer_name : "";
+    const gclid = typeof body.gclid === "string" ? body.gclid : null;
+    const fbclid = typeof body.fbclid === "string" ? body.fbclid : null;
+    const msclkid = typeof body.msclkid === "string" ? body.msclkid : null;
+    const callRailSource = typeof body.source === "string" ? body.source : null;
+    const callRailMedium = typeof body.medium === "string" ? body.medium : null;
+    const callRailCampaign = typeof body.campaign === "string" ? body.campaign : null;
+    const landingPage = typeof body.landing_page_url === "string" ? body.landing_page_url : null;
+    const referrer = typeof body.referring_url === "string" ? body.referring_url
+      : typeof body.referrer_domain === "string" ? body.referrer_domain
+      : null;
+    const customerCity = typeof body.customer_city === "string" ? body.customer_city : null;
+    const customerState = typeof body.customer_state === "string" ? body.customer_state : null;
+
+    const hashedPhone = customerPhone ? hashPhone(customerPhone) : null;
+
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId,
+      eventType: "call",
+      gclid,
+      fbclid,
+      msclkid,
+      hashedPhone,
+      utmSource: callRailSource || "callrail",
+      utmCampaign: callRailCampaign,
+      utmMedium: callRailMedium,
+      landingPage,
+      referrer,
+      matchLevel: gclid ? "diamond" : hashedPhone ? "golden" : "unmatched",
+      matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : 0,
+      externalId,
+    }).returning();
+
+    const nameLower = customerName.toLowerCase();
+    const isTestLead = nameLower.includes("test");
+
+    if (!isTestLead && (customerName || customerPhone)) {
+      const nameParts = customerName.trim().split(/\s+/);
+      const firstName = nameParts[0] || "Unknown";
+      const lastName = nameParts.slice(1).join(" ") || "";
+
+      const normalizedIntakeSource = await normalizeSource(tenantId, callRailSource || "callrail");
+      const billingAddress = customerCity || customerState
+        ? normalizeAddress([customerCity, customerState].filter(Boolean).join(", "))
+        : null;
+
+      const [newLead] = await db.insert(leadsTable).values({
+        tenantId,
+        firstName,
+        lastName,
+        phone: customerPhone,
+        source: normalizedIntakeSource,
+        originalSource: normalizedIntakeSource,
+        matchedGclid: gclid,
+        billingAddress,
+        leadType: "CallRail",
+        interestType: null,
+        hubStatus: "day_1",
+        dayInSequence: 1,
+        status: "new",
+      }).returning();
+
+      if (newLead) {
+        try {
+          const result = await assignLeadRoundRobin(tenantId, newLead.id, null);
+          if (result.assignedCsrId && result.passIntervalMinutes != null) {
+            scheduleAutoPass(newLead.id, result.passIntervalMinutes * 60 * 1000);
+            await db.insert(callAttemptsTable).values({
+              leadId: newLead.id,
+              userId: result.assignedCsrId,
+              method: "system",
+              outcome: "initial_assignment",
+              platform: "native",
+              actionType: "system",
+              notes: `System: Lead initially assigned to ${result.csrName}`,
+            });
+          } else if (!result.assignedCsrId) {
+            console.warn(`[CallRail Webhook] Lead ${newLead.id} not assigned: ${result.reason}`);
+          }
+        } catch (err) {
+          console.warn("[CallRail Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
+        }
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
+        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+      }
+    }
+
+    res.json({ success: true, eventId: event.id, message: "CallRail webhook processed successfully" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process CallRail webhook";
+    console.error("[CallRail Webhook] Error:", error);
+    res.status(400).json({ success: false, message });
   }
 });
 

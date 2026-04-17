@@ -708,7 +708,7 @@ export default function Settings() {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-300">CallRail Tracking Number</label>
+            <label className="text-sm font-medium text-gray-300">CallRail Tracking Number (optional)</label>
             <input
               type="text"
               value={form.callRailTrackingNumber}
@@ -716,6 +716,7 @@ export default function Settings() {
               className={inputClass}
               placeholder="e.g. +18005551234"
             />
+            <p className="text-xs text-gray-500">Reference field — outbound SMS via CallRail is not yet wired up.</p>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
