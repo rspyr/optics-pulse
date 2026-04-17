@@ -183,6 +183,20 @@
       "when": 1776700000000,
       "tag": "0034_attribution_events_external_id_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1776710000000,
+      "tag": "0035_lead_merges",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1776720000000,
+      "tag": "0036_callrail_webhook_status",
+      "breakpoints": true
     }
   ]
 }
