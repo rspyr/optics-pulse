@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -42,7 +42,9 @@ export const attributionEventsTable = pgTable("attribution_events", {
   matchConfidence: real("match_confidence"),
   createdLeadId: integer("created_lead_id").references(() => leadsTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  tenantExternalIdUnique: uniqueIndex("attribution_events_tenant_external_id_unique").on(table.tenantId, table.externalId),
+}));
 
 export const insertAttributionEventSchema = createInsertSchema(attributionEventsTable).omit({ id: true, createdAt: true });
 export type InsertAttributionEvent = z.infer<typeof insertAttributionEventSchema>;

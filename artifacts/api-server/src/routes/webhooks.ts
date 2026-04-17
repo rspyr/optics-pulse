@@ -267,19 +267,6 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     const externalId = `callrail:${callId}`;
 
-    const existing = await db.select({ id: attributionEventsTable.id })
-      .from(attributionEventsTable)
-      .where(and(
-        eq(attributionEventsTable.tenantId, tenantId),
-        eq(attributionEventsTable.externalId, externalId),
-      ))
-      .limit(1);
-
-    if (existing.length > 0) {
-      res.json({ success: true, eventId: existing[0].id, message: "Duplicate CallRail call ignored", duplicate: true });
-      return;
-    }
-
     const customerPhone = typeof body.customer_phone_number === "string" ? body.customer_phone_number : null;
     const customerName = typeof body.customer_name === "string" ? body.customer_name : "";
     const gclid = typeof body.gclid === "string" ? body.gclid : null;
@@ -312,7 +299,26 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       matchLevel: gclid ? "diamond" : hashedPhone ? "golden" : "unmatched",
       matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : 0,
       externalId,
+    }).onConflictDoNothing({
+      target: [attributionEventsTable.tenantId, attributionEventsTable.externalId],
     }).returning();
+
+    if (!event) {
+      const [existing] = await db.select({ id: attributionEventsTable.id })
+        .from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, tenantId),
+          eq(attributionEventsTable.externalId, externalId),
+        ))
+        .limit(1);
+      res.json({
+        success: true,
+        eventId: existing?.id ?? 0,
+        message: "Duplicate CallRail call ignored",
+        duplicate: true,
+      });
+      return;
+    }
 
     const nameLower = customerName.toLowerCase();
     const isTestLead = nameLower.includes("test");
@@ -428,9 +434,9 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
 
     const externalId = contact.id ? `ghl:${String(contact.id)}` : null;
 
-    const [event] = await db.insert(attributionEventsTable).values({
+    const eventValues = {
       tenantId,
-      eventType: "form_fill",
+      eventType: "form_fill" as const,
       gclid,
       wbraid,
       fbclid,
@@ -449,9 +455,34 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
       formName,
       formFields,
       externalId,
-      matchLevel: gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched",
+      matchLevel: (gclid ? "diamond" : hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched") as "diamond" | "golden" | "silver" | "unmatched",
       matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0,
-    }).returning();
+    };
+
+    const insertResult = externalId
+      ? await db.insert(attributionEventsTable).values(eventValues).onConflictDoNothing({
+          target: [attributionEventsTable.tenantId, attributionEventsTable.externalId],
+        }).returning()
+      : await db.insert(attributionEventsTable).values(eventValues).returning();
+    const event = insertResult[0];
+
+    if (!event) {
+      const [existing] = await db.select({ id: attributionEventsTable.id })
+        .from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, tenantId),
+          eq(attributionEventsTable.externalId, externalId as string),
+        ))
+        .limit(1);
+      console.log(`[GHL Webhook] Duplicate contact ${externalId} for tenant ${tenantId} ignored`);
+      res.json({
+        success: true,
+        eventId: existing?.id ?? 0,
+        message: "Duplicate GHL contact ignored",
+        duplicate: true,
+      });
+      return;
+    }
 
     const webhookNameFields = [firstName, lastName, fullName].filter(Boolean).join(" ").toLowerCase();
     const isTestLead = webhookNameFields.includes("test");

@@ -42,9 +42,16 @@ function makeInsertChain(results: () => unknown[], onValues?: (v: unknown) => vo
   return {
     values: vi.fn().mockImplementation((vals: unknown) => {
       onValues?.(vals);
+      const lazyResult = () => results();
       return {
-        returning: vi.fn().mockResolvedValue(results()),
-        then: (resolve: Function, reject?: Function) => Promise.resolve(results()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
+        returning: vi.fn().mockImplementation(() => Promise.resolve(lazyResult())),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockImplementation(() => Promise.resolve(lazyResult())),
+        }),
+        onConflictDoUpdate: vi.fn().mockReturnValue({
+          returning: vi.fn().mockImplementation(() => Promise.resolve(lazyResult())),
+        }),
+        then: (resolve: Function, reject?: Function) => Promise.resolve(lazyResult()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
       };
     }),
   };
@@ -556,13 +563,12 @@ describe("POST /webhooks/callrail/:tenantId", () => {
   it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead", async () => {
     const fakeEvent = { id: 700, tenantId: 1 };
     const fakeLead = { id: 70, tenantId: 1 };
-    // selects in order: tenant lookup, dedup check, refreshed lead lookup
+    // selects in order: tenant lookup, refreshed lead lookup
     mockDb.selectResults = [
       [{ id: 1, apiConfig: "encrypted" }],
-      [],
       [fakeLead],
     ];
-    // inserts in order: attribution event, lead
+    // inserts in order: attribution event (upsert), lead
     mockDb.insertResults = [[fakeEvent], [fakeLead]];
 
     const payload = {
@@ -605,12 +611,15 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     expect(leadInsert.leadType).toBe("CallRail");
   });
 
-  it("de-duplicates a repeat post of the same call id", async () => {
+  it("de-duplicates a repeat post of the same call id via ON CONFLICT DO NOTHING", async () => {
     const existingEvent = { id: 555 };
+    // selects: tenant lookup, then existing-event lookup after upsert returned no row
     mockDb.selectResults = [
       [{ id: 1, apiConfig: "encrypted" }],
       [existingEvent],
     ];
+    // The upsert returns [] indicating a conflict (the unique index already has the row)
+    mockDb.insertResults = [[]];
 
     const payload = { id: "CAL_dup", customer_phone_number: "+15551234567" };
     const sig = signCallRail(JSON.stringify(payload));
@@ -621,8 +630,11 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const body = res.json();
     expect(body.duplicate).toBe(true);
     expect(body.eventId).toBe(555);
-    // No inserts should have happened
-    expect(mockDb.insertCalls.length).toBe(0);
+    // The upsert was attempted exactly once; no lead insert happened
+    expect(mockDb.insertCalls.length).toBe(1);
+    expect(mockDb.insertCalls[0].table).toBe(
+      (await import("@workspace/db")).attributionEventsTable,
+    );
   });
 
   it("returns 400 when CallRail payload is missing the call id", async () => {
@@ -638,7 +650,7 @@ describe("POST /webhooks/callrail/:tenantId", () => {
 
   it("skips lead creation for test-named callers", async () => {
     const fakeEvent = { id: 800 };
-    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }], []];
+    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }]];
     mockDb.insertResults = [[fakeEvent]];
 
     const payload = {
@@ -652,6 +664,133 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     expect(res.status).toBe(200);
     // Only the event insert, no lead insert
     expect(mockDb.insertCalls.length).toBe(1);
+  });
+
+  it("creates exactly one event and one lead when the same call is delivered concurrently", async () => {
+    // Simulate the database-side guarantee from the unique index on
+    // (tenant_id, external_id): only the first insert produces a row, and
+    // subsequent concurrent upserts return [] (ON CONFLICT DO NOTHING).
+    const dbModule = await import("@workspace/db") as unknown as {
+      db: {
+        select: ReturnType<typeof vi.fn>;
+        insert: ReturnType<typeof vi.fn>;
+      };
+      attributionEventsTable: symbol;
+      leadsTable: symbol;
+      tenantsTable: symbol;
+      callAttemptsTable: symbol;
+    };
+
+    const tenantRow = { id: 1, apiConfig: "encrypted" };
+    const eventsByExternalId = new Map<string, { id: number; tenantId: number; externalId: string }>();
+    const insertedLeads: Array<{ id: number; tenantId: number }> = [];
+    const insertCalls: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+    let nextEventId = 9000;
+    let nextLeadId = 8000;
+
+    dbModule.db.select = vi.fn().mockImplementation(() => {
+      let fromTable: unknown = null;
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn().mockImplementation((tbl: unknown) => {
+        fromTable = tbl;
+        return chain;
+      });
+      const resolveResult = (): unknown[] => {
+        if (fromTable === dbModule.tenantsTable) return [tenantRow];
+        if (fromTable === dbModule.attributionEventsTable) {
+          const first = eventsByExternalId.values().next();
+          return first.done ? [] : [first.value];
+        }
+        if (fromTable === dbModule.leadsTable) {
+          return insertedLeads.length ? [insertedLeads[0]] : [];
+        }
+        return [];
+      };
+      chain.where = vi.fn().mockImplementation(() => {
+        const whereChain: Record<string, unknown> = {
+          limit: vi.fn().mockImplementation(() => Promise.resolve(resolveResult())),
+          then: (resolve: Function, reject?: Function) =>
+            Promise.resolve(resolveResult()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
+          [Symbol.iterator]: function* () { yield* resolveResult(); },
+        };
+        return whereChain;
+      });
+      chain.then = (resolve: Function, reject?: Function) =>
+        Promise.resolve(resolveResult()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown);
+      return chain;
+    });
+
+    dbModule.db.insert = vi.fn().mockImplementation((table: unknown) => ({
+      values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        insertCalls.push({ table, values: vals });
+
+        const upsertEvent = () => {
+          const ext = String(vals.externalId);
+          if (eventsByExternalId.has(ext)) return [];
+          const event = { id: nextEventId++, tenantId: Number(vals.tenantId), externalId: ext };
+          eventsByExternalId.set(ext, event);
+          return [event];
+        };
+        const insertLead = () => {
+          const lead = { id: nextLeadId++, tenantId: Number(vals.tenantId) };
+          insertedLeads.push(lead);
+          return [lead];
+        };
+        const insertOther = () => [];
+
+        const buildResult = (): unknown[] => {
+          if (table === dbModule.attributionEventsTable) return upsertEvent();
+          if (table === dbModule.leadsTable) return insertLead();
+          return insertOther();
+        };
+
+        return {
+          returning: vi.fn().mockImplementation(() => Promise.resolve(buildResult())),
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockImplementation(() => Promise.resolve(buildResult())),
+          }),
+          then: (resolve: Function, reject?: Function) =>
+            Promise.resolve(buildResult()).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown),
+        };
+      }),
+    }));
+
+    const payload = {
+      id: "CAL_concurrent_xyz",
+      customer_phone_number: "+15551234567",
+      customer_name: "Concurrent Caller",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const [r1, r2] = await Promise.all([
+      sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig }),
+      sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig }),
+    ]);
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+
+    // Exactly one attribution event survived the race.
+    expect(eventsByExternalId.size).toBe(1);
+
+    // Exactly one lead was created.
+    expect(insertedLeads.length).toBe(1);
+    const leadInserts = insertCalls.filter((c) => c.table === dbModule.leadsTable);
+    expect(leadInserts.length).toBe(1);
+
+    // Both requests targeted the upsert; one of them came back as duplicate.
+    const eventInserts = insertCalls.filter((c) => c.table === dbModule.attributionEventsTable);
+    expect(eventInserts.length).toBe(2);
+
+    const bodies = [r1.json(), r2.json()];
+    const duplicates = bodies.filter((b) => b.duplicate === true);
+    expect(duplicates.length).toBe(1);
+    const winners = bodies.filter((b) => b.duplicate !== true);
+    expect(winners.length).toBe(1);
+
+    // Both responses point at the same surviving event id.
+    const survivingId = Array.from(eventsByExternalId.values())[0].id;
+    expect(bodies.every((b) => b.eventId === survivingId)).toBe(true);
   });
 });
 

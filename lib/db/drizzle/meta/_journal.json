@@ -176,6 +176,13 @@
       "when": 1775940000000,
       "tag": "0029_user_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776700000000,
+      "tag": "0034_attribution_events_external_id_unique",
+      "breakpoints": true
     }
   ]
 }
