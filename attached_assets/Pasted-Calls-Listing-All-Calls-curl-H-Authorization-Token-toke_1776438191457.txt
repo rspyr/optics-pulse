@@ -1,0 +1,479 @@
+Calls
+Listing All Calls
+curl -H "Authorization: Token token={api_token}" \
+     -X GET \
+     "https://api.callrail.com/v3/a/{account_id}/calls.json"
+The above command returns JSON structured like this:
+
+{
+  "page": 1,
+  "per_page": 100,
+  "total_pages": 1,
+  "total_records": 9,
+  "calls": [
+    {
+      "answered": false,
+      "business_phone_number": null,
+      "customer_city": "Denver",
+      "customer_country": "US",
+      "customer_name": "RUEGSEGGER SIMO",
+      "customer_phone_number": "+13036231131",
+      "customer_state": "CO",
+      "direction": "inbound",
+      "duration": 4,
+      "id": "CAL8154748ae6bd4e278a7cddd38a662f4f",
+      "recording": "https://api.callrail.com/v3/a/227799611/calls/111222333/recording.json",
+      "recording_duration": "27",
+      "recording_player": "https://app.callrail.com/calls/111222333/recording?access_key=3b91eb7f7cc08a4d01ed",
+      "start_time": "2017-01-24T11:27:48.119-05:00",
+      "tracking_phone_number": "+13038163491",
+      "voicemail": false,
+      "agent_email": "gil@televised.com"
+    },
+    {
+      "answered": false,
+      "business_phone_number": null,
+      "customer_city": "Blue Ridge",
+      "customer_country": "US",
+      "customer_name": "BLUE RIDGE, GA",
+      "customer_phone_number": "+17064558047",
+      "customer_state": "GA",
+      "direction": "inbound",
+      "duration": 16,
+      "id": "CAL8154748ae6bd4e278a7cddd38a662f4f",
+      "recording": null,
+      "recording_duration": null,
+      "recording_player": null,
+      "start_time": "2017-01-24T19:50:03.456-05:00",
+      "tracking_phone_number": "+17708243899",
+      "voicemail": false,
+      "agent_email": "elbert@bpp.com"
+    }
+  ]
+}
+This endpoint returns a paginated list of all calls in the target account.
+
+API Endpoint
+Method	URL
+GET	/v3/a/{account_id}/calls.json
+Request Parameters
+This endpoint supports Offset Pagination, Sorting, Filtering, Field Selection, and Searching. Please use Relative Pagination when querying larger data sets.
+
+Name	Type	Required?	Description
+company_id	string	optional	If provided, only return calls to tracking numbers belonging to this company.
+tracker_id	string	optional	If provided, only return calls to this specific tracking number.
+Sorting is available for the following fields:
+
+customer_name
+
+customer_phone_number
+
+duration
+
+start_time
+
+source*
+
+customer_city
+
+customer_country
+
+landing_page_url*
+
+device_type*
+
+answered
+
+first_call*
+
+source_name
+
+lead_status
+
+tags*
+
+Note: fields marked with * must be selected to be visible in the response payload as they are not part of the default set of fields.
+
+Filtering is available for the following:
+
+date_range: See Filtering by Date for more info.
+
+call_type: first_call, missed, voicemails, inbound, or outbound
+
+answer_status: answered, missed, or voicemail
+
+device: desktop or mobile
+
+direction: inbound or outbound
+
+lead_status: good_lead, not_a_lead, or not_scored
+
+tags: This parameter can be provided as tags=A for a single tag, or tags[]=A&tags[]=B to return calls tagged with either tag A or tag B.
+
+Searching is available for the following fields:
+
+business_phone_number
+
+customer_name
+
+customer_number
+
+note
+
+source
+
+tracking_phone_number
+
+Response Fields
+When successful, the HTTP response code will indicate 200 OK.
+
+Name	Type	Description
+answered	boolean	Whether the call was answered (true) or not answered (false).
+business_phone_number	string	The phone number of the person or business who answered the call from the dialed tracking number.
+customer_city	string	The customer’s city, based on the original assigned location of their phone number.
+customer_country	string	The customer’s country, based on the area code of their phone number.
+customer_name	string	The customer’s name, as reported by Caller ID.
+customer_phone_number	string	The customer’s phone number (in E.164 format).
+customer_state	string	The 2-character abbreviation for the customer’s state, based on the original assigned location of their phone number.
+direction	string	Whether the call was inbound (from a customer to you) or outbound (from you to a customer).
+duration	integer	The duration of the call in seconds.
+id	string	Unique identifier for the call.
+recording	string	A URL pointing to the calls/recording api endpoint.
+recording_duration	string	The length in seconds of the recording, if available.
+recording_player	string	The URL for a stand-alone recording player for this call, if available.
+start_time	string	The date and time the call started in the current timezone (ISO 8601 format) with an offset.
+tracking_phone_number	string	The business’ tracking phone number for this call (in E.164 format).
+voicemail	boolean	Whether the call ended with a voicemail (true) or not (false).
+Additional User Requested Response Fields
+Field Selection is available for the following fields.
+
+Name	Type	Description
+agent_email	string	Email address for the user who answered the call, when applicable.
+call_highlights	array	A list of relevant keywords automatically found in the call transcription.
+call_summary	string	Three to five sentences that summarizes the contents of the call. This is available to customers with a subscription to a Premium Conversation Intelligence plan. For more information, see our support article on Call summaries.
+call_type	string	The type of call. One of abandonded, answered, in_progress, missed, outbound, voicemail, or voicemail_transcription.
+campaign	string	The name of the campaign the call belongs to.
+company_id	string	The string id of the company the call belongs to.
+company_name	string	The name of the company the source belongs to .
+company_time_zone	string	The configure time zone of the company in CallRail.
+created_at	string	The date and time the call was created in the current timezone (ISO 8601 format) with an offset.
+custom	object	A list of key-value pairs of custom cookies captured by the Custom Cookie Capture integration, for calls placed to Website (Session) trackers.
+device_type	string	Either mobile or desktop, available for calls placed to Website (Session) trackers.
+fbclid	string	fbclid as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+first_call	boolean	Whether or not the call is the caller’s first call to this company.
+formatted_call_type	string	The type of call, formatted for display.
+formatted_customer_location	string	The customer’s city and state formatted for display.
+formatted_business_phone_number	string	The phone number of the person or business who answered the call from the dialed tracking number, formatted for display.
+formatted_customer_name	string	The customer’s name with certain values stylized for display.
+formatted_customer_name_or_phone_number	string	The name or phone number of the customer as reported by Caller ID, formatted for display.
+formatted_customer_phone_number	string	The customer’s phone number formatted for display.
+formatted_duration	string	The duration of the call formatted for display.
+formatted_tracking_phone_number	string	The business’ tracking phone number for this call formatted for display.
+formatted_tracking_source	string	The name of the call source formatted for display.
+formatted_value	string	The value of the call assigned via the CallRail dashboard, formatted as currency or “–” if not set.
+ga	string	Google Universal Analytics _ga value, available for calls placed to Website (Session) trackers.
+gclid	string	gclid as captured from the landing page parameter, available for calls placed to Website (Session) trackers. This is also available for calls from Google Ads call assets (formerly called extensions) and call-only ads through the use of our Google Ads Call Details Forwarding integration.
+good_lead_call_id	integer	If provided, the id of the call that was originally scored as a good lead.
+good_lead_call_time	string	If provided, the time of the call that was originally scored as a good lead.
+keypad_entries	object	A list of key-value pairs containing each number entered by the caller as part of a call flow. Each item includes the name given to the keypad entry step in the call flow and the numbers entered by the caller in the keypad entry step of the call flow. { "name": "Account Number", "value": "1234" }
+keywords	string	The keywords the visitor searched for, if available for calls placed to Website (Session) trackers. Keywords only provided from paid ad sources.
+keywords_spotted	array	Array of keywords spotted, each containing keyword with locations in seconds offset from beginning of recording.
+landing_page_url	string	The URL the caller first landed on, available for calls placed to Website (Session) trackers.
+last_requested_url	string	The URL of the active page at the time the call was placed, available for calls placed to Website (Session) trackers.
+lead_status	string	The current lead status of this caller (as of this call). One of good_lead, not_a_lead, previously_marked_good_lead, or null.
+medium	string	The medium associated with the call. Most commonly “PPC”, “direct”, or “Organic”.
+milestones	object	An object describing the attribution data associated with the lead’s milestones. For more information, see our support article on Attribution Modeling.
+milestones: first_touch	object	Automatically included when you request the milestones object. The First Touch milestone is the first time a customer engages with your company. For example, if they click a PPC ad that takes them to a landing page or they are called by a sales representative on your team. This is the first time a customer interacts with your company.
+milestones: lead_created	object	Automatically included when you request the milestones object. The Lead Creation milestone is the last source before a customer calls, texts, or submits a form and becomes known to your business as a new lead. For example, if a customer clicks on one of your Google Ads PPC ads and then calls the tracking number on your landing page, their Lead Creation milestone would be that PPC ad because it caused them to call.
+milestones: qualified	object	Automatically included when you request the milestones object. The Qualified milestone is the last source before a customer becomes scored as a qualified lead.
+milestones: last_touch	object	Automatically included when you request the milestones object. The Last Touch milestone is the last source before the current call. For example, if a customer clicks on a Google PPC add and then calls the tracking number on your website, and then later navigates back to your website via the Google search results page and calls one of your tracking numbers again, their First Touch source would be Google Ads and the Last Touch source for the 2nd call would be Google Organic.
+msclkid	string	msclkid as captured from the landing page parameter, available for calls placed to Website (Session) Trackers.
+note	string	Any text notes to associate with this call.
+person_id	string	Unique identifier for the lead associated with the phone call.
+prior_calls	integer	The number of times this company received a call from this customer prior to this call. If this is the first call from the customer, prior_calls will be 0.
+referrer_domain	string	The domain that referred the caller to your website, available for calls placed to Website (Session) trackers.
+referring_url	string	The URL that referred the caller to your website, available for calls placed to Website (Session) trackers.
+sentiment	string	The assigned sentiment of the conversation. This is available to customers with a subscription to a Premium Conversation Intelligence plan. For more information, see our support article on call sentiments.
+session_uuid	string	The unique identifier for the session associated with the call, available for calls placed to Website (Session) trackers.
+source	string	The marketing source that led to the phone call.
+source_name	string	The name of the tracking number within CallRail.
+speaker_percent	object	A JSON object containing the values of the percentage of time spent talking by the Agent and Customer on a call.
+tags	array	Any tags which have been applied to this call.
+timeline_url	string	A link to the lead’s timeline, which displays the web sessions and touchpoints a caller had on your website before, during, and after calling your business. For more information, see our support article on Caller Timelines.
+total_calls	integer	The total number of calls received from a customer phone number.
+tracker_id	string	The unique identifier for the tracking number of this call.
+transcription	string	A transcribed copy of the the conversation or voicemail message, if available. Phone call transcription requires a subscription to a Conversational Intelligence plan. Call recording must be enabled on tracking numbers where you’d like to transcribe calls. See our support article for details.
+utm_campaign	string	utm_campaign as captured from the landing page parameter, or as specified in the configuration for Source Trackers.
+utm_content	string	utm_content as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+utm_medium	string	utm_medium as captured from the landing page parameter for Website (Session) Trackers, or as specified in the configuration for Source Trackers.
+utm_source	string	utm_source as captured from the landing page parameter for Website (Session) Trackers, or as specified in the configuration for Source Trackers.
+utm_term	string	utm_term as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+value	integer	A number representing the monetary value of this call.
+voice_assist_message	object	The data collected during a Voice Assistant call. See our support article for more information.
+voice_assist_message: contents	object	A JSON object containing "question": "answer" mappings of collected data.
+voice_assist_message: overrides	object	A JSON object containing "question": "override" if a user has overridden an AI answer. Defaults to null.
+voice_assist_message: recorded_at	string	An ISO8601 timestamp of when the assistant recorded this message.
+voice_assist_message: urgency	string	The detected urgency level of the call.
+waveforms	array	Only present if the call was recorded. Contains the URLs of two images representing the volume of the call over time.
+zip_code	array	A list of each zip code entered by the caller as part of the geo-routing step of a call flow. See our support article for more information.
+lead_score	string	AI-based lead grading from “very poor” to “very good”.
+lead_score_explanation	string	Explanation of AI-based lead score.
+Retrieving a Single Call
+curl -H "Authorization: Token token={api_token}" \
+     -X GET \
+     "https://api.callrail.com/v3/a/{account_id}/calls/{call_id}.json"
+The above command returns JSON structured like this:
+
+ {
+  "answered": false,
+  "business_phone_number": null,
+  "customer_city": "New York City",
+  "customer_country": "US",
+  "customer_name": "Jimmy Pesto, Sr.",
+  "customer_phone_number": "+13036231131",
+  "customer_state": "NY",
+  "direction": "inbound",
+  "duration": 4,
+  "id": "CAL8154748ae6bd4e278a7cddd38a662f4f",
+  "recording": "https://api.callrail.com/v3/a/227799611/calls/111222333/recording.json",
+  "recording_duration": "27",
+  "recording_player": "https://app.callrail.com/calls/111222333/recording?access_key=3b91eb7f7cc08a4d01ed",
+  "start_time": "2017-01-24T11:27:48.119-05:00",
+  "tracking_phone_number": "+13038163491",
+  "voicemail": false,
+  "agent_email": "gil@televised.com"
+}
+curl -H "Authorization: Token token={api_token}" \
+     -X GET \
+     "https://api.callrail.com/v3/a/{account_id}/calls/{call_id}.json?fields=keywords_spotted,milestones"
+The above command returns JSON structured like this:
+
+ {
+  "answered": false,
+  "business_phone_number": null,
+  "customer_city": "New York City",
+  "customer_country": "US",
+  "customer_name": "Jimmy Pesto, Sr.",
+  "customer_phone_number": "+13036231131",
+  "customer_state": "NY",
+  "direction": "inbound",
+  "duration": 4,
+  "id": "CAL8154748ae6bd4e278a7cddd38a662f4f",
+  "recording": "https://api.callrail.com/v3/a/227799611/calls/111222333/recording.json",
+  "recording_duration": "27",
+  "recording_player": "https://app.callrail.com/calls/111222333/recording?access_key=3b91eb7f7cc08a4d01ed",
+  "start_time": "2017-01-24T11:27:48.119-05:00",
+  "tracking_phone_number": "+13038163491",
+  "voicemail": false,
+  "agent_email": "gil@televised.com",
+  "milestones": {
+     "first_touch": {
+          "event_date": "2017-01-22T19:41:45.183-04:00",
+          "ad_position": null,
+          "campaign": "US_branded",
+          "device": "desktop",
+          "keywords": "peststoppers",
+          "landing": "https://www.example.com/peststoppers/?campaign=US_branded&keywords=peststoppers&gclid=12345abgdef",
+          "landing_page_url_params": {
+               "campaign": "US_branded",
+               "keywords": "peststoppers",
+               "gclid": "12345abgdef"
+          },
+          "match_type": null,
+          "medium": "cpc",
+          "referrer": "https://www.google.com/",
+          "referrer_url_params": {},
+          "session_browser": "Chrome",
+          "url_utm_params": {},
+          "source": "Google Ads"
+      },
+     "lead_created": {
+          "event_date": "2017-01-22T19:41:45.183-04:00",
+          "ad_position": null,
+          "campaign": "US_branded",
+          "device": "desktop",
+          "keywords": "peststoppers",
+          "landing": "https://www.example.com/peststoppers/?campaign=US_branded&keywords=peststoppers&gclid=12345abgdef",
+          "landing_page_url_params": {
+               "campaign": "US_branded",
+               "keywords": "peststoppers",
+               "gclid": "12345abgdef"
+          },
+          "match_type": null,
+          "medium": "cpc",
+          "referrer": "https://www.google.com/",
+          "referrer_url_params": {},
+          "session_browser": "Chrome",
+          "url_utm_params": {},
+          "source": "Google Ads"
+      },
+      "qualified": {
+          "event_date": "2017-01-22T19:41:45.183-04:00",
+          "ad_position": null,
+          "campaign": "US_branded",
+          "device": "desktop",
+          "keywords": "peststoppers",
+          "landing": "https://www.example.com/peststoppers/?campaign=US_branded&keywords=peststoppers&gclid=12345abgdef",
+          "landing_page_url_params": {
+               "campaign": "US_branded",
+               "keywords": "peststoppers",
+               "gclid": "12345abgdef"
+          },
+          "match_type": null,
+          "medium": "cpc",
+          "referrer": "https://www.google.com/",
+          "referrer_url_params": {},
+          "session_browser": "Chrome",
+          "url_utm_params": {},
+          "source": "Google Ads"
+       },
+     "last_touch": {
+          "event_date": "2017-01-24T11:27:48.119-05:00",
+          "ad_position": null,
+          "campaign": null,
+          "device": "desktop",
+          "keywords": null,
+          "landing": "https://www.example.com/",
+          "landing_page_url_params": {},
+          "match_type": null,
+          "medium": "organic",
+          "referrer": "https://www.google.com/",
+          "referrer_url_params": {},
+          "session_browser": "Chrome",
+          "url_utm_params": {},
+          "source": "Google Organic"
+      }
+  },
+  "keywords_spotted": [
+    {
+      "keyword": "test phrase one",
+      "locations": [
+        {
+          "speaker": "caller",
+          "start": 7.71
+        },
+        {
+          "speaker": "agent",
+          "start": 13.38
+        },
+        {
+          "speaker": "caller",
+          "start": 17.96
+        }
+      ]
+    },
+    {
+      "keyword": "test phrase two",
+      "locations": [
+        {
+          "speaker": "caller",
+          "start": 8.44
+        }
+      ]
+    }
+  ]
+}
+This endpoint returns a single call object associated with the target account.
+
+API Endpoint
+Method	URL
+GET	/v3/a/{account_id}/calls/{call_id}.json
+Request Parameters
+This endpoint supports Field Selection.
+
+Response Fields
+When successful, the HTTP response code will indicate 200 OK.
+
+Name	Type	Description
+answered	boolean	Whether the call was answered (true) or not answered (false).
+business_phone_number	string	The phone number of the person or business who answered the call from the dialed tracking number.
+customer_city	string	The customer’s city, based on the original assigned location of their phone number.
+customer_country	string	The customer’s country, based on the area code of their phone number.
+customer_name	string	The customer’s name, as reported by Caller ID.
+customer_phone_number	string	The customer’s phone number (in E.164 format).
+customer_state	string	The 2-character abbreviation for the customer’s state, based on the original assigned location of their phone number.
+direction	string	Whether the call was inbound (from a customer to you) or outbound (from you to a customer).
+duration	integer	The duration of the call in seconds.
+id	string	Unique identifier for the call.
+recording	string	A URL pointing to the recording of the call, if available. This URL redirects to the actual audio file of the recording in MP3 format.
+recording_duration	string	The length in seconds of the recording, if available.
+recording_player	string	The URL for a stand-alone recording player for this call, if available.
+start_time	string	The date and time the call started in the current timezone (ISO 8601 format) with an offset.
+tracking_phone_number	string	The business’ tracking phone number for this call (in E.164 format).
+voicemail	boolean	Whether the call ended with a voicemail (true) or not (false).
+Additional User Requested Response Fields
+Field Selection is available for the following fields.
+
+Name	Type	Description
+agent_email	string	Email address for the user who answered the call, when applicable.
+call_highlights	array	A list of relevant keywords automatically found in the call transcription.
+call_summary	array	Three to five sentences that summarizes the contents of the call. This is available to customers with a subscription to a Premium Conversation Intelligence plan. For more information, see our support article on Call summaries.
+call_type	string	The type of call. One of abandonded, answered, in_progress, missed, outbound, voicemail, or voicemail_transcription.
+campaign	string	The name of the campaign the call belongs to.
+company_id	string	The unique string id of the company the call belongs to.
+company_name	string	The name of the company the source belongs to.
+company_time_zone	string	The configure time zone of the company in CallRail.
+conversational_transcript	string	A formatted version of the transcription of the phone call conversation, if available. The conversation is broken into objects containing the speaker (either caller or agent), the phrase (what was said by the speaker), and the start, indicating the timestamp (in seconds) when the speaker began that phrase.
+created_at	string	The date and time the call was created in the current timezone (ISO 8601 format) with an offset.
+custom	object	A list of key-value pairs of custom cookies captured by the Custom Cookie Capture integration, for calls placed to Website (Session) trackers.
+device_type	string	Either mobile or desktop, available for calls placed to Website (Session) trackers.
+fbclid	string	fbclid as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+first_call	boolean	Whether or not the call is the caller’s first call to this company.
+formatted_call_type	string	The type of call, formatted for display.
+formatted_customer_location	string	The customer’s city and state formatted for display.
+formatted_business_phone_number	string	The phone number of the person or business who answered the call from the dialed tracking number, formatted for display.
+formatted_customer_name	string	The customer’s name with certain values stylized for display.
+formatted_customer_name_or_phone_number	string	The name or phone number of the customer as reported by Caller ID, formatted for display.
+formatted_customer_phone_number	string	The customer’s phone number formatted for display.
+formatted_duration	string	The duration of the call formatted for display.
+formatted_tracking_phone_number	string	The business’ tracking phone number for this call formatted for display.
+formatted_tracking_source	string	The name of the call source formatted for display.
+formatted_value	string	The value of the call assigned via the CallRail dashboard, formatted as currency or “–” if not set.
+ga	string	Google Universal Analytics _ga value, available for calls placed to Website (Session) trackers.
+gclid	string	gclid as captured from the landing page parameter, available for calls placed to Website (Session) trackers. This is also available for calls from Google Ads call assets (formerly called extensions) and call-only ads through the use of our Google Ads Call Details Forwarding integration.
+good_lead_call_id	integer	If provided, the id of the call that was originally scored as a good lead.
+good_lead_call_time	string	If provided, the time of the call that was originally scored as a good lead.
+integration_data	array	Company integration data collected for a given call, available for calls placed to Website (Session) trackers.
+keypad_entries	object	A list of key-value pairs containing each number entered by the caller as part of a call flow. Each item includes the name given to the keypad entry step in the call flow and the numbers entered by the caller in the keypad entry step of the call flow. { "name": "Account Number", "value": "1234" }
+keywords	string	The keywords the visitor searched for, if available for calls placed to Website (Session) trackers. Keywords only provided from paid ad sources.
+keywords_spotted	array	Array of keywords spotted, each containing keyword with locations in seconds offset from beginning of recording.
+landing_page_url	string	The URL the caller first landed on, available for calls placed to Website (Session) trackers.
+last_requested_url	string	The URL of the active page at the time the call was placed, available for calls placed to Website (Session) trackers.
+lead_status	string	The current lead status of this caller (as of this call). One of good_lead, not_a_lead, previously_marked_good_lead, or null.
+medium	string	The medium associated with the call. Most commonly “PPC”, “direct”, or “Organic”.
+milestones	object	An object describing the attribution data associated with the lead’s milestones. For more information, see our support article on Attribution Modeling.
+milestones: first_touch	object	Automatically included when you request the milestones object. The First Touch milestone is the first time a customer engages with your company. For example, if they click a PPC ad that takes them to a landing page or they are called by a sales representative on your team. This is the first time a customer interacts with your company.
+milestones: lead_created	object	Automatically included when you request the milestones object. The Lead Creation milestone is the last source before a customer calls, texts, or submits a form and becomes known to your business as a new lead. For example, if a customer clicks on one of your Google Ads PPC ads and then calls the tracking number on your landing page, their Lead Creation milestone would be that PPC ad because it caused them to call.
+milestones: qualified	object	Automatically included when you request the milestones object. The Qualified milestone is the last source before a customer becomes scored as a qualified lead.
+milestones: last_touch	object	Automatically included when you request the milestones object. The Last Touch milestone is the last source before the current call. For example, if a customer clicks on a Google PPC add and then calls the tracking number on your website, and then later navigates back to your website via the Google search results page and calls one of your tracking numbers again, their First Touch source would be Google Ads and the Last Touch source for the 2nd call would be Google Organic.
+msclkid	string	msclkid as captured from the landing page parameter, available for calls placed to Website (Session) Trackers.
+note	string	Any text notes to associate with this call.
+person_id	string	Unique identifier for the lead associated with the phone call.
+prior_calls	integer	The number of times this company received a call from this customer prior to this call. If this is the first call from the customer, prior_calls will be 0.
+referrer_domain	string	The domain that referred the caller to your website, available for calls placed to Website (Session) trackers.
+referring_url	string	The URL that referred the caller to your website, available for calls placed to Website (Session) trackers.
+sentiment	string	The assigned sentiment of the conversation. This is available to customers with a subscription to a Premium Conversation Intelligence plan. For more information, see our support article on call sentiments.
+session_uuid	string	The unique identifier for the session associated with the call, available for calls placed to Website (Session) trackers.
+source	string	The marketing source that led to the phone call.
+source_name	string	The name of the tracking number within CallRail.
+speaker_percent	object	A JSON object containing the values of the percentage of time spent talking by the Agent and Customer on a call.
+tags	array	Any tags which have been applied to this call.
+timeline_url	string	A link to the lead’s timeline, which displays the web sessions and touchpoints a caller had on your website before, during, and after calling your business. For more information, see our support article on Caller Timelines.
+total_calls	integer	The total number of calls received from a customer phone number.
+tracker_id	string	The unique ID for the tracking number of this call.
+transcription	string	A transcribed copy of the the conversation or voicemail message, if available. Phone call transcription requires a subscription to a Conversational Intelligence plan. Call recording must be enabled on tracking numbers where you’d like to transcribe calls. See our support article for details.
+utm_campaign	string	utm_campaign as captured from the landing page parameter for Website (Session) Trackers, or as specified in the configuration for Source Trackers.
+utm_content	string	utm_content as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+utm_medium	string	utm_medium as captured from the landing page parameter for Website (Session) Trackers, or as specified in the configuration for Source Trackers.
+utm_source	string	utm_source as captured from the landing page parameter for Website (Session) Trackers, or as specified in the configuration for Source Trackers.
+utm_term	string	utm_term as captured from the landing page parameter, available for calls placed to Website (Session) trackers.
+value	integer	A number representing the monetary value of this call.
+voice_assist_message	object	The data collected during a Voice Assistant call. See our support article for more information.
+voice_assist_message: contents	object	A JSON object containing "question": "answer" mappings of collected data.
+voice_assist_message: overrides	object	A JSON object containing "question": "override" if a user has overridden an AI answer. Defaults to null.
+voice_assist_message: recorded_at	string	An ISO8601 timestamp of when the assistant recorded this message.
+voice_assist_message: urgency	string	The detected urgency level of the call.
+waveforms	array	Only present if the call was recorded. Contains the URLs of two images representing the volume of the call over time.
+zip_code	array	A list of each zip code entered by the caller as part of the geo-routing step of a call flow. See our support article for more information.
+lead_score	string	AI-based lead grading from “very poor” to “very good”.
+lead_score_explanation	string	Explanation of AI-based lead score.
