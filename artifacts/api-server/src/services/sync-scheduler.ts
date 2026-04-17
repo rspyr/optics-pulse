@@ -6,7 +6,6 @@ import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetc
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
-import { syncCallRailCalls } from "./integrations/callrail";
 import { runReconciliation } from "./reconciliation";
 import crypto from "crypto";
 
@@ -864,11 +863,10 @@ export function startSyncScheduler() {
     console.log("[SyncScheduler] Podium review sync PAUSED — integration disabled");
   }, reviewSyncInterval);
 
-  // CallRail intake is webhook-first (POST /api/webhooks/callrail/:tenantId).
+  // CallRail intake is webhook-only (POST /api/webhooks/callrail/:tenantId).
   // The previous polling backstop was a permanent no-op timer; it has been
-  // removed. If CallRail webhooks ever need a polling safety net, re-enable
-  // syncCallRailCalls here on a real interval rather than a logging stub.
-  void syncCallRailCalls;
+  // removed. If CallRail webhooks ever need a polling safety net,
+  // re-enable syncCallRailCalls here on a real interval.
 
   syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer];
   console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 15min, Podium PAUSED, CallRail webhook-only");

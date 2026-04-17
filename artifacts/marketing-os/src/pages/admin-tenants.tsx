@@ -545,7 +545,7 @@ export default function AdminTenants() {
             </div>
             <SetupGuide title="CallRail Setup Instructions">
               <p className="font-medium text-white/90">1. Generate an API Key</p>
-              <p>In CallRail, go to <span className="text-white/80">Settings → API Access</span>. Click <span className="text-white/80">"Create API V3 Key"</span>. Copy the key and paste it into the <span className="text-white/80">API Key</span> field above. (Optional today — used by the polling backstop only; webhooks below are the primary path.)</p>
+              <p>In CallRail, go to <span className="text-white/80">Settings → API Access</span>. Click <span className="text-white/80">"Create API V3 Key"</span>. Copy the key and paste it into the <span className="text-white/80">API Key</span> field above. (Optional today — webhooks below are the only intake path; the API key is reserved for future backfill/reconciliation tooling.)</p>
               <p className="font-medium text-white/90 pt-1">2. Find your Account ID &amp; Company ID</p>
               <p>Your <span className="text-white/80">Account ID</span> is in the URL when logged into CallRail (e.g. <span className="font-mono text-[11px]">app.callrail.com/a/<strong>123456789</strong>/…</span>). The <span className="text-white/80">Company ID</span> can be found under <span className="text-white/80">Settings → Companies</span> — click a company and note the ID from the URL.</p>
               <p className="font-medium text-white/90 pt-1">3. Add the Webhook URL</p>
