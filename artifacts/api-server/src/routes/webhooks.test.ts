@@ -133,6 +133,7 @@ vi.mock("drizzle-orm", () => ({
   sql: vi.fn(),
   isNull: vi.fn(),
   isNotNull: vi.fn(),
+  gt: vi.fn((...args: unknown[]) => args),
 }));
 
 import express from "express";
@@ -563,9 +564,10 @@ describe("POST /webhooks/callrail/:tenantId", () => {
   it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead", async () => {
     const fakeEvent = { id: 700, tenantId: 1 };
     const fakeLead = { id: 70, tenantId: 1 };
-    // selects in order: tenant lookup, refreshed lead lookup
+    // selects in order: tenant lookup, recent-leads dedupe lookup, refreshed lead lookup
     mockDb.selectResults = [
       [{ id: 1, apiConfig: "encrypted" }],
+      [],
       [fakeLead],
     ];
     // inserts in order: attribution event (upsert), lead
@@ -637,15 +639,124 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     );
   });
 
-  it("returns 400 when CallRail payload is missing the call id", async () => {
-    mockDb.selectResults = [[{ id: 1, apiConfig: "encrypted" }]];
+  it("accepts a CallRail payload missing the call id and still creates an event + lead", async () => {
+    const fakeEvent = { id: 701, tenantId: 1 };
+    const fakeLead = { id: 71, tenantId: 1 };
+    // selects: tenant, recent-leads dedupe (empty), refreshed lead
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [],
+      [fakeLead],
+    ];
+    mockDb.insertResults = [[fakeEvent], [fakeLead]];
 
-    const payload = { customer_phone_number: "+15551234567" };
+    const payload = { customer_phone_number: "+15551234567", customer_name: "No Id Caller" };
     const sig = signCallRail(JSON.stringify(payload));
 
     const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
-    expect(res.status).toBe(400);
-    expect(res.json().message).toContain("call id");
+    expect(res.status).toBe(200);
+    expect(res.json().success).toBe(true);
+    expect(res.json().eventId).toBe(701);
+    const eventInsert = mockDb.insertCalls[0]?.values as Record<string, unknown>;
+    expect(eventInsert.externalId).toBeNull();
+  });
+
+  it("suppresses a duplicate lead when the same phone arrived within the dedupe window (with call id)", async () => {
+    const fakeEvent = { id: 702, tenantId: 1 };
+    const recentLead = { id: 90, phone: "+1 (555) 123-4567" };
+    // selects: tenant, recent-leads dedupe (existing lead within window)
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [recentLead],
+    ];
+    mockDb.insertResults = [[fakeEvent]];
+
+    const payload = {
+      id: "CAL_dedupe_window",
+      customer_phone_number: "+15551234567",
+      customer_name: "Window Caller",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(200);
+    const body = res.json();
+    expect(body.duplicate).toBe(true);
+    expect(body.duplicateLeadId).toBe(90);
+    // Only the attribution event was inserted; lead insert was suppressed
+    expect(mockDb.insertCalls.length).toBe(1);
+  });
+
+  it("suppresses a duplicate lead within the dedupe window even when the call id is missing", async () => {
+    const fakeEvent = { id: 703, tenantId: 1 };
+    const recentLead = { id: 91, phone: "5551234567" };
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [recentLead],
+    ];
+    mockDb.insertResults = [[fakeEvent]];
+
+    const payload = {
+      customer_phone_number: "+15551234567",
+      customer_name: "No Id Window Caller",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(200);
+    const body = res.json();
+    expect(body.duplicate).toBe(true);
+    expect(body.duplicateLeadId).toBe(91);
+    expect(mockDb.insertCalls.length).toBe(1);
+  });
+
+  it("creates a second lead when no recent lead exists for that phone (outside the dedupe window)", async () => {
+    const fakeEvent = { id: 704, tenantId: 1 };
+    const fakeLead = { id: 92, tenantId: 1 };
+    // selects: tenant, recent-leads dedupe (empty -> nothing recent), refreshed lead
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [],
+      [fakeLead],
+    ];
+    mockDb.insertResults = [[fakeEvent], [fakeLead]];
+
+    const payload = {
+      id: "CAL_outside_window",
+      customer_phone_number: "+15551234567",
+      customer_name: "Outside Window",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(200);
+    expect(res.json().duplicate).toBeUndefined();
+    // Both event and lead were inserted
+    expect(mockDb.insertCalls.length).toBe(2);
+  });
+
+  it("respects per-tenant CALLRAIL_DEDUPE_WINDOW_MINUTES override of 0 (disabled)", async () => {
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY, callRailDedupeWindowMinutes: 0 });
+    const fakeEvent = { id: 705, tenantId: 1 };
+    const fakeLead = { id: 93, tenantId: 1 };
+    // selects: tenant, refreshed lead (no dedupe select since window=0)
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [fakeLead],
+    ];
+    mockDb.insertResults = [[fakeEvent], [fakeLead]];
+
+    const payload = {
+      id: "CAL_disabled_window",
+      customer_phone_number: "+15551234567",
+      customer_name: "Disabled Window",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+    expect(res.status).toBe(200);
+    expect(res.json().duplicate).toBeUndefined();
+    expect(mockDb.insertCalls.length).toBe(2);
   });
 
   it("skips lead creation for test-named callers", async () => {

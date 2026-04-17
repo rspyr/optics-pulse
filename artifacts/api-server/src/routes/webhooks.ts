@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable, callAttemptsTable, callrailWebhookStatusTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
-import { eq, and, sql, isNotNull } from "drizzle-orm";
+import { eq, and, sql, isNotNull, gt } from "drizzle-orm";
 import { emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
@@ -10,7 +10,7 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
 import { webhookLimiter } from "../middleware/rate-limit";
-import { hashValue, hashPhone } from "../lib/phone-utils";
+import { hashValue, hashPhone, normalizePhone } from "../lib/phone-utils";
 import { verifyCallRailSignature } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
 
@@ -286,10 +286,15 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     }
 
     let signingKey: string | undefined;
+    let tenantDedupeWindowMinutes: number | undefined;
     if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
       try {
         const cfg = decryptConfig(tenant.apiConfig);
         signingKey = typeof cfg.callRailSigningKey === "string" ? cfg.callRailSigningKey : undefined;
+        const rawWindow = cfg.callRailDedupeWindowMinutes;
+        if (typeof rawWindow === "number" && Number.isFinite(rawWindow) && rawWindow >= 0) {
+          tenantDedupeWindowMinutes = rawWindow;
+        }
       } catch (err) {
         console.warn(`[CallRail Webhook] Failed to decrypt apiConfig for tenant ${tenantId}:`, err);
       }
@@ -307,13 +312,7 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     const body = (req.body || {}) as Record<string, unknown>;
     const callId = String(body.id || body.call_id || "");
-    if (!callId) {
-      await recordCallRailStatus(tenantId, { success: false, reason: "Missing CallRail call id in payload" });
-      res.status(400).json({ success: false, message: "Missing CallRail call id" });
-      return;
-    }
-
-    const externalId = `callrail:${callId}`;
+    const externalId = callId ? `callrail:${callId}` : null;
 
     const customerPhone = typeof body.customer_phone_number === "string" ? body.customer_phone_number : null;
     const customerName = typeof body.customer_name === "string" ? body.customer_name : "";
@@ -332,9 +331,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     const hashedPhone = customerPhone ? hashPhone(customerPhone) : null;
 
-    const [event] = await db.insert(attributionEventsTable).values({
+    const eventValues = {
       tenantId,
-      eventType: "call",
+      eventType: "call" as const,
       gclid,
       fbclid,
       msclkid,
@@ -344,19 +343,24 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       utmMedium: callRailMedium,
       landingPage,
       referrer,
-      matchLevel: gclid ? "diamond" : hashedPhone ? "golden" : "unmatched",
+      matchLevel: (gclid ? "diamond" : hashedPhone ? "golden" : "unmatched") as "diamond" | "golden" | "unmatched",
       matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : 0,
       externalId,
-    }).onConflictDoNothing({
-      target: [attributionEventsTable.tenantId, attributionEventsTable.externalId],
-    }).returning();
+    };
+
+    const eventInsertResult = externalId
+      ? await db.insert(attributionEventsTable).values(eventValues).onConflictDoNothing({
+          target: [attributionEventsTable.tenantId, attributionEventsTable.externalId],
+        }).returning()
+      : await db.insert(attributionEventsTable).values(eventValues).returning();
+    const event = eventInsertResult[0];
 
     if (!event) {
       const [existing] = await db.select({ id: attributionEventsTable.id })
         .from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.tenantId, tenantId),
-          eq(attributionEventsTable.externalId, externalId),
+          eq(attributionEventsTable.externalId, externalId as string),
         ))
         .limit(1);
       await recordCallRailStatus(tenantId, { success: true, callId });
@@ -373,6 +377,37 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const isTestLead = nameLower.includes("test");
 
     if (!isTestLead && (customerName || customerPhone)) {
+      const defaultWindowMinutes = Number(process.env.CALLRAIL_DEDUPE_WINDOW_MINUTES) || 10;
+      const dedupeWindowMinutes = tenantDedupeWindowMinutes ?? defaultWindowMinutes;
+
+      if (customerPhone && dedupeWindowMinutes > 0) {
+        const normalizedCustomerPhone = normalizePhone(customerPhone);
+        const windowStart = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);
+        const recentLeads = await db.select({
+          id: leadsTable.id,
+          phone: leadsTable.phone,
+        })
+          .from(leadsTable)
+          .where(and(
+            eq(leadsTable.tenantId, tenantId),
+            isNotNull(leadsTable.phone),
+            gt(leadsTable.createdAt, windowStart),
+          ));
+        const dupLead = recentLeads.find((l) => l.phone && normalizePhone(l.phone) === normalizedCustomerPhone);
+        if (dupLead) {
+          console.log(`[CallRail Webhook] Suppressing duplicate lead for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
+          await recordCallRailStatus(tenantId, { success: true, callId });
+          res.json({
+            success: true,
+            eventId: event.id,
+            message: "CallRail webhook processed; duplicate lead suppressed",
+            duplicate: true,
+            duplicateLeadId: dupLead.id,
+          });
+          return;
+        }
+      }
+
       const nameParts = customerName.trim().split(/\s+/);
       const firstName = nameParts[0] || "Unknown";
       const lastName = nameParts.slice(1).join(" ") || "";
