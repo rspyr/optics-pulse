@@ -526,6 +526,7 @@ export default function AdminTenants() {
           </div>
           <div>
             <h4 className="text-xs font-medium text-green-400 uppercase tracking-wider mb-3">CallRail</h4>
+            {editId && <CallRailWebhookStatus tenantId={editId} apiBase={API_BASE} />}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <SecretInput field="callRailApiKey" label="API Key" />
               <SecretInput field="callRailSigningKey" label="Webhook Signing Key" placeholder="HMAC verification key" />
@@ -1241,6 +1242,97 @@ function TenantLeaderboardConfig({ tenantId, apiBase }: { tenantId: number; apiB
         {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : <Trophy className="w-4 h-4" />}
         {saved ? "Saved!" : "Save Leaderboard Settings"}
       </button>
+    </div>
+  );
+}
+
+interface CallRailStatus {
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureReason: string | null;
+  lastCallId: string | null;
+}
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "never";
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+function CallRailWebhookStatus({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
+  const [status, setStatus] = useState<CallRailStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/tenants/${tenantId}/callrail-status`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as CallRailStatus;
+      setStatus(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load status");
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, apiBase]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const lastSuccess = status?.lastSuccessAt ? new Date(status.lastSuccessAt).getTime() : 0;
+  const lastFailure = status?.lastFailureAt ? new Date(status.lastFailureAt).getTime() : 0;
+  const isHealthy = lastSuccess > 0 && lastSuccess >= lastFailure;
+  const isFailing = lastFailure > 0 && lastFailure > lastSuccess;
+  const hasNeverFired = !lastSuccess && !lastFailure;
+
+  return (
+    <div className="mb-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className={`shrink-0 w-2.5 h-2.5 rounded-full ${
+              isHealthy ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.7)]"
+                : isFailing ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.7)]"
+                : "bg-white/30"
+            }`}
+            aria-hidden
+          />
+          <div className="text-xs min-w-0">
+            {loading && <span className="text-muted-foreground">Checking webhook status…</span>}
+            {!loading && error && <span className="text-red-400">Failed to load status: {error}</span>}
+            {!loading && !error && hasNeverFired && (
+              <span className="text-muted-foreground">No CallRail webhooks received yet. Trigger a test call from CallRail to verify the URL and signing key.</span>
+            )}
+            {!loading && !error && isHealthy && (
+              <span className="text-emerald-300">
+                Last successful webhook {formatRelativeTime(status?.lastSuccessAt ?? null)}
+                {status?.lastCallId ? <span className="text-muted-foreground"> · call {status.lastCallId}</span> : null}
+              </span>
+            )}
+            {!loading && !error && isFailing && (
+              <span className="text-red-300 break-words">
+                Last webhook rejected {formatRelativeTime(status?.lastFailureAt ?? null)}
+                {status?.lastFailureReason ? <span className="text-red-200/80"> — {status.lastFailureReason}</span> : null}
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="shrink-0 text-[11px] text-muted-foreground hover:text-white px-2 py-1 rounded border border-white/10 hover:bg-white/5 disabled:opacity-50"
+        >
+          {loading ? "…" : "Refresh"}
+        </button>
+      </div>
     </div>
   );
 }

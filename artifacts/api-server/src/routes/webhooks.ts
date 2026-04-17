@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable, callAttemptsTable } from "@workspace/db";
+import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, usersTable, callAttemptsTable, callrailWebhookStatusTable } from "@workspace/db";
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
@@ -222,9 +222,52 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
   }
 });
 
-router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => {
+async function recordCallRailStatus(
+  tenantId: number,
+  outcome: { success: true; callId: string } | { success: false; reason: string; callId?: string | null },
+): Promise<void> {
   try {
-    const tenantId = Number(req.params.tenantId);
+    const now = new Date();
+    const values = outcome.success
+      ? {
+          tenantId,
+          lastSuccessAt: now,
+          lastCallId: outcome.callId,
+          updatedAt: now,
+        }
+      : {
+          tenantId,
+          lastFailureAt: now,
+          lastFailureReason: outcome.reason.slice(0, 500),
+          ...(outcome.callId ? { lastCallId: outcome.callId } : {}),
+          updatedAt: now,
+        };
+    const setOnConflict = outcome.success
+      ? {
+          lastSuccessAt: now,
+          lastCallId: outcome.callId,
+          updatedAt: now,
+        }
+      : {
+          lastFailureAt: now,
+          lastFailureReason: outcome.reason.slice(0, 500),
+          ...(outcome.callId ? { lastCallId: outcome.callId } : {}),
+          updatedAt: now,
+        };
+    await db.insert(callrailWebhookStatusTable)
+      .values(values)
+      .onConflictDoUpdate({
+        target: callrailWebhookStatusTable.tenantId,
+        set: setOnConflict,
+      });
+  } catch (err) {
+    console.warn(`[CallRail Webhook] Failed to record status for tenant ${tenantId}:`, err);
+  }
+}
+
+router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  try {
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       res.status(400).json({ success: false, message: "Invalid tenantId in URL" });
       return;
@@ -254,6 +297,10 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     if (!verifyCallRailSignature(rawBody, signature, signingKey)) {
       console.warn(`[CallRail Webhook] Signature verification failed for tenant ${tenantId}`);
+      const reason = signingKey
+        ? "Invalid webhook signature (signing key mismatch)"
+        : "No CallRail signing key configured for this tenant";
+      await recordCallRailStatus(tenantId, { success: false, reason });
       res.status(401).json({ success: false, message: "Invalid webhook signature" });
       return;
     }
@@ -261,6 +308,7 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const body = (req.body || {}) as Record<string, unknown>;
     const callId = String(body.id || body.call_id || "");
     if (!callId) {
+      await recordCallRailStatus(tenantId, { success: false, reason: "Missing CallRail call id in payload" });
       res.status(400).json({ success: false, message: "Missing CallRail call id" });
       return;
     }
@@ -311,6 +359,7 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
           eq(attributionEventsTable.externalId, externalId),
         ))
         .limit(1);
+      await recordCallRailStatus(tenantId, { success: true, callId });
       res.json({
         success: true,
         eventId: existing?.id ?? 0,
@@ -374,10 +423,14 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       }
     }
 
+    await recordCallRailStatus(tenantId, { success: true, callId });
     res.json({ success: true, eventId: event.id, message: "CallRail webhook processed successfully" });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to process CallRail webhook";
     console.error("[CallRail Webhook] Error:", error);
+    if (Number.isInteger(tenantId) && tenantId > 0) {
+      await recordCallRailStatus(tenantId, { success: false, reason: message });
+    }
     res.status(400).json({ success: false, message });
   }
 });

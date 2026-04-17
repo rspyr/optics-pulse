@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, tenantsTable, usersTable, leadSourceAliasesTable } from "@workspace/db";
+import { db, tenantsTable, usersTable, leadSourceAliasesTable, callrailWebhookStatusTable } from "@workspace/db";
 import { eq, sql, and } from "drizzle-orm";
 import { CreateTenantBody, GetTenantParams, UpdateTenantBody } from "@workspace/api-zod";
 import { requireRole } from "../middleware/auth";
@@ -231,6 +231,40 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     return;
   }
   res.json(sanitizeTenant(tenant));
+});
+
+router.get("/tenants/:tenantId/callrail-status", async (req, res) => {
+  const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user" && req.session.tenantId !== tenantId) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  try {
+    const [status] = await db.select().from(callrailWebhookStatusTable)
+      .where(eq(callrailWebhookStatusTable.tenantId, tenantId));
+    if (!status) {
+      res.json({
+        tenantId,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        lastFailureReason: null,
+        lastCallId: null,
+      });
+      return;
+    }
+    res.json(status);
+  } catch (err) {
+    console.warn(`[Tenants] callrail-status query failed for tenant ${tenantId}:`, err);
+    res.json({
+      tenantId,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      lastFailureReason: null,
+      lastCallId: null,
+      unavailable: true,
+    });
+  }
 });
 
 router.delete("/tenants/:tenantId", requireRole("super_admin", "agency_user"), async (req, res) => {
