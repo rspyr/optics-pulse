@@ -1479,8 +1479,8 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
   );
 }
 
-function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false, userRole }: {
-  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean; userRole?: string;
+function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timezone = "America/New_York", funnelMap = {}, canEditActions = false, currentUserId, isAdminRole = false, isArchived = false, userRole, onOpenLeadById }: {
+  lead: LeadData; tenantId: number; onBack: () => void; onUpdate: () => void; onSpiffEarned?: (amount: number) => void; timezone?: string; funnelMap?: Record<number, string>; canEditActions?: boolean; currentUserId?: number; isAdminRole?: boolean; isArchived?: boolean; userRole?: string; onOpenLeadById?: (leadId: number) => void;
 }) {
   const [actionStep, setActionStep] = useState<null | "call_done" | "call_result" | "spoke_result" | "dead_reason" | "dead_reason_custom" | "text_done" | "text_result" | "vm_done" | "appt_booked_spoke" | "appt_cancel_reason">(null);
   const [customDeadNote, setCustomDeadNote] = useState("");
@@ -2292,10 +2292,78 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
         <ContractDetailsSection leadId={lead.id} tenantId={tenantId} timezone={timezone} />
       )}
 
+      <LeadMergeHistory leadId={lead.id} timezone={timezone} onOpenLeadById={onOpenLeadById} />
+
       <PremiumCard className="p-4">
         <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} />
       </PremiumCard>
     </div>
+  );
+}
+
+type LeadMergeRecord = { duplicateLeadId: number; canonicalLeadId?: number; mergedAt: string; source: string; runId: string | null };
+function LeadMergeHistory({ leadId, timezone, onOpenLeadById }: { leadId: number; timezone: string; onOpenLeadById?: (leadId: number) => void }) {
+  const [data, setData] = useState<{ duplicates: LeadMergeRecord[]; mergedInto: LeadMergeRecord | null } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`${API_BASE}/leads/${leadId}/merges`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [leadId]);
+
+  if (loading || !data) return null;
+  if (data.duplicates.length === 0 && !data.mergedInto) return null;
+
+  const renderLeadIdLink = (id: number) => (
+    onOpenLeadById ? (
+      <button
+        type="button"
+        onClick={() => onOpenLeadById(id)}
+        className="text-blue-400 hover:text-blue-300 underline-offset-2 hover:underline font-mono"
+      >
+        #{id}
+      </button>
+    ) : (
+      <span className="font-mono text-white/50">#{id}</span>
+    )
+  );
+
+  return (
+    <PremiumCard className="p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <FileText className="w-3.5 h-3.5 text-white/40" />
+        <span className="text-xs font-medium text-white/50 uppercase tracking-wider">Merge history</span>
+      </div>
+      {data.mergedInto && (
+        <p className="text-xs text-amber-300/80 mb-2">
+          This lead id was merged into lead {renderLeadIdLink(data.mergedInto.canonicalLeadId!)} on {formatDateTimeInTz(data.mergedInto.mergedAt, timezone)} by <span className="font-mono">{data.mergedInto.source}</span>
+          {data.mergedInto.runId ? <> (run <span className="font-mono text-white/40">{data.mergedInto.runId}</span>)</> : null}.
+        </p>
+      )}
+      {data.duplicates.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] text-white/40 uppercase tracking-wider">Absorbed duplicates</p>
+          <ul className="space-y-1">
+            {data.duplicates.map(d => (
+              <li key={d.duplicateLeadId} className="text-xs text-white/70 flex items-center gap-2 font-mono">
+                {renderLeadIdLink(d.duplicateLeadId)}
+                <span className="text-white/30">→</span>
+                <span className="text-white/40">{formatDateTimeInTz(d.mergedAt, timezone)}</span>
+                <span className="text-white/30">·</span>
+                <span className="text-white/40">{d.source}</span>
+                {d.runId ? <span className="text-white/30 truncate" title={d.runId}>· {d.runId}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </PremiumCard>
   );
 }
 
@@ -2419,6 +2487,12 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
         isAdminRole={isAdmin}
         userRole={user?.role}
         isArchived
+        onOpenLeadById={async (id) => {
+          try {
+            const r = await fetch(`${API_BASE}/leads/${id}?tenantId=${tenantId}`, { credentials: "include" });
+            if (r.ok) setSelectedLead(await r.json() as LeadData);
+          } catch {}
+        }}
       />
     );
   }
@@ -3151,6 +3225,12 @@ export default function Leads() {
               currentUserId={user?.id}
               isAdminRole={isAdmin}
               userRole={user?.role}
+              onOpenLeadById={async (id) => {
+                try {
+                  const r = await fetch(`${API_BASE}/leads/${id}?tenantId=${effectiveTenantId}`, { credentials: "include" });
+                  if (r.ok) setSelectedLead(await r.json() as LeadData);
+                } catch {}
+              }}
             />
           ) : (
           <>

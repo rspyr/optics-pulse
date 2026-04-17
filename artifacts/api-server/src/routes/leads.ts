@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable } from "@workspace/db";
+import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
@@ -581,6 +581,32 @@ router.get("/leads/:leadId", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
   const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) {
+    // The lead row may have been hard-deleted by the dedupe cleanup script.
+    // If so, point the caller at the canonical lead it was merged into so
+    // support tools can answer "what happened to lead #1234?".
+    const [merge] = await db
+      .select()
+      .from(leadMergesTable)
+      .where(eq(leadMergesTable.duplicateLeadId, leadId));
+    if (merge) {
+      const role = req.session.userRole;
+      if (role !== "super_admin" && role !== "agency_user") {
+        if (merge.tenantId !== req.session.tenantId) {
+          res.status(403).json({ error: "Access denied" });
+          return;
+        }
+      }
+      res.status(410).json({
+        error: "Lead was merged",
+        mergedInto: {
+          canonicalLeadId: merge.canonicalLeadId,
+          mergedAt: merge.mergedAt,
+          source: merge.source,
+          runId: merge.runId,
+        },
+      });
+      return;
+    }
     res.status(404).json({ error: "Lead not found" });
     return;
   }
@@ -592,6 +618,67 @@ router.get("/leads/:leadId", async (req, res) => {
     }
   }
   res.json(lead);
+});
+
+router.get("/leads/:leadId/merges", async (req, res) => {
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+
+  // Authorize against either the surviving lead (if still present) or the
+  // recorded merge row (if the requested id is a deleted duplicate).
+  let tenantId: number | null = null;
+  const [lead] = await db
+    .select({ tenantId: leadsTable.tenantId })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
+  if (lead) {
+    tenantId = lead.tenantId;
+  } else {
+    const [merge] = await db
+      .select({ tenantId: leadMergesTable.tenantId })
+      .from(leadMergesTable)
+      .where(eq(leadMergesTable.duplicateLeadId, leadId));
+    if (merge) tenantId = merge.tenantId;
+  }
+  if (tenantId === null) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  const [duplicates, mergedIntoRows] = await Promise.all([
+    db
+      .select()
+      .from(leadMergesTable)
+      .where(eq(leadMergesTable.canonicalLeadId, leadId))
+      .orderBy(desc(leadMergesTable.mergedAt)),
+    db
+      .select()
+      .from(leadMergesTable)
+      .where(eq(leadMergesTable.duplicateLeadId, leadId)),
+  ]);
+
+  res.json({
+    duplicates: duplicates.map((m) => ({
+      duplicateLeadId: m.duplicateLeadId,
+      mergedAt: m.mergedAt,
+      source: m.source,
+      runId: m.runId,
+    })),
+    mergedInto: mergedIntoRows[0]
+      ? {
+          canonicalLeadId: mergedIntoRows[0].canonicalLeadId,
+          mergedAt: mergedIntoRows[0].mergedAt,
+          source: mergedIntoRows[0].source,
+          runId: mergedIntoRows[0].runId,
+        }
+      : null,
+  });
 });
 
 router.patch("/leads/:leadId", async (req, res) => {

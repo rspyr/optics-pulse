@@ -32,3 +32,4 @@ export * from "./one-time-migrations";
 export * from "./sold-estimates";
 export * from "./ingestion-audit-log";
 export * from "./callrail-webhook-status";
+export * from "./lead-merges";

@@ -9,6 +9,7 @@ import {
   podiumMessagesTable,
   jobsTable,
   tenantsTable,
+  leadMergesTable,
 } from "../src";
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -142,7 +143,9 @@ async function findDuplicateGroups(): Promise<Group[]> {
   );
 }
 
-async function mergeGroup(group: Group): Promise<void> {
+const SCRIPT_SOURCE = "dedupe-callrail-ghl-leads";
+
+async function mergeGroup(group: Group, runId: string): Promise<void> {
   const { canonicalId, duplicateIds } = group;
   if (duplicateIds.length === 0) return;
 
@@ -225,6 +228,19 @@ async function mergeGroup(group: Group): Promise<void> {
         inArray(attributionEventsTable.createdLeadId, duplicateIds),
       ));
 
+    // Audit trail: record each merge before hard-deleting the duplicate row.
+    // `duplicate_lead_id` is unique, so re-runs (or accidental retries) will
+    // surface as a constraint violation rather than silently double-write.
+    await tx.insert(leadMergesTable).values(
+      duplicateIds.map((duplicateLeadId) => ({
+        tenantId: group.tenantId,
+        duplicateLeadId,
+        canonicalLeadId: canonicalId,
+        source: SCRIPT_SOURCE,
+        runId,
+      })),
+    );
+
     await tx.delete(leadsTable).where(inArray(leadsTable.id, duplicateIds));
   });
 }
@@ -275,17 +291,18 @@ async function main() {
     return;
   }
 
-  console.log("\n[Dedupe Leads] Applying merges...");
+  const runId = `${SCRIPT_SOURCE}:${new Date().toISOString()}`;
+  console.log(`\n[Dedupe Leads] Applying merges (run_id=${runId})...`);
   let merged = 0;
   for (const g of groups) {
     try {
-      await mergeGroup(g);
+      await mergeGroup(g, runId);
       merged += g.duplicateIds.length;
     } catch (err) {
       console.error(`[Dedupe Leads] Failed to merge group tenant=${g.tenantId} ext=${g.externalId} keep=${g.canonicalId}:`, err);
     }
   }
-  console.log(`[Dedupe Leads] Done. Merged ${merged} orphan leads across ${groups.length} canonical leads.`);
+  console.log(`[Dedupe Leads] Done. Merged ${merged} orphan leads across ${groups.length} canonical leads (run_id=${runId}).`);
 }
 
 main()
