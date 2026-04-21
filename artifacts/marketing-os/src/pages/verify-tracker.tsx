@@ -81,8 +81,42 @@ export default function VerifyTracker() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [ignoredCount, setIgnoredCount] = useState(0);
   const socketRef = useRef<Socket | null>(null);
+  const persistHostRef = useRef<string | null>(null);
 
   const MAX_EVENTS = 5;
+  const STORAGE_PREFIX = "verify-tracker:events:";
+
+  const storageKeyFor = (host: string) => `${STORAGE_PREFIX}${host.toLowerCase()}`;
+
+  const loadPersistedEvents = (host: string): { evt: LiveAttributionEvent; arrivedAt: number }[] => {
+    try {
+      const raw = localStorage.getItem(storageKeyFor(host));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.slice(0, MAX_EVENTS);
+    } catch {
+      return [];
+    }
+  };
+
+  const persistEvents = (host: string | null, events: { evt: LiveAttributionEvent; arrivedAt: number }[]) => {
+    if (!host) return;
+    try {
+      localStorage.setItem(storageKeyFor(host), JSON.stringify(events.slice(0, MAX_EVENTS)));
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  };
+
+  const clearPersistedEvents = (host: string | null) => {
+    if (!host) return;
+    try {
+      localStorage.removeItem(storageKeyFor(host));
+    } catch {
+      /* ignore */
+    }
+  };
 
   const stopWaiting = () => {
     if (socketRef.current) {
@@ -110,6 +144,9 @@ export default function VerifyTracker() {
     setIgnoredCount(0);
     const allowedTenantIds = new Set(verifyResult.heartbeats.map(h => h.tenantId));
     const expectedHost = verifyResult.host.toLowerCase();
+    persistHostRef.current = expectedHost;
+    const persisted = loadPersistedEvents(expectedHost);
+    if (persisted.length > 0) setLiveEvents(persisted);
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
     socket.on("connect", () => {
       for (const tid of allowedTenantIds) socket.emit("join-tenant", tid);
@@ -121,7 +158,11 @@ export default function VerifyTracker() {
         setIgnoredCount(c => c + 1);
         return;
       }
-      setLiveEvents(prev => [{ evt, arrivedAt: Date.now() }, ...prev].slice(0, MAX_EVENTS));
+      setLiveEvents(prev => {
+        const next = [{ evt, arrivedAt: Date.now() }, ...prev].slice(0, MAX_EVENTS);
+        persistEvents(expectedHost, next);
+        return next;
+      });
       setWaitingSince(Date.now());
       setElapsedMs(0);
     });
@@ -231,7 +272,7 @@ export default function VerifyTracker() {
             elapsedMs={elapsedMs}
             onRestart={() => startWaiting(result)}
             onStop={stopWaiting}
-            onClear={() => setLiveEvents([])}
+            onClear={() => { setLiveEvents([]); clearPersistedEvents(persistHostRef.current); }}
             tenantsScoped={result.heartbeats.length}
             expectedHost={result.host}
             ignoredCount={ignoredCount}
