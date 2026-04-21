@@ -1,5 +1,7 @@
 import { db, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
 import { and, desc, eq } from "drizzle-orm";
+import { emitLeadResubmitted } from "../socket";
+import { sendPushToUser } from "./push-notifications";
 
 const TERMINAL_HUB_STATUSES = new Set(["appt_set", "appt_booked", "dead"]);
 
@@ -77,9 +79,28 @@ export async function handleResubmission(
     });
   }
 
+  const reactivated = !isTerminal;
+
+  if (reactivated && lead.assignedCsrId) {
+    const leadName = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "Lead";
+    emitLeadResubmitted(tenantId, {
+      leadId: existingLeadId,
+      assignedCsrId: lead.assignedCsrId,
+      leadName,
+      source: sourceLabel,
+      reactivated,
+    });
+    sendPushToUser(
+      lead.assignedCsrId,
+      "Lead Resubmitted",
+      `${leadName} resubmitted from ${sourceLabel} — reach out again`,
+      { leadId: existingLeadId, type: "lead-resubmitted", intent: "open-lead" },
+    ).catch(err => console.error("[Push] handleResubmission push error:", err));
+  }
+
   return {
     resubmitted: true,
-    reactivated: !isTerminal,
+    reactivated,
     leadId: existingLeadId,
   };
 }

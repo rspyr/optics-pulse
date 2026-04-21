@@ -317,6 +317,16 @@ export function emitPodiumMessage(tenantId: number, message: Record<string, unkn
   }
 }
 
+export function emitLeadResubmitted(
+  tenantId: number,
+  data: { leadId: number; assignedCsrId: number | null; leadName: string; source: string; reactivated: boolean },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("lead-resubmitted", data);
+    console.log(`[Socket.IO] Emitted lead-resubmitted for tenant-${tenantId} (lead ${data.leadId} -> csr ${data.assignedCsrId ?? "none"})`);
+  }
+}
+
 export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("callback-due", data);
