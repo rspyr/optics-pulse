@@ -3,7 +3,7 @@ import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leads
 import { TrackerSubmitBody } from "@workspace/api-zod";
 import { eq, and, gte } from "drizzle-orm";
 import { z } from "zod";
-import { emitNewLead } from "../socket";
+import { emitNewLead, emitNewAttributionEvent } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
@@ -282,6 +282,27 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       matchLevel,
       matchConfidence,
     }).returning();
+
+    emitNewAttributionEvent(tenantId, {
+      id: event.id,
+      matchLevel,
+      matchConfidence,
+      resolvedLeadSource: resolvedSourceStr,
+      resolvedFunnel: resolvedFunnelStr,
+      formType,
+      formId,
+      formName,
+      pageUrl,
+      landingPage,
+      hasPhone: !!hashedPhone,
+      hasEmail: !!hashedEmail,
+      gclid,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      submittedAt: submittedAt instanceof Date ? submittedAt.toISOString() : submittedAt,
+      receivedAt: new Date().toISOString(),
+    });
 
     const ingestionMode = tenant.leadIngestionMode || "sheets";
     const shouldCreateLead = ingestionMode === "tracker" || ingestionMode === "both";

@@ -327,6 +327,13 @@ export function emitLeadResubmitted(
   }
 }
 
+export function emitNewAttributionEvent(tenantId: number, data: Record<string, unknown>) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("new-attribution-event", { ...data, tenantId });
+    console.log(`[Socket.IO] Emitted new-attribution-event for tenant-${tenantId} (event ${data.id})`);
+  }
+}
+
 export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("callback-due", data);
