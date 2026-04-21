@@ -54,6 +54,12 @@ interface ScriptResult {
   error?: string;
 }
 
+interface StoredEvent {
+  evt: LiveAttributionEvent;
+  arrivedAt: number;
+  sessionId: string;
+}
+
 interface VerifyResult {
   url: string;
   host: string;
@@ -75,32 +81,36 @@ export default function VerifyTracker() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [liveEvents, setLiveEvents] = useState<{ evt: LiveAttributionEvent; arrivedAt: number }[]>([]);
+  const [liveEvents, setLiveEvents] = useState<StoredEvent[]>([]);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [ignoredCount, setIgnoredCount] = useState(0);
   const socketRef = useRef<Socket | null>(null);
   const persistHostRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string>(`s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const MAX_EVENTS = 5;
   const STORAGE_PREFIX = "verify-tracker:events:";
 
   const storageKeyFor = (host: string) => `${STORAGE_PREFIX}${host.toLowerCase()}`;
 
-  const loadPersistedEvents = (host: string): { evt: LiveAttributionEvent; arrivedAt: number }[] => {
+  const loadPersistedEvents = (host: string): StoredEvent[] => {
     try {
       const raw = localStorage.getItem(storageKeyFor(host));
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return [];
-      return parsed.slice(0, MAX_EVENTS);
+      return parsed.slice(0, MAX_EVENTS).map((e: StoredEvent) => ({
+        ...e,
+        sessionId: e.sessionId ?? "__legacy__",
+      }));
     } catch {
       return [];
     }
   };
 
-  const persistEvents = (host: string | null, events: { evt: LiveAttributionEvent; arrivedAt: number }[]) => {
+  const persistEvents = (host: string | null, events: StoredEvent[]) => {
     if (!host) return;
     try {
       localStorage.setItem(storageKeyFor(host), JSON.stringify(events.slice(0, MAX_EVENTS)));
@@ -159,7 +169,7 @@ export default function VerifyTracker() {
         return;
       }
       setLiveEvents(prev => {
-        const next = [{ evt, arrivedAt: Date.now() }, ...prev].slice(0, MAX_EVENTS);
+        const next: StoredEvent[] = [{ evt, arrivedAt: Date.now(), sessionId: sessionIdRef.current }, ...prev].slice(0, MAX_EVENTS);
         persistEvents(expectedHost, next);
         return next;
       });
@@ -276,6 +286,7 @@ export default function VerifyTracker() {
             tenantsScoped={result.heartbeats.length}
             expectedHost={result.host}
             ignoredCount={ignoredCount}
+            currentSessionId={sessionIdRef.current}
           />
 
           <PremiumCard className="p-6">
@@ -374,8 +385,9 @@ function LiveEventCard({
   tenantsScoped,
   expectedHost,
   ignoredCount,
+  currentSessionId,
 }: {
-  events: { evt: LiveAttributionEvent; arrivedAt: number }[];
+  events: StoredEvent[];
   nowMs: number;
   waitingSince: number | null;
   elapsedMs: number;
@@ -385,10 +397,12 @@ function LiveEventCard({
   tenantsScoped: number;
   expectedHost: string;
   ignoredCount: number;
+  currentSessionId: string;
 }) {
   const seconds = Math.floor(elapsedMs / 1000);
   const hasEvents = events.length > 0;
   const timedOut = waitingSince !== null && !hasEvents && seconds >= 60;
+  const hasPriorSession = events.some(e => e.sessionId !== currentSessionId);
 
   return (
     <PremiumCard className="p-6">
@@ -405,6 +419,7 @@ function LiveEventCard({
             {hasEvents && (
               <p className="text-[11px] text-muted-foreground mt-1">
                 Showing the {events.length === 1 ? "most recent event" : `last ${events.length} events`} (newest first, capped at 5).
+                {hasPriorSession && " Events from a previous session show their actual capture time."}
               </p>
             )}
             {ignoredCount > 0 && (
@@ -454,13 +469,28 @@ function LiveEventCard({
         )}
         {hasEvents && (
           <div className="space-y-2">
-            {events.map(({ evt, arrivedAt }) => (
+            {events.map(({ evt, arrivedAt, sessionId }) => {
+              const fromPriorSession = sessionId !== currentSessionId;
+              const capturedAtIso = evt.receivedAt || evt.submittedAt;
+              const capturedAtMs = capturedAtIso ? Date.parse(capturedAtIso) : NaN;
+              const capturedAtLabel = Number.isFinite(capturedAtMs)
+                ? new Date(capturedAtMs).toLocaleString()
+                : new Date(arrivedAt).toLocaleString();
+              return (
               <div key={`${evt.id}-${arrivedAt}`} className="border border-white/10 bg-white/[0.02] rounded-md p-3">
                 <div className="flex items-center gap-2 text-sm text-emerald-300 flex-wrap">
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Event #{evt.id}</span>
                   <span className={`text-[11px] px-2 py-0.5 rounded border ${matchPillClass(evt.matchLevel)}`}>match: {evt.matchLevel}</span>
-                  <span className="text-[11px] text-muted-foreground ml-auto">{formatAge(nowMs - arrivedAt)}</span>
+                  {fromPriorSession && (
+                    <span className="text-[11px] px-2 py-0.5 rounded border bg-white/[0.04] text-muted-foreground border-white/15">from previous session</span>
+                  )}
+                  <span
+                    className="text-[11px] text-muted-foreground ml-auto"
+                    title={fromPriorSession ? `Captured ${capturedAtLabel}` : `Arrived ${new Date(arrivedAt).toLocaleString()}`}
+                  >
+                    {fromPriorSession ? `captured ${capturedAtLabel}` : formatAge(nowMs - arrivedAt)}
+                  </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mt-2">
                   <Field label="Resolved source" value={evt.resolvedLeadSource} />
@@ -469,7 +499,8 @@ function LiveEventCard({
                   <Field label="Form" value={[evt.formType, evt.formName].filter(Boolean).join(" / ") || null} />
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
