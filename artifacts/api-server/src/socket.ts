@@ -322,7 +322,7 @@ export function emitLeadResubmitted(
   data: { leadId: number; assignedCsrId: number | null; leadName: string; source: string; reactivated: boolean },
 ) {
   if (io) {
-    io.to(`tenant-${tenantId}`).emit("lead-resubmitted", data);
+    io.to(`tenant-${tenantId}`).emit("lead-resubmitted", { ...data, tenantId });
     console.log(`[Socket.IO] Emitted lead-resubmitted for tenant-${tenantId} (lead ${data.leadId} -> csr ${data.assignedCsrId ?? "none"})`);
   }
 }

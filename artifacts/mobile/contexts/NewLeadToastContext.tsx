@@ -24,6 +24,14 @@ interface ToastLead {
   phone?: string;
 }
 
+interface ResubmittedToast {
+  leadId: number;
+  assignedCsrId: number | null;
+  leadName: string;
+  source?: string | null;
+  reactivated: boolean;
+}
+
 interface PodiumToast {
   id: number;
   leadId?: number;
@@ -90,6 +98,46 @@ function PodiumToastBanner({ data, onPress, onDismiss }: { data: PodiumToast; on
   );
 }
 
+function ResubmittedToastBanner({ data, onPress, onDismiss }: { data: ResubmittedToast; onPress: () => void; onDismiss: () => void }) {
+  const slideAnim = useRef(new Animated.Value(-120)).current;
+  const progressAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 300 }).start();
+    Animated.timing(progressAnim, { toValue: 0, duration: 30000, useNativeDriver: false }).start();
+    const timer = setTimeout(onDismiss, 30000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
+
+  return (
+    <Animated.View style={[styles.toastContainer, { transform: [{ translateY: slideAnim }] }]}>
+      <TouchableOpacity
+        style={[styles.card, { backgroundColor: "#78350f", borderColor: "#f59e0b66" }]}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
+        <View style={styles.topRow}>
+          <View style={styles.pulseWrap}>
+            <View style={[styles.pulseDot, { backgroundColor: "#f59e0b" }]} />
+          </View>
+          <Text style={[styles.toastTitle, { color: "#fbbf24" }]}>Lead Resubmitted</Text>
+          <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Feather name="x" size={16} color="rgba(255,255,255,0.4)" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.toastName}>{data.leadName}</Text>
+        <View style={styles.toastMeta}>
+          {data.source ? <Text style={styles.toastSource}>from {data.source}</Text> : null}
+          <Text style={styles.toastSource}>· reach out again</Text>
+        </View>
+        <Animated.View style={[styles.progressBar, { width: progressWidth, backgroundColor: "rgba(245,158,11,0.6)" }]} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
 function ToastBanner({ lead, onPress, onDismiss }: { lead: ToastLead; onPress: () => void; onDismiss: () => void }) {
   const slideAnim = useRef(new Animated.Value(-120)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
@@ -138,8 +186,10 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
 
   const [toastLead, setToastLead] = useState<ToastLead | null>(null);
   const [podiumToast, setPodiumToast] = useState<PodiumToast | null>(null);
+  const [resubmittedToast, setResubmittedToast] = useState<ResubmittedToast | null>(null);
   const recentToastIds = useRef(new Set<number>());
   const recentPodiumIds = useRef(new Set<number>());
+  const recentResubmittedIds = useRef(new Set<number>());
   const pushLeadIds = useRef(new Set<number>());
 
   const recordPushLeadId = (leadId: number) => {
@@ -191,9 +241,31 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
       }
     };
 
+    const handleLeadResubmitted = (data: ResubmittedToast) => {
+      if (
+        !data ||
+        !data.leadId ||
+        data.assignedCsrId !== user.id ||
+        AppState.currentState !== "active" ||
+        recentResubmittedIds.current.has(data.leadId) ||
+        pushLeadIds.current.has(data.leadId)
+      ) {
+        return;
+      }
+      recentResubmittedIds.current.add(data.leadId);
+      setTimeout(() => recentResubmittedIds.current.delete(data.leadId), 120000);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setResubmittedToast(data);
+    };
+
     on("new-lead", handleNewLead);
     on("podium-message", handlePodiumMessage);
-    return () => { off("new-lead", handleNewLead); off("podium-message", handlePodiumMessage); };
+    on("lead-resubmitted", handleLeadResubmitted);
+    return () => {
+      off("new-lead", handleNewLead);
+      off("podium-message", handlePodiumMessage);
+      off("lead-resubmitted", handleLeadResubmitted);
+    };
   }, [user?.id, on, off]);
 
   return (
@@ -212,7 +284,20 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
           />
         </View>
       )}
-      {podiumToast && !toastLead && (
+      {resubmittedToast && !toastLead && (
+        <View style={{ position: "absolute", top: isWeb ? 67 : insets.top + 8, left: 0, right: 0, zIndex: 9997 }}>
+          <ResubmittedToastBanner
+            data={resubmittedToast}
+            onPress={() => {
+              const id = resubmittedToast.leadId;
+              setResubmittedToast(null);
+              router.push({ pathname: "/lead/[id]", params: { id: String(id) } });
+            }}
+            onDismiss={() => setResubmittedToast(null)}
+          />
+        </View>
+      )}
+      {podiumToast && !toastLead && !resubmittedToast && (
         <View style={{ position: "absolute", top: isWeb ? 67 : insets.top + 8, left: 0, right: 0, zIndex: 9998 }}>
           <PodiumToastBanner
             data={podiumToast}

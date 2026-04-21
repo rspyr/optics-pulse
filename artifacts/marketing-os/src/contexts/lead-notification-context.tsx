@@ -246,6 +246,19 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       setLatestCallbackDue(data);
       playSound("callback");
     });
+    socket.on("lead-resubmitted", (data: { leadId: number; assignedCsrId: number | null; leadName: string; source?: string | null; reactivated: boolean; tenantId?: number }) => {
+      if (!data || !data.leadId) return;
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      const isAssignedCsr = user?.id != null && data.assignedCsrId === user.id;
+      const isManager = isAgency || user?.role === "client_admin";
+      if (!isAssignedCsr && !isManager) return;
+      const sourcePart = data.source ? ` from ${data.source}` : "";
+      toast({
+        title: "Lead Resubmitted",
+        description: `${data.leadName}${sourcePart} — reach out again`,
+      });
+      playSound("new-lead");
+    });
     socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
