@@ -75,11 +75,14 @@ export default function VerifyTracker() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [liveEvent, setLiveEvent] = useState<LiveAttributionEvent | null>(null);
+  const [liveEvents, setLiveEvents] = useState<{ evt: LiveAttributionEvent; arrivedAt: number }[]>([]);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [ignoredCount, setIgnoredCount] = useState(0);
   const socketRef = useRef<Socket | null>(null);
+
+  const MAX_EVENTS = 5;
 
   const stopWaiting = () => {
     if (socketRef.current) {
@@ -97,9 +100,13 @@ export default function VerifyTracker() {
     return () => clearInterval(id);
   }, [waitingSince]);
 
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const startWaiting = (verifyResult: VerifyResult) => {
     stopWaiting();
-    setLiveEvent(null);
     setIgnoredCount(0);
     const allowedTenantIds = new Set(verifyResult.heartbeats.map(h => h.tenantId));
     const expectedHost = verifyResult.host.toLowerCase();
@@ -114,8 +121,9 @@ export default function VerifyTracker() {
         setIgnoredCount(c => c + 1);
         return;
       }
-      setLiveEvent(evt);
-      setWaitingSince(null);
+      setLiveEvents(prev => [{ evt, arrivedAt: Date.now() }, ...prev].slice(0, MAX_EVENTS));
+      setWaitingSince(Date.now());
+      setElapsedMs(0);
     });
     socketRef.current = socket;
     setWaitingSince(Date.now());
@@ -125,7 +133,7 @@ export default function VerifyTracker() {
   const run = async () => {
     setError(null);
     setResult(null);
-    setLiveEvent(null);
+    setLiveEvents([]);
     stopWaiting();
     setLoading(true);
     try {
@@ -217,11 +225,13 @@ export default function VerifyTracker() {
           </PremiumCard>
 
           <LiveEventCard
-            event={liveEvent}
+            events={liveEvents}
+            nowMs={nowMs}
             waitingSince={waitingSince}
             elapsedMs={elapsedMs}
             onRestart={() => startWaiting(result)}
             onStop={stopWaiting}
+            onClear={() => setLiveEvents([])}
             tenantsScoped={result.heartbeats.length}
             expectedHost={result.host}
             ignoredCount={ignoredCount}
@@ -296,38 +306,54 @@ export default function VerifyTracker() {
   );
 }
 
+function matchPillClass(level: LiveAttributionEvent["matchLevel"]): string {
+  return level === "diamond" ? "bg-cyan-500/20 text-cyan-200 border-cyan-400/30"
+    : level === "golden" ? "bg-amber-500/20 text-amber-200 border-amber-400/30"
+    : level === "silver" ? "bg-slate-400/20 text-slate-200 border-slate-300/30"
+    : "bg-red-500/20 text-red-200 border-red-400/30";
+}
+
+function formatAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m ago`;
+}
+
 function LiveEventCard({
-  event,
+  events,
+  nowMs,
   waitingSince,
   elapsedMs,
   onRestart,
   onStop,
+  onClear,
   tenantsScoped,
   expectedHost,
   ignoredCount,
 }: {
-  event: LiveAttributionEvent | null;
+  events: { evt: LiveAttributionEvent; arrivedAt: number }[];
+  nowMs: number;
   waitingSince: number | null;
   elapsedMs: number;
   onRestart: () => void;
   onStop: () => void;
+  onClear: () => void;
   tenantsScoped: number;
   expectedHost: string;
   ignoredCount: number;
 }) {
   const seconds = Math.floor(elapsedMs / 1000);
-  const timedOut = waitingSince !== null && !event && seconds >= 60;
-  const matchColor =
-    event?.matchLevel === "diamond" ? "bg-cyan-500/20 text-cyan-200 border-cyan-400/30"
-    : event?.matchLevel === "golden" ? "bg-amber-500/20 text-amber-200 border-amber-400/30"
-    : event?.matchLevel === "silver" ? "bg-slate-400/20 text-slate-200 border-slate-300/30"
-    : "bg-red-500/20 text-red-200 border-red-400/30";
+  const hasEvents = events.length > 0;
+  const timedOut = waitingSince !== null && !hasEvents && seconds >= 60;
 
   return (
     <PremiumCard className="p-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Radio className={`w-5 h-5 mt-0.5 ${event ? "text-emerald-400" : timedOut ? "text-amber-400" : "text-primary animate-pulse"}`} />
+          <Radio className={`w-5 h-5 mt-0.5 ${hasEvents ? "text-emerald-400" : timedOut ? "text-amber-400" : "text-primary animate-pulse"}`} />
           <div>
             <h4 className="text-sm font-medium text-white">Live attribution feed</h4>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -335,6 +361,11 @@ function LiveEventCard({
                 ? `Listening on ${tenantsScoped} tenant channel${tenantsScoped === 1 ? "" : "s"} matched to ${expectedHost}.`
                 : `No heartbeats from ${expectedHost} yet — only events whose page URL matches this host will be shown.`}
             </p>
+            {hasEvents && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Showing the {events.length === 1 ? "most recent event" : `last ${events.length} events`} (newest first, capped at 5).
+              </p>
+            )}
             {ignoredCount > 0 && (
               <p className="text-[11px] text-muted-foreground mt-1">
                 Ignored {ignoredCount} event{ignoredCount === 1 ? "" : "s"} from other hosts on the same tenant.
@@ -343,23 +374,30 @@ function LiveEventCard({
           </div>
         </div>
         <div className="flex gap-2">
+          {hasEvents && (
+            <Button size="sm" variant="ghost" onClick={onClear}>Clear</Button>
+          )}
           {waitingSince !== null && (
             <Button size="sm" variant="ghost" onClick={onStop}>Stop</Button>
           )}
           <Button size="sm" variant="outline" onClick={onRestart}>
-            {event || timedOut ? "Wait for next" : "Restart"}
+            {hasEvents || timedOut ? "Wait for next" : "Restart"}
           </Button>
         </div>
       </div>
 
-      <div className="mt-4">
-        {!event && waitingSince !== null && !timedOut && (
+      <div className="mt-4 space-y-3">
+        {waitingSince !== null && !timedOut && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Still waiting for the next form_fill event… ({seconds}s)</span>
+            <span>
+              {hasEvents
+                ? `Waiting for the next form_fill event… (${seconds}s)`
+                : `Still waiting for the next form_fill event… (${seconds}s)`}
+            </span>
           </div>
         )}
-        {!event && waitingSince !== null && timedOut && (
+        {waitingSince !== null && timedOut && !hasEvents && (
           <div className="flex items-start gap-2 text-sm text-amber-300 border border-amber-500/30 bg-amber-500/[0.05] rounded-md px-3 py-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <div>
@@ -370,29 +408,27 @@ function LiveEventCard({
             </div>
           </div>
         )}
-        {!event && waitingSince === null && (
+        {!hasEvents && waitingSince === null && (
           <p className="text-sm text-muted-foreground">Click "Restart" to begin listening for the next inbound attribution event.</p>
         )}
-        {event && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm text-emerald-300">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Event #{event.id} captured.</span>
-              <span className={`text-[11px] px-2 py-0.5 rounded border ${matchColor}`}>match: {event.matchLevel}</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs border border-white/10 bg-white/[0.02] rounded-md p-3">
-              <Field label="Resolved source" value={event.resolvedLeadSource} />
-              <Field label="Resolved funnel" value={event.resolvedFunnel} />
-              <Field label="Form" value={[event.formType, event.formName, event.formId].filter(Boolean).join(" / ") || null} />
-              <Field label="Page" value={event.pageUrl || event.landingPage} mono />
-              <Field label="UTM source / medium" value={[event.utmSource, event.utmMedium].filter(Boolean).join(" / ") || null} />
-              <Field label="UTM campaign" value={event.utmCampaign} />
-              <Field label="gclid" value={event.gclid} mono />
-              <Field
-                label="Captured PII"
-                value={[event.hasPhone ? "phone" : null, event.hasEmail ? "email" : null].filter(Boolean).join(", ") || "none"}
-              />
-            </div>
+        {hasEvents && (
+          <div className="space-y-2">
+            {events.map(({ evt, arrivedAt }) => (
+              <div key={`${evt.id}-${arrivedAt}`} className="border border-white/10 bg-white/[0.02] rounded-md p-3">
+                <div className="flex items-center gap-2 text-sm text-emerald-300 flex-wrap">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Event #{evt.id}</span>
+                  <span className={`text-[11px] px-2 py-0.5 rounded border ${matchPillClass(evt.matchLevel)}`}>match: {evt.matchLevel}</span>
+                  <span className="text-[11px] text-muted-foreground ml-auto">{formatAge(nowMs - arrivedAt)}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mt-2">
+                  <Field label="Resolved source" value={evt.resolvedLeadSource} />
+                  <Field label="Resolved funnel" value={evt.resolvedFunnel} />
+                  <Field label="Form id" value={evt.formId} mono />
+                  <Field label="Form" value={[evt.formType, evt.formName].filter(Boolean).join(" / ") || null} />
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
