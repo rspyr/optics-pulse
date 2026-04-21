@@ -503,6 +503,10 @@ router.post("/leads-hub/action", async (req, res) => {
   const realTouchActions = ["call", "text", "voicemail_drop", "voicemail"];
   const isRealTouch = realTouchActions.includes(actionType);
 
+  if (isRealTouch && lead.resubmittedAt) {
+    updates.resubmittedAt = null;
+  }
+
   if (isRealTouch && lead.assignedCsrId !== userId) {
     const [actingUser] = await db.select({ name: usersTable.name })
       .from(usersTable).where(eq(usersTable.id, userId));

@@ -221,6 +221,7 @@ interface LeadData {
   lastAttemptAt?: string | null;
   attemptCount?: number;
   hasSoldEstimate?: boolean;
+  resubmittedAt?: string | null;
 }
 
 interface HistoryEntry {
@@ -647,6 +648,14 @@ function ClosedBadge() {
   );
 }
 
+function ResubBadge() {
+  return (
+    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border bg-cyan-500/15 text-cyan-400 border-cyan-500/30">
+      RESUB
+    </span>
+  );
+}
+
 function formatTimeAgo(dateStr: string): string {
   const diffMs = Date.now() - new Date(dateStr).getTime();
   const minutes = Math.floor(diffMs / 60000);
@@ -778,6 +787,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
             </h3>
             <DayBadge hubStatus={lead.hubStatus} />
             {lead.hasSoldEstimate && <ClosedBadge />}
+              {lead.resubmittedAt && <ResubBadge />}
             <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
             {showReengageBadge && <ReengageBadge lastAttemptAt={lead.lastAttemptAt} attemptCount={lead.attemptCount} />}
           </div>
@@ -984,6 +994,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   const getIcon = (entry: TimelineEntry) => {
     if (entry.type === "podium_text") return <MessageSquare className="w-3 h-3 text-blue-400" />;
     if (entry.type === "podium_call") return <Phone className="w-3 h-3 text-cyan-400" />;
+    if (entry.outcome === "resubmission") return <RefreshCw className="w-3 h-3 text-cyan-400" />;
     if (entry.actionType === "call" || entry.method === "call") return <Phone className="w-3 h-3" />;
     if (entry.actionType === "text" || entry.method === "text") return <MessageSquare className="w-3 h-3" />;
     if (entry.actionType === "voicemail_drop" || entry.method === "voicemail") return <Mic className="w-3 h-3" />;
@@ -1649,6 +1660,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <h2 className="font-display text-xl text-white">{lead.firstName} {lead.lastName}</h2>
               <DayBadge hubStatus={lead.hubStatus} />
               {lead.hasSoldEstimate && <ClosedBadge />}
+              {lead.resubmittedAt && <ResubBadge />}
               <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
@@ -2575,6 +2587,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
                   {lead.hasSoldEstimate && <ClosedBadge />}
+              {lead.resubmittedAt && <ResubBadge />}
                   <EditableSourceTag leadId={lead.id} source={lead.source} originalSource={lead.originalSource} userRole={user?.role} onSourceChanged={() => refetch()} tenantId={tenantId} />
                 </div>
                 <div className="flex items-center gap-2">

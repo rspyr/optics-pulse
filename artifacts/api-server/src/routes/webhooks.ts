@@ -13,6 +13,8 @@ import { webhookLimiter } from "../middleware/rate-limit";
 import { hashValue, hashPhone, normalizePhone } from "../lib/phone-utils";
 import { verifyCallRailSignature } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
+import { handleResubmission } from "../services/lead-resubmission";
+import { emitLeadUpdated } from "../socket";
 
 const router: IRouter = Router();
 
@@ -395,13 +397,20 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
           ));
         const dupLead = recentLeads.find((l) => l.phone && normalizePhone(l.phone) === normalizedCustomerPhone);
         if (dupLead) {
-          console.log(`[CallRail Webhook] Suppressing duplicate lead for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
+          console.log(`[CallRail Webhook] Resubmission detected for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
+          const result = await handleResubmission(tenantId, dupLead.id, "CallRail");
           await recordCallRailStatus(tenantId, { success: true, callId });
+          const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLead.id));
+          if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
           res.json({
             success: true,
             eventId: event.id,
-            message: "CallRail webhook processed; duplicate lead suppressed",
+            message: result.reactivated
+              ? "CallRail webhook processed; existing lead resurfaced as new"
+              : "CallRail webhook processed; existing lead marked resubmitted",
             duplicate: true,
+            resubmitted: true,
+            reactivated: result.reactivated,
             duplicateLeadId: dupLead.id,
           });
           return;
@@ -555,14 +564,41 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
     const event = insertResult[0];
 
     if (!event) {
-      const [existing] = await db.select({ id: attributionEventsTable.id })
+      const [existing] = await db.select({ id: attributionEventsTable.id, createdLeadId: attributionEventsTable.createdLeadId })
         .from(attributionEventsTable)
         .where(and(
           eq(attributionEventsTable.tenantId, tenantId),
           eq(attributionEventsTable.externalId, externalId as string),
         ))
         .limit(1);
-      console.log(`[GHL Webhook] Duplicate contact ${externalId} for tenant ${tenantId} ignored`);
+      console.log(`[GHL Webhook] Duplicate contact ${externalId} for tenant ${tenantId} — treating as resubmission`);
+
+      let resubmittedLeadId: number | null = existing?.createdLeadId ?? null;
+      if (!resubmittedLeadId && phone) {
+        const normalizedPhone = normalizePhone(phone);
+        const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+          .from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, tenantId), isNotNull(leadsTable.phone)));
+        const dup = recentLeads.find((l) => l.phone && normalizePhone(l.phone) === normalizedPhone);
+        if (dup) resubmittedLeadId = dup.id;
+      }
+      if (resubmittedLeadId) {
+        const result = await handleResubmission(tenantId, resubmittedLeadId, "GHL");
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, resubmittedLeadId));
+        if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+        res.json({
+          success: true,
+          eventId: existing?.id ?? 0,
+          message: result.reactivated
+            ? "GHL webhook processed; existing lead resurfaced as new"
+            : "GHL webhook processed; existing lead marked resubmitted",
+          duplicate: true,
+          resubmitted: true,
+          reactivated: result.reactivated,
+          duplicateLeadId: resubmittedLeadId,
+        });
+        return;
+      }
       res.json({
         success: true,
         eventId: existing?.id ?? 0,
@@ -576,6 +612,36 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
     const isTestLead = webhookNameFields.includes("test");
 
     if (!isTestLead && (firstName || lastName || phone || email)) {
+      // Phone-based resubmission detection (GHL contacts that bypass externalId dedupe)
+      if (phone) {
+        const normalizedPhone = normalizePhone(phone);
+        const candidates = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+          .from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, tenantId), isNotNull(leadsTable.phone)));
+        const dup = candidates.find((l) => l.phone && normalizePhone(l.phone) === normalizedPhone);
+        if (dup) {
+          console.log(`[GHL Webhook] Resubmission detected for tenant ${tenantId} phone (existing lead ${dup.id})`);
+          const result = await handleResubmission(tenantId, dup.id, "GHL");
+          const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
+          if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+          await db.update(attributionEventsTable)
+            .set({ createdLeadId: dup.id })
+            .where(eq(attributionEventsTable.id, event.id));
+          res.json({
+            success: true,
+            eventId: event.id,
+            message: result.reactivated
+              ? "GHL webhook processed; existing lead resurfaced as new"
+              : "GHL webhook processed; existing lead marked resubmitted",
+            duplicate: true,
+            resubmitted: true,
+            reactivated: result.reactivated,
+            duplicateLeadId: dup.id,
+          });
+          return;
+        }
+      }
+
       const funnelSlug = (customData.funnel as string) || (customData._mos_funnel as string) || null;
       const resolved = await resolveFunnelType(tenantId, funnelSlug);
       const resolvedLeadType = resolved?.name || "ghl";

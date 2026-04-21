@@ -134,6 +134,7 @@ interface LeadDetail {
   contactPreferences?: string[];
   deadReason?: string;
   hasSoldEstimate?: boolean;
+  resubmittedAt?: string | null;
 }
 
 interface HistoryItem {
@@ -737,6 +738,7 @@ export default function LeadDetailScreen() {
   const getTimelineIcon = (entry: TimelineEntry): { name: keyof typeof Feather.glyphMap; color: string } => {
     if (entry.type === "podium_text") return { name: "message-square", color: "#3B82F6" };
     if (entry.type === "podium_call") return { name: "phone", color: "#06B6D4" };
+    if (entry.outcome === "resubmission") return { name: "refresh-cw", color: "#06B6D4" };
     if (entry.actionType === "call" || entry.method === "call") return { name: "phone", color: colors.foreground };
     if (entry.actionType === "text" || entry.method === "text") return { name: "message-square", color: colors.foreground };
     if (entry.actionType === "voicemail_drop" || entry.method === "voicemail") return { name: "voicemail", color: colors.foreground };
@@ -745,6 +747,7 @@ export default function LeadDetailScreen() {
   };
 
   const getOutcomeLabel = (entry: TimelineEntry) => {
+    if (entry.outcome === "resubmission") return "Resubmitted Lead";
     const result = entry.callResult || entry.textResult || entry.vmResult || entry.outcome;
     return ((result as string) || "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
   };
@@ -806,6 +809,11 @@ export default function LeadDetailScreen() {
                   {lead.hasSoldEstimate && (
                     <View style={[styles.dayBadge, { backgroundColor: "#F59E0B20", borderColor: "#F59E0B30" }]}>
                       <Text style={[styles.dayBadgeText, { color: "#F59E0B" }]}>CLOSED</Text>
+                    </View>
+                  )}
+                  {lead.resubmittedAt && (
+                    <View style={[styles.dayBadge, { backgroundColor: "#06B6D420", borderColor: "#06B6D440" }]}>
+                      <Text style={[styles.dayBadgeText, { color: "#06B6D4" }]}>RESUB</Text>
                     </View>
                   )}
                 </View>

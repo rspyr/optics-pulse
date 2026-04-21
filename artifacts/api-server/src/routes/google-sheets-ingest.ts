@@ -9,6 +9,8 @@ import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
+import { handleResubmission } from "../services/lead-resubmission";
+import { emitLeadUpdated } from "../socket";
 
 const router: IRouter = Router();
 
@@ -372,23 +374,33 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       return;
     }
 
-    const existingPhones = new Set<string>();
-    const existingLeads = await db.select({ phone: leadsTable.phone })
+    const existingPhoneToLeadId = new Map<string, number>();
+    const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
       .from(leadsTable)
       .where(eq(leadsTable.tenantId, config.tenantId));
     for (const l of existingLeads) {
-      if (l.phone) existingPhones.add(l.phone.replace(/[^0-9]/g, ""));
+      if (l.phone) existingPhoneToLeadId.set(l.phone.replace(/[^0-9]/g, ""), l.id);
     }
 
     let imported = 0;
     let skipped = 0;
+    let resubmitted = 0;
     let noFunnelSkipped = 0;
     const newLeads: (typeof leadsTable.$inferSelect)[] = [];
+    const resubmittedLeadIds: number[] = [];
 
     for (const row of rows) {
       const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
-      if (normalizedPhone && existingPhones.has(normalizedPhone)) {
-        skipped++;
+      if (normalizedPhone && existingPhoneToLeadId.has(normalizedPhone)) {
+        const dupLeadId = existingPhoneToLeadId.get(normalizedPhone)!;
+        try {
+          await handleResubmission(config.tenantId, dupLeadId, "Google Sheets");
+          resubmittedLeadIds.push(dupLeadId);
+          resubmitted++;
+        } catch (err) {
+          console.warn("[SheetsIngest] Resubmission failed for lead", dupLeadId, err);
+          skipped++;
+        }
         continue;
       }
 
@@ -410,7 +422,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         continue;
       }
 
-      if (normalizedPhone) existingPhones.add(normalizedPhone);
+      if (normalizedPhone) existingPhoneToLeadId.set(normalizedPhone, 0);
 
       const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
       const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
@@ -496,9 +508,15 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       emitNewLead(config.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
     }
 
+    for (const leadId of resubmittedLeadIds) {
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+      if (refreshed) emitLeadUpdated(config.tenantId, refreshed as unknown as Record<string, unknown>);
+    }
+
     res.json({
       imported,
       skipped,
+      resubmitted,
       noFunnelSkipped,
       total: rows.length,
       message: `Imported ${imported} leads, skipped ${skipped} duplicates${noFunnelSkipped > 0 ? ` (${noFunnelSkipped} had no matching funnel)` : ""}`,

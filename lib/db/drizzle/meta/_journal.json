@@ -204,6 +204,13 @@
       "when": 1776730000000,
       "tag": "0037_tracker_heartbeats_first_page_url",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1776740000000,
+      "tag": "0038_lead_resubmitted_at",
+      "breakpoints": true
     }
   ]
 }

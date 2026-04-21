@@ -55,6 +55,7 @@ export const leadsTable = pgTable("leads", {
   podiumContactUid: text("podium_contact_uid"),
   manuallyTransferred: boolean("manually_transferred").notNull().default(false),
   hasSoldEstimate: boolean("has_sold_estimate").notNull().default(false),
+  resubmittedAt: timestamp("resubmitted_at"),
 
   assignedAt: timestamp("assigned_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),

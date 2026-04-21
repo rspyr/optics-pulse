@@ -13,6 +13,8 @@ import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rat
 import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
 import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
+import { handleResubmission } from "../services/lead-resubmission";
+import { emitLeadUpdated } from "../socket";
 
 const TrackerSubmitPayload = TrackerSubmitBody.extend({
   submitted_at: z.string().optional(),
@@ -319,6 +321,40 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
             isDuplicate = emailLeads.length > 0;
           }
           if (isDuplicate) {
+            // Resurface as resubmission instead of silently suppressing
+            let dupLeadId: number | null = null;
+            if (pii.phone) {
+              const normalizedPhone = normalizePhone(pii.phone);
+              const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+                .from(leadsTable)
+                .where(and(
+                  eq(leadsTable.tenantId, tenantId),
+                  gte(leadsTable.createdAt, overlapWindow),
+                ));
+              const dup = recentLeads.find(l => l.phone && normalizePhone(l.phone) === normalizedPhone);
+              dupLeadId = dup?.id ?? null;
+            }
+            if (!dupLeadId && pii.email) {
+              const emailLower = pii.email.toLowerCase().trim();
+              const [emailDup] = await db.select({ id: leadsTable.id }).from(leadsTable)
+                .where(and(
+                  eq(leadsTable.tenantId, tenantId),
+                  eq(leadsTable.email, emailLower),
+                  gte(leadsTable.createdAt, overlapWindow),
+                ))
+                .limit(1);
+              dupLeadId = emailDup?.id ?? null;
+            }
+            if (dupLeadId) {
+              const result = await handleResubmission(tenantId, dupLeadId, "Universal Tracker");
+              await db.update(attributionEventsTable)
+                .set({ createdLeadId: dupLeadId })
+                .where(eq(attributionEventsTable.id, event.id));
+              const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLeadId));
+              if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+              res.json({ success: true, eventId: event.id, deduplicated: true, resubmitted: true, reactivated: result.reactivated, duplicateLeadId: dupLeadId });
+              return;
+            }
             res.json({ success: true, eventId: event.id, deduplicated: true });
             return;
           }
