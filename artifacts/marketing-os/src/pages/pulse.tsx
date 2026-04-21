@@ -222,6 +222,7 @@ interface LeadData {
   attemptCount?: number;
   hasSoldEstimate?: boolean;
   resubmittedAt?: string | null;
+  resubmissionCount?: number | null;
 }
 
 interface HistoryEntry {
@@ -648,10 +649,14 @@ function ClosedBadge() {
   );
 }
 
-function ResubBadge() {
+function ResubBadge({ count }: { count?: number | null }) {
+  const n = count && count > 0 ? count : null;
   return (
-    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border bg-cyan-500/15 text-cyan-400 border-cyan-500/30">
-      RESUB
+    <span
+      className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
+      title={n ? `Resubmitted ${n} time${n === 1 ? "" : "s"}` : "Resubmitted"}
+    >
+      RESUB{n ? ` ×${n}` : ""}
     </span>
   );
 }
@@ -787,7 +792,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
             </h3>
             <DayBadge hubStatus={lead.hubStatus} />
             {lead.hasSoldEstimate && <ClosedBadge />}
-              {lead.resubmittedAt && <ResubBadge />}
+              {lead.resubmittedAt && <ResubBadge count={lead.resubmissionCount} />}
             <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
             {showReengageBadge && <ReengageBadge lastAttemptAt={lead.lastAttemptAt} attemptCount={lead.attemptCount} />}
           </div>
@@ -1660,7 +1665,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               <h2 className="font-display text-xl text-white">{lead.firstName} {lead.lastName}</h2>
               <DayBadge hubStatus={lead.hubStatus} />
               {lead.hasSoldEstimate && <ClosedBadge />}
-              {lead.resubmittedAt && <ResubBadge />}
+              {lead.resubmittedAt && <ResubBadge count={lead.resubmissionCount} />}
               <FunnelBadge funnelId={lead.funnelId} funnelMap={funnelMap} />
               <span className="text-xs text-white/30 font-mono">Day {lead.dayInSequence}</span>
             </div>
@@ -2587,7 +2592,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
                   <span className="text-sm text-white/70">{lead.firstName} {lead.lastName}</span>
                   <DayBadge hubStatus={lead.hubStatus} />
                   {lead.hasSoldEstimate && <ClosedBadge />}
-              {lead.resubmittedAt && <ResubBadge />}
+              {lead.resubmittedAt && <ResubBadge count={lead.resubmissionCount} />}
                   <EditableSourceTag leadId={lead.id} source={lead.source} originalSource={lead.originalSource} userRole={user?.role} onSourceChanged={() => refetch()} tenantId={tenantId} />
                 </div>
                 <div className="flex items-center gap-2">

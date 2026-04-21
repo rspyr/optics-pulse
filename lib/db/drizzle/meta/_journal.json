@@ -211,6 +211,13 @@
       "when": 1776740000000,
       "tag": "0038_lead_resubmitted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1776750000000,
+      "tag": "0039_lead_resubmission_count",
+      "breakpoints": true
     }
   ]
 }

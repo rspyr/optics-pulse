@@ -56,6 +56,7 @@ export const leadsTable = pgTable("leads", {
   manuallyTransferred: boolean("manually_transferred").notNull().default(false),
   hasSoldEstimate: boolean("has_sold_estimate").notNull().default(false),
   resubmittedAt: timestamp("resubmitted_at"),
+  resubmissionCount: integer("resubmission_count").notNull().default(0),
 
   assignedAt: timestamp("assigned_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),

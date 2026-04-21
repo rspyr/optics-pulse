@@ -135,6 +135,7 @@ interface LeadDetail {
   deadReason?: string;
   hasSoldEstimate?: boolean;
   resubmittedAt?: string | null;
+  resubmissionCount?: number | null;
 }
 
 interface HistoryItem {
@@ -813,7 +814,9 @@ export default function LeadDetailScreen() {
                   )}
                   {lead.resubmittedAt && (
                     <View style={[styles.dayBadge, { backgroundColor: "#06B6D420", borderColor: "#06B6D440" }]}>
-                      <Text style={[styles.dayBadgeText, { color: "#06B6D4" }]}>RESUB</Text>
+                      <Text style={[styles.dayBadgeText, { color: "#06B6D4" }]}>
+                        {lead.resubmissionCount && lead.resubmissionCount > 0 ? `RESUB ×${lead.resubmissionCount}` : "RESUB"}
+                      </Text>
                     </View>
                   )}
                 </View>

@@ -1,5 +1,5 @@
 import { db, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { emitLeadResubmitted } from "../socket";
 import { sendPushToUser } from "./push-notifications";
 
@@ -35,6 +35,7 @@ export async function handleResubmission(
 
   const updates: Record<string, unknown> = {
     resubmittedAt: now,
+    resubmissionCount: sql`COALESCE(${leadsTable.resubmissionCount}, 0) + 1`,
     updatedAt: now,
   };
 
