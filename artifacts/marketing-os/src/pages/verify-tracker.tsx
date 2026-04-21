@@ -86,6 +86,7 @@ export default function VerifyTracker() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [ignoredCount, setIgnoredCount] = useState(0);
+  const [storedHostCount, setStoredHostCount] = useState(0);
   const socketRef = useRef<Socket | null>(null);
   const persistHostRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string>(`s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -114,6 +115,7 @@ export default function VerifyTracker() {
     if (!host) return;
     try {
       localStorage.setItem(storageKeyFor(host), JSON.stringify(events.slice(0, MAX_EVENTS)));
+      setStoredHostCount(countAllPersistedHosts());
     } catch {
       /* ignore quota / disabled storage */
     }
@@ -123,8 +125,36 @@ export default function VerifyTracker() {
     if (!host) return;
     try {
       localStorage.removeItem(storageKeyFor(host));
+      setStoredHostCount(countAllPersistedHosts());
     } catch {
       /* ignore */
+    }
+  };
+
+  const countAllPersistedHosts = (): number => {
+    try {
+      let n = 0;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORAGE_PREFIX)) n++;
+      }
+      return n;
+    } catch {
+      return 0;
+    }
+  };
+
+  const clearAllPersistedEvents = (): number => {
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+      }
+      for (const k of keys) localStorage.removeItem(k);
+      return keys.length;
+    } catch {
+      return 0;
     }
   };
 
@@ -137,6 +167,20 @@ export default function VerifyTracker() {
   };
 
   useEffect(() => () => stopWaiting(), []);
+
+  useEffect(() => { setStoredHostCount(countAllPersistedHosts()); }, []);
+
+  const handleClearAllHistory = () => {
+    const total = countAllPersistedHosts();
+    if (total === 0) return;
+    const ok = window.confirm(
+      `Clear saved Verify Tracker history for all ${total} host${total === 1 ? "" : "s"}? This cannot be undone — events will only return as new submissions are captured.`,
+    );
+    if (!ok) return;
+    clearAllPersistedEvents();
+    setLiveEvents([]);
+    setStoredHostCount(0);
+  };
 
   useEffect(() => {
     if (waitingSince === null) return;
@@ -244,6 +288,21 @@ export default function VerifyTracker() {
           </Button>
         </div>
         {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
+        <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">
+            {storedHostCount === 0
+              ? "No saved event history yet. Verified hosts will keep their last few captured events here in your browser."
+              : `Saved event history for ${storedHostCount} host${storedHostCount === 1 ? "" : "s"} is kept in this browser. Clearing it cannot be undone — events will only return as new submissions are captured.`}
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleClearAllHistory}
+            disabled={storedHostCount === 0}
+          >
+            Clear all history
+          </Button>
+        </div>
       </PremiumCard>
 
       {result && (
