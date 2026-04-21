@@ -197,6 +197,13 @@
       "when": 1776720000000,
       "tag": "0036_callrail_webhook_status",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1776730000000,
+      "tag": "0037_tracker_heartbeats_first_page_url",
+      "breakpoints": true
     }
   ]
 }

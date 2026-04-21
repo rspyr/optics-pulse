@@ -395,6 +395,10 @@ router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
     const clientId = typeof req.body.clientId === "string" ? req.body.clientId.trim() : null;
     const domain = req.body.domain || req.headers.origin || null;
     const userAgent = req.headers["user-agent"] || null;
+    // Capture the page URL the script was loaded on; falls back to Referer header.
+    // Stored only for the first sighting on this (tenant, domain) — purely diagnostic.
+    const referer = req.headers["referer"] || req.headers["referrer"] || null;
+    const pageUrl = (typeof req.body.pageUrl === "string" && req.body.pageUrl) || (typeof referer === "string" ? referer : null);
 
     if (!tenantId && clientId) {
       const [tenant] = await db.select({ id: tenantsTable.id })
@@ -417,14 +421,18 @@ router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
       .limit(1);
 
     if (existing.length > 0) {
+      // Backfill firstPageUrl on existing rows that predate the column being recorded.
+      const updateSet: Record<string, unknown> = { lastSeenAt: new Date(), userAgent };
+      if (!existing[0].firstPageUrl && pageUrl) updateSet.firstPageUrl = pageUrl;
       await db.update(trackerHeartbeatsTable)
-        .set({ lastSeenAt: new Date(), userAgent })
+        .set(updateSet)
         .where(eq(trackerHeartbeatsTable.id, existing[0].id));
     } else {
       await db.insert(trackerHeartbeatsTable).values({
         tenantId,
         domain,
         userAgent,
+        firstPageUrl: pageUrl,
       });
     }
 

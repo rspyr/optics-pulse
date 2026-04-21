@@ -105,3 +105,12 @@ A native mobile app (`artifacts/mobile`) for sales reps/lead coordinators, mirro
 - `POST/DELETE /api/push-tokens` — Registration endpoints
 - `api-server/src/services/push-notifications.ts` — Expo Push API service
 - `api-server/src/services/callback-scheduler.ts` — Polls every 60s for due callbacks, sends push notification to assigned CSR
+
+## Tracker-Only Lead Ingestion (Task #232)
+Hardened pulse.js capture surface and per-domain visibility so tracker-only tenants never silently drop leads (the Vance failure mode: "Healthy" tenant status while a sub-page form was non-capturing).
+
+- **`public/pulse.js`** — Document capture-phase submit listener (beats `stopPropagation`), shadow-DOM + same-origin iframe scanning, button-click fallback for non-`<form>` CTAs, GHL/LeadConnector `postMessage` handler, dedup, `?pulse_debug=1` overlay, heartbeat enriched with `pageUrl`.
+- **Heartbeats** — `tracker_heartbeats.first_page_url` (migration `0037`) records the first page URL we ever saw a heartbeat from per (tenant, domain). `/api/ingestion-mode/status` now returns a per-domain array (green/amber/red) deduped by normalized host so duplicates can't produce contradictory cards. Amber = healthy heartbeat + zero events in 24h (capture broken); red = stale heartbeat (script not loading).
+- **Verify Tracker tool** (`/verify-tracker` UI + `POST /api/verify-tracker`) — Fetches a customer URL, parses every `<script src>`, follows each (8s/800KB cap, manual redirect re-validation), reports content-type/JS-fingerprint findings, and surfaces 24h heartbeat + event presence. Critical: HTML response on a `tracker.js`/`pulse.js` URL is ALWAYS reported as an error (the Vance regression). Role-gated to `super_admin`/`agency_user`/`client_admin`/`client_user`; client roles are tenant-scoped on the heartbeat lookup. SSRF-hardened via custom `safeLookup` passed into `http(s).request`'s connect-time DNS — rejects RFC1918, loopback, link-local (incl. AWS 169.254.169.254 metadata), CGNAT, IPv4-mapped v6, multicast at the moment of socket connect (closes DNS-rebinding TOCTOU).
+- **Attribution page** (`pages/attribution.tsx`) — Renders per-domain rows + "Verify a specific URL" link; reminds clients the legacy `tracker.js` snippet is dead.
+- **Tests** — 123/123 passing. Includes regression tests for the Vance HTML-on-tracker.js failure mode, the IP block-list, capture-phase priority over `stopPropagation`, button-fallback, GHL postMessage, and heartbeat pageUrl.

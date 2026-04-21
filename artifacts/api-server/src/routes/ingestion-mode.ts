@@ -102,6 +102,11 @@ router.put("/ingestion-mode", async (req, res) => {
   res.json({ success: true, mode, previousMode });
 });
 
+function hostFromUrl(u: string | null | undefined): string | null {
+  if (!u) return null;
+  try { return new URL(u).hostname.toLowerCase(); } catch { return null; }
+}
+
 router.get("/ingestion-mode/status", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
@@ -112,20 +117,97 @@ router.get("/ingestion-mode/status", async (req, res) => {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const [latestHeartbeat] = await db.select().from(trackerHeartbeatsTable)
+  const heartbeats = await db.select().from(trackerHeartbeatsTable)
     .where(eq(trackerHeartbeatsTable.tenantId, tenantId))
-    .orderBy(desc(trackerHeartbeatsTable.lastSeenAt))
-    .limit(1);
-  const trackerHealthy = latestHeartbeat
-    ? new Date(latestHeartbeat.lastSeenAt) > twentyFourHoursAgo
-    : false;
+    .orderBy(desc(trackerHeartbeatsTable.lastSeenAt));
 
-  const [eventCount] = await db.select({ count: sql<number>`count(*)::int` })
+  const recentEvents = await db.select({
+    pageUrl: attributionEventsTable.pageUrl,
+    landingPage: attributionEventsTable.landingPage,
+    createdAt: attributionEventsTable.createdAt,
+  })
     .from(attributionEventsTable)
     .where(and(
       eq(attributionEventsTable.tenantId, tenantId),
       gte(attributionEventsTable.createdAt, sevenDaysAgo),
     ));
+
+  // Bucket events by host derived from pageUrl (fall back to landingPage).
+  const eventsByHost = new Map<string, { last: Date; count24h: number; count7d: number }>();
+  for (const ev of recentEvents) {
+    const host = hostFromUrl(ev.pageUrl) || hostFromUrl(ev.landingPage);
+    if (!host) continue;
+    const prev = eventsByHost.get(host) || { last: new Date(0), count24h: 0, count7d: 0 };
+    if (ev.createdAt > prev.last) prev.last = ev.createdAt;
+    prev.count7d += 1;
+    if (ev.createdAt > twentyFourHoursAgo) prev.count24h += 1;
+    eventsByHost.set(host, prev);
+  }
+
+  type DomainStatus = "green" | "amber" | "red";
+  // Dedupe heartbeats by normalized domain (latest wins). The upsert in /heartbeat
+  // already enforces this in practice, but defending here protects the per-domain
+  // cards from showing contradictory rows if duplicates ever land.
+  const seenHosts = new Set<string>();
+  const dedupedHeartbeats = [];
+  for (const h of heartbeats) {
+    if (!h.domain) continue;
+    const host = h.domain.toLowerCase();
+    if (seenHosts.has(host)) continue;
+    seenHosts.add(host);
+    dedupedHeartbeats.push(h);
+  }
+  const domains = dedupedHeartbeats
+    .map(h => {
+      const host = (h.domain || "").toLowerCase();
+      const stats = eventsByHost.get(host) || { last: null as Date | null, count24h: 0, count7d: 0 };
+      const heartbeatHealthy = new Date(h.lastSeenAt) > twentyFourHoursAgo;
+      let status: DomainStatus;
+      let reason: string;
+      if (!heartbeatHealthy) {
+        status = "red";
+        reason = "Heartbeat stale (no ping in last 24h). Tracker likely not loading on this domain.";
+      } else if (stats.count24h === 0) {
+        status = "amber";
+        reason = "Tracker is loading and pinging heartbeats, but no form-fill events captured in the last 24h. Capture may be broken on this domain.";
+      } else {
+        status = "green";
+        reason = "Healthy: tracker loading and capturing events.";
+      }
+      // mark hosts we've already reconciled with a heartbeat row so we can detect orphan event-only hosts below
+      eventsByHost.delete(host);
+      return {
+        domain: host,
+        status,
+        reason,
+        lastHeartbeat: h.lastSeenAt,
+        firstPageUrl: h.firstPageUrl || null,
+        lastEventAt: stats.last,
+        eventCount24h: stats.count24h,
+        eventCount7d: stats.count7d,
+      };
+    });
+
+  // Domains that produced events but never sent a heartbeat — odd, surface as info-amber.
+  for (const [host, stats] of eventsByHost.entries()) {
+    domains.push({
+      domain: host,
+      status: "amber" as DomainStatus,
+      reason: "Events received from this domain but no heartbeat — script may be loaded without the heartbeat-capable build.",
+      lastHeartbeat: null,
+      firstPageUrl: null,
+      lastEventAt: stats.last,
+      eventCount24h: stats.count24h,
+      eventCount7d: stats.count7d,
+    });
+  }
+
+  // Backwards-compatible tenant-level rollup.
+  const latestHeartbeat = heartbeats[0] || null;
+  const trackerHealthy = latestHeartbeat
+    ? new Date(latestHeartbeat.lastSeenAt) > twentyFourHoursAgo
+    : false;
+  const recentEventCount = recentEvents.length;
 
   const activeSheets = await db.select({ id: googleSheetConfigsTable.id })
     .from(googleSheetConfigsTable)
@@ -139,8 +221,9 @@ router.get("/ingestion-mode/status", async (req, res) => {
     trackerHealthy,
     lastHeartbeat: latestHeartbeat?.lastSeenAt || null,
     heartbeatDomain: latestHeartbeat?.domain || null,
-    recentEventCount: eventCount?.count || 0,
+    recentEventCount,
     activeSheetCount: activeSheets.length,
+    domains,
   });
 });
 

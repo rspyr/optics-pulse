@@ -14,6 +14,7 @@ import Leads from "@/pages/pulse";
 import Clients from "@/pages/clients";
 import Internal from "@/pages/internal";
 import Attribution from "@/pages/attribution";
+import VerifyTracker from "@/pages/verify-tracker";
 import Settings from "@/pages/settings";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminUsers from "@/pages/admin-users";
@@ -106,6 +107,7 @@ function AuthenticatedRoutes() {
         <Route path="/pulse" component={Leads} />
         <Route path="/leads">{() => <ImmediateRedirect to="/pulse" />}</Route>
         <Route path="/attribution" component={Attribution} />
+        <Route path="/verify-tracker">{() => <AgencyGuard><VerifyTracker /></AgencyGuard>}</Route>
         <Route path="/settings" component={Settings} />
         <Route path="/internal">{() => <AgencyGuard><Internal /></AgencyGuard>}</Route>
         <Route path="/clients">{() => <AgencyGuard><Clients /></AgencyGuard>}</Route>

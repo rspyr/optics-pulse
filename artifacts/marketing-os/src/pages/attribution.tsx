@@ -873,6 +873,16 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
     heartbeatDomain: string | null;
     recentEventCount: number;
     activeSheetCount: number;
+    domains?: Array<{
+      domain: string;
+      status: "green" | "amber" | "red";
+      reason: string;
+      lastHeartbeat: string | null;
+      firstPageUrl: string | null;
+      lastEventAt: string | null;
+      eventCount24h: number;
+      eventCount7d: number;
+    }>;
   } | null>(null);
 
   useEffect(() => {
@@ -963,6 +973,53 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
               <p className="text-2xl text-white font-semibold">{status.activeSheetCount}</p>
             </div>
           </div>
+
+          {status.domains && status.domains.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-white/80">Per-domain status</h4>
+                <a
+                  href={`${API_BASE}/verify-tracker`}
+                  className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                >
+                  Verify a specific URL <ArrowRight className="w-3 h-3" />
+                </a>
+              </div>
+              <div className="space-y-2">
+                {status.domains.map((d) => {
+                  const dot = d.status === "green" ? "bg-emerald-400" : d.status === "amber" ? "bg-amber-400" : "bg-red-400";
+                  const ring = d.status === "green" ? "border-emerald-500/20" : d.status === "amber" ? "border-amber-500/30 bg-amber-500/[0.03]" : "border-red-500/30 bg-red-500/[0.03]";
+                  return (
+                    <div key={d.domain} className={`border ${ring} rounded-lg p-3 bg-white/[0.02]`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`w-2 h-2 rounded-full mt-1.5 ${dot}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium text-white truncate">{d.domain}</p>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">
+                              {d.eventCount24h} ev / 24h · {d.eventCount7d} / 7d
+                            </div>
+                          </div>
+                          <p className={`text-xs mt-1 ${d.status === "amber" ? "text-amber-300/80" : d.status === "red" ? "text-red-300/80" : "text-muted-foreground"}`}>
+                            {d.reason}
+                          </p>
+                          <div className="text-[11px] text-muted-foreground mt-1 space-x-3">
+                            {d.lastHeartbeat && <span>Heartbeat: {new Date(d.lastHeartbeat).toLocaleString()}</span>}
+                            {d.lastEventAt && <span>Last event: {new Date(d.lastEventAt).toLocaleString()}</span>}
+                          </div>
+                          {d.firstPageUrl && (
+                            <p className="text-[11px] text-muted-foreground mt-1 truncate">
+                              First seen on: <span className="text-white/60">{d.firstPageUrl}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </PremiumCard>
       )}
 
@@ -1017,6 +1074,11 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
           <div>
             <h3 className="text-lg font-medium text-white mb-1">GTM Snippet</h3>
             <p className="text-sm text-muted-foreground">Copy this into your Google Tag Manager custom HTML tag.</p>
+            <p className="text-xs text-amber-300/80 mt-2">
+              Heads up: if the page also has a hardcoded <code className="text-white/80">&lt;script src="…/tracker.js"&gt;</code> tag,
+              remove it — the legacy URL no longer serves JavaScript and will mask diagnostics. Use{" "}
+              <a href={`${API_BASE}/verify-tracker`} className="text-primary hover:underline">Verify Tracker</a> to confirm a specific URL is healthy.
+            </p>
           </div>
         </div>
 
