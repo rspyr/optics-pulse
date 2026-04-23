@@ -17,3 +17,9 @@ id = "YLse_I9F_-LKzMdutvZ7W"
 uri = "file://docs/attribution-engine.md"
 type = "text"
 title = "Attribution Engine Documentation"
+
+[[outputs]]
+id = "a26dZR49wXYIlQwmuXm-I"
+uri = "file://BRAND_GUIDE.md"
+type = "text"
+title = "Pulse / Marketing OS — Brand Guide"
