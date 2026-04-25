@@ -5,25 +5,7 @@ import { z } from "zod";
 import { logTrackerDiagnostic } from "../services/tracker-audit";
 import { trackerDiagnosticsHardLimiter, trackerDiagnosticsLimiter } from "../middleware/rate-limit";
 
-/**
- * Diagnostic beacon endpoint for pulse.js capture mode.
- *
- * When a page loads with `?pulse_capture=1` (or `window.__pulseCapture = true`),
- * pulse.js batches up everything it observes that *might* be a form
- * interaction — every form scan it ran, every postMessage it saw matching
- * /submit|form/, every click on a submit-like button — and POSTs the batch
- * here once per page session (and again on unload).
- *
- * The whole point is to debug the "tracker is loaded but submits never
- * happen" failure mode (e.g. Vance Heating, where the tracker fired
- * heartbeats but never picked up the GHL-iframe form). This endpoint
- * stores the diagnostic envelope in the same audit table as real submits,
- * with kind='diagnostic', so it can be inspected from Verify Tracker.
- *
- * IMPORTANT: there are NO PII fields in the diagnostic payload by design —
- * pulse.js sends only field NAMES, types, and structural metadata. The
- * audit module's redactPii pass is still applied as belt-and-suspenders.
- */
+/** Diagnostic beacon endpoint for pulse.js capture mode (?pulse_capture=1). */
 const router: IRouter = Router();
 
 const FormScan = z.object({
@@ -70,17 +52,11 @@ export const DiagnosticEnvelope = z.object({
   domain: z.string().max(500).nullish(),
   pulseVersion: z.string().max(40).nullish(),
   diagnostics: z.object({
-    // Caps match pulse.js client buffer caps so a healthy capture
-    // session never trips the validator (formScans ≤100, postMessages
-    // ≤200, submitClicks ≤100). Larger inputs are rejected as 400.
     formScans: z.array(FormScan).max(100).optional(),
     postMessages: z.array(PostMessageObservation).max(200).optional(),
     submitClicks: z.array(ClickObservation).max(100).optional(),
     sessionStartedAt: z.string().nullish(),
     flushedAt: z.string().nullish(),
-    // pulse.js emits "interval" (30s timer), "pagehide" + "beforeunload"
-    // (lifecycle), and "manual" (operator-triggered). Keep "unload" for
-    // back-compat with older pulse builds in the wild.
     reason: z.enum(["interval", "unload", "pagehide", "beforeunload", "manual"]).optional(),
   }),
 }).strict();

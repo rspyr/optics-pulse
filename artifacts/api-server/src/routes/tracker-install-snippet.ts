@@ -8,15 +8,7 @@ const requireOperator = requireRole("super_admin", "agency_user", "client_admin"
 
 const router: IRouter = Router();
 
-/**
- * Resolve the public origin for the pulse.js script tag. Pages outside
- * Replit (e.g. customer landing pages on Framer / GHL) need an absolute
- * URL — never `/api/pulse.js`. Order of preference:
- *   1. PUBLIC_API_URL env (set in production)
- *   2. REPLIT_DOMAINS  (deployed)
- *   3. REPLIT_DEV_DOMAIN (workspace)
- *   4. fall back to localhost:8080 for tests
- */
+/** Resolve the absolute public origin for the pulse.js script tag. */
 function resolvePublicOrigin(): string {
   if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL.replace(/\/$/, "");
   const fromDomains = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
@@ -25,15 +17,7 @@ function resolvePublicOrigin(): string {
   return "http://localhost:8080";
 }
 
-/**
- * Funnel suggestions surfaced alongside the install snippet. Tenants whose
- * install has historically used a static `data-funnel` value get a
- * convenience copy-paste here; everyone else gets the generic snippet.
- *
- * Vance Heating's two production funnels are hardcoded because that
- * tenant is the canonical fix-target for this task and its slugs are
- * stable in the funnel-types table.
- */
+/** Per-tenant funnel hints surfaced alongside the install snippet. */
 const TENANT_FUNNEL_HINTS: Record<string, { funnels: string[]; note?: string }> = {
   "vance-heating": {
     funnels: ["ac-tune-up", "bogo-deal"],

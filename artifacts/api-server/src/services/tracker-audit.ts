@@ -8,8 +8,6 @@ import type { Request } from "express";
  * and are best-effort — a logging failure must never break ingestion.
  */
 
-const PAYLOAD_SAMPLE_MAX_BYTES = 4 * 1024;
-
 export type TrackerOutcome =
   | "accepted"
   | "duplicate"
@@ -486,14 +484,7 @@ export async function getDomainHealthRollup(args: {
   }
 }
 
-/**
- * Daily retention sweep. Deletes rows older than `retentionDays` (default
- * 30). Returns the number of rows pruned. Best-effort; never throws.
- *
- * Why 30 days: this table is purely diagnostic — anything older than a
- * month is essentially never read. At a baseline 10k rows/day across all
- * tenants the table would otherwise grow ~14 GB/year.
- */
+/** Delete audit rows older than `retentionDays` (default 30). Best-effort. */
 export async function pruneOldTrackerAttempts(retentionDays = 30): Promise<number> {
   try {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
@@ -507,8 +498,6 @@ export async function pruneOldTrackerAttempts(retentionDays = 30): Promise<numbe
   }
 }
 
-// `tenantsTable` is re-exported for the verify-tracker route to JOIN against.
-void tenantsTable;
 
 /**
  * Patch a previously-logged audit row once the request resolves to a
