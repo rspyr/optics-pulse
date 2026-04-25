@@ -1,4 +1,4 @@
-import { db, notificationsTable, integrationSyncLogsTable, trackerHeartbeatsTable, tenantsTable } from "@workspace/db";
+import { db, notificationsTable, integrationSyncLogsTable, trackerHeartbeatsTable, trackerSubmitAttemptsTable, tenantsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 
 export async function createNotification(params: {
@@ -128,6 +128,134 @@ export async function checkStaleHeartbeats() {
   if (alertsCreated > 0) {
     console.log(`[Notifications] Created ${alertsCreated} stale heartbeat alerts`);
   }
+}
+
+/**
+ * Detect "tracker installed but never collecting submits" — the silent
+ * failure mode that prompted Task #248. A tenant is considered to have a
+ * stale install when:
+ *
+ *   - At least 5 heartbeats have arrived in the last 7 days (the page is
+ *     definitely being visited and pulse.js is loading), AND
+ *   - Zero successful /collect/submit attempts have arrived in the last
+ *     7 days from any of that tenant's heartbeat domains.
+ *
+ * The 5-heartbeat floor is the smallest sample where "never submitted"
+ * starts to mean "the install is broken" rather than "the page got one
+ * accidental visit". Below that threshold we leave the tenant alone to
+ * avoid false alarms on test/staging hosts.
+ *
+ * Notifications use a 15-minute cooldown — short enough to stay loud
+ * during an active outage, long enough to avoid notification spam if a
+ * page is in active development with the tracker getting toggled.
+ */
+const STALE_INSTALL_COOLDOWN_MS = 15 * 60 * 1000;
+const STALE_INSTALL_HEARTBEAT_THRESHOLD = 5;
+
+export async function checkStaleInstall() {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.isActive, true));
+
+  let alertsCreated = 0;
+
+  for (const tenant of tenants) {
+    // Heartbeat count from this tenant in the last 7 days, regardless of
+    // domain. trackerHeartbeatsTable is upsert-on-change so each row's
+    // lastSeenAt + heartbeat counter give us the "is the page being
+    // visited" signal — we use lastSeenAt > 7d as a cheap proxy for
+    // "active in window".
+    const recentHeartbeats = await db.select({
+      lastSeenAt: trackerHeartbeatsTable.lastSeenAt,
+      domain: trackerHeartbeatsTable.domain,
+    })
+      .from(trackerHeartbeatsTable)
+      .where(and(
+        eq(trackerHeartbeatsTable.tenantId, tenant.id),
+        sql`${trackerHeartbeatsTable.lastSeenAt} > ${sevenDaysAgo}`,
+      ));
+
+    if (recentHeartbeats.length < STALE_INSTALL_HEARTBEAT_THRESHOLD) continue;
+
+    // Successful submit count from this tenant in the last 7 days.
+    // The current tracker-audit success outcomes are "accepted" (new
+    // lead persisted), "duplicate" (idempotent retry of an already-
+    // accepted lead), and "resubmitted" (operator-driven replay) —
+    // any of these proves the install is delivering submits, so we
+    // treat all three as "successful submits" for stale detection.
+    // Counting only outcome="ok" was the legacy (Optics) value and
+    // would mark every healthy tenant as stale.
+    const [submitRow] = await db.select({
+      n: sql<number>`COUNT(*)::int`,
+    })
+      .from(trackerSubmitAttemptsTable)
+      .where(and(
+        eq(trackerSubmitAttemptsTable.tenantId, tenant.id),
+        eq(trackerSubmitAttemptsTable.endpoint, "submit"),
+        sql`${trackerSubmitAttemptsTable.outcome} IN ('accepted', 'duplicate', 'resubmitted')`,
+        sql`${trackerSubmitAttemptsTable.createdAt} > ${sevenDaysAgo}`,
+      ));
+
+    const submitCount = submitRow?.n ?? 0;
+    if (submitCount > 0) continue;
+
+    // Cooldown check — don't re-notify within 15 minutes for the same tenant.
+    const cooldownSince = new Date(Date.now() - STALE_INSTALL_COOLDOWN_MS);
+    const existingRecent = await db.select({ id: notificationsTable.id })
+      .from(notificationsTable)
+      .where(and(
+        eq(notificationsTable.tenantId, tenant.id),
+        eq(notificationsTable.type, "stale_install"),
+        sql`${notificationsTable.createdAt} > ${cooldownSince}`,
+      ))
+      .limit(1);
+    if (existingRecent.length > 0) continue;
+
+    // Sample domain to surface in the message — operators want to know
+    // WHICH page is the offender.
+    const sampleDomain = recentHeartbeats[0]?.domain || "(unknown)";
+
+    await createNotification({
+      tenantId: tenant.id,
+      type: "stale_install",
+      severity: "error",
+      title: `Pulse install broken for ${tenant.name}`,
+      message: `pulse.js heartbeats are arriving (${recentHeartbeats.length} in the last 7 days, e.g. from ${sampleDomain}) but ZERO successful form submits. The tracker is loaded but cannot see the form — open Verify Tracker on this page to investigate.`,
+    });
+    alertsCreated++;
+  }
+
+  if (alertsCreated > 0) {
+    console.log(`[Notifications] Created ${alertsCreated} stale-install alerts`);
+  }
+}
+
+let staleInstallTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start the stale-install monitor. Runs once at startup (after a short
+ * delay so the DB is warm) then every 15 minutes — matching the cooldown
+ * window so a fixed install will reset the alert promptly once submits
+ * resume.
+ */
+export function startStaleInstallMonitor() {
+  if (staleInstallTimer) clearInterval(staleInstallTimer);
+
+  setTimeout(() => {
+    checkStaleInstall().catch(err =>
+      console.error("[Notifications] Initial stale-install check failed:", err)
+    );
+  }, 30_000);
+
+  staleInstallTimer = setInterval(() => {
+    checkStaleInstall().catch(err =>
+      console.error("[Notifications] Periodic stale-install check failed:", err)
+    );
+  }, STALE_INSTALL_COOLDOWN_MS);
+
+  console.log("[Notifications] Stale-install monitor started (every 15min, threshold 5+ heartbeats and 0 submits in 7d)");
 }
 
 let heartbeatCheckTimer: ReturnType<typeof setInterval> | null = null;

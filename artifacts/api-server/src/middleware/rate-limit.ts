@@ -31,6 +31,35 @@ export const trackerSubmitLimiter = rateLimit({
   },
 });
 
+// Diagnostics beacons come in BURSTS (a page with 5 form scans + 10
+// postMessage events + a few clicks all flush at once on unload). Allow
+// a short-burst-friendly limit but a hard ceiling per IP so a malicious
+// page can't fill the audit table.
+export const trackerDiagnosticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30, // ~30 batched envelopes per minute per IP, plenty for normal use
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  handler: async (req, res) => {
+    const rawBody = req.body as Record<string, unknown> | undefined;
+    const clientId = typeof rawBody?.client_id === "string" ? rawBody.client_id.trim() : null;
+    await logTrackerAttempt({
+      endpoint: "submit",
+      kind: "diagnostic",
+      req,
+      body: rawBody,
+      clientId,
+      outcome: "rate_limited",
+      httpStatus: 429,
+      message: "Hit /collect/diagnostics rate limit (30 envelopes/min)",
+    });
+    res.status(429).json({
+      success: false,
+      message: "Too many diagnostic beacons. Throttle and try again.",
+    });
+  },
+});
+
 export const trackerHeartbeatLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 20,

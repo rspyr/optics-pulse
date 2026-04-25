@@ -81,6 +81,141 @@
       return qs.indexOf("pulse_debug=1") !== -1;
     } catch(e) { return false; }
   })();
+
+  // Capture mode: ?pulse_capture=1 (or window.__pulseCapture=true) enables
+  // diagnostic batching of every form found, every postMessage that crosses
+  // window.message, and every submit-button click. The batch is flushed on
+  // a 30s interval AND on pagehide via sendBeacon to /api/collect/diagnostics
+  // so an operator running Verify Tracker can see what pulse.js actually
+  // observes at runtime — including content inside iframes that the
+  // server-side static fetch cannot see. This is intentionally separate
+  // from DEBUG (which is a visible overlay): capture mode is silent and
+  // safe to share with a customer to "load the page once for diagnostics".
+  var CAPTURE = (function() {
+    try {
+      if (window.__pulseCapture === true) return true;
+      var qs = (location.search || "");
+      return qs.indexOf("pulse_capture=1") !== -1;
+    } catch(e) { return false; }
+  })();
+  var captureBuf = {
+    sessionStartedAt: new Date().toISOString(),
+    formScans: [],
+    postMessages: [],
+    submitClicks: []
+  };
+  function captureFormScan(form, source) {
+    if (!CAPTURE) return;
+    if (captureBuf.formScans.length >= 100) return;
+    var fields = [];
+    try {
+      var inputs = form.querySelectorAll
+        ? form.querySelectorAll("input, select, textarea")
+        : [];
+      for (var i = 0; i < inputs.length && fields.length < 50; i++) {
+        var el = inputs[i];
+        // Capture only field NAMES + types — never values. Values are PII
+        // and the diagnostics endpoint redacts them anyway, but we don't
+        // even send them.
+        var name = el.getAttribute && (el.getAttribute("name") || el.getAttribute("id"));
+        if (!name) continue;
+        fields.push({ name: String(name), type: String(el.type || "text") });
+      }
+    } catch(e) {}
+    captureBuf.formScans.push({
+      formId: (form.getAttribute && form.getAttribute("id")) || null,
+      formName: (form.getAttribute && form.getAttribute("name")) || null,
+      builder: (form.getAttribute && (form.getAttribute("data-pulse-builder") || form.getAttribute("data-form-builder"))) || "native",
+      source: source || "initial",
+      fields: fields
+    });
+  }
+  function capturePostMessage(event) {
+    if (!CAPTURE) return;
+    if (captureBuf.postMessages.length >= 200) return;
+    var preview = "";
+    try {
+      var data = event && event.data;
+      if (data == null) preview = "(null)";
+      else if (typeof data === "string") preview = data.slice(0, 200);
+      else preview = JSON.stringify(data).slice(0, 200);
+    } catch(e) { preview = "(unserialisable)"; }
+    var messageType = "";
+    try {
+      if (event.data && typeof event.data === "object") {
+        messageType = String(event.data.type || event.data.event || event.data.eventName || "");
+      }
+    } catch(e) {}
+    captureBuf.postMessages.push({
+      origin: String(event.origin || ""),
+      messageType: messageType,
+      preview: preview
+    });
+  }
+  function captureSubmitClick(targetEl, context) {
+    if (!CAPTURE) return;
+    if (captureBuf.submitClicks.length >= 100) return;
+    var sel = "";
+    try {
+      if (!targetEl) sel = "(none)";
+      else if (targetEl.tagName) {
+        sel = targetEl.tagName.toLowerCase();
+        if (targetEl.id) sel += "#" + targetEl.id;
+        if (targetEl.className && typeof targetEl.className === "string") {
+          sel += "." + targetEl.className.split(/\s+/).filter(Boolean).slice(0, 3).join(".");
+        }
+      }
+    } catch(e) {}
+    captureBuf.submitClicks.push({ target: sel, context: context || "" });
+  }
+  function captureFlush(reason) {
+    if (!CAPTURE) return;
+    if (!captureBuf.formScans.length && !captureBuf.postMessages.length && !captureBuf.submitClicks.length) return;
+    var diagnosticsUrl = "";
+    try {
+      diagnosticsUrl = CONFIG.endpointUrl
+        ? CONFIG.endpointUrl.replace(/\/api\/collect\/submit.*$/, "") + "/api/collect/diagnostics"
+        : "";
+    } catch(e) {}
+    if (!diagnosticsUrl) return;
+    var payload = {
+      client_id: CONFIG.clientId || "",
+      page_url: (location && location.href) || "",
+      domain: (location && location.hostname) || "",
+      pulseVersion: window.__pulseVersion || "",
+      diagnostics: {
+        reason: reason || "interval",
+        sessionStartedAt: captureBuf.sessionStartedAt,
+        flushedAt: new Date().toISOString(),
+        formScans: captureBuf.formScans.slice(0),
+        postMessages: captureBuf.postMessages.slice(0),
+        submitClicks: captureBuf.submitClicks.slice(0)
+      }
+    };
+    var body = "";
+    try { body = JSON.stringify(payload); } catch(e) { return; }
+    try {
+      if (typeof navigator.sendBeacon === "function") {
+        navigator.sendBeacon(diagnosticsUrl, new Blob([body], { type: "application/json" }));
+      } else {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", diagnosticsUrl, true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(body);
+      }
+    } catch(e) {}
+    // Reset buffers after flush so we don't double-send.
+    captureBuf.formScans.length = 0;
+    captureBuf.postMessages.length = 0;
+    captureBuf.submitClicks.length = 0;
+  }
+  if (CAPTURE) {
+    try {
+      setInterval(function() { captureFlush("interval"); }, 30000);
+      window.addEventListener("pagehide", function() { captureFlush("pagehide"); });
+      window.addEventListener("beforeunload", function() { captureFlush("beforeunload"); });
+    } catch(e) {}
+  }
   var debugLog = { bound: [], captured: [], rejected: [], heartbeat: "pending", lastSubmit: null };
   var debugRender = function() {};
 
@@ -504,6 +639,7 @@
       // (e.g. a <span> inside a <button>).
       for (var depth = 0; depth < 4 && el; depth++) {
         if (isSubmitLikeButton(el)) {
+          captureSubmitClick(el, "submit-like-button");
           var fields = extractFieldsNearButton(el);
           if (Object.keys(fields).length === 0) {
             debugRecordRejected("button click but no nearby input values", { id: el.id || null, name: null, type: "button-fallback" });
@@ -527,6 +663,7 @@
     var forms = root.querySelectorAll("form");
     for (var i = 0; i < forms.length; i++) {
       bindForm(forms[i], source || "document");
+      captureFormScan(forms[i], source || "document");
     }
     // Open shadow roots (closed roots are inaccessible by design).
     try {
@@ -597,6 +734,7 @@
   }
 
   window.addEventListener("message", function(event) {
+    capturePostMessage(event);
     if (!event.data || typeof event.data !== "object") return;
 
     // HubSpot embedded form

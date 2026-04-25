@@ -163,3 +163,4 @@ describe("pulse.js capture surface", () => {
     expect(submits.length).toBeGreaterThan(0);
   });
 });
+

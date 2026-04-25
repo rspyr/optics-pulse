@@ -13,7 +13,8 @@ import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
 import { startCallbackScheduler } from "./services/callback-scheduler";
-import { startHeartbeatMonitor } from "./services/notifications";
+import { startHeartbeatMonitor, startStaleInstallMonitor } from "./services/notifications";
+import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
 
 const rawPort = process.env["PORT"];
 
@@ -69,6 +70,8 @@ async function startServer() {
     );
     startCallbackScheduler();
     startHeartbeatMonitor();
+    startStaleInstallMonitor();
+    startTrackerRetentionCron();
   });
 }
 

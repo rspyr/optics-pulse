@@ -870,6 +870,10 @@ export default function Settings() {
         <IngestionModeSettings tenantId={tenantId} />
       )}
 
+      {tenantId && (
+        <TrackerHealthSettings tenantId={tenantId} />
+      )}
+
       {isClientUser && (
         <PremiumCard>
           <h3 className="text-xl font-display text-white mb-4">Account Information</h3>
@@ -1067,5 +1071,126 @@ function IngestionModeSettings({ tenantId }: { tenantId: number }) {
         )}
       </PremiumCard>
     </>
+  );
+}
+
+interface InstallSnippetVariant {
+  label: string;
+  description: string;
+  placement: string;
+  snippet: string;
+}
+interface InstallSnippetResponse {
+  tenantId: number;
+  tenantName: string;
+  clientSlug: string;
+  scriptUrl: string;
+  suggestedFunnels: string[];
+  funnelNote: string | null;
+  variants: InstallSnippetVariant[];
+  builderGuidance: { builder: string; instructions: string }[];
+}
+
+function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
+  const [data, setData] = useState<InstallSnippetResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${API_BASE}/api/tracker/install-snippet?tenantId=${tenantId}`, { credentials: "include" })
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d: InstallSnippetResponse) => setData(d))
+      .catch(e => setError(e.message || "Failed to load install snippet"))
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  const copy = async (text: string, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <PremiumCard>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h3 className="text-xl font-display text-white">Tracker Health — Pulse install</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Per-tenant install snippet for pulse.js. Paste into the &lt;head&gt; of every landing page that should attribute leads to{" "}
+            <span className="text-white">{data?.tenantName || "this tenant"}</span>.
+          </p>
+        </div>
+        <a
+          href={`${API_BASE}/verify-tracker`}
+          className="text-xs px-3 py-1.5 rounded-md border border-white/15 hover:bg-white/5 text-white/80 shrink-0"
+        >
+          Open Verify Tracker
+        </a>
+      </div>
+
+      {error && (
+        <div className="border border-red-500/30 bg-red-500/[0.05] text-red-300 text-sm rounded-md px-3 py-2 mb-3">{error}</div>
+      )}
+
+      {data?.funnelNote && (
+        <div className="border border-amber-500/30 bg-amber-500/[0.05] text-amber-200 text-sm rounded-md px-3 py-2 mb-4">
+          {data.funnelNote}
+          {data.suggestedFunnels.length > 0 && (
+            <div className="mt-1 text-xs text-amber-200/80">
+              Suggested funnel slugs: {data.suggestedFunnels.map(f => <code key={f} className="text-white/80 mr-2">{f}</code>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {data && (
+        <div className="space-y-4">
+          {data.variants.map((v, idx) => (
+            <div key={v.label} className="border border-white/10 bg-white/[0.02] rounded-lg p-4">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-sm font-medium text-white">{v.label}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{v.description}</div>
+                </div>
+                <button
+                  onClick={() => copy(v.snippet, idx)}
+                  className="text-xs px-3 py-1.5 rounded-md border border-white/15 hover:bg-white/10 text-white/80 shrink-0"
+                >
+                  {copiedIdx === idx ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <pre className="text-xs bg-black/40 border border-white/5 rounded px-3 py-2 overflow-x-auto text-white/85 whitespace-pre">
+                <code>{v.snippet}</code>
+              </pre>
+              <p className="text-[11px] text-muted-foreground mt-2">{v.placement}</p>
+            </div>
+          ))}
+
+          <div className="border border-white/10 bg-white/[0.02] rounded-lg p-4">
+            <div className="text-sm font-medium text-white mb-2">Builder-specific install notes</div>
+            <ul className="space-y-2 text-xs">
+              {data.builderGuidance.map(g => (
+                <li key={g.builder} className="border-l-2 border-white/20 pl-3 py-1">
+                  <div className="text-white/80 font-medium">{g.builder}</div>
+                  <div className="text-muted-foreground mt-0.5 leading-relaxed">{g.instructions}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </PremiumCard>
   );
 }

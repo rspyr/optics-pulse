@@ -17,6 +17,8 @@ import trainingRouter from "./training";
 import automationRouter from "./automation";
 import funnelTypesRouter from "./funnel-types";
 import trackerRouter from "./tracker";
+import trackerDiagnosticsRouter from "./tracker-diagnostics";
+import trackerInstallSnippetRouter from "./tracker-install-snippet";
 import callAttemptsRouter from "./call-attempts";
 import drilldownRouter from "./drilldown";
 import budgetRouter from "./budget";
@@ -46,6 +48,7 @@ router.use(healthRouter);
 router.use(authRouter);
 router.use(webhooksRouter);
 router.use(trackerRouter);
+router.use(trackerDiagnosticsRouter);
 
 router.use(googleOAuthRouter);
 router.use(metaOAuthRouter);
@@ -59,6 +62,7 @@ router.use(enforceTenantScope);
 
 router.use(reviewsRouter);
 
+router.use(trackerInstallSnippetRouter);
 router.use(tenantsRouter);
 router.use(leadsRouter);
 router.use(campaignsRouter);

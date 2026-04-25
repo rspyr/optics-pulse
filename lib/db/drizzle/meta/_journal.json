@@ -225,6 +225,13 @@
       "when": 1777000000000,
       "tag": "0040_tracker_submit_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1777010000000,
+      "tag": "0041_tracker_submit_attempts_diagnostic_cols",
+      "breakpoints": true
     }
   ]
 }

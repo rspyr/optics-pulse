@@ -44,6 +44,14 @@ interface LiveAttributionEvent {
   receivedAt: string;
 }
 
+type ScriptKind = "pulse-current" | "pulse-legacy" | "optics-legacy" | "unknown-tracker" | "none";
+type InstallVerdict =
+  | "pulse-ok"
+  | "wrong-tracker-installed"
+  | "no-tracker-found"
+  | "heartbeat-only-never-submitted"
+  | "stale-install";
+
 interface ScriptResult {
   src: string;
   resolvedUrl: string | null;
@@ -51,7 +59,25 @@ interface ScriptResult {
   contentType: string | null;
   bytes: number;
   looksLikePulse: boolean;
+  kind: ScriptKind;
+  dataAttrs: Record<string, string> | null;
   error?: string;
+}
+
+interface FormInventoryItem {
+  kind: "form" | "iframe";
+  source: string | null;
+  builder: string | null;
+  host: string | null;
+  fieldNames: string[];
+}
+
+interface SubmitBreakdown {
+  total: number;
+  submitOk: number;
+  submitClientError: number;
+  submitRateLimited: number;
+  submitServerError: number;
 }
 
 interface StoredEvent {
@@ -66,6 +92,13 @@ interface VerifyResult {
   overall: "green" | "amber" | "red";
   findings: { level: "info" | "warning" | "error"; message: string }[];
   scripts: ScriptResult[];
+  pageScriptKind: ScriptKind;
+  installVerdict: InstallVerdict;
+  formInventory: FormInventoryItem[];
+  statusBreakdown: {
+    last24h: SubmitBreakdown;
+    last7d: SubmitBreakdown;
+  };
   heartbeats: {
     tenantId: number;
     tenantName: string | null;
@@ -88,6 +121,7 @@ interface VerifyResult {
     createdAt: string;
   }[];
   debugUrl: string;
+  captureUrl: string;
 }
 
 export default function VerifyTracker() {
@@ -362,31 +396,54 @@ export default function VerifyTracker() {
             currentSessionId={sessionIdRef.current}
           />
 
+          <InstallVerdictBanner verdict={result.installVerdict} pageScriptKind={result.pageScriptKind} captureUrl={result.captureUrl} />
+
+          <StatusBreakdownCard last24h={result.statusBreakdown.last24h} last7d={result.statusBreakdown.last7d} host={result.host} />
+
           <PremiumCard className="p-6">
             <h4 className="text-sm font-medium text-white mb-3">Tracker script tags ({result.scripts.length})</h4>
             {result.scripts.length === 0 ? (
               <p className="text-sm text-muted-foreground">No tracker script tags found in static HTML. (GTM-injected scripts won't appear here.)</p>
             ) : (
               <div className="space-y-2">
-                {result.scripts.map((s, i) => (
-                  <div key={i} className="border border-white/10 bg-white/[0.02] rounded-md p-3 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <code className="text-white/80 truncate">{s.src}</code>
-                      <span className={`px-2 py-0.5 rounded ${s.status >= 200 && s.status < 300 ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
-                        HTTP {s.status || "ERR"}
-                      </span>
+                {result.scripts.map((s, i) => {
+                  const kindColor = s.kind === "pulse-current" ? "bg-emerald-500/20 text-emerald-300"
+                    : s.kind === "pulse-legacy" ? "bg-amber-500/20 text-amber-300"
+                    : s.kind === "optics-legacy" ? "bg-red-500/20 text-red-300"
+                    : s.kind === "unknown-tracker" ? "bg-amber-500/20 text-amber-300"
+                    : "bg-white/10 text-white/60";
+                  return (
+                    <div key={i} className="border border-white/10 bg-white/[0.02] rounded-md p-3 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <code className="text-white/80 truncate">{s.src}</code>
+                        <div className="flex gap-1.5 shrink-0">
+                          <span className={`px-2 py-0.5 rounded ${kindColor}`}>{s.kind}</span>
+                          <span className={`px-2 py-0.5 rounded ${s.status >= 200 && s.status < 300 ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
+                            HTTP {s.status || "ERR"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-muted-foreground mt-1 space-x-3">
+                        <span>type: {s.contentType || "(none)"}</span>
+                        <span>bytes: {s.bytes.toLocaleString()}</span>
+                        <span>looks like pulse.js: {s.looksLikePulse ? "yes" : "no"}</span>
+                      </div>
+                      {s.dataAttrs && Object.keys(s.dataAttrs).length > 0 && (
+                        <div className="text-muted-foreground mt-1">
+                          attrs: {Object.entries(s.dataAttrs).map(([k, v]) => (
+                            <code key={k} className="text-white/60 mr-2">data-{k}="{v}"</code>
+                          ))}
+                        </div>
+                      )}
+                      {s.error && <p className="text-red-300 mt-1">{s.error}</p>}
                     </div>
-                    <div className="text-muted-foreground mt-1 space-x-3">
-                      <span>type: {s.contentType || "(none)"}</span>
-                      <span>bytes: {s.bytes.toLocaleString()}</span>
-                      <span>looks like pulse.js: {s.looksLikePulse ? "yes" : "no"}</span>
-                    </div>
-                    {s.error && <p className="text-red-300 mt-1">{s.error}</p>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </PremiumCard>
+
+          <FormInventoryCard items={result.formInventory} />
 
           <PremiumCard className="p-6">
             <h4 className="text-sm font-medium text-white mb-3">Heartbeats from {result.host}</h4>
@@ -630,5 +687,120 @@ function Field({ label, value, mono = false }: { label: string; value: string | 
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className={`text-white/85 truncate ${mono ? "font-mono text-[11px]" : ""}`}>{value || <span className="text-muted-foreground">—</span>}</div>
     </div>
+  );
+}
+
+function InstallVerdictBanner({ verdict, pageScriptKind, captureUrl }: { verdict: InstallVerdict; pageScriptKind: ScriptKind; captureUrl: string }) {
+  const config = {
+    "pulse-ok": { color: "border-emerald-500/40 bg-emerald-500/[0.08]", chip: "bg-emerald-500/30 text-emerald-200", icon: <CheckCircle2 className="h-5 w-5 text-emerald-300" />, label: "Pulse OK", body: "Current Pulse build is installed and submits are flowing. Heartbeat fresh." },
+    "wrong-tracker-installed": { color: "border-red-500/40 bg-red-500/[0.10]", chip: "bg-red-500/30 text-red-200", icon: <XCircle className="h-5 w-5 text-red-300" />, label: "Wrong tracker installed", body: pageScriptKind === "optics-legacy" ? "This page is loading the LEGACY Optics tracker (tracker.js / hvaclaunch-optics.replit.app). Submits go to a different deployment AND a different tenant id — this is the exact failure mode that broke Vance Heating. Replace with the Pulse install snippet from Settings → Tracker Health." : "This page has a tracker-shaped script tag that is not a recognised Pulse build." },
+    "no-tracker-found": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "No tracker found", body: "No <script src=…pulse.js> or recognised tracker tag in the static HTML. If pulse.js is injected via GTM, the static HTML scan won't see it — load the page in capture mode to confirm." },
+    "heartbeat-only-never-submitted": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "Heartbeats but no submits", body: "pulse.js loads (heartbeats are coming in) but no successful submits in the last 7 days. Forms exist but pulse.js can't see them — check the form inventory below and use capture mode to investigate." },
+    "stale-install": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "Stale install", body: "Pulse is installed but the most recent heartbeat is over 24 hours old. Either the page hasn't been visited recently or the tracker has been removed." },
+  } as const;
+  const c = config[verdict];
+  return (
+    <PremiumCard className={`p-5 border ${c.color}`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 shrink-0">{c.icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="text-sm font-semibold text-white">Install verdict</h4>
+            <span className={`text-[11px] px-2 py-0.5 rounded ${c.chip}`}>{c.label}</span>
+            <span className="text-[11px] text-muted-foreground">script kind: <code className="text-white/70">{pageScriptKind}</code></span>
+          </div>
+          <p className="text-sm text-white/75 mt-2 leading-relaxed">{c.body}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a href={captureUrl} target="_blank" rel="noreferrer" className="text-xs px-3 py-1.5 rounded-md border border-white/15 hover:bg-white/5 text-white/80 inline-flex items-center gap-1.5">
+              Open page in capture mode <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        </div>
+      </div>
+    </PremiumCard>
+  );
+}
+
+function StatusBreakdownCard({ last24h, last7d, host }: { last24h: SubmitBreakdown; last7d: SubmitBreakdown; host: string }) {
+  const Pill = ({ label, n, tone }: { label: string; n: number; tone: "ok" | "warn" | "err" | "muted" }) => {
+    const c = tone === "ok" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+      : tone === "warn" ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+      : tone === "err" ? "bg-red-500/15 text-red-300 border-red-500/30"
+      : "bg-white/5 text-white/60 border-white/10";
+    return (
+      <div className={`border rounded-md px-2.5 py-2 ${c}`}>
+        <div className="text-[10px] uppercase tracking-wide opacity-80">{label}</div>
+        <div className="text-base font-semibold mt-0.5">{n.toLocaleString()}</div>
+      </div>
+    );
+  };
+  const Row = ({ title, b }: { title: string; b: SubmitBreakdown }) => (
+    <div>
+      <div className="text-xs text-white/60 mb-2">{title} ({b.total.toLocaleString()} total)</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Pill label="submit ok" n={b.submitOk} tone="ok" />
+        <Pill label="submit 4xx" n={b.submitClientError} tone="err" />
+        <Pill label="submit 429" n={b.submitRateLimited} tone="warn" />
+        <Pill label="submit 5xx" n={b.submitServerError} tone="err" />
+      </div>
+    </div>
+  );
+  return (
+    <PremiumCard className="p-6">
+      <h4 className="text-sm font-medium text-white mb-1">Tracker Health — {host}</h4>
+      <p className="text-xs text-muted-foreground mb-4">HTTP-status rollup of every /collect/* attempt from this hostname, grouped by outcome.</p>
+      <div className="space-y-4">
+        <Row title="Last 24h" b={last24h} />
+        <Row title="Last 7 days" b={last7d} />
+      </div>
+    </PremiumCard>
+  );
+}
+
+function FormInventoryCard({ items }: { items: FormInventoryItem[] }) {
+  if (!items.length) return null;
+  const forms = items.filter(i => i.kind === "form");
+  const iframes = items.filter(i => i.kind === "iframe");
+  return (
+    <PremiumCard className="p-6">
+      <h4 className="text-sm font-medium text-white mb-1">Form & iframe inventory</h4>
+      <p className="text-xs text-muted-foreground mb-4">
+        What pulse.js will see when this page loads — native forms it can bind to directly, plus form-builder iframes (where it has to listen for postMessage).
+      </p>
+      {forms.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs text-white/60 mb-2">Native &lt;form&gt; ({forms.length})</div>
+          <div className="space-y-2">
+            {forms.map((f, i) => (
+              <div key={`f${i}`} className="border border-white/10 bg-white/[0.02] rounded-md p-3 text-xs">
+                <div className="text-white/80">action: <code className="text-white/60">{f.source || "(none)"}</code></div>
+                {f.fieldNames.length > 0 && (
+                  <div className="text-muted-foreground mt-1">fields: {f.fieldNames.map(n => <code key={n} className="text-white/60 mr-2">{n}</code>)}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {iframes.length > 0 && (
+        <div>
+          <div className="text-xs text-white/60 mb-2">Form-builder iframes ({iframes.length})</div>
+          <div className="space-y-2">
+            {iframes.map((f, i) => {
+              const known = f.builder && f.builder !== "unknown";
+              return (
+                <div key={`i${i}`} className="border border-white/10 bg-white/[0.02] rounded-md p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] ${known ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>{f.builder || "unknown"}</span>
+                    <span className="text-muted-foreground truncate">{f.host || ""}</span>
+                  </div>
+                  <code className="text-white/60 mt-1 block truncate">{f.source}</code>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </PremiumCard>
   );
 }
