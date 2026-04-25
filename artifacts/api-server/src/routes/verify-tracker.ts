@@ -741,6 +741,7 @@ router.post("/verify-tracker", async (req, res) => {
       tenantName: a.tenantName,
       clientId: a.clientId,
       endpoint: a.endpoint,
+      kind: a.kind,
       pageUrl: a.pageUrl,
       outcome: a.outcome,
       httpStatus: a.httpStatus,
