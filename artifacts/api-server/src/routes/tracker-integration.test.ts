@@ -86,6 +86,14 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("../socket", () => ({
   emitNewLead: vi.fn(),
+  emitNewAttributionEvent: vi.fn(),
+  emitLeadUpdated: vi.fn(),
+}));
+
+vi.mock("../services/tracker-audit", () => ({
+  logTrackerAttempt: vi.fn().mockResolvedValue(null),
+  updateTrackerAttempt: vi.fn().mockResolvedValue(undefined),
+  logTrackerDiagnostic: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("../services/round-robin", () => ({
