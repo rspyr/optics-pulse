@@ -1,6 +1,8 @@
 (function() {
   "use strict";
 
+  var PULSE_VERSION = "2026.04.25";
+
   var CONFIG = {
     clientId: "",
     endpointUrl: "",
@@ -182,7 +184,8 @@
       client_id: CONFIG.clientId || "",
       page_url: (location && location.href) || "",
       domain: (location && location.hostname) || "",
-      pulseVersion: window.__pulseVersion || "",
+      pulse_version: PULSE_VERSION,
+      pulseVersion: PULSE_VERSION,
       diagnostics: {
         reason: reason || "interval",
         sessionStartedAt: captureBuf.sessionStartedAt,
@@ -201,6 +204,7 @@
         var xhr = new XMLHttpRequest();
         xhr.open("POST", diagnosticsUrl, true);
         xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("X-Pulse-Version", PULSE_VERSION);
         xhr.send(body);
       }
     } catch(e) {}
@@ -434,6 +438,7 @@
   }
 
   function sendPayload(payload) {
+    try { payload.pulse_version = PULSE_VERSION; } catch(e) {}
     var body = JSON.stringify(payload);
 
     var beaconOrQueue = function() {
@@ -450,7 +455,7 @@
       try {
         fetch(CONFIG.endpointUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Pulse-Version": PULSE_VERSION },
           body: body,
           keepalive: true
         }).then(function(resp) {
@@ -862,12 +867,13 @@
   function sendHeartbeat() {
     if ((!tenantIdAttr && !CONFIG.clientId) || !apiBase) return;
     try {
-      var payload = { domain: location.hostname, pageUrl: location.href };
+      var payload = { domain: location.hostname, pageUrl: location.href, pulse_version: PULSE_VERSION };
       if (tenantIdAttr) payload.tenantId = parseInt(tenantIdAttr, 10);
       if (CONFIG.clientId) payload.clientId = CONFIG.clientId;
       var xhr = new XMLHttpRequest();
       xhr.open("POST", apiBase + "/api/collect/heartbeat", true);
       xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.setRequestHeader("X-Pulse-Version", PULSE_VERSION);
       xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
           debugLog.heartbeat = xhr.status === 200 ? "ok (" + new Date().toISOString() + ")" : "error " + xhr.status;

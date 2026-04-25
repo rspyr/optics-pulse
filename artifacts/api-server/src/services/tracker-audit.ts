@@ -120,6 +120,17 @@ function parseContentLength(req: Request): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+// header preferred; body fallback covers sendBeacon paths (no custom headers)
+function derivePulseVersion(req: Request, body: unknown): string | null {
+  const fromHeader = pickHeader(req, "x-pulse-version");
+  if (fromHeader) return fromHeader.slice(0, 40);
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const fromBody = typeof b.pulse_version === "string" ? b.pulse_version
+    : typeof b.pulseVersion === "string" ? b.pulseVersion
+    : null;
+  return fromBody ? fromBody.slice(0, 40) : null;
+}
+
 /**
  * Extract field NAMES (not values) from body: top-level keys of fields/
  * custom/form plus form-scan field names from diagnostics.formScans[].
@@ -189,7 +200,7 @@ export async function logTrackerAttempt(input: TrackerAuditInput): Promise<numbe
       outcome: input.outcome,
       httpStatus: input.httpStatus,
       message: input.message ?? null,
-      pulseVersion: pickHeader(input.req, "x-pulse-version"),
+      pulseVersion: derivePulseVersion(input.req, input.body),
       attributionEventId: input.attributionEventId ?? null,
       // payload_sample never persisted (field-names-only audit policy)
       payloadSample: null,
@@ -218,7 +229,7 @@ export async function logTrackerDiagnostic(input: TrackerDiagnosticInput): Promi
       outcome: input.outcome,
       httpStatus: input.httpStatus,
       message: input.message ?? null,
-      pulseVersion: pickHeader(input.req, "x-pulse-version"),
+      pulseVersion: derivePulseVersion(input.req, input.body),
       payloadSample: null,
     }).returning({ id: trackerSubmitAttemptsTable.id });
     return row?.id ?? null;
@@ -395,7 +406,7 @@ export async function getDomainHealthRollup(args: {
             WHERE a.domain = r.domain
               AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
               AND a.created_at > NOW() - INTERVAL '7 days'
-            ORDER BY a.created_at DESC LIMIT 5
+            ORDER BY a.created_at DESC LIMIT 10
           ) x) AS recent_attempts
       FROM recent r
       LEFT JOIN tenants t ON t.id = r.tenant_id
