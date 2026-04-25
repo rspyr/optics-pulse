@@ -455,9 +455,7 @@ export async function pruneOldTrackerAttempts(retentionDays = 30): Promise<numbe
   }
 }
 
-// Suppress unused-import warnings — these are exported for downstream
-// consumers (verify-tracker route) that import them by name.
-void desc;
+// `tenantsTable` is re-exported for the verify-tracker route to JOIN against.
 void tenantsTable;
 
 /**

@@ -1,7 +1,14 @@
 import { Router, type IRouter } from "express";
 import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireAuth } from "../middleware/auth";
+import { requireRole } from "../middleware/auth";
+
+// Tracker install snippet + per-domain health rollup are operator surfaces:
+// they reveal install state, every active landing-page domain, and submit
+// volumes. Restricted to manager / agency_user / super_admin only — the
+// client_user role (HVAC operator) is intentionally NOT included so we
+// don't leak cross-tenant operational data through their session.
+const requireOperator = requireRole("manager", "agency_user", "super_admin");
 import { getDomainHealthRollup } from "../services/tracker-audit";
 
 const router: IRouter = Router();
@@ -48,7 +55,7 @@ interface SnippetVariant {
   snippet: string;
 }
 
-router.get("/api/tracker/install-snippet", requireAuth, async (req, res) => {
+router.get("/api/tracker/install-snippet", requireOperator, async (req, res) => {
   const sessionTenantId = req.session?.tenantId ? Number(req.session.tenantId) : null;
   const isAgency = req.session?.userRole === "agency_user" || req.session?.userRole === "super_admin";
   // Agency users may pass ?tenantId=N to fetch any tenant's snippet.
@@ -163,7 +170,7 @@ router.get("/api/tracker/install-snippet", requireAuth, async (req, res) => {
  * shown in the Settings → Tracker Health card so operators can spot
  * which specific landing page is misbehaving without leaving Settings.
  */
-router.get("/api/tracker/health-rollup", requireAuth, async (req, res) => {
+router.get("/api/tracker/health-rollup", requireOperator, async (req, res) => {
   const sessionTenantId = req.session?.tenantId ? Number(req.session.tenantId) : null;
   const isAgency = req.session?.userRole === "agency_user" || req.session?.userRole === "super_admin";
   const requestedTenantId = (() => {

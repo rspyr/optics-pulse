@@ -692,6 +692,7 @@ router.post("/verify-tracker", async (req, res) => {
       tenantName: tenantsTable.name,
       clientId: trackerSubmitAttemptsTable.clientId,
       endpoint: trackerSubmitAttemptsTable.endpoint,
+      kind: trackerSubmitAttemptsTable.kind,
       pageUrl: trackerSubmitAttemptsTable.pageUrl,
       outcome: trackerSubmitAttemptsTable.outcome,
       httpStatus: trackerSubmitAttemptsTable.httpStatus,
@@ -717,7 +718,7 @@ router.post("/verify-tracker", async (req, res) => {
   // time a tenant has capture mode enabled.
   const recentFailedSubmits = recentAttempts.filter(
     a => a.endpoint === "submit"
-      && (a as { kind?: string }).kind !== "diagnostic"
+      && a.kind !== "diagnostic"
       && a.outcome !== "accepted"
       && a.outcome !== "duplicate"
       && a.outcome !== "resubmitted",
