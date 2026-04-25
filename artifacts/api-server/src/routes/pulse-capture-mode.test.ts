@@ -50,8 +50,9 @@ beforeAll(() => {
 
 describe("pulse.js capture mode (?pulse_capture=1)", () => {
   it("flushes buffered diagnostics to /api/collect/diagnostics on pagehide", async () => {
-    // Push something into the postMessages buffer so the flush is non-empty.
-    window.postMessage({ type: "lc.test.event", data: { foo: "bar" } }, "*");
+    // Push a submit-like postMessage so it passes the capture filter
+    // (only submit/form-related events from form-builder origins are kept).
+    window.postMessage({ type: "form-submit", data: { foo: "bar" } }, "*");
     await new Promise((r) => setTimeout(r, 30));
 
     window.dispatchEvent(new Event("pagehide"));

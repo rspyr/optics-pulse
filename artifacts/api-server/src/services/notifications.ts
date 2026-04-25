@@ -130,92 +130,69 @@ export async function checkStaleHeartbeats() {
   }
 }
 
-/**
- * Detect "tracker installed but never collecting submits" — the silent
- * failure mode that prompted Task #248. A tenant is considered to have a
- * stale install when:
- *
- *   - At least 5 heartbeats have arrived in the last 7 days (the page is
- *     definitely being visited and pulse.js is loading), AND
- *   - Zero successful /collect/submit attempts have arrived in the last
- *     7 days from any of that tenant's heartbeat domains.
- *
- * The 5-heartbeat floor is the smallest sample where "never submitted"
- * starts to mean "the install is broken" rather than "the page got one
- * accidental visit". Below that threshold we leave the tenant alone to
- * avoid false alarms on test/staging hosts.
- *
- * Notifications use a 15-minute cooldown — short enough to stay loud
- * during an active outage, long enough to avoid notification spam if a
- * page is in active development with the tracker getting toggled.
- */
+// Per-(tenant, domain) stale-install detection. A domain is "stale" when
+// it has 5+ heartbeats AND zero accepted/duplicate/resubmitted submits in
+// the trailing 7d. Domain-scoped so one healthy domain can't mask another.
 const STALE_INSTALL_COOLDOWN_MS = 15 * 60 * 1000;
 const STALE_INSTALL_HEARTBEAT_THRESHOLD = 5;
 
 export async function checkStaleInstall() {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-  const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
-    .from(tenantsTable)
-    .where(eq(tenantsTable.isActive, true));
-
+  const cooldownSince = new Date(Date.now() - STALE_INSTALL_COOLDOWN_MS);
   let alertsCreated = 0;
 
-  for (const tenant of tenants) {
-    // Heartbeat EVENT count from the audit table (kind='heartbeat'); using
-    // tracker_heartbeats would undercount because it's upsert-on-change.
-    const [hbRow] = await db.select({
-      n: sql<number>`COUNT(*)::int`,
-      sampleDomain: sql<string | null>`MIN(${trackerSubmitAttemptsTable.domain})`,
-    })
-      .from(trackerSubmitAttemptsTable)
-      .where(and(
-        eq(trackerSubmitAttemptsTable.tenantId, tenant.id),
-        eq(trackerSubmitAttemptsTable.kind, "heartbeat"),
-        sql`${trackerSubmitAttemptsTable.createdAt} > ${sevenDaysAgo}`,
-      ));
-    const heartbeatCount = hbRow?.n ?? 0;
-    const sampleDomain = hbRow?.sampleDomain ?? "(unknown)";
+  // Group heartbeats by (tenant_id, domain) and join successful submits +
+  // recent stale_install notification per domain in one query.
+  const result = await db.execute(sql`
+    WITH hb AS (
+      SELECT tsa.tenant_id, tsa.domain, COUNT(*)::int AS n
+      FROM tracker_submit_attempts tsa
+      WHERE tsa.kind = 'heartbeat'
+        AND tsa.domain IS NOT NULL
+        AND tsa.tenant_id IS NOT NULL
+        AND tsa.created_at > ${sevenDaysAgo}
+      GROUP BY tsa.tenant_id, tsa.domain
+      HAVING COUNT(*) >= ${STALE_INSTALL_HEARTBEAT_THRESHOLD}
+    ),
+    ok_submits AS (
+      SELECT tsa.tenant_id, tsa.domain, COUNT(*)::int AS n
+      FROM tracker_submit_attempts tsa
+      WHERE tsa.endpoint = 'submit'
+        AND tsa.outcome IN ('accepted','duplicate','resubmitted')
+        AND tsa.tenant_id IS NOT NULL
+        AND tsa.domain IS NOT NULL
+        AND tsa.created_at > ${sevenDaysAgo}
+      GROUP BY tsa.tenant_id, tsa.domain
+    )
+    SELECT hb.tenant_id, hb.domain, hb.n AS heartbeat_count, t.name AS tenant_name
+    FROM hb
+    JOIN tenants t ON t.id = hb.tenant_id AND t.is_active = true
+    LEFT JOIN ok_submits s ON s.tenant_id = hb.tenant_id AND s.domain = hb.domain
+    WHERE COALESCE(s.n, 0) = 0
+  `);
+  const candidates = (result as unknown as { rows: Array<{
+    tenant_id: number; domain: string; heartbeat_count: number; tenant_name: string;
+  }> }).rows ?? [];
 
-    if (heartbeatCount < STALE_INSTALL_HEARTBEAT_THRESHOLD) continue;
-
-    // Successful submit outcomes are accepted|duplicate|resubmitted (the
-    // legacy "ok" value would mark every healthy tenant stale).
-    const [submitRow] = await db.select({
-      n: sql<number>`COUNT(*)::int`,
-    })
-      .from(trackerSubmitAttemptsTable)
-      .where(and(
-        eq(trackerSubmitAttemptsTable.tenantId, tenant.id),
-        eq(trackerSubmitAttemptsTable.endpoint, "submit"),
-        sql`${trackerSubmitAttemptsTable.outcome} IN ('accepted', 'duplicate', 'resubmitted')`,
-        sql`${trackerSubmitAttemptsTable.createdAt} > ${sevenDaysAgo}`,
-      ));
-
-    const submitCount = submitRow?.n ?? 0;
-    if (submitCount > 0) continue;
-
-    // Cooldown check — don't re-notify within 15 minutes for the same tenant.
-    const cooldownSince = new Date(Date.now() - STALE_INSTALL_COOLDOWN_MS);
-    const existingRecent = await db.select({ id: notificationsTable.id })
+  for (const c of candidates) {
+    // Per-domain cooldown — match by tenant + type + domain in title.
+    const existing = await db.select({ id: notificationsTable.id })
       .from(notificationsTable)
       .where(and(
-        eq(notificationsTable.tenantId, tenant.id),
+        eq(notificationsTable.tenantId, c.tenant_id),
         eq(notificationsTable.type, "stale_install"),
+        sql`${notificationsTable.title} LIKE ${`%${c.domain}%`}`,
         sql`${notificationsTable.createdAt} > ${cooldownSince}`,
       ))
       .limit(1);
-    if (existingRecent.length > 0) continue;
+    if (existing.length > 0) continue;
 
     await createNotification({
-      tenantId: tenant.id,
+      tenantId: c.tenant_id,
       type: "stale_install",
-      // "warning" not "error": the tracker IS loading and beaconing, the
-      // pages are live — but submits never arrive. That's a stuck-pipeline
-      // signal that warrants attention without paging an on-call.
       severity: "warning",
-      title: `Pulse install broken for ${tenant.name}`,
-      message: `pulse.js heartbeats are arriving (${heartbeatCount} in the last 7 days, e.g. from ${sampleDomain}) but ZERO successful form submits. The tracker is loaded but cannot see the form — open Verify Tracker on this page to investigate.`,
+      title: `Pulse install broken on ${c.domain} (${c.tenant_name})`,
+      message: `${c.heartbeat_count} pulse.js heartbeats in the last 7 days from ${c.domain} but ZERO successful form submits. The tracker is loaded but cannot see the form — open Verify Tracker on this page to investigate.`,
     });
     alertsCreated++;
   }

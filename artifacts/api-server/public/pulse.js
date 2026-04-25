@@ -130,9 +130,28 @@
       fields: fields
     });
   }
+  // Form-builder origins we recognise. Used to decide whether a postMessage
+  // is worth capturing — we don't want to record arbitrary cross-window
+  // chatter.
+  var FORM_BUILDER_ORIGIN_RE = /(^|\.)(leadconnectorhq\.com|msgsndr\.com|ghl\.io|gohighlevel\.com|highlevel\.com|typeform\.com|hsforms\.(com|net)|hubspot\.com|framer\.com|framercanvas\.com|framerusercontent\.com|servicetitan\.com|clickfunnels\.com|myclickfunnels\.com|wufoo\.com|calendly\.com)$/i;
+  var SUBMIT_TYPE_RE = /submit|form[-_]?(submit|complete|success)|lead|response|hsubmit|gform|conversion/i;
+
   function capturePostMessage(event) {
     if (!CAPTURE) return;
     if (captureBuf.postMessages.length >= 200) return;
+    var messageType = "";
+    try {
+      if (event.data && typeof event.data === "object") {
+        messageType = String(event.data.type || event.data.event || event.data.eventName || "");
+      }
+    } catch(e) {}
+    // Only capture submit/form-related events from known form-builder origins.
+    // Avoids storing fragments of unrelated cross-window payloads.
+    var originHost = "";
+    try { originHost = new URL(String(event.origin || "")).hostname; } catch(e) {}
+    var isBuilder = originHost && FORM_BUILDER_ORIGIN_RE.test(originHost);
+    var isSubmitLike = messageType && SUBMIT_TYPE_RE.test(messageType);
+    if (!isBuilder && !isSubmitLike) return;
     var preview = "";
     try {
       var data = event && event.data;
@@ -140,12 +159,6 @@
       else if (typeof data === "string") preview = data.slice(0, 200);
       else preview = JSON.stringify(data).slice(0, 200);
     } catch(e) { preview = "(unserialisable)"; }
-    var messageType = "";
-    try {
-      if (event.data && typeof event.data === "object") {
-        messageType = String(event.data.type || event.data.event || event.data.eventName || "");
-      }
-    } catch(e) {}
     captureBuf.postMessages.push({
       origin: String(event.origin || ""),
       messageType: messageType,

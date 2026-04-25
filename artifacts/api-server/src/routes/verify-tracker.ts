@@ -238,22 +238,12 @@ export function looksLikePulseScript(url: string, body: string): boolean {
 }
 
 /**
- * Per-script-tag classification used by Verify Tracker. The five values match
- * the operator-facing taxonomy in the Tracker Health view:
- *
- * - `pulse-current`: a fetched <script src=…> that is the current Pulse build
- *   (the URL ends in pulse.js OR the body fingerprints pulse.js literals AND
- *   the response was JS not HTML). This is the "good" state.
- * - `pulse-legacy`: a `pulse.js` URL that returns JS but does NOT contain the
- *   current fingerprint literals (older build / partial deploy).
- * - `optics-legacy`: any URL containing "tracker.js" OR pointing at a
- *   hvaclaunch-optics.replit.app host. This is the EXACT failure mode that
- *   broke Vance Heating — the page loads the old Optics tracker which posts
- *   to a different deployment and a different tenant id.
- * - `unknown-tracker`: a `<script>` whose URL or body looks tracker-shaped
- *   (matches /tracker|analytics|pixel/) but isn't ours.
- * - `none`: returned at the *page* level when no candidate script tag is
- *   found at all. Per-script entries never use this value.
+ * Per-script-tag classification:
+ * - pulse-current: pulse.js URL OR body fingerprints (current build)
+ * - pulse-legacy: pulse.js URL but missing current fingerprint literals
+ * - optics-legacy: tracker.js URL or hvaclaunch-optics.replit.app host
+ * - unknown-tracker: tracker-shaped URL but not Pulse
+ * - none: page-level only when no candidate tag found
  */
 export type ScriptKind = "pulse-current" | "pulse-legacy" | "optics-legacy" | "unknown-tracker" | "none";
 
@@ -491,11 +481,16 @@ router.post("/verify-tracker", async (req, res) => {
   }
 
   const allSrcs = findScriptSources(page.body);
-  // Consider any tracker-shaped script tag — pulse.js, legacy tracker.js, OR
-  // anything pointing at the legacy hvaclaunch-optics.replit.app deployment
-  // (the EXACT pattern that broke Vance Heating: a tracker.js pointing at
-  // the old Optics deploy with a wrong tenant id).
-  const trackerSrcs = allSrcs.filter(s => /\bpulse\.js\b|\btracker\.js\b|hvaclaunch-optics\.replit\.app/i.test(s));
+  // Known tracker shapes: pulse.js, legacy tracker.js, legacy Optics deploy.
+  const KNOWN_TRACKER_RE = /\bpulse\.js\b|\btracker\.js\b|hvaclaunch-optics\.replit\.app/i;
+  // Other tracker-shaped scripts. classifyScriptKind tags these as
+  // unknown-tracker (warning) unless their body fingerprints match Pulse.
+  const SHAPED_RE = /tracker|tracking|analytics|pixel|telemetry|beacon|gtm\.js|gtag/i;
+  const knownSrcs = allSrcs.filter(s => KNOWN_TRACKER_RE.test(s));
+  const shapedSrcs = allSrcs
+    .filter(s => !KNOWN_TRACKER_RE.test(s) && SHAPED_RE.test(s))
+    .slice(0, 5); // bound fetch cost
+  const trackerSrcs = [...knownSrcs, ...shapedSrcs];
 
   const scripts: Array<{
     src: string;

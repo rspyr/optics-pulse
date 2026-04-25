@@ -3,19 +3,9 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Request } from "express";
 
 /**
- * Centralised "did this tracker submit ever even *try*" audit log.
- *
- * Why this exists: in April 2026 a schema change silently 400'd every
- * /api/collect/submit call for ~3 weeks before anyone noticed (Vance
- * Heating's missing Jenna Record lead). The heartbeat endpoint was fine,
- * so System Health stayed green and we had no signal that submits were
- * dying. This module is the trip-wire that catches the next one
- * within seconds instead of weeks.
- *
- * Every call to /api/collect/submit and /api/collect/heartbeat MUST
- * write a row here, written *before* schema validation so even malformed
- * payloads still appear. All inserts are best-effort: failure to log
- * MUST NEVER break the request.
+ * Audit log of every /api/collect/submit + /heartbeat + /diagnostics call.
+ * Inserts run BEFORE schema validation so malformed payloads still appear,
+ * and are best-effort — a logging failure must never break ingestion.
  */
 
 const PAYLOAD_SAMPLE_MAX_BYTES = 4 * 1024;
@@ -64,18 +54,7 @@ export interface TrackerDiagnosticInput {
   message?: string | null;
 }
 
-/**
- * Strip values that look like raw PII from the payload sample so we never
- * persist contact details into a diagnostic table. Two layers of defence:
- *
- * 1. Field-name match: anything with a likely-PII key has its value
- *    replaced with "<redacted>". Covers full-word + common short aliases
- *    (fname/lname/fn/ln/addr1/addr2/phn/em) and common "your_*" prefixes.
- * 2. Value-pattern scrub: even for non-PII keys, free-text values are
- *    scanned for embedded emails / phone-like / SSN-like sequences and
- *    those substrings are masked. This catches PII leaking through
- *    "comments", "notes", "message", or unknown custom fields.
- */
+/** Redact PII from payload sample: field-name match + value-pattern scrub. */
 const PII_FIELD_NAME_PATTERN = /(email|e[-_ ]?mail|\bemail_?address\b|phone|\bphn\b|\btel\b|mobile|cell|fax|first.?name|last.?name|full.?name|\bfname\b|\blname\b|\bfn\b|\bln\b|\bname\b|address|addr|\baddr1\b|\baddr2\b|street|\bcity\b|\bstate\b|zip|postal|country|ssn|tax.?id|dob|birth|gender|age|\bdl\b|driver|passport|account.?number|card.?number|\bcvv\b|credit|password|secret|token)/i;
 
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -164,13 +143,8 @@ function parseContentLength(req: Request): number | null {
 }
 
 /**
- * Extract just the field NAMES (not values) from a submission body so we can
- * audit "the form sent these field names" without storing PII. We look at:
- * - top-level keys of `body.fields` (the canonical bucket pulse.js writes to)
- * - top-level keys of `body.custom` (anything pulse.js couldn't classify)
- * - top-level keys of `body.form` (form.id / form.name / form.type)
- * - the FIELD NAMES inside `body.diagnostics.formScans[*].fields[*].name`
- *   (used by the diagnostic capture mode to surface what GHL/Framer emit)
+ * Extract field NAMES (not values) from body: top-level keys of fields/
+ * custom/form plus form-scan field names from diagnostics.formScans[].
  */
 function extractSuppliedFieldNames(body: unknown): string[] | null {
   if (!body || typeof body !== "object") return null;
@@ -219,11 +193,7 @@ function derivePageUrl(req: Request, body: unknown, explicit: string | null | un
   return pickHeader(req, "referer") || pickHeader(req, "referrer");
 }
 
-/**
- * Insert an audit row. Returns the new row id, or null on insert failure
- * (failure is logged to console but never thrown — ingestion must not
- * regress because of an audit miss).
- */
+/** Insert an audit row. Best-effort — never throws. */
 export async function logTrackerAttempt(input: TrackerAuditInput): Promise<number | null> {
   try {
     const kind: TrackerKind = input.kind ?? input.endpoint;
@@ -252,11 +222,7 @@ export async function logTrackerAttempt(input: TrackerAuditInput): Promise<numbe
   }
 }
 
-/**
- * Record a row coming from /api/collect/diagnostics (pulse.js capture mode).
- * Always written with kind='diagnostic'. Same redaction guarantees as the
- * regular submit path.
- */
+/** Audit row from /api/collect/diagnostics (capture mode). kind='diagnostic'. */
 export async function logTrackerDiagnostic(input: TrackerDiagnosticInput): Promise<number | null> {
   try {
     const [row] = await db.insert(trackerSubmitAttemptsTable).values({
@@ -298,7 +264,7 @@ export interface DomainStatusBreakdown {
 
 /**
  * Per-HTTP-status breakdown of /collect/submit attempts for a domain in a
- * time window. Used by the Tracker Health view's 24h / 7d columns.
+ * time window.
  */
 export async function getDomainSubmitBreakdown(args: {
   domain: string;
@@ -341,9 +307,8 @@ export async function getDomainSubmitBreakdown(args: {
 }
 
 /**
- * Per-tenant rollup of distinct domains, last submit, last heartbeat. Used
- * by the Tracker Health view to give an at-a-glance install verdict per
- * domain. Emits one row per domain.
+ * Per-tenant rollup: one row per (tenant, domain) over the last 30 days
+ * with last submit, last heartbeat, status buckets, and recent attempts.
  */
 export interface DomainHealthRow {
   domain: string;
@@ -363,11 +328,11 @@ export async function getDomainHealthRollup(args: {
   const limit = args.limit ?? 100;
   if (args.tenantIds && args.tenantIds.length === 0) return [];
   try {
-    // Build a CTE that gets distinct (tenant_id, domain) pairs from the
-    // last 30 days, then attaches latest submit + 24h/7d submit counts.
     const tenantFilter = args.tenantIds && args.tenantIds.length > 0
       ? sql`AND tsa.tenant_id = ANY(${args.tenantIds}::int[])`
       : sql``;
+    // Status buckets: 200 (success), 400 (bad request), 404 (unknown
+    // tenant/route), 429 (rate-limited), 500 (server error), other.
     const result = await db.execute(sql`
       WITH recent AS (
         SELECT DISTINCT tsa.tenant_id, tsa.domain
@@ -384,6 +349,15 @@ export async function getDomainHealthRollup(args: {
           AND tsa.created_at > NOW() - INTERVAL '30 days'
           ${tenantFilter}
         ORDER BY tsa.tenant_id, tsa.domain, tsa.created_at DESC
+      ),
+      last_heartbeat AS (
+        SELECT DISTINCT ON (tsa.tenant_id, tsa.domain)
+          tsa.tenant_id, tsa.domain, tsa.created_at AS hb_at
+        FROM tracker_submit_attempts tsa
+        WHERE tsa.kind = 'heartbeat'
+          AND tsa.created_at > NOW() - INTERVAL '30 days'
+          ${tenantFilter}
+        ORDER BY tsa.tenant_id, tsa.domain, tsa.created_at DESC
       )
       SELECT
         r.domain,
@@ -392,6 +366,7 @@ export async function getDomainHealthRollup(args: {
         ls.created_at AS last_submit_at,
         ls.http_status AS last_submit_status,
         ls.outcome AS last_submit_outcome,
+        lh.hb_at AS last_heartbeat_at,
         (SELECT COUNT(*) FROM tracker_submit_attempts a
           WHERE a.kind = 'submit' AND a.domain = r.domain
             AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
@@ -399,12 +374,48 @@ export async function getDomainHealthRollup(args: {
         (SELECT COUNT(*) FROM tracker_submit_attempts a
           WHERE a.kind = 'submit' AND a.domain = r.domain
             AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
-            AND a.created_at > NOW() - INTERVAL '7 days') AS submit_count_7d
+            AND a.created_at > NOW() - INTERVAL '7 days') AS submit_count_7d,
+        (SELECT json_build_object(
+            's200', COUNT(*) FILTER (WHERE a.http_status = 200),
+            's400', COUNT(*) FILTER (WHERE a.http_status = 400),
+            's404', COUNT(*) FILTER (WHERE a.http_status = 404),
+            's429', COUNT(*) FILTER (WHERE a.http_status = 429),
+            's500', COUNT(*) FILTER (WHERE a.http_status >= 500),
+            'other', COUNT(*) FILTER (WHERE a.http_status NOT IN (200,400,404,429) AND a.http_status < 500)
+          )
+          FROM tracker_submit_attempts a
+          WHERE a.kind = 'submit' AND a.domain = r.domain
+            AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
+            AND a.created_at > NOW() - INTERVAL '24 hours') AS status_buckets_24h,
+        (SELECT json_build_object(
+            's200', COUNT(*) FILTER (WHERE a.http_status = 200),
+            's400', COUNT(*) FILTER (WHERE a.http_status = 400),
+            's404', COUNT(*) FILTER (WHERE a.http_status = 404),
+            's429', COUNT(*) FILTER (WHERE a.http_status = 429),
+            's500', COUNT(*) FILTER (WHERE a.http_status >= 500),
+            'other', COUNT(*) FILTER (WHERE a.http_status NOT IN (200,400,404,429) AND a.http_status < 500)
+          )
+          FROM tracker_submit_attempts a
+          WHERE a.kind = 'submit' AND a.domain = r.domain
+            AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
+            AND a.created_at > NOW() - INTERVAL '7 days') AS status_buckets_7d,
+        (SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) FROM (
+            SELECT a.created_at, a.kind, a.endpoint, a.http_status,
+                   a.outcome, a.message, a.origin, a.content_length
+            FROM tracker_submit_attempts a
+            WHERE a.domain = r.domain
+              AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
+              AND a.created_at > NOW() - INTERVAL '7 days'
+            ORDER BY a.created_at DESC LIMIT 5
+          ) x) AS recent_attempts
       FROM recent r
       LEFT JOIN tenants t ON t.id = r.tenant_id
       LEFT JOIN last_submit ls
         ON ls.domain = r.domain
        AND (ls.tenant_id = r.tenant_id OR (ls.tenant_id IS NULL AND r.tenant_id IS NULL))
+      LEFT JOIN last_heartbeat lh
+        ON lh.domain = r.domain
+       AND (lh.tenant_id = r.tenant_id OR (lh.tenant_id IS NULL AND r.tenant_id IS NULL))
       ORDER BY ls.created_at DESC NULLS LAST
       LIMIT ${limit}
     `);
@@ -415,9 +426,30 @@ export async function getDomainHealthRollup(args: {
       last_submit_at: Date | null;
       last_submit_status: number | null;
       last_submit_outcome: string | null;
+      last_heartbeat_at: Date | null;
       submit_count_24h: string | number;
       submit_count_7d: string | number;
+      status_buckets_24h: Record<string, number> | null;
+      status_buckets_7d: Record<string, number> | null;
+      recent_attempts: Array<{
+        created_at: string;
+        kind: string;
+        endpoint: string;
+        http_status: number;
+        outcome: string;
+        message: string | null;
+        origin: string | null;
+        content_length: number | null;
+      }> | null;
     }> }).rows ?? [];
+    const toBuckets = (b: Record<string, number> | null) => ({
+      s200: Number(b?.s200) || 0,
+      s400: Number(b?.s400) || 0,
+      s404: Number(b?.s404) || 0,
+      s429: Number(b?.s429) || 0,
+      s500: Number(b?.s500) || 0,
+      other: Number(b?.other) || 0,
+    });
     return rows.map(r => ({
       domain: r.domain,
       tenantId: r.tenant_id,
@@ -425,8 +457,21 @@ export async function getDomainHealthRollup(args: {
       lastSubmitAt: r.last_submit_at,
       lastSubmitStatus: r.last_submit_status,
       lastSubmitOutcome: r.last_submit_outcome,
+      lastHeartbeatAt: r.last_heartbeat_at,
       submitCount24h: Number(r.submit_count_24h) || 0,
       submitCount7d: Number(r.submit_count_7d) || 0,
+      statusBuckets24h: toBuckets(r.status_buckets_24h),
+      statusBuckets7d: toBuckets(r.status_buckets_7d),
+      recentAttempts: (r.recent_attempts ?? []).map(a => ({
+        createdAt: a.created_at,
+        kind: a.kind,
+        endpoint: a.endpoint,
+        httpStatus: a.http_status,
+        outcome: a.outcome,
+        message: a.message,
+        origin: a.origin,
+        contentLength: a.content_length,
+      })),
     }));
   } catch (err) {
     console.warn("[tracker-audit] getDomainHealthRollup failed", err);

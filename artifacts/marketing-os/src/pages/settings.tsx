@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
 import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff } from "lucide-react";
@@ -1091,13 +1091,37 @@ interface InstallSnippetResponse {
   builderGuidance: { builder: string; instructions: string }[];
 }
 
+interface StatusBuckets {
+  s200: number;
+  s400: number;
+  s404: number;
+  s429: number;
+  s500: number;
+  other: number;
+}
+
+interface RecentAttempt {
+  createdAt: string;
+  kind: string;
+  endpoint: string;
+  httpStatus: number;
+  outcome: string;
+  message: string | null;
+  origin: string | null;
+  contentLength: number | null;
+}
+
 interface DomainHealthRow {
   domain: string;
   lastSubmitAt: string | null;
   lastSubmitStatus: number | null;
   lastSubmitOutcome: string | null;
+  lastHeartbeatAt: string | null;
   submitCount24h: number;
   submitCount7d: number;
+  statusBuckets24h: StatusBuckets;
+  statusBuckets7d: StatusBuckets;
+  recentAttempts: RecentAttempt[];
 }
 
 function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
@@ -1216,8 +1240,10 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
                   <thead className="text-[11px] uppercase tracking-wider text-white/50">
                     <tr className="border-b border-white/10">
                       <th className="text-left py-2 pr-3 font-medium">Domain</th>
+                      <th className="text-left py-2 pr-3 font-medium">Last heartbeat</th>
                       <th className="text-left py-2 pr-3 font-medium">Last submit</th>
                       <th className="text-left py-2 pr-3 font-medium">Outcome</th>
+                      <th className="text-left py-2 pr-3 font-medium">7d status</th>
                       <th className="text-right py-2 pr-3 font-medium">24h</th>
                       <th className="text-right py-2 font-medium">7d</th>
                     </tr>
@@ -1230,18 +1256,70 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
                         : ok
                           ? "text-emerald-300"
                           : "text-red-300";
-                      const ts = d.lastSubmitAt ? new Date(d.lastSubmitAt).toLocaleString() : "—";
+                      const submitTs = d.lastSubmitAt ? new Date(d.lastSubmitAt).toLocaleString() : "—";
+                      const hbTs = d.lastHeartbeatAt ? new Date(d.lastHeartbeatAt).toLocaleString() : "—";
+                      const buckets = d.statusBuckets7d;
+                      const Pill = ({ label, n, cls }: { label: string; n: number; cls: string }) =>
+                        n > 0 ? <span className={`inline-block px-1.5 py-0.5 rounded mr-1 text-[10px] ${cls}`}>{label} {n}</span> : null;
                       return (
-                        <tr key={d.domain} className="border-b border-white/5">
-                          <td className="py-2 pr-3 text-white/85 font-mono">{d.domain}</td>
-                          <td className="py-2 pr-3 text-muted-foreground">{ts}</td>
-                          <td className={`py-2 pr-3 ${outcomeClass}`}>
-                            {d.lastSubmitOutcome || "—"}
-                            {d.lastSubmitStatus ? <span className="text-white/40 ml-1">({d.lastSubmitStatus})</span> : null}
-                          </td>
-                          <td className="py-2 pr-3 text-right text-white/80">{d.submitCount24h.toLocaleString()}</td>
-                          <td className="py-2 text-right text-white/80">{d.submitCount7d.toLocaleString()}</td>
-                        </tr>
+                        <Fragment key={d.domain}>
+                          <tr className="border-b border-white/5 align-top">
+                            <td className="py-2 pr-3 text-white/85 font-mono">{d.domain}</td>
+                            <td className="py-2 pr-3 text-muted-foreground">{hbTs}</td>
+                            <td className="py-2 pr-3 text-muted-foreground">{submitTs}</td>
+                            <td className={`py-2 pr-3 ${outcomeClass}`}>
+                              {d.lastSubmitOutcome || "—"}
+                              {d.lastSubmitStatus ? <span className="text-white/40 ml-1">({d.lastSubmitStatus})</span> : null}
+                            </td>
+                            <td className="py-2 pr-3">
+                              <Pill label="200" n={buckets.s200} cls="bg-emerald-500/15 text-emerald-200" />
+                              <Pill label="400" n={buckets.s400} cls="bg-amber-500/15 text-amber-200" />
+                              <Pill label="404" n={buckets.s404} cls="bg-amber-500/15 text-amber-200" />
+                              <Pill label="429" n={buckets.s429} cls="bg-orange-500/15 text-orange-200" />
+                              <Pill label="500" n={buckets.s500} cls="bg-red-500/15 text-red-200" />
+                              <Pill label="other" n={buckets.other} cls="bg-white/10 text-white/70" />
+                            </td>
+                            <td className="py-2 pr-3 text-right text-white/80">{d.submitCount24h.toLocaleString()}</td>
+                            <td className="py-2 text-right text-white/80">{d.submitCount7d.toLocaleString()}</td>
+                          </tr>
+                          {d.recentAttempts.length > 0 && (
+                            <tr className="border-b border-white/10">
+                              <td colSpan={7} className="py-2 pr-3 pl-4 bg-black/20">
+                                <details>
+                                  <summary className="text-[11px] text-white/50 cursor-pointer hover:text-white/80">
+                                    Recent attempts ({d.recentAttempts.length})
+                                  </summary>
+                                  <table className="w-full mt-2 text-[11px]">
+                                    <thead className="text-white/40">
+                                      <tr>
+                                        <th className="text-left pr-2">Time</th>
+                                        <th className="text-left pr-2">Kind</th>
+                                        <th className="text-left pr-2">Status</th>
+                                        <th className="text-left pr-2">Outcome</th>
+                                        <th className="text-left pr-2">Origin</th>
+                                        <th className="text-right pr-2">Bytes</th>
+                                        <th className="text-left">Message</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {d.recentAttempts.map((a, i) => (
+                                        <tr key={i} className="text-white/70">
+                                          <td className="pr-2 py-1">{new Date(a.createdAt).toLocaleTimeString()}</td>
+                                          <td className="pr-2">{a.kind}</td>
+                                          <td className={`pr-2 ${a.httpStatus >= 400 ? "text-red-300" : "text-emerald-300"}`}>{a.httpStatus}</td>
+                                          <td className="pr-2">{a.outcome}</td>
+                                          <td className="pr-2 font-mono text-white/50 truncate max-w-[180px]">{a.origin || "—"}</td>
+                                          <td className="pr-2 text-right text-white/50">{a.contentLength ?? "—"}</td>
+                                          <td className="text-white/60 truncate max-w-[260px]">{a.message || ""}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </details>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>

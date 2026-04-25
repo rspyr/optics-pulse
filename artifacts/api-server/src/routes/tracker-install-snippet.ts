@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { getDomainHealthRollup } from "../services/tracker-audit";
 
-// client_user is intentionally excluded so we don't leak operational data.
+// Operator surfaces; client_user excluded.
 const requireOperator = requireRole("super_admin", "agency_user", "client_admin");
 
 const router: IRouter = Router();

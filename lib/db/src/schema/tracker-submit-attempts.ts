@@ -3,16 +3,9 @@ import { tenantsTable } from "./tenants";
 import { attributionEventsTable } from "./attribution-events";
 
 /**
- * Audit log of every inbound /api/collect/submit, /api/collect/heartbeat, and
- * /api/collect/diagnostics call.
- *
- * Written *before* schema validation so that even malformed payloads (e.g. the
- * silent-400 schema regression on Apr 2026 that hid Vance Heating's lead Jenna
- * Record) still appear in this table. This is the single source of truth used
- * by Verify Tracker's "submit attempts" panel and the Tracker Health view.
- *
- * Outcomes are written best-effort and never block the request lifecycle —
- * a failure to log must NEVER break ingestion.
+ * Audit log of every /api/collect/{submit,heartbeat,diagnostics} call.
+ * Written before schema validation so malformed payloads still appear.
+ * Best-effort: a logging failure must never block ingestion.
  */
 export const trackerSubmitAttemptsTable = pgTable("tracker_submit_attempts", {
   id: serial("id").primaryKey(),
