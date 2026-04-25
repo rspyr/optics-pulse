@@ -1117,6 +1117,8 @@ interface DomainHealthRow {
   lastSubmitStatus: number | null;
   lastSubmitOutcome: string | null;
   lastHeartbeatAt: string | null;
+  lastPulseVersion: string | null;
+  scriptSource: "pulse" | "unknown" | "no-tracker";
   submitCount24h: number;
   submitCount7d: number;
   statusBuckets24h: StatusBuckets;
@@ -1240,6 +1242,7 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
                   <thead className="text-[11px] uppercase tracking-wider text-white/50">
                     <tr className="border-b border-white/10">
                       <th className="text-left py-2 pr-3 font-medium">Domain</th>
+                      <th className="text-left py-2 pr-3 font-medium">Source</th>
                       <th className="text-left py-2 pr-3 font-medium">Last heartbeat</th>
                       <th className="text-left py-2 pr-3 font-medium">Last submit</th>
                       <th className="text-left py-2 pr-3 font-medium">Outcome</th>
@@ -1261,10 +1264,18 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
                       const buckets = d.statusBuckets7d;
                       const Pill = ({ label, n, cls }: { label: string; n: number; cls: string }) =>
                         n > 0 ? <span className={`inline-block px-1.5 py-0.5 rounded mr-1 text-[10px] ${cls}`}>{label} {n}</span> : null;
+                      const sourcePill = d.scriptSource === "pulse"
+                        ? { label: `pulse${d.lastPulseVersion ? ` ${d.lastPulseVersion}` : ""}`, cls: "bg-emerald-500/15 text-emerald-200", title: "Heartbeats arriving with pulse.js — install looks current." }
+                        : d.scriptSource === "unknown"
+                          ? { label: "unknown tracker", cls: "bg-amber-500/15 text-amber-200", title: "Heartbeats arriving without a pulse_version header. Likely legacy Optics tracker.js or a hand-rolled script — recommend swapping to the snippet above." }
+                          : { label: "no tracker", cls: "bg-red-500/15 text-red-200", title: "No heartbeats from this domain in the last 30 days. The snippet above is not installed (or pages aren't loading)." };
                       return (
                         <Fragment key={d.domain}>
                           <tr className="border-b border-white/5 align-top">
                             <td className="py-2 pr-3 text-white/85 font-mono">{d.domain}</td>
+                            <td className="py-2 pr-3">
+                              <span title={sourcePill.title} className={`inline-block px-1.5 py-0.5 rounded text-[10px] ${sourcePill.cls}`}>{sourcePill.label}</span>
+                            </td>
                             <td className="py-2 pr-3 text-muted-foreground">{hbTs}</td>
                             <td className="py-2 pr-3 text-muted-foreground">{submitTs}</td>
                             <td className={`py-2 pr-3 ${outcomeClass}`}>
@@ -1284,7 +1295,7 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
                           </tr>
                           {d.recentAttempts.length > 0 && (
                             <tr className="border-b border-white/10">
-                              <td colSpan={7} className="py-2 pr-3 pl-4 bg-black/20">
+                              <td colSpan={8} className="py-2 pr-3 pl-4 bg-black/20">
                                 <details>
                                   <summary className="text-[11px] text-white/50 cursor-pointer hover:text-white/80">
                                     Recent attempts ({d.recentAttempts.length})

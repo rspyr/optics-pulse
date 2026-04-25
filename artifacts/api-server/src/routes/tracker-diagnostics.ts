@@ -3,7 +3,7 @@ import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { logTrackerDiagnostic } from "../services/tracker-audit";
-import { trackerDiagnosticsLimiter } from "../middleware/rate-limit";
+import { trackerDiagnosticsHardLimiter, trackerDiagnosticsLimiter } from "../middleware/rate-limit";
 
 /**
  * Diagnostic beacon endpoint for pulse.js capture mode.
@@ -85,7 +85,7 @@ const DiagnosticEnvelope = z.object({
   }),
 }).strict();
 
-router.post("/collect/diagnostics", trackerDiagnosticsLimiter, async (req, res) => {
+router.post("/collect/diagnostics", trackerDiagnosticsHardLimiter, trackerDiagnosticsLimiter, async (req, res) => {
   const rawBody = req.body as Record<string, unknown> | undefined;
   const initialClientId = typeof rawBody?.client_id === "string" ? rawBody.client_id.trim() : null;
 

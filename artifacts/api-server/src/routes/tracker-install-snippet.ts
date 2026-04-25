@@ -178,6 +178,8 @@ router.get("/api/tracker/health-rollup", requireOperator, async (req, res) => {
       lastSubmitStatus: r.lastSubmitStatus,
       lastSubmitOutcome: r.lastSubmitOutcome,
       lastHeartbeatAt: r.lastHeartbeatAt,
+      lastPulseVersion: r.lastPulseVersion,
+      scriptSource: r.scriptSource,
       submitCount24h: r.submitCount24h,
       submitCount7d: r.submitCount7d,
       statusBuckets24h: r.statusBuckets24h,

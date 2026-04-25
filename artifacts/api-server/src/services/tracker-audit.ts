@@ -107,18 +107,6 @@ function redactPii(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
-function buildPayloadSample(body: unknown): unknown {
-  try {
-    const redacted = redactPii(body);
-    const json = JSON.stringify(redacted);
-    if (!json) return null;
-    if (json.length <= PAYLOAD_SAMPLE_MAX_BYTES) return redacted;
-    return { _truncated: true, _bytes: json.length, sample: json.slice(0, PAYLOAD_SAMPLE_MAX_BYTES) };
-  } catch {
-    return { _error: "could not serialize payload" };
-  }
-}
-
 function pickHeader(req: Request, name: string): string | null {
   const h = req.headers[name.toLowerCase()];
   if (Array.isArray(h)) return h[0] || null;
@@ -213,7 +201,9 @@ export async function logTrackerAttempt(input: TrackerAuditInput): Promise<numbe
       message: input.message ?? null,
       pulseVersion: pickHeader(input.req, "x-pulse-version"),
       attributionEventId: input.attributionEventId ?? null,
-      payloadSample: buildPayloadSample(input.body),
+      // payload_sample intentionally not persisted: audit storage is
+      // restricted to field names + counts + status/outcome metadata.
+      payloadSample: null,
     }).returning({ id: trackerSubmitAttemptsTable.id });
     return row?.id ?? null;
   } catch (err) {
@@ -240,7 +230,7 @@ export async function logTrackerDiagnostic(input: TrackerDiagnosticInput): Promi
       httpStatus: input.httpStatus,
       message: input.message ?? null,
       pulseVersion: pickHeader(input.req, "x-pulse-version"),
-      payloadSample: buildPayloadSample(input.body),
+      payloadSample: null,
     }).returning({ id: trackerSubmitAttemptsTable.id });
     return row?.id ?? null;
   } catch (err) {
@@ -319,6 +309,26 @@ export interface DomainHealthRow {
   lastSubmitOutcome: string | null;
   submitCount24h: number;
   submitCount7d: number;
+  // Per-domain script-source verdict derived from heartbeat traffic.
+  //  pulse       — heartbeats arrived with a pulse_version header
+  //  unknown     — heartbeats arrived without a pulse_version (likely
+  //                legacy Optics tracker.js or hand-rolled script)
+  //  no-tracker  — no heartbeats in 30d
+  scriptSource: "pulse" | "unknown" | "no-tracker";
+  lastPulseVersion: string | null;
+  lastHeartbeatAt: Date | null;
+  statusBuckets24h: { s200: number; s400: number; s404: number; s429: number; s500: number; other: number };
+  statusBuckets7d: { s200: number; s400: number; s404: number; s429: number; s500: number; other: number };
+  recentAttempts: Array<{
+    createdAt: string;
+    kind: string;
+    endpoint: string;
+    httpStatus: number;
+    outcome: string;
+    message: string | null;
+    origin: string | null;
+    contentLength: number | null;
+  }>;
 }
 
 export async function getDomainHealthRollup(args: {
@@ -352,7 +362,7 @@ export async function getDomainHealthRollup(args: {
       ),
       last_heartbeat AS (
         SELECT DISTINCT ON (tsa.tenant_id, tsa.domain)
-          tsa.tenant_id, tsa.domain, tsa.created_at AS hb_at
+          tsa.tenant_id, tsa.domain, tsa.created_at AS hb_at, tsa.pulse_version
         FROM tracker_submit_attempts tsa
         WHERE tsa.kind = 'heartbeat'
           AND tsa.created_at > NOW() - INTERVAL '30 days'
@@ -367,6 +377,7 @@ export async function getDomainHealthRollup(args: {
         ls.http_status AS last_submit_status,
         ls.outcome AS last_submit_outcome,
         lh.hb_at AS last_heartbeat_at,
+        lh.pulse_version AS last_pulse_version,
         (SELECT COUNT(*) FROM tracker_submit_attempts a
           WHERE a.kind = 'submit' AND a.domain = r.domain
             AND (a.tenant_id = r.tenant_id OR (a.tenant_id IS NULL AND r.tenant_id IS NULL))
@@ -427,6 +438,7 @@ export async function getDomainHealthRollup(args: {
       last_submit_status: number | null;
       last_submit_outcome: string | null;
       last_heartbeat_at: Date | null;
+      last_pulse_version: string | null;
       submit_count_24h: string | number;
       submit_count_7d: string | number;
       status_buckets_24h: Record<string, number> | null;
@@ -450,6 +462,10 @@ export async function getDomainHealthRollup(args: {
       s500: Number(b?.s500) || 0,
       other: Number(b?.other) || 0,
     });
+    const deriveScriptSource = (hbAt: Date | null, pv: string | null): "pulse" | "unknown" | "no-tracker" => {
+      if (!hbAt) return "no-tracker";
+      return pv ? "pulse" : "unknown";
+    };
     return rows.map(r => ({
       domain: r.domain,
       tenantId: r.tenant_id,
@@ -458,6 +474,8 @@ export async function getDomainHealthRollup(args: {
       lastSubmitStatus: r.last_submit_status,
       lastSubmitOutcome: r.last_submit_outcome,
       lastHeartbeatAt: r.last_heartbeat_at,
+      lastPulseVersion: r.last_pulse_version,
+      scriptSource: deriveScriptSource(r.last_heartbeat_at, r.last_pulse_version),
       submitCount24h: Number(r.submit_count_24h) || 0,
       submitCount7d: Number(r.submit_count_7d) || 0,
       statusBuckets24h: toBuckets(r.status_buckets_24h),
