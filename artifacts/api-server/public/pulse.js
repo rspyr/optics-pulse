@@ -184,7 +184,6 @@
       client_id: CONFIG.clientId || "",
       page_url: (location && location.href) || "",
       domain: (location && location.hostname) || "",
-      pulse_version: PULSE_VERSION,
       pulseVersion: PULSE_VERSION,
       diagnostics: {
         reason: reason || "interval",

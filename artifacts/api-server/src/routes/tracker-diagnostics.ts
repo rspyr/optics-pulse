@@ -64,7 +64,7 @@ const ClickObservation = z.object({
   context: z.string().max(100).nullish(),
 }).strict();
 
-const DiagnosticEnvelope = z.object({
+export const DiagnosticEnvelope = z.object({
   client_id: z.string().max(200).nullish(),
   page_url: z.string().max(2000).nullish(),
   domain: z.string().max(500).nullish(),

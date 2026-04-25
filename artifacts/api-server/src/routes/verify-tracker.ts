@@ -695,7 +695,7 @@ router.post("/verify-tracker", async (req, res) => {
 
   // per-domain install verdict (script + heartbeat + submit history)
   let installVerdict: "pulse-ok" | "wrong-tracker-installed" | "no-tracker-found" | "heartbeat-only-never-submitted" | "stale-install" = "no-tracker-found";
-  if (pageScriptKind === "optics-legacy" || pageScriptKind === "unknown-tracker") {
+  if (pageScriptKind === "optics-legacy") {
     installVerdict = "wrong-tracker-installed";
   } else if (pageScriptKind === "pulse-current" || pageScriptKind === "pulse-legacy") {
     if (breakdown7d.submitOk === 0 && heartbeats.length > 0) {
