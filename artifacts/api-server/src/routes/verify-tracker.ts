@@ -707,15 +707,9 @@ router.post("/verify-tracker", async (req, res) => {
     .orderBy(desc(trackerSubmitAttemptsTable.createdAt))
     .limit(20);
 
-  // Surface failed submits as findings. A successful heartbeat with
-  // failing submits is the EXACT pattern that broke Vance — call it out
-  // even when other signals look healthy.
-  // CRITICAL: filter on `kind` not `endpoint`. logTrackerDiagnostic writes
-  // endpoint='submit' for back-compat but kind='diagnostic' with outcome
-  // 'diagnostic_recorded' (HTTP 200). Without the kind guard those rows
-  // would be surfaced as "submit failures" because their outcome is not in
-  // the success set — flooding Verify Tracker with false red errors every
-  // time a tenant has capture mode enabled.
+  // Surface failed submits as findings. Exclude kind='diagnostic' rows
+  // (which are HTTP 200 audit beacons logged by logTrackerDiagnostic with
+  // endpoint='submit' for back-compat).
   const recentFailedSubmits = recentAttempts.filter(
     a => a.endpoint === "submit"
       && a.kind !== "diagnostic"

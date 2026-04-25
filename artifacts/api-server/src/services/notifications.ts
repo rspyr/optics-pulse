@@ -162,14 +162,8 @@ export async function checkStaleInstall() {
   let alertsCreated = 0;
 
   for (const tenant of tenants) {
-    // Heartbeat EVENT volume from this tenant in the last 7 days. We
-    // count rows in tracker_submit_attempts where kind='heartbeat' (the
-    // audit log of every individual /collect/heartbeat HTTP request),
-    // NOT rows in tracker_heartbeats — the latter is upsert-on-change
-    // (one row per (tenant, domain)), so even a tenant with thousands
-    // of pageviews per day on a single landing page would only have
-    // one row and never cross the threshold. Using the audit table
-    // gives us true traffic volume.
+    // Heartbeat EVENT count from the audit table (kind='heartbeat'); using
+    // tracker_heartbeats would undercount because it's upsert-on-change.
     const [hbRow] = await db.select({
       n: sql<number>`COUNT(*)::int`,
       sampleDomain: sql<string | null>`MIN(${trackerSubmitAttemptsTable.domain})`,
@@ -185,14 +179,8 @@ export async function checkStaleInstall() {
 
     if (heartbeatCount < STALE_INSTALL_HEARTBEAT_THRESHOLD) continue;
 
-    // Successful submit count from this tenant in the last 7 days.
-    // The current tracker-audit success outcomes are "accepted" (new
-    // lead persisted), "duplicate" (idempotent retry of an already-
-    // accepted lead), and "resubmitted" (operator-driven replay) —
-    // any of these proves the install is delivering submits, so we
-    // treat all three as "successful submits" for stale detection.
-    // Counting only outcome="ok" was the legacy (Optics) value and
-    // would mark every healthy tenant as stale.
+    // Successful submit outcomes are accepted|duplicate|resubmitted (the
+    // legacy "ok" value would mark every healthy tenant stale).
     const [submitRow] = await db.select({
       n: sql<number>`COUNT(*)::int`,
     })
