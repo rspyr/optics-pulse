@@ -177,8 +177,12 @@ router.get("/api/tracker/health-rollup", requireOperator, async (req, res) => {
       lastSubmitAt: r.lastSubmitAt,
       lastSubmitStatus: r.lastSubmitStatus,
       lastSubmitOutcome: r.lastSubmitOutcome,
+      lastHeartbeatAt: r.lastHeartbeatAt,
       submitCount24h: r.submitCount24h,
       submitCount7d: r.submitCount7d,
+      statusBuckets24h: r.statusBuckets24h,
+      statusBuckets7d: r.statusBuckets7d,
+      recentAttempts: r.recentAttempts,
     })),
   });
 });
