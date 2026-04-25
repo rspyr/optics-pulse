@@ -130,9 +130,7 @@ export async function checkStaleHeartbeats() {
   }
 }
 
-// Per-(tenant, domain) stale-install detection. A domain is "stale" when
-// it has 5+ heartbeats AND zero accepted/duplicate/resubmitted submits in
-// the trailing 7d. Domain-scoped so one healthy domain can't mask another.
+// stale = 5+ heartbeats and zero accepted/duplicate/resubmitted in trailing 7d (per tenant+domain)
 const STALE_INSTALL_COOLDOWN_MS = 15 * 60 * 1000;
 const STALE_INSTALL_HEARTBEAT_THRESHOLD = 5;
 
@@ -141,8 +139,7 @@ export async function checkStaleInstall() {
   const cooldownSince = new Date(Date.now() - STALE_INSTALL_COOLDOWN_MS);
   let alertsCreated = 0;
 
-  // Group heartbeats by (tenant_id, domain) and join successful submits +
-  // recent stale_install notification per domain in one query.
+  // group heartbeats by (tenant, domain), join successful submits + recent stale alert
   const result = await db.execute(sql`
     WITH hb AS (
       SELECT tsa.tenant_id, tsa.domain, COUNT(*)::int AS n
@@ -175,7 +172,6 @@ export async function checkStaleInstall() {
   }> }).rows ?? [];
 
   for (const c of candidates) {
-    // Per-domain cooldown — match by tenant + type + domain in title.
     const existing = await db.select({ id: notificationsTable.id })
       .from(notificationsTable)
       .where(and(

@@ -870,7 +870,7 @@ export default function Settings() {
         <IngestionModeSettings tenantId={tenantId} />
       )}
 
-      {tenantId && (
+      {!isClientUser && tenantId && (
         <TrackerHealthSettings tenantId={tenantId} />
       )}
 

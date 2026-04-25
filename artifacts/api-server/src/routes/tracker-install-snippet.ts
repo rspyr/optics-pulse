@@ -4,7 +4,6 @@ import { eq } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { getDomainHealthRollup } from "../services/tracker-audit";
 
-// Operator surfaces; client_user excluded.
 const requireOperator = requireRole("super_admin", "agency_user", "client_admin");
 
 const router: IRouter = Router();
@@ -54,7 +53,6 @@ interface SnippetVariant {
 router.get("/api/tracker/install-snippet", requireOperator, async (req, res) => {
   const sessionTenantId = req.session?.tenantId ? Number(req.session.tenantId) : null;
   const isAgency = req.session?.userRole === "agency_user" || req.session?.userRole === "super_admin";
-  // Agency users may pass ?tenantId=N to fetch any tenant's snippet.
   const requestedTenantId = (() => {
     const raw = req.query.tenantId;
     if (typeof raw === "string" && /^\d+$/.test(raw)) return Number(raw);
@@ -77,21 +75,17 @@ router.get("/api/tracker/install-snippet", requireOperator, async (req, res) => 
   }
 
   const origin = resolvePublicOrigin();
-  // Static assets are mounted under /api (app.use("/api", express.static(...))).
   const scriptUrl = `${origin}/api/pulse.js`;
   const tenantHint = TENANT_FUNNEL_HINTS[tenant.clientSlug];
   const funnelToUse = tenantHint?.funnels[0] || "default";
 
-  // Standard snippet (no funnel) — drop into <head> of every landing page.
   const standardSnippet =
     `<script async\n` +
     `  src="${scriptUrl}"\n` +
     `  data-client-id="${tenant.clientSlug}"\n` +
     `  data-tenant="${tenant.id}"></script>`;
 
-  // Per-funnel snippet — used when the tenant maintains separate landing
-  // pages per funnel and wants pulse.js to attribute submits without
-  // having to read the URL.
+  // per-funnel snippet for tenants with funnel-specific landing pages
   const funnelSnippet =
     `<script async\n` +
     `  src="${scriptUrl}"\n` +
@@ -117,8 +111,7 @@ router.get("/api/tracker/install-snippet", requireOperator, async (req, res) => 
     },
   ];
 
-  // Builder-specific guidance for the embeds we have to special-case in
-  // pulse.js because their forms live in cross-origin iframes.
+  // builder-specific guidance for cross-origin iframe embeds
   const builderGuidance: { builder: string; instructions: string }[] = [
     {
       builder: "Framer",

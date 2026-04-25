@@ -73,7 +73,7 @@
   var CLICK_ID_KEYS = ["gclid", "fbclid", "msclkid", "ttclid", "li_fat_id", "wbraid"];
   var ALL_ATTR_KEYS = UTM_KEYS.concat(CLICK_ID_KEYS);
 
-  // Debug overlay state. Activated by ?pulse_debug=1 or window.__pulseDebug = true.
+  // debug overlay: ?pulse_debug=1 or window.__pulseDebug
   var DEBUG = (function() {
     try {
       if (window.__pulseDebug === true) return true;
@@ -82,15 +82,7 @@
     } catch(e) { return false; }
   })();
 
-  // Capture mode: ?pulse_capture=1 (or window.__pulseCapture=true) enables
-  // diagnostic batching of every form found, every postMessage that crosses
-  // window.message, and every submit-button click. The batch is flushed on
-  // a 30s interval AND on pagehide via sendBeacon to /api/collect/diagnostics
-  // so an operator running Verify Tracker can see what pulse.js actually
-  // observes at runtime — including content inside iframes that the
-  // server-side static fetch cannot see. This is intentionally separate
-  // from DEBUG (which is a visible overlay): capture mode is silent and
-  // safe to share with a customer to "load the page once for diagnostics".
+  // capture mode: ?pulse_capture=1 — silent diagnostic batching to /collect/diagnostics
   var CAPTURE = (function() {
     try {
       if (window.__pulseCapture === true) return true;
@@ -114,9 +106,7 @@
         : [];
       for (var i = 0; i < inputs.length && fields.length < 50; i++) {
         var el = inputs[i];
-        // Capture only field NAMES + types — never values. Values are PII
-        // and the diagnostics endpoint redacts them anyway, but we don't
-        // even send them.
+        // names+types only, never values
         var name = el.getAttribute && (el.getAttribute("name") || el.getAttribute("id"));
         if (!name) continue;
         fields.push({ name: String(name), type: String(el.type || "text") });
@@ -130,9 +120,7 @@
       fields: fields
     });
   }
-  // Form-builder origins we recognise. Used to decide whether a postMessage
-  // is worth capturing — we don't want to record arbitrary cross-window
-  // chatter.
+  // recognised form-builder origins for postMessage capture filter
   var FORM_BUILDER_ORIGIN_RE = /(^|\.)(leadconnectorhq\.com|msgsndr\.com|ghl\.io|gohighlevel\.com|highlevel\.com|typeform\.com|hsforms\.(com|net)|hubspot\.com|framer\.com|framercanvas\.com|framerusercontent\.com|servicetitan\.com|clickfunnels\.com|myclickfunnels\.com|wufoo\.com|calendly\.com)$/i;
   var SUBMIT_TYPE_RE = /submit|form[-_]?(submit|complete|success)|lead|response|hsubmit|gform|conversion/i;
 
@@ -145,8 +133,7 @@
         messageType = String(event.data.type || event.data.event || event.data.eventName || "");
       }
     } catch(e) {}
-    // Only capture submit/form-related events from known form-builder origins.
-    // Avoids storing fragments of unrelated cross-window payloads.
+    // capture only submit-shaped messages from known builder origins
     var originHost = "";
     try { originHost = new URL(String(event.origin || "")).hostname; } catch(e) {}
     var isBuilder = originHost && FORM_BUILDER_ORIGIN_RE.test(originHost);
@@ -217,7 +204,6 @@
         xhr.send(body);
       }
     } catch(e) {}
-    // Reset buffers after flush so we don't double-send.
     captureBuf.formScans.length = 0;
     captureBuf.postMessages.length = 0;
     captureBuf.submitClicks.length = 0;
@@ -380,8 +366,7 @@
     return fields;
   }
 
-  // Walk inputs near a clicked button when there's no <form> wrapper.
-  // Looks at sibling inputs within a common container (up to 6 ancestors).
+  // walk sibling inputs (up to 6 ancestors) for buttons without a form
   function extractFieldsNearButton(button) {
     var fields = {};
     var container = button;
@@ -469,10 +454,7 @@
           body: body,
           keepalive: true
         }).then(function(resp) {
-          // Surface the HTTP status of EVERY submit response in the debug
-          // overlay — not just network failures. The April 2026 outage was
-          // a 400 returned to a successful network call; the old debug
-          // overlay treated that as silent success.
+          // surface every submit HTTP status (2xx and 4xx alike)
           if (typeof debugLog !== "undefined") {
             debugLog.lastSubmit = {
               status: resp.status,
@@ -544,8 +526,7 @@
 
   function isDuplicateSubmit(formMeta, fields) {
     var now = Date.now();
-    // Include a hash of the field keys+values so two distinct submits in the same form aren't dedup'd,
-    // but a single submit captured on multiple paths (capture-phase + bubble + framework event) is.
+    // hash of field keys+values: dedup multi-path captures, keep distinct submits
     var fieldSig = "";
     if (fields) {
       var keys = Object.keys(fields).sort();
@@ -569,7 +550,6 @@
     }
     if (!fields || Object.keys(fields).length === 0) {
       debugRecordRejected("no capturable fields", formMeta);
-      // Still send — backend may still get useful attribution context — but record rejection in debug.
     }
     var payload = buildPayload(fields, formMeta);
     debugRecordCaptured(formMeta, Object.keys(fields || {}), payload.attribution);
@@ -583,8 +563,7 @@
     boundForms.add(form);
     debugRecordBound(form, source);
 
-    // Per-form bubble-phase listener (legacy path; document-level capture-phase listener
-    // below is the primary capture surface and wins over any in-page stopPropagation).
+    // per-form bubble (legacy); document capture-phase below is primary
     form.addEventListener("submit", function() {
       captureFormSubmit(form);
     });
@@ -609,14 +588,11 @@
     handleFormSubmit(fields, meta);
   }
 
-  // Capture-phase listener at document level. This fires before any in-page bubble-phase
-  // listener has a chance to call stopPropagation. Crucial for Vite/React/Framer SPAs
-  // whose form handlers swallow submit events.
+  // doc-level capture phase: fires before in-page stopPropagation
   if (typeof document.addEventListener === "function") {
     document.addEventListener("submit", function(ev) {
       var form = ev.target;
       if (!form || form.tagName !== "FORM") return;
-      // Mark as bound so per-form bubble listener (if added later) won't double-capture.
       if (!boundForms.has(form)) {
         boundForms.add(form);
         debugRecordBound(form, "capture-phase");
@@ -625,21 +601,17 @@
     }, true /* useCapture */);
   }
 
-  // Click-time fallback for non-<form> submit buttons (React-style click-to-POST handlers
-  // that never trigger a real form submit). We delay slightly so the page's own handler
-  // gets the canonical input values first.
+  // click-time fallback for React-style click-to-POST buttons (no real form submit)
   function isSubmitLikeButton(el) {
     if (!el) return false;
     var tag = (el.tagName || "").toLowerCase();
     if (tag === "button" || (tag === "input" && (el.type === "submit" || el.type === "button"))) {
-      // Skip if the button is inside a real <form> — the submit listener will handle it.
       if (el.closest && el.closest("form")) return false;
       var label = ((el.textContent || el.value || "") + " " + (el.getAttribute("aria-label") || "")).toLowerCase();
       var matchers = ["submit", "send", "reserve", "book", "claim", "get ", "request", "schedule", "sign up", "signup", "join", "start", "yes", "continue", "next", "apply", "register", "subscribe", "contact", "quote", "estimate", "free"];
       for (var i = 0; i < matchers.length; i++) {
         if (label.indexOf(matchers[i]) !== -1) return true;
       }
-      // Buttons with type="submit" outside a form are clearly intended as submits.
       if (tag === "button" && (el.type === "submit" || !el.type)) return true;
     }
     return false;
@@ -648,8 +620,7 @@
   if (typeof document.addEventListener === "function") {
     document.addEventListener("click", function(ev) {
       var el = ev.target;
-      // Walk up a few levels in case the click target is a child element of the button
-      // (e.g. a <span> inside a <button>).
+      // walk up a few levels (click target may be child of button)
       for (var depth = 0; depth < 4 && el; depth++) {
         if (isSubmitLikeButton(el)) {
           captureSubmitClick(el, "submit-like-button");
@@ -678,7 +649,6 @@
       bindForm(forms[i], source || "document");
       captureFormScan(forms[i], source || "document");
     }
-    // Open shadow roots (closed roots are inaccessible by design).
     try {
       var all = root.querySelectorAll("*");
       for (var j = 0; j < all.length; j++) {
@@ -686,7 +656,6 @@
         if (node.shadowRoot) scanFormsInNode(node.shadowRoot, "shadow:" + describeForm(node));
       }
     } catch(e) {}
-    // Same-origin iframes only (cross-origin throws SecurityError when accessing contentDocument).
     try {
       var frames = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
       for (var k = 0; k < frames.length; k++) {
@@ -695,7 +664,6 @@
         try { doc = frame.contentDocument; } catch(e) { doc = null; }
         if (doc) {
           scanFormsInNode(doc, "iframe:" + (frame.src || frame.id || "(anon)"));
-          // Bind a load listener so dynamically loaded same-origin iframes are scanned.
           if (!frame.__pulseFrameBound) {
             frame.__pulseFrameBound = true;
             try {
@@ -750,7 +718,6 @@
     capturePostMessage(event);
     if (!event.data || typeof event.data !== "object") return;
 
-    // HubSpot embedded form
     if (event.data.type === "hsFormCallback" && event.data.eventName === "onFormSubmitted") {
       var hsData = event.data.data || {};
       var fields = {};
@@ -769,7 +736,6 @@
       return;
     }
 
-    // Typeform embed
     if (event.data.type === "form-submit") {
       handleFormSubmit({
         _typeform_response_id: event.data.responseId || null,
@@ -783,9 +749,7 @@
       return;
     }
 
-    // GoHighLevel / LeadConnector embedded form widget.
-    // GHL posts a message of shape { type: "form_submission", formId, fields } or
-    // { event: "form_submitted", payload: {...} }. Cover both observed shapes.
+    // GHL/LeadConnector: { type:"form_submission", formId, fields } or { event:"form_submitted", payload }
     if (event.data.type === "form_submission" || event.data.type === "leadconnector_form_submitted" ||
         event.data.event === "form_submitted") {
       var ghlPayload = event.data.payload || event.data.data || event.data;
@@ -922,7 +886,6 @@
     setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
   }
 
-  // ---- Debug overlay --------------------------------------------------------
   if (DEBUG) {
     var overlayEl = null;
     var setupOverlay = function() {
@@ -945,9 +908,7 @@
       html += "<div style=\"font-weight:600;color:#a3e635;margin-bottom:4px\">pulse.js debug</div>";
       html += "<div>client: <b>" + (CONFIG.clientId || "(none)") + "</b> · endpoint: " + (CONFIG.endpointUrl || "(none)") + "</div>";
       html += "<div>heartbeat: " + debugLog.heartbeat + "</div>";
-      // Last submit response — color-coded so a 4xx jumps out instead of looking
-      // like a passive log line. This is the key signal that catches silent
-      // server-side rejections (the original April 2026 outage was here).
+      // last submit (color-coded so 4xx is visible vs passive log)
       if (debugLog.lastSubmit) {
         var ls = debugLog.lastSubmit;
         var lsColor = ls.ok ? "#34d399" : "#f87171";

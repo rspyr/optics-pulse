@@ -1,12 +1,8 @@
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { logTrackerAttempt } from "../services/tracker-audit";
 
-// Tracker limiters write a `rate_limited` audit row before responding so a
-// burst of 429s is visible in Verify Tracker. Without this, traffic that
-// exceeds the limit would leave NO audit trail (the request never reaches
-// the route handler) and would be functionally indistinguishable from a
-// silent outage — exactly the failure mode this whole feature is designed
-// to surface.
+// Tracker limiters write a `rate_limited` audit row before responding so 429
+// bursts remain visible in Verify Tracker.
 export const trackerSubmitLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 60,
@@ -31,19 +27,9 @@ export const trackerSubmitLimiter = rateLimit({
   },
 });
 
-// Diagnostics beacons get TWO stacked limiters (apply hard limiter first
-// in the route chain, then the fairness limiter):
-//
-//   1. trackerDiagnosticsHardLimiter — IP-only ceiling (120/min). Hard
-//      anti-abuse cap. Cannot be bypassed by manipulating body fields
-//      because the key is purely IP-derived.
-//
-//   2. trackerDiagnosticsLimiter — composite IP + body client_id (30/min).
-//      Provides per-tenant fairness so one noisy tenant on a shared NAT
-//      can't burn another tenant's headroom. The body `client_id` is
-//      attacker-controlled, so a malicious page COULD rotate it to mint
-//      fresh fairness buckets — but the hard limiter above caps total
-//      throughput per IP regardless of how many fairness buckets exist.
+// Diagnostics beacons: stack the hard IP-only ceiling first, then the
+// composite IP+client_id fairness limiter. Hard limiter caps abuse
+// regardless of body-supplied client_id rotation.
 const diagnosticsClientId = (req: { body?: unknown }): string => {
   const rawBody = req.body as Record<string, unknown> | undefined;
   return typeof rawBody?.client_id === "string" ? rawBody.client_id.trim() : "";

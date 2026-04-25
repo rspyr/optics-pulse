@@ -233,7 +233,6 @@ export function findScriptSources(html: string): string[] {
 
 export function looksLikePulseScript(url: string, body: string): boolean {
   if (/pulse\.js|tracker\.js/i.test(url)) return true;
-  // Fingerprint our IIFE: presence of these literal strings is highly specific to pulse.js.
   return body.includes("_attr_data") && body.includes("/api/collect/submit");
 }
 
@@ -259,9 +258,7 @@ export function classifyScriptKind(args: {
   const ctRaw = (contentType || "").toLowerCase();
   const isJs = ctRaw.includes("javascript") || ctRaw.includes("ecmascript");
 
-  // Optics-legacy is determined by host/path even when the file is dead —
-  // an HTML 200 from the Optics deployment URL is STILL the same install
-  // mistake as a working Optics tracker.
+  // optics-legacy by host/path even if the file is dead
   if (/hvaclaunch-optics\.replit\.app|\btracker\.js\b/i.test(url)) {
     return "optics-legacy";
   }
@@ -269,11 +266,9 @@ export function classifyScriptKind(args: {
     if (ok && isJs && body.includes("_attr_data") && body.includes("/api/collect/submit")) {
       return "pulse-current";
     }
-    // pulse.js URL but missing fingerprint → legacy / mis-built / proxy issue.
     return "pulse-legacy";
   }
-  // Body-fingerprint match against arbitrary URLs (e.g. served via a CDN
-  // path). Treated as current if the literals are present.
+  // body-fingerprint match (handles CDN-served pulse.js)
   if (ok && isJs && body.includes("_attr_data") && body.includes("/api/collect/submit")) {
     return "pulse-current";
   }
@@ -286,7 +281,6 @@ export function classifyScriptKind(args: {
  * session tenant. Returns null if the tag could not be located.
  */
 export function extractScriptDataAttrs(html: string, scriptSrc: string): Record<string, string> | null {
-  // Find <script ... src="<scriptSrc>" ...></script> (or <script ... src='...'>).
   const escaped = scriptSrc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`<script\\b[^>]*\\bsrc\\s*=\\s*(['"])${escaped}\\1[^>]*>`, "i");
   const m = re.exec(html);
@@ -324,18 +318,10 @@ const KNOWN_FORM_BUILDERS: Array<{ builder: string; host: RegExp }> = [
 
 export interface FormInventoryItem {
   kind: "form" | "iframe";
-  // For native <form>: the 'action' attribute (or null). For iframes: the
-  // iframe src URL.
   source: string | null;
-  // For iframes: best-guess builder ("leadconnector", "framer", etc) or
-  // "unknown" if no host pattern matches.
   builder: string | null;
-  // For iframes: the iframe's host. For native forms: null.
   host: string | null;
-  // For native forms: best-effort field-name list extracted from <input
-  // name="…">. Empty for iframes (we can't see across the iframe boundary
-  // from the static fetch — that's exactly what pulse.js capture mode is
-  // for).
+  // native-form input names (empty for iframes — capture-mode covers those)
   fieldNames: string[];
 }
 
@@ -350,7 +336,6 @@ function classifyIframeBuilder(iframeHost: string | null): string {
 export function buildFormInventory(html: string, baseUrl: string): FormInventoryItem[] {
   const out: FormInventoryItem[] = [];
 
-  // Native <form>...</form> blocks (greedy across newlines, capped to 100).
   const formRe = /<form\b([^>]*)>([\s\S]*?)<\/form>/gi;
   let fm: RegExpExecArray | null;
   let formCount = 0;
@@ -370,7 +355,6 @@ export function buildFormInventory(html: string, baseUrl: string): FormInventory
     out.push({ kind: "form", source: action, builder: null, host: null, fieldNames: Array.from(names) });
   }
 
-  // <iframe src="..."> — extract every one, classify by host.
   const iframeRe = /<iframe\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1[^>]*>/gi;
   let im: RegExpExecArray | null;
   let iframeCount = 0;
@@ -434,9 +418,7 @@ export function classifyScriptResponse(args: {
 }
 
 router.post("/verify-tracker", async (req, res) => {
-  // Role gate: this endpoint can fetch arbitrary URLs and reads heartbeats. Restrict to
-  // agency/admin/super_admin and (for client_user) the user's own tenant. We never reveal
-  // tenant names outside the caller's visibility.
+  // role gate: visibility scoped to caller's tenant (client_user) or all (agency/super_admin)
   const userId = req.session?.userId;
   const role = req.session?.userRole;
   const sessionTenantId = req.session?.tenantId ? Number(req.session.tenantId) : null;
@@ -481,10 +463,8 @@ router.post("/verify-tracker", async (req, res) => {
   }
 
   const allSrcs = findScriptSources(page.body);
-  // Known tracker shapes: pulse.js, legacy tracker.js, legacy Optics deploy.
   const KNOWN_TRACKER_RE = /\bpulse\.js\b|\btracker\.js\b|hvaclaunch-optics\.replit\.app/i;
-  // Other tracker-shaped scripts. classifyScriptKind tags these as
-  // unknown-tracker (warning) unless their body fingerprints match Pulse.
+  // tracker-shaped scripts; classifyScriptKind tags as unknown-tracker unless body fingerprint matches
   const SHAPED_RE = /tracker|tracking|analytics|pixel|telemetry|beacon|gtm\.js|gtag/i;
   const knownSrcs = allSrcs.filter(s => KNOWN_TRACKER_RE.test(s));
   const shapedSrcs = allSrcs
@@ -504,8 +484,7 @@ router.post("/verify-tracker", async (req, res) => {
     error?: string;
   }> = [];
 
-  // Page-level script verdict: the kind of the BEST script tag on the page.
-  // Order of preference: pulse-current > pulse-legacy > optics-legacy > unknown-tracker > none
+  // page verdict = best of (pulse-current > pulse-legacy > optics-legacy > unknown-tracker > none)
   let pageScriptKind: ScriptKind = "none";
   function rankKind(k: ScriptKind): number {
     return k === "pulse-current" ? 4 : k === "pulse-legacy" ? 3 : k === "optics-legacy" ? 2 : k === "unknown-tracker" ? 1 : 0;
@@ -548,9 +527,7 @@ router.post("/verify-tracker", async (req, res) => {
     if (rankKind(kind) > rankKind(pageScriptKind)) pageScriptKind = kind;
   }
 
-  // Loud, banner-ready finding when the page is on the wrong tracker entirely.
-  // This is the headline error operators need to see — everything else is
-  // secondary diagnostics.
+  // banner-ready: page is on the wrong tracker entirely
   if (pageScriptKind === "optics-legacy") {
     findings.push({
       level: "error",
@@ -568,10 +545,7 @@ router.post("/verify-tracker", async (req, res) => {
     });
   }
 
-  // data-tenant / data-client-id mismatch reporting against the verifying
-  // user's session tenant. We can only check this for client_user / client_admin
-  // (whose session is bound to one tenant); agency/super_admin can verify
-  // any URL so a "mismatch" against THEIR session would be a false positive.
+  // mismatch check only for client_user/client_admin (one bound tenant)
   if (!isAgency && sessionTenantId) {
     const [sessTenant] = await db.select({ id: tenantsTable.id, clientSlug: tenantsTable.clientSlug })
       .from(tenantsTable)
@@ -598,9 +572,7 @@ router.post("/verify-tracker", async (req, res) => {
     }
   }
 
-  // Form / iframe inventory — surfaces "the page has 3 forms, 2 in GHL
-  // iframes; here's what's actually there" so an operator can see the
-  // form surface without reverse-engineering the page.
+  // form/iframe inventory for the operator
   const formInventory = page.body ? buildFormInventory(page.body, targetUrl) : [];
   if (formInventory.length === 0 && page.body && isHtml) {
     findings.push({
@@ -616,9 +588,7 @@ router.post("/verify-tracker", async (req, res) => {
     });
   }
 
-  // Heartbeat lookup: scoped to the caller's visibility.
-  // - agency/super_admin: see all tenants with a heartbeat for this hostname.
-  // - client_user/client_admin: only their own tenant's heartbeat (if any).
+  // heartbeat lookup scoped to caller visibility
   const heartbeatWhere = isAgency
     ? eq(trackerHeartbeatsTable.domain, targetHost)
     : and(
@@ -671,9 +641,7 @@ router.post("/verify-tracker", async (req, res) => {
     }
   }
 
-  // Recent submit/heartbeat audit log — same visibility rules as heartbeats.
-  // This is the trip-wire that surfaces silent 4xx/5xx rejections (the
-  // problem this whole feature was built to catch).
+  // recent submit/heartbeat audit log (caller-visibility scoped)
   const auditWhere = isAgency
     ? eq(trackerSubmitAttemptsTable.domain, targetHost)
     : and(
@@ -702,9 +670,7 @@ router.post("/verify-tracker", async (req, res) => {
     .orderBy(desc(trackerSubmitAttemptsTable.createdAt))
     .limit(20);
 
-  // Surface failed submits as findings. Exclude kind='diagnostic' rows
-  // (which are HTTP 200 audit beacons logged by logTrackerDiagnostic with
-  // endpoint='submit' for back-compat).
+  // surface failed submits (excluding diagnostic beacons)
   const recentFailedSubmits = recentAttempts.filter(
     a => a.endpoint === "submit"
       && a.kind !== "diagnostic"
@@ -720,16 +686,14 @@ router.post("/verify-tracker", async (req, res) => {
     });
   }
 
-  // 24h / 7d HTTP-status breakdowns for the hostname, scoped to the caller's
-  // visible tenant set. These power the "Tracker Health" view's status pills.
+  // 24h/7d HTTP-status breakdowns for Tracker Health pills
   const visibleTenantIds = isAgency ? undefined : (sessionTenantId ? [sessionTenantId] : []);
   const [breakdown24h, breakdown7d] = await Promise.all([
     getDomainSubmitBreakdown({ domain: targetHost, windowHours: 24, tenantIds: visibleTenantIds }),
     getDomainSubmitBreakdown({ domain: targetHost, windowHours: 24 * 7, tenantIds: visibleTenantIds }),
   ]);
 
-  // Per-domain install verdict: combines the tracker-script kind, heartbeat
-  // freshness, and submit history into a single operator-facing label.
+  // per-domain install verdict (script + heartbeat + submit history)
   let installVerdict: "pulse-ok" | "wrong-tracker-installed" | "no-tracker-found" | "heartbeat-only-never-submitted" | "stale-install" = "no-tracker-found";
   if (pageScriptKind === "optics-legacy" || pageScriptKind === "unknown-tracker") {
     installVerdict = "wrong-tracker-installed";
@@ -742,8 +706,7 @@ router.post("/verify-tracker", async (req, res) => {
       installVerdict = "pulse-ok";
     }
   } else if (heartbeats.length > 0) {
-    // No script tag found in static HTML but heartbeat exists — probably
-    // injected via GTM. Borderline state.
+    // no script tag in static HTML but heartbeat exists (probably GTM-injected)
     installVerdict = breakdown7d.submitOk > 0 ? "pulse-ok" : "heartbeat-only-never-submitted";
   }
 

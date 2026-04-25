@@ -24,14 +24,12 @@ export type TrackerOutcome =
 export type TrackerKind = "submit" | "heartbeat" | "diagnostic";
 
 export interface TrackerAuditInput {
-  // `endpoint` is the legacy field kept for back-compat — new code should pass
-  // `kind` and the audit module mirrors it into `endpoint` automatically.
+  // legacy field; mirrored from `kind` for back-compat
   endpoint: "submit" | "heartbeat";
   kind?: TrackerKind;
   req: Request;
   body: unknown;
-  // Best-effort tenant resolution at the time of logging. Fill in later
-  // via `updateAttempt` once the tenant has been resolved from client_id.
+  // best-effort; updateAttempt fills it in later if not yet known
   tenantId?: number | null;
   clientId?: string | null;
   domain?: string | null;
@@ -58,8 +56,7 @@ export interface TrackerDiagnosticInput {
 const PII_FIELD_NAME_PATTERN = /(email|e[-_ ]?mail|\bemail_?address\b|phone|\bphn\b|\btel\b|mobile|cell|fax|first.?name|last.?name|full.?name|\bfname\b|\blname\b|\bfn\b|\bln\b|\bname\b|address|addr|\baddr1\b|\baddr2\b|street|\bcity\b|\bstate\b|zip|postal|country|ssn|tax.?id|dob|birth|gender|age|\bdl\b|driver|passport|account.?number|card.?number|\bcvv\b|credit|password|secret|token)/i;
 
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-// 10–15 digits with optional separators. Not a strict E.164 — intentionally
-// loose to catch "(555) 123-4567", "555.123.4567", "+1 555 123 4567" etc.
+// loose phone regex: 10–15 digits with optional separators
 const PHONE_PATTERN = /(?:\+?\d[\s.\-()]*){10,15}/g;
 const SSN_PATTERN = /\b\d{3}-\d{2}-\d{4}\b/g;
 
@@ -68,14 +65,8 @@ function scrubValuePatterns(s: string): string {
     .replace(EMAIL_PATTERN, "<redacted-email>")
     .replace(SSN_PATTERN, "<redacted-ssn>")
     .replace(PHONE_PATTERN, (m) => {
-      // Don't mask short digit runs that happen to match (e.g. order numbers
-      // of 10+ digits with no separators are usually IDs not phone numbers,
-      // but we mask anyway since the cost of a false-mask in a diagnostic
-      // sample is ~zero compared to leaking a real phone number).
       const digits = m.replace(/\D/g, "");
       if (digits.length < 10) return m;
-      // Preserve any trailing whitespace the greedy match swallowed so the
-      // surrounding text remains readable in diagnostic output.
       const trailingWs = m.match(/\s+$/)?.[0] ?? "";
       return "<redacted-phone>" + trailingWs;
     });
@@ -85,7 +76,6 @@ function redactPii(value: unknown, depth = 0): unknown {
   if (depth > 4) return "<truncated>";
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
-    // Cap individual string length so a single ginormous field can't blow the limit.
     const capped = value.length > 500 ? value.slice(0, 500) + "…" : value;
     return scrubValuePatterns(capped);
   }
@@ -201,8 +191,7 @@ export async function logTrackerAttempt(input: TrackerAuditInput): Promise<numbe
       message: input.message ?? null,
       pulseVersion: pickHeader(input.req, "x-pulse-version"),
       attributionEventId: input.attributionEventId ?? null,
-      // payload_sample intentionally not persisted: audit storage is
-      // restricted to field names + counts + status/outcome metadata.
+      // payload_sample never persisted (field-names-only audit policy)
       payloadSample: null,
     }).returning({ id: trackerSubmitAttemptsTable.id });
     return row?.id ?? null;
@@ -239,9 +228,7 @@ export async function logTrackerDiagnostic(input: TrackerDiagnosticInput): Promi
   }
 }
 
-// ============================================================================
 // Read helpers used by Verify Tracker / Tracker Health views.
-// ============================================================================
 
 export interface DomainStatusBreakdown {
   // Counts of submit-kind rows in the window, bucketed by HTTP status range.
@@ -252,10 +239,7 @@ export interface DomainStatusBreakdown {
   total: number;
 }
 
-/**
- * Per-HTTP-status breakdown of /collect/submit attempts for a domain in a
- * time window.
- */
+/** Per-HTTP-status breakdown of /collect/submit attempts for a domain. */
 export async function getDomainSubmitBreakdown(args: {
   domain: string;
   windowHours: number;
@@ -309,11 +293,7 @@ export interface DomainHealthRow {
   lastSubmitOutcome: string | null;
   submitCount24h: number;
   submitCount7d: number;
-  // Per-domain script-source verdict derived from heartbeat traffic.
-  //  pulse       — heartbeats arrived with a pulse_version header
-  //  unknown     — heartbeats arrived without a pulse_version (likely
-  //                legacy Optics tracker.js or hand-rolled script)
-  //  no-tracker  — no heartbeats in 30d
+  // pulse=heartbeat+version, unknown=heartbeat+no-version, no-tracker=no heartbeat
   scriptSource: "pulse" | "unknown" | "no-tracker";
   lastPulseVersion: string | null;
   lastHeartbeatAt: Date | null;
@@ -341,8 +321,6 @@ export async function getDomainHealthRollup(args: {
     const tenantFilter = args.tenantIds && args.tenantIds.length > 0
       ? sql`AND tsa.tenant_id = ANY(${args.tenantIds}::int[])`
       : sql``;
-    // Status buckets: 200 (success), 400 (bad request), 404 (unknown
-    // tenant/route), 429 (rate-limited), 500 (server error), other.
     const result = await db.execute(sql`
       WITH recent AS (
         SELECT DISTINCT tsa.tenant_id, tsa.domain
