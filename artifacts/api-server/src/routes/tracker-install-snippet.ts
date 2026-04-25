@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth";
+import { getDomainHealthRollup } from "../services/tracker-audit";
 
 const router: IRouter = Router();
 
@@ -73,7 +74,11 @@ router.get("/api/tracker/install-snippet", requireAuth, async (req, res) => {
   }
 
   const origin = resolvePublicOrigin();
-  const scriptUrl = `${origin}/pulse.js`;
+  // Static assets are mounted under /api in production
+  // (app.use("/api", express.static(publicDir))), so the live pulse.js is
+  // at /api/pulse.js. Operators paste this snippet verbatim — pointing it
+  // at /pulse.js silently 404s and the tracker never loads.
+  const scriptUrl = `${origin}/api/pulse.js`;
   const tenantHint = TENANT_FUNNEL_HINTS[tenant.clientSlug];
   const funnelToUse = tenantHint?.funnels[0] || "default";
 
@@ -146,6 +151,43 @@ router.get("/api/tracker/install-snippet", requireAuth, async (req, res) => {
     funnelNote: tenantHint?.note || null,
     variants,
     builderGuidance,
+  });
+});
+
+/**
+ * GET /api/tracker/health-rollup?tenantId=N
+ *
+ * Per-tenant per-domain health rollup: every distinct (tenant, domain)
+ * pair seen in the last 30d, with last submit timestamp/status/outcome
+ * and 24h + 7d submit volume. Powers the per-tenant domain health list
+ * shown in the Settings → Tracker Health card so operators can spot
+ * which specific landing page is misbehaving without leaving Settings.
+ */
+router.get("/api/tracker/health-rollup", requireAuth, async (req, res) => {
+  const sessionTenantId = req.session?.tenantId ? Number(req.session.tenantId) : null;
+  const isAgency = req.session?.userRole === "agency_user" || req.session?.userRole === "super_admin";
+  const requestedTenantId = (() => {
+    const raw = req.query.tenantId;
+    if (typeof raw === "string" && /^\d+$/.test(raw)) return Number(raw);
+    return null;
+  })();
+  const tenantId = isAgency && requestedTenantId !== null ? requestedTenantId : sessionTenantId;
+
+  if (!tenantId) {
+    return res.status(400).json({ error: "No tenant in session and no tenantId query parameter provided." });
+  }
+
+  const rows = await getDomainHealthRollup({ tenantIds: [tenantId], limit: 50 });
+  return res.json({
+    tenantId,
+    domains: rows.map(r => ({
+      domain: r.domain,
+      lastSubmitAt: r.lastSubmitAt,
+      lastSubmitStatus: r.lastSubmitStatus,
+      lastSubmitOutcome: r.lastSubmitOutcome,
+      submitCount24h: r.submitCount24h,
+      submitCount7d: r.submitCount7d,
+    })),
   });
 });
 

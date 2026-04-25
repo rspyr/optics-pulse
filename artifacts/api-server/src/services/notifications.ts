@@ -162,22 +162,28 @@ export async function checkStaleInstall() {
   let alertsCreated = 0;
 
   for (const tenant of tenants) {
-    // Heartbeat count from this tenant in the last 7 days, regardless of
-    // domain. trackerHeartbeatsTable is upsert-on-change so each row's
-    // lastSeenAt + heartbeat counter give us the "is the page being
-    // visited" signal — we use lastSeenAt > 7d as a cheap proxy for
-    // "active in window".
-    const recentHeartbeats = await db.select({
-      lastSeenAt: trackerHeartbeatsTable.lastSeenAt,
-      domain: trackerHeartbeatsTable.domain,
+    // Heartbeat EVENT volume from this tenant in the last 7 days. We
+    // count rows in tracker_submit_attempts where kind='heartbeat' (the
+    // audit log of every individual /collect/heartbeat HTTP request),
+    // NOT rows in tracker_heartbeats — the latter is upsert-on-change
+    // (one row per (tenant, domain)), so even a tenant with thousands
+    // of pageviews per day on a single landing page would only have
+    // one row and never cross the threshold. Using the audit table
+    // gives us true traffic volume.
+    const [hbRow] = await db.select({
+      n: sql<number>`COUNT(*)::int`,
+      sampleDomain: sql<string | null>`MIN(${trackerSubmitAttemptsTable.domain})`,
     })
-      .from(trackerHeartbeatsTable)
+      .from(trackerSubmitAttemptsTable)
       .where(and(
-        eq(trackerHeartbeatsTable.tenantId, tenant.id),
-        sql`${trackerHeartbeatsTable.lastSeenAt} > ${sevenDaysAgo}`,
+        eq(trackerSubmitAttemptsTable.tenantId, tenant.id),
+        eq(trackerSubmitAttemptsTable.kind, "heartbeat"),
+        sql`${trackerSubmitAttemptsTable.createdAt} > ${sevenDaysAgo}`,
       ));
+    const heartbeatCount = hbRow?.n ?? 0;
+    const sampleDomain = hbRow?.sampleDomain ?? "(unknown)";
 
-    if (recentHeartbeats.length < STALE_INSTALL_HEARTBEAT_THRESHOLD) continue;
+    if (heartbeatCount < STALE_INSTALL_HEARTBEAT_THRESHOLD) continue;
 
     // Successful submit count from this tenant in the last 7 days.
     // The current tracker-audit success outcomes are "accepted" (new
@@ -213,16 +219,15 @@ export async function checkStaleInstall() {
       .limit(1);
     if (existingRecent.length > 0) continue;
 
-    // Sample domain to surface in the message — operators want to know
-    // WHICH page is the offender.
-    const sampleDomain = recentHeartbeats[0]?.domain || "(unknown)";
-
     await createNotification({
       tenantId: tenant.id,
       type: "stale_install",
-      severity: "error",
+      // "warning" not "error": the tracker IS loading and beaconing, the
+      // pages are live — but submits never arrive. That's a stuck-pipeline
+      // signal that warrants attention without paging an on-call.
+      severity: "warning",
       title: `Pulse install broken for ${tenant.name}`,
-      message: `pulse.js heartbeats are arriving (${recentHeartbeats.length} in the last 7 days, e.g. from ${sampleDomain}) but ZERO successful form submits. The tracker is loaded but cannot see the form — open Verify Tracker on this page to investigate.`,
+      message: `pulse.js heartbeats are arriving (${heartbeatCount} in the last 7 days, e.g. from ${sampleDomain}) but ZERO successful form submits. The tracker is loaded but cannot see the form — open Verify Tracker on this page to investigate.`,
     });
     alertsCreated++;
   }

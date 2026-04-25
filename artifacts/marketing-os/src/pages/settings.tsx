@@ -1091,8 +1091,18 @@ interface InstallSnippetResponse {
   builderGuidance: { builder: string; instructions: string }[];
 }
 
+interface DomainHealthRow {
+  domain: string;
+  lastSubmitAt: string | null;
+  lastSubmitStatus: number | null;
+  lastSubmitOutcome: string | null;
+  submitCount24h: number;
+  submitCount7d: number;
+}
+
 function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
   const [data, setData] = useState<InstallSnippetResponse | null>(null);
+  const [domains, setDomains] = useState<DomainHealthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -1100,12 +1110,24 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/api/tracker/install-snippet?tenantId=${tenantId}`, { credentials: "include" })
-      .then(async r => {
-        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
-        return r.json();
+    setDomains(null);
+    Promise.all([
+      fetch(`${API_BASE}/api/tracker/install-snippet?tenantId=${tenantId}`, { credentials: "include" })
+        .then(async r => {
+          if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+          return r.json() as Promise<InstallSnippetResponse>;
+        }),
+      fetch(`${API_BASE}/api/tracker/health-rollup?tenantId=${tenantId}`, { credentials: "include" })
+        .then(async r => {
+          if (!r.ok) return { domains: [] as DomainHealthRow[] };
+          return r.json() as Promise<{ domains: DomainHealthRow[] }>;
+        })
+        .catch(() => ({ domains: [] as DomainHealthRow[] })),
+    ])
+      .then(([snippetData, rollupData]) => {
+        setData(snippetData);
+        setDomains(rollupData.domains || []);
       })
-      .then((d: InstallSnippetResponse) => setData(d))
       .catch(e => setError(e.message || "Failed to load install snippet"))
       .finally(() => setLoading(false));
   }, [tenantId]);
@@ -1177,6 +1199,56 @@ function TrackerHealthSettings({ tenantId }: { tenantId: number }) {
               <p className="text-[11px] text-muted-foreground mt-2">{v.placement}</p>
             </div>
           ))}
+
+          <div className="border border-white/10 bg-white/[0.02] rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium text-white">Per-domain health (last 30 days)</div>
+              <div className="text-[11px] text-muted-foreground">Each landing page that has talked to pulse.js, with most recent submit + 24h/7d submit volume.</div>
+            </div>
+            {domains && domains.length === 0 && (
+              <div className="text-xs text-muted-foreground italic">
+                No tracker traffic yet for this tenant in the last 30 days. Once the snippet above is installed and a page loads, that domain will appear here.
+              </div>
+            )}
+            {domains && domains.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-[11px] uppercase tracking-wider text-white/50">
+                    <tr className="border-b border-white/10">
+                      <th className="text-left py-2 pr-3 font-medium">Domain</th>
+                      <th className="text-left py-2 pr-3 font-medium">Last submit</th>
+                      <th className="text-left py-2 pr-3 font-medium">Outcome</th>
+                      <th className="text-right py-2 pr-3 font-medium">24h</th>
+                      <th className="text-right py-2 font-medium">7d</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {domains.map(d => {
+                      const ok = d.lastSubmitOutcome === "accepted" || d.lastSubmitOutcome === "duplicate" || d.lastSubmitOutcome === "resubmitted";
+                      const outcomeClass = !d.lastSubmitOutcome
+                        ? "text-white/40"
+                        : ok
+                          ? "text-emerald-300"
+                          : "text-red-300";
+                      const ts = d.lastSubmitAt ? new Date(d.lastSubmitAt).toLocaleString() : "—";
+                      return (
+                        <tr key={d.domain} className="border-b border-white/5">
+                          <td className="py-2 pr-3 text-white/85 font-mono">{d.domain}</td>
+                          <td className="py-2 pr-3 text-muted-foreground">{ts}</td>
+                          <td className={`py-2 pr-3 ${outcomeClass}`}>
+                            {d.lastSubmitOutcome || "—"}
+                            {d.lastSubmitStatus ? <span className="text-white/40 ml-1">({d.lastSubmitStatus})</span> : null}
+                          </td>
+                          <td className="py-2 pr-3 text-right text-white/80">{d.submitCount24h.toLocaleString()}</td>
+                          <td className="py-2 text-right text-white/80">{d.submitCount7d.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           <div className="border border-white/10 bg-white/[0.02] rounded-lg p-4">
             <div className="text-sm font-medium text-white mb-2">Builder-specific install notes</div>
