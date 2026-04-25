@@ -1667,54 +1667,79 @@ components:
         submitted_at:
           type: string
           format: date-time
+          nullable: true
         page_url:
           type: string
+          nullable: true
         landing_page:
           type: string
+          nullable: true
         referrer:
           type: string
+          nullable: true
         attribution:
           type: object
+          nullable: true
           properties:
             utm_source:
               type: string
+              nullable: true
             utm_medium:
               type: string
+              nullable: true
             utm_campaign:
               type: string
+              nullable: true
             utm_term:
               type: string
+              nullable: true
             utm_content:
               type: string
+              nullable: true
             gclid:
               type: string
+              nullable: true
             fbclid:
               type: string
+              nullable: true
             msclkid:
               type: string
+              nullable: true
             ttclid:
               type: string
+              nullable: true
             li_fat_id:
               type: string
+              nullable: true
             wbraid:
               type: string
+              nullable: true
         form:
           type: object
+          nullable: true
           properties:
             id:
               type: string
+              nullable: true
             name:
               type: string
+              nullable: true
             type:
               type: string
-              enum: [native, hubspot, gravity, wpforms, typeform]
+              nullable: true
+              # Tracker integrations send a wider set of types than this list
+              # (e.g. "button-fallback", "leadconnector"). We accept any string
+              # to avoid 400-ing on new integration shapes added in pulse.js.
             action:
               type: string
+              nullable: true
         fields:
           type: object
+          nullable: true
           additionalProperties: true
         custom:
           type: object
+          nullable: true
           additionalProperties: true
       required: [client_id]
 

@@ -15,9 +15,14 @@ import { normalizeFunnel } from "../services/funnel-normalizer";
 import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
+import { logTrackerAttempt, updateTrackerAttempt } from "../services/tracker-audit";
 
+// Pulse.js sends `submitted_at` as an ISO string. The generated Zod schema
+// coerces to `Date` (and also accepts `null` since the OpenAPI spec was
+// fixed to be nullable); we override here to keep the runtime value as a
+// string + null for downstream callers that parse it themselves.
 const TrackerSubmitPayload = TrackerSubmitBody.extend({
-  submitted_at: z.string().optional(),
+  submitted_at: z.string().nullish(),
 });
 
 const router: IRouter = Router();
@@ -123,10 +128,31 @@ export function extractPiiFromFields(fields: Record<string, unknown>): { firstNa
 }
 
 router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
+  // Insert an audit row IMMEDIATELY — before any validation — so even
+  // schema-rejected payloads show up in Verify Tracker. The id is patched
+  // throughout the handler as the request is classified.
+  const rawBody = req.body as Record<string, unknown> | undefined;
+  const initialClientId = typeof rawBody?.client_id === "string" ? rawBody.client_id.trim() : null;
+  const auditId = await logTrackerAttempt({
+    endpoint: "submit",
+    req,
+    body: rawBody,
+    clientId: initialClientId,
+    outcome: "server_error", // overwritten at the right exit
+    httpStatus: 0,
+    message: "in-flight",
+  });
+
   try {
     const parsed = TrackerSubmitPayload.safeParse(req.body);
     if (!parsed.success) {
       const errors = parsed.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ");
+      console.warn("[Tracker Submit] invalid payload from", initialClientId || "(no client_id)", "—", errors);
+      await updateTrackerAttempt(auditId, {
+        outcome: "invalid_payload",
+        httpStatus: 400,
+        message: errors.slice(0, 1000),
+      });
       res.status(400).json({ success: false, message: `Invalid payload: ${errors}` });
       return;
     }
@@ -135,6 +161,11 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     const clientId = parsed.data.client_id.trim();
 
     if (!clientId) {
+      await updateTrackerAttempt(auditId, {
+        outcome: "missing_client_id",
+        httpStatus: 400,
+        message: "client_id is empty after trim",
+      });
       res.status(400).json({ success: false, message: "client_id is required" });
       return;
     }
@@ -145,6 +176,12 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       .limit(1);
 
     if (!tenant) {
+      await updateTrackerAttempt(auditId, {
+        clientId,
+        outcome: "unknown_client",
+        httpStatus: 404,
+        message: `No tenant matches client_id "${clientId}"`,
+      });
       res.status(404).json({ success: false, message: "Unknown client_id" });
       return;
     }
@@ -373,9 +410,25 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
                 .where(eq(attributionEventsTable.id, event.id));
               const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLeadId));
               if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+              await updateTrackerAttempt(auditId, {
+                tenantId,
+                clientId,
+                outcome: "resubmitted",
+                httpStatus: 200,
+                message: `Resurfaced as resubmission on lead #${dupLeadId}`,
+                attributionEventId: event.id,
+              });
               res.json({ success: true, eventId: event.id, deduplicated: true, resubmitted: true, reactivated: result.reactivated, duplicateLeadId: dupLeadId });
               return;
             }
+            await updateTrackerAttempt(auditId, {
+              tenantId,
+              clientId,
+              outcome: "duplicate",
+              httpStatus: 200,
+              message: "Duplicate of recent lead within 48h overlap window",
+              attributionEventId: event.id,
+            });
             res.json({ success: true, eventId: event.id, deduplicated: true });
             return;
           }
@@ -438,15 +491,43 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       }
     }
 
+    await updateTrackerAttempt(auditId, {
+      tenantId,
+      clientId,
+      outcome: "accepted",
+      httpStatus: 200,
+      message: null,
+      attributionEventId: event.id,
+    });
     res.json({ success: true, eventId: event.id });
   } catch (error) {
     console.error("[Tracker Submit] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to process submission";
-    res.status(400).json({ success: false, message });
+    // Server errors should be 500, not 400 — a 400 wrongly tells the
+    // browser the payload was bad, masking real bugs (this exact mistake
+    // is what hid the April 2026 outage). Keep the same response shape.
+    await updateTrackerAttempt(auditId, {
+      outcome: "server_error",
+      httpStatus: 500,
+      message: message.slice(0, 1000),
+    });
+    res.status(500).json({ success: false, message });
   }
 });
 
 router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
+  const rawBody = req.body as Record<string, unknown> | undefined;
+  const initialClientId = typeof rawBody?.clientId === "string" ? rawBody.clientId.trim() : null;
+  const auditId = await logTrackerAttempt({
+    endpoint: "heartbeat",
+    req,
+    body: rawBody,
+    clientId: initialClientId,
+    outcome: "server_error",
+    httpStatus: 0,
+    message: "in-flight",
+  });
+
   try {
     let tenantId = req.body.tenantId ? Number(req.body.tenantId) : null;
     const clientId = typeof req.body.clientId === "string" ? req.body.clientId.trim() : null;
@@ -466,6 +547,12 @@ router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
     }
 
     if (!tenantId) {
+      await updateTrackerAttempt(auditId, {
+        clientId,
+        outcome: clientId ? "unknown_client" : "missing_client_id",
+        httpStatus: 400,
+        message: clientId ? `No tenant matches client_id "${clientId}"` : "tenantId or clientId is required",
+      });
       res.status(400).json({ error: "tenantId or clientId is required" });
       return;
     }
@@ -493,8 +580,22 @@ router.post("/collect/heartbeat", trackerHeartbeatLimiter, async (req, res) => {
       });
     }
 
+    await updateTrackerAttempt(auditId, {
+      tenantId,
+      clientId,
+      outcome: "accepted",
+      httpStatus: 200,
+      message: null,
+    });
     res.json({ success: true });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to record heartbeat";
+    console.error("[Tracker Heartbeat] Error:", error);
+    await updateTrackerAttempt(auditId, {
+      outcome: "server_error",
+      httpStatus: 500,
+      message: message.slice(0, 1000),
+    });
     res.status(500).json({ error: "Failed to record heartbeat" });
   }
 });

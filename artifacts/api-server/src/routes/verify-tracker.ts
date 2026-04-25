@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { trackerHeartbeatsTable, attributionEventsTable, tenantsTable } from "@workspace/db";
+import { trackerHeartbeatsTable, attributionEventsTable, tenantsTable, trackerSubmitAttemptsTable } from "@workspace/db";
 import { and, eq, desc, gte } from "drizzle-orm";
 import { lookup as dnsLookup } from "node:dns";
 import { isIP } from "node:net";
@@ -421,6 +421,50 @@ router.post("/verify-tracker", async (req, res) => {
     }
   }
 
+  // Recent submit/heartbeat audit log — same visibility rules as heartbeats.
+  // This is the trip-wire that surfaces silent 4xx/5xx rejections (the
+  // problem this whole feature was built to catch).
+  const auditWhere = isAgency
+    ? eq(trackerSubmitAttemptsTable.domain, targetHost)
+    : and(
+        eq(trackerSubmitAttemptsTable.domain, targetHost),
+        sessionTenantId ? eq(trackerSubmitAttemptsTable.tenantId, sessionTenantId) : eq(trackerSubmitAttemptsTable.tenantId, -1),
+      );
+  const recentAttempts = await db
+    .select({
+      id: trackerSubmitAttemptsTable.id,
+      tenantId: trackerSubmitAttemptsTable.tenantId,
+      tenantName: tenantsTable.name,
+      clientId: trackerSubmitAttemptsTable.clientId,
+      endpoint: trackerSubmitAttemptsTable.endpoint,
+      pageUrl: trackerSubmitAttemptsTable.pageUrl,
+      outcome: trackerSubmitAttemptsTable.outcome,
+      httpStatus: trackerSubmitAttemptsTable.httpStatus,
+      message: trackerSubmitAttemptsTable.message,
+      pulseVersion: trackerSubmitAttemptsTable.pulseVersion,
+      attributionEventId: trackerSubmitAttemptsTable.attributionEventId,
+      createdAt: trackerSubmitAttemptsTable.createdAt,
+    })
+    .from(trackerSubmitAttemptsTable)
+    .leftJoin(tenantsTable, eq(tenantsTable.id, trackerSubmitAttemptsTable.tenantId))
+    .where(auditWhere)
+    .orderBy(desc(trackerSubmitAttemptsTable.createdAt))
+    .limit(20);
+
+  // Surface failed submits as findings. A successful heartbeat with
+  // failing submits is the EXACT pattern that broke Vance — call it out
+  // even when other signals look healthy.
+  const recentFailedSubmits = recentAttempts.filter(
+    a => a.endpoint === "submit" && a.outcome !== "accepted" && a.outcome !== "duplicate" && a.outcome !== "resubmitted",
+  );
+  if (recentFailedSubmits.length > 0) {
+    const sample = recentFailedSubmits[0];
+    findings.push({
+      level: "error",
+      message: `${recentFailedSubmits.length} recent submit attempt(s) from ${targetHost} were rejected (most recent: HTTP ${sample.httpStatus} "${sample.outcome}" — ${sample.message || "no message"}). Heartbeat status alone will NOT catch this; check the audit log below.`,
+    });
+  }
+
   const overall: "green" | "amber" | "red" =
     findings.some(f => f.level === "error") ? "red"
     : findings.some(f => f.level === "warning") ? "amber"
@@ -439,6 +483,20 @@ router.post("/verify-tracker", async (req, res) => {
       firstPageUrl: h.firstPageUrl,
     })),
     recentEventCount24h: recentEventCount,
+    recentAttempts: recentAttempts.map(a => ({
+      id: a.id,
+      tenantId: a.tenantId,
+      tenantName: a.tenantName,
+      clientId: a.clientId,
+      endpoint: a.endpoint,
+      pageUrl: a.pageUrl,
+      outcome: a.outcome,
+      httpStatus: a.httpStatus,
+      message: a.message,
+      pulseVersion: a.pulseVersion,
+      attributionEventId: a.attributionEventId,
+      createdAt: a.createdAt,
+    })),
     debugUrl: `${targetUrl}${targetUrl.includes("?") ? "&" : "?"}pulse_debug=1`,
   });
 });

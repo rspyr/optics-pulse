@@ -73,6 +73,20 @@ interface VerifyResult {
     firstPageUrl: string | null;
   }[];
   recentEventCount24h: number;
+  recentAttempts: {
+    id: number;
+    tenantId: number | null;
+    tenantName: string | null;
+    clientId: string | null;
+    endpoint: "submit" | "heartbeat";
+    pageUrl: string | null;
+    outcome: string;
+    httpStatus: number;
+    message: string | null;
+    pulseVersion: string | null;
+    attributionEventId: number | null;
+    createdAt: string;
+  }[];
   debugUrl: string;
 }
 
@@ -392,6 +406,49 @@ export default function VerifyTracker() {
                   </div>
                 ))}
                 <p className="text-xs text-muted-foreground mt-2">Form-fill events from this host in last 24h: <span className="text-white">{result.recentEventCount24h}</span></p>
+              </div>
+            )}
+          </PremiumCard>
+
+          <PremiumCard className="p-6">
+            <h4 className="text-sm font-medium text-white mb-1">Recent submit attempts</h4>
+            <p className="text-xs text-muted-foreground mb-3">
+              Every inbound /collect/submit and /collect/heartbeat from {result.host} — including ones rejected before validation.
+              This is the trip-wire for silent capture failures (heartbeat green + submit red is the textbook silent outage).
+            </p>
+            {result.recentAttempts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No attempts on record yet.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {result.recentAttempts.map((a) => {
+                  const isAccepted = a.outcome === "accepted" || a.outcome === "duplicate" || a.outcome === "resubmitted";
+                  const isInvalid = a.outcome === "invalid_payload" || a.outcome === "missing_client_id" || a.outcome === "unknown_client";
+                  const pillClass = isAccepted
+                    ? "bg-emerald-500/15 text-emerald-200 border-emerald-400/30"
+                    : isInvalid
+                      ? "bg-amber-500/15 text-amber-200 border-amber-400/30"
+                      : "bg-red-500/15 text-red-200 border-red-400/30";
+                  const statusClass = a.httpStatus >= 200 && a.httpStatus < 300
+                    ? "text-emerald-300"
+                    : a.httpStatus >= 400
+                      ? "text-red-300"
+                      : "text-muted-foreground";
+                  return (
+                    <div key={a.id} className="border border-white/10 bg-white/[0.02] rounded-md p-2.5 text-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`px-1.5 py-0.5 rounded border ${pillClass} font-medium`}>{a.outcome}</span>
+                        <span className={`font-mono ${statusClass}`}>HTTP {a.httpStatus || "—"}</span>
+                        <span className="text-white/70">{a.endpoint}</span>
+                        {a.clientId && <span className="text-muted-foreground">· {a.clientId}</span>}
+                        {a.tenantName && <span className="text-muted-foreground">· {a.tenantName}</span>}
+                        {a.pulseVersion && <span className="text-muted-foreground">· pulse v{a.pulseVersion}</span>}
+                        <span className="text-muted-foreground ml-auto">{new Date(a.createdAt).toLocaleString()}</span>
+                      </div>
+                      {a.message && <p className="text-muted-foreground mt-1 break-all"><span className="text-white/60">{a.message}</span></p>}
+                      {a.pageUrl && <p className="text-muted-foreground mt-0.5 truncate" title={a.pageUrl}>on {a.pageUrl}</p>}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </PremiumCard>

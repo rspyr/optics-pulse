@@ -18,6 +18,7 @@ export * from "./scheduled-followups";
 export * from "./coordinator-daily-stats";
 export * from "./reviews";
 export * from "./tracker-heartbeats";
+export * from "./tracker-submit-attempts";
 export * from "./scripts";
 export * from "./routing-config";
 export * from "./google-sheet-configs";

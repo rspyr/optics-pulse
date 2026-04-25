@@ -81,7 +81,7 @@
       return qs.indexOf("pulse_debug=1") !== -1;
     } catch(e) { return false; }
   })();
-  var debugLog = { bound: [], captured: [], rejected: [], heartbeat: "pending" };
+  var debugLog = { bound: [], captured: [], rejected: [], heartbeat: "pending", lastSubmit: null };
   var debugRender = function() {};
 
   function debugRecordBound(form, source) {
@@ -321,13 +321,47 @@
           body: body,
           keepalive: true
         }).then(function(resp) {
+          // Surface the HTTP status of EVERY submit response in the debug
+          // overlay — not just network failures. The April 2026 outage was
+          // a 400 returned to a successful network call; the old debug
+          // overlay treated that as silent success.
+          if (typeof debugLog !== "undefined") {
+            debugLog.lastSubmit = {
+              status: resp.status,
+              ok: resp.ok,
+              at: new Date().toISOString()
+            };
+            if (!resp.ok) {
+              try {
+                resp.clone().text().then(function(txt) {
+                  debugLog.lastSubmit.body = (txt || "").slice(0, 500);
+                  if (typeof debugRender === "function") debugRender();
+                });
+              } catch(e) {}
+              debugLog.rejected.push({
+                reason: "server returned HTTP " + resp.status,
+                at: new Date().toISOString(),
+                meta: { httpStatus: resp.status }
+              });
+            }
+            if (typeof debugRender === "function") debugRender();
+          }
           if (resp.ok) return;
           if (retries > 0) {
             sleep(RETRY_DELAY).then(function() { attempt(retries - 1); });
           } else {
             beaconOrQueue();
           }
-        }).catch(function() {
+        }).catch(function(err) {
+          if (typeof debugLog !== "undefined") {
+            debugLog.lastSubmit = {
+              status: 0,
+              ok: false,
+              error: (err && err.message) || "network error",
+              at: new Date().toISOString()
+            };
+            if (typeof debugRender === "function") debugRender();
+          }
           if (retries > 0) {
             sleep(RETRY_DELAY).then(function() { attempt(retries - 1); });
           } else {
@@ -760,6 +794,19 @@
       html += "<div style=\"font-weight:600;color:#a3e635;margin-bottom:4px\">pulse.js debug</div>";
       html += "<div>client: <b>" + (CONFIG.clientId || "(none)") + "</b> · endpoint: " + (CONFIG.endpointUrl || "(none)") + "</div>";
       html += "<div>heartbeat: " + debugLog.heartbeat + "</div>";
+      // Last submit response — color-coded so a 4xx jumps out instead of looking
+      // like a passive log line. This is the key signal that catches silent
+      // server-side rejections (the original April 2026 outage was here).
+      if (debugLog.lastSubmit) {
+        var ls = debugLog.lastSubmit;
+        var lsColor = ls.ok ? "#34d399" : "#f87171";
+        html += "<div>last submit: <b style=\"color:" + lsColor + "\">HTTP " + (ls.status || "—") + "</b>";
+        if (ls.error) html += " <span style=\"color:#f87171\">" + ls.error + "</span>";
+        if (ls.body) html += "<br><span style=\"color:#fbbf24\">" + ls.body + "</span>";
+        html += " <span style=\"color:#888\">@ " + ls.at + "</span></div>";
+      } else {
+        html += "<div>last submit: <span style=\"color:#888\">(none yet — submit a form)</span></div>";
+      }
       html += "<div style=\"margin-top:6px\"><b>Bound (" + debugLog.bound.length + ")</b></div>";
       var bn = debugLog.bound.slice(-10);
       for (var i = 0; i < bn.length; i++) html += "<div>· " + bn[i].selector + " <span style=\"color:#888\">via " + bn[i].source + "</span></div>";
