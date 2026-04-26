@@ -447,13 +447,8 @@ describe("POST /collect/submit", () => {
     });
   });
 
-  // --- Live Attribution Feed payload (Task #254) ---
-  // Operators rely on the Live Feed to diagnose unmatched form fills. The
-  // live socket emit must include the captured raw field NAMES (not values)
-  // and a one-line reason so they can map a non-semantic field name like
-  // `field_3` → `phone` without leaving the page.
-  it("includes raw field names in the live attribution emit (no values)", async () => {
-    const tenant = { id: 11, name: "Live Feed Tenant" };
+  it("emits field names (not values) on the live attribution payload", async () => {
+    const tenant = { id: 11, name: "Tenant" };
     const fakeEvent = { id: 700, tenantId: 11 };
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
@@ -473,9 +468,7 @@ describe("POST /collect/submit", () => {
     expect(calls.length).toBe(1);
     const payload = calls[0][1] as Record<string, unknown>;
 
-    // (a) field NAMES are present, exact set
     expect(payload.fieldNames).toEqual(["field_1", "field_2", "field_3", "comment"]);
-    // (c) field VALUES are NEVER present anywhere in the live payload
     const flat = JSON.stringify(payload);
     expect(flat).not.toContain("Alice O'Sullivan");
     expect(flat).not.toContain("alice@example.com");
@@ -483,8 +476,8 @@ describe("POST /collect/submit", () => {
     expect(flat).not.toContain("Urgent");
   });
 
-  it("excludes _custom keys and caps the field-name list at 30", async () => {
-    const tenant = { id: 12, name: "Cap Tenant" };
+  it("caps fieldNames at 30 and excludes underscore-prefixed keys", async () => {
+    const tenant = { id: 12, name: "Tenant" };
     const fakeEvent = { id: 701, tenantId: 12 };
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
@@ -499,24 +492,21 @@ describe("POST /collect/submit", () => {
     });
 
     const { emitNewAttributionEvent } = await import("../socket");
-    const calls = vi.mocked(emitNewAttributionEvent).mock.calls;
-    const payload = calls[0][1] as Record<string, unknown>;
+    const payload = vi.mocked(emitNewAttributionEvent).mock.calls[0][1] as Record<string, unknown>;
     const names = payload.fieldNames as string[];
     expect(names.length).toBe(30);
-    // `_custom` is a server-side wrapper key — it must not surface as a field
-    // name the operator could be tempted to map.
     expect(names.every((n) => !n.startsWith("_"))).toBe(true);
   });
 
-  it("sets unmatchedReason for unmatched form fills (no phone/email/click ID)", async () => {
-    const tenant = { id: 13, name: "Reason Tenant" };
+  it("sets unmatchedReason on unmatched events", async () => {
+    const tenant = { id: 13, name: "Tenant" };
     const fakeEvent = { id: 702, tenantId: 13 };
     mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent]];
 
     await sendRequest(app, "/collect/submit", {
       client_id: "test-client",
-      fields: { field_a: "anonymous", field_b: "data" },
+      fields: { field_a: "x", field_b: "y" },
     });
 
     const { emitNewAttributionEvent } = await import("../socket");
@@ -527,8 +517,8 @@ describe("POST /collect/submit", () => {
     );
   });
 
-  it("leaves unmatchedReason null for matched (golden) form fills", async () => {
-    const tenant = { id: 14, name: "Matched Tenant" };
+  it("leaves unmatchedReason null on matched events", async () => {
+    const tenant = { id: 14, name: "Tenant" };
     const fakeEvent = { id: 703, tenantId: 14 };
     const fakeLead = { id: 60, tenantId: 14 };
     mockDb.selectResults = [[tenant], [fakeLead]];

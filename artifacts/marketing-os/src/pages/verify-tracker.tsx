@@ -43,9 +43,6 @@ interface LiveAttributionEvent {
   utmCampaign: string | null;
   submittedAt: string;
   receivedAt: string;
-  // Added for the unmatched-fields panel: PII-safe list of raw form field
-  // names captured by pulse.js (no values), and a one-line diagnosis when
-  // the event was unmatched.
   fieldNames?: string[] | null;
   unmatchedReason?: string | null;
 }

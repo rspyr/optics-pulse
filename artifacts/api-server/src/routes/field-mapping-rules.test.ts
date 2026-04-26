@@ -96,10 +96,7 @@ describe("POST /field-mapping-rules", () => {
     await setupApp("agency_user", 42);
   });
 
-  // Acceptance (b) for Task #254: when an operator clicks "Map to phone" on a
-  // captured field name from the Live Feed, the rule must be inserted scoped
-  // to the right tenant, page-URL pattern, form identifier, and field name.
-  it("inserts a rule scoped to tenant + page + form + field when an operator saves a mapping", async () => {
+  it("inserts a rule scoped to tenant, page, form, and field", async () => {
     const res = await postJson(app, "/field-mapping-rules", {
       pageUrlPattern: "/contact",
       formIdentifier: "ac-breakdown-prevention",
@@ -118,7 +115,7 @@ describe("POST /field-mapping-rules", () => {
     });
   });
 
-  it("rejects non-manager roles (e.g. csr cannot save a mapping from the Live Feed)", async () => {
+  it("rejects non-manager roles", async () => {
     await setupApp("csr", 42);
     const res = await postJson(app, "/field-mapping-rules", {
       pageUrlPattern: "/contact",
@@ -130,12 +127,12 @@ describe("POST /field-mapping-rules", () => {
     expect(insertCalls.length).toBe(0);
   });
 
-  it("rejects unknown mapsTo targets so a typo can't poison the rule table", async () => {
+  it("rejects unknown mapsTo targets", async () => {
     const res = await postJson(app, "/field-mapping-rules", {
       pageUrlPattern: "/contact",
       formIdentifier: "form1",
       fieldName: "field_3",
-      mapsTo: "phon", // typo
+      mapsTo: "phon",
     });
     expect(res.status).toBe(400);
     expect((res.json.error as string)).toContain("mapsTo must be one of");
