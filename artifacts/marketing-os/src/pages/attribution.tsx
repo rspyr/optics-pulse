@@ -518,26 +518,7 @@ export default function Attribution() {
                     <DetailRow label="Form Type" value={selectedEvent.formType} />
                     <DetailRow label="Form ID" value={selectedEvent.formId} />
                     <DetailRow label="Form Name" value={selectedEvent.formName} />
-                    {selectedEvent.formFields && typeof selectedEvent.formFields === 'object' && (() => {
-                      const fieldEntries = Object.entries(selectedEvent.formFields as Record<string, unknown>)
-                        .filter(([key]) => !key.startsWith('_'));
-                      const count = fieldEntries.length;
-                      return (
-                        <div className="mt-3 space-y-1">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-                            Form Fields <span className="text-white/40 normal-case tracking-normal">· {count} {count === 1 ? 'field' : 'fields'} captured</span>
-                          </p>
-                          <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
-                            {fieldEntries.map(([key, value]) => (
-                              <div key={key} className="flex justify-between gap-4 text-sm">
-                                <span className="text-muted-foreground shrink-0">{key}</span>
-                                <span className="text-white text-right break-all">{formatFieldValue(value)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    <FormFieldsList formFields={selectedEvent.formFields as Record<string, unknown> | null | undefined} />
                   </DetailSection>
                 )}
 
@@ -1280,6 +1261,28 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
           </div>
         )}
       </PremiumCard>
+    </div>
+  );
+}
+
+export function FormFieldsList({ formFields }: { formFields: Record<string, unknown> | null | undefined }) {
+  if (!formFields || typeof formFields !== "object") return null;
+  const fieldEntries = Object.entries(formFields).filter(([key]) => !key.startsWith("_"));
+  const count = fieldEntries.length;
+  if (count === 0) return null;
+  return (
+    <div className="mt-3 space-y-1">
+      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+        Form Fields <span className="text-white/40 normal-case tracking-normal">· {count} {count === 1 ? "field" : "fields"} captured</span>
+      </p>
+      <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+        {fieldEntries.map(([key, value]) => (
+          <div key={key} className="flex justify-between gap-4 text-sm">
+            <span className="text-muted-foreground shrink-0">{key}</span>
+            <span className="text-white text-right break-all">{formatFieldValue(value)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

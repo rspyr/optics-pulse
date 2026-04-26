@@ -18,7 +18,7 @@ vi.mock("@/components/ui/select", () => ({
   SelectValue: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-import { InlineFieldCorrection } from "../attribution";
+import { InlineFieldCorrection, FormFieldsList } from "../attribution";
 import type { AttributionEvent } from "@workspace/api-client-react";
 
 function makeEvent(formFields: Record<string, unknown>): AttributionEvent {
@@ -85,5 +85,62 @@ describe("InlineFieldCorrection — captured value rendering", () => {
 
     expect(screen.getByText(/1 field captured/)).toBeInTheDocument();
     expect(screen.queryByText(/1 fields captured/)).not.toBeInTheDocument();
+  });
+
+  it("renders long captured values with the truncate class so the row stays single-line (full value via title tooltip)", () => {
+    const longValue = "a".repeat(500);
+    const event = makeEvent({ notes: longValue });
+    render(<InlineFieldCorrection tenantId={42} event={event} />);
+
+    const rendered = screen.getByText(longValue);
+    expect(rendered).toBeInTheDocument();
+    // Inline Field Correction value column truncates with hover tooltip showing the full value.
+    expect(rendered.className).toContain("truncate");
+    expect(rendered.getAttribute("title")).toBe(longValue);
+  });
+});
+
+describe("FormFieldsList — captured value rendering in Form Data section", () => {
+  it("renders (empty) and (no value) placeholders and shows the captured-field count", () => {
+    render(
+      <FormFieldsList formFields={{ company_url: "", first_name: "Jane", optional: null }} />
+    );
+
+    expect(screen.getByText(/3 fields captured/)).toBeInTheDocument();
+    expect(screen.getByText("(empty)")).toBeInTheDocument();
+    expect(screen.getByText("Jane")).toBeInTheDocument();
+    expect(screen.getByText("(no value)")).toBeInTheDocument();
+  });
+
+  it("renders objects/arrays as compact JSON", () => {
+    render(
+      <FormFieldsList formFields={{ meta: { utm: "google" }, tags: ["a", "b"] }} />
+    );
+
+    expect(screen.getByText(/2 fields captured/)).toBeInTheDocument();
+    expect(screen.getByText('{"utm":"google"}')).toBeInTheDocument();
+    expect(screen.getByText('["a","b"]')).toBeInTheDocument();
+  });
+
+  it("filters out _-prefixed internal keys from both the count and the rendered list", () => {
+    render(
+      <FormFieldsList formFields={{ first_name: "Jane", _custom: "hidden", _meta: { foo: 1 } }} />
+    );
+
+    expect(screen.getByText(/1 field captured/)).toBeInTheDocument();
+    expect(screen.queryByText("_custom")).not.toBeInTheDocument();
+    expect(screen.queryByText("_meta")).not.toBeInTheDocument();
+    expect(screen.getByText("first_name")).toBeInTheDocument();
+  });
+
+  it("returns null when no formFields or only _-prefixed keys are present", () => {
+    const { container: c1 } = render(<FormFieldsList formFields={null} />);
+    expect(c1.firstChild).toBeNull();
+
+    const { container: c2 } = render(<FormFieldsList formFields={undefined} />);
+    expect(c2.firstChild).toBeNull();
+
+    const { container: c3 } = render(<FormFieldsList formFields={{ _internal: "x" }} />);
+    expect(c3.firstChild).toBeNull();
   });
 });
