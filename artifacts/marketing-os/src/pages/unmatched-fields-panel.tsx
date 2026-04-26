@@ -8,6 +8,7 @@ import {
   type LearnedSuggestions,
   type MapToTarget,
 } from "@/lib/field-mapping-heuristic";
+import { formatFieldValue } from "@/lib/format-field-value";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -19,6 +20,12 @@ export interface UnmatchedFieldsPanelEvent {
   formId: string | null;
   formName: string | null;
   fieldNames?: string[] | null;
+  /** Raw captured values keyed by field name. When present, the panel renders
+   * the submitted value next to each field name so operators can see what
+   * actually came in (e.g. "company_url: (empty)") before choosing a mapping
+   * target. Optional — surfaces that don't have access to the raw form fields
+   * (e.g. live SSE feed) can omit it and the panel renders names only. */
+  fieldValues?: Record<string, unknown> | null;
   unmatchedReason?: string | null;
 }
 
@@ -735,10 +742,13 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
               <div className="space-y-1">
                 {fieldNames.map((name) => {
                   const saved = savedFields.get(name);
+                  const hasValueForName = evt.fieldValues != null && Object.prototype.hasOwnProperty.call(evt.fieldValues, name);
                   return (
                     <UnmatchedFieldRow
                       key={name}
                       name={name}
+                      capturedValue={hasValueForName ? evt.fieldValues![name] : undefined}
+                      hasCapturedValue={hasValueForName}
                       savedAs={saved?.mapsTo}
                       canUndo={saved?.ruleId != null}
                       isPreloaded={preloadedFields.has(name)}
@@ -769,6 +779,8 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
 
 function UnmatchedFieldRow({
   name,
+  capturedValue,
+  hasCapturedValue,
   savedAs,
   canUndo,
   isPreloaded,
@@ -787,6 +799,8 @@ function UnmatchedFieldRow({
   learnedSuggestions,
 }: {
   name: string;
+  capturedValue: unknown;
+  hasCapturedValue: boolean;
   savedAs: MapToTarget | undefined;
   canUndo: boolean;
   isPreloaded: boolean;
@@ -810,11 +824,14 @@ function UnmatchedFieldRow({
   );
   const showSuggestedHint = !savedAs && suggested !== null && !isTouched && selected === suggested;
   const controlsDisabled = isSaving || isUndoing || disabled;
+  const formattedValue = hasCapturedValue ? formatFieldValue(capturedValue) : null;
 
   if (savedAs && !isEditing) {
     return (
       <SavedFieldRow
         name={name}
+        capturedValue={capturedValue}
+        hasCapturedValue={hasCapturedValue}
         savedAs={savedAs}
         isPreloaded={isPreloaded}
         canUndo={canUndo}
@@ -829,13 +846,24 @@ function UnmatchedFieldRow({
 
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
-      <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
+      <div className="flex-1 min-w-0">
+        <code className="block text-[11px] text-white/80 truncate" title={name}>{name}</code>
+        {formattedValue !== null && (
+          <span
+            className="block text-[10px] text-white/45 truncate font-mono"
+            title={formattedValue}
+            data-testid={`captured-value-${name}`}
+          >
+            {formattedValue}
+          </span>
+        )}
+      </div>
       <select
         aria-label={`Map ${name} to`}
         value={selected}
         disabled={controlsDisabled}
         onChange={(e) => onSelect(name, e.target.value as MapToTarget | "")}
-        className="bg-black/40 border border-white/15 rounded text-[11px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 cursor-pointer disabled:opacity-50"
+        className="bg-black/40 border border-white/15 rounded text-[11px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 cursor-pointer disabled:opacity-50 shrink-0"
       >
         <option value="">Map to…</option>
         {MAP_TO_OPTIONS.map((opt) => (
@@ -882,6 +910,8 @@ export const UNDO_CONFIRMATION_TIMEOUT_MS = 6000;
 
 function SavedFieldRow({
   name,
+  capturedValue,
+  hasCapturedValue,
   savedAs,
   isPreloaded,
   canUndo,
@@ -892,6 +922,8 @@ function SavedFieldRow({
   onStartReMapping,
 }: {
   name: string;
+  capturedValue: unknown;
+  hasCapturedValue: boolean;
   savedAs: MapToTarget;
   isPreloaded: boolean;
   canUndo: boolean;
@@ -901,6 +933,7 @@ function SavedFieldRow({
   onUndo: (fieldName: string) => void;
   onStartReMapping: (fieldName: string) => void;
 }) {
+  const formattedValue = hasCapturedValue ? formatFieldValue(capturedValue) : null;
   // Two-step inline confirmation. The first click on Undo arms `confirming`;
   // only a second click on the (now relabeled) Undo button actually triggers
   // the DELETE. Cancel disarms it. This protects against accidental clicks
@@ -953,8 +986,19 @@ function SavedFieldRow({
 
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
-      <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
-      <span className="flex items-center gap-1 text-[11px] text-emerald-300">
+      <div className="flex-1 min-w-0">
+        <code className="block text-[11px] text-white/80 truncate" title={name}>{name}</code>
+        {formattedValue !== null && (
+          <span
+            className="block text-[10px] text-white/45 truncate font-mono"
+            title={formattedValue}
+            data-testid={`captured-value-${name}`}
+          >
+            {formattedValue}
+          </span>
+        )}
+      </div>
+      <span className="flex items-center gap-1 text-[11px] text-emerald-300 shrink-0">
         <Check className="w-3 h-3" />
         {badgeText}
       </span>

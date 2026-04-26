@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { UnmatchedFieldsPanel } from "./unmatched-fields-panel";
+import { formatFieldValue } from "@/lib/format-field-value";
 import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
@@ -394,6 +395,7 @@ export default function Attribution() {
                         formId: selectedEvent.formId ?? null,
                         formName: selectedEvent.formName ?? null,
                         fieldNames: selectedEvent.fieldNames,
+                        fieldValues: (selectedEvent.formFields ?? null) as Record<string, unknown> | null,
                         unmatchedReason: selectedEvent.unmatchedReason,
                       }}
                     />
@@ -516,19 +518,26 @@ export default function Attribution() {
                     <DetailRow label="Form Type" value={selectedEvent.formType} />
                     <DetailRow label="Form ID" value={selectedEvent.formId} />
                     <DetailRow label="Form Name" value={selectedEvent.formName} />
-                    {selectedEvent.formFields && typeof selectedEvent.formFields === 'object' && (
-                      <div className="mt-3 space-y-1">
-                        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Form Fields</p>
-                        <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
-                          {Object.entries(selectedEvent.formFields as Record<string, unknown>).map(([key, value]) => (
-                            <div key={key} className="flex justify-between gap-4 text-sm">
-                              <span className="text-muted-foreground shrink-0">{key}</span>
-                              <span className="text-white text-right break-all">{String(value ?? '')}</span>
-                            </div>
-                          ))}
+                    {selectedEvent.formFields && typeof selectedEvent.formFields === 'object' && (() => {
+                      const fieldEntries = Object.entries(selectedEvent.formFields as Record<string, unknown>)
+                        .filter(([key]) => !key.startsWith('_'));
+                      const count = fieldEntries.length;
+                      return (
+                        <div className="mt-3 space-y-1">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                            Form Fields <span className="text-white/40 normal-case tracking-normal">· {count} {count === 1 ? 'field' : 'fields'} captured</span>
+                          </p>
+                          <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+                            {fieldEntries.map(([key, value]) => (
+                              <div key={key} className="flex justify-between gap-4 text-sm">
+                                <span className="text-muted-foreground shrink-0">{key}</span>
+                                <span className="text-white text-right break-all">{formatFieldValue(value)}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </DetailSection>
                 )}
 
@@ -829,7 +838,10 @@ function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: A
 
   return (
     <DetailSection title="Inline Field Correction" icon={<Settings className="w-4 h-4" />}>
-      <p className="text-xs text-muted-foreground mb-3">Click a field to create a mapping rule for this page + form scope.</p>
+      <p className="text-xs text-muted-foreground mb-3">
+        Click a field to create a mapping rule for this page + form scope.{' '}
+        <span className="text-white/50">· {entries.length} {entries.length === 1 ? 'field' : 'fields'} captured</span>
+      </p>
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
           <p className="text-xs text-red-400">{error}</p>
@@ -864,7 +876,7 @@ function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: A
               >
                 <span className="text-xs font-mono text-muted-foreground">{fieldName}</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-white/60 truncate max-w-[150px]">{String(value)}</span>
+                  <span className="text-xs text-white/60 truncate max-w-[150px]" title={formatFieldValue(value)}>{formatFieldValue(value)}</span>
                   {saved.includes(fieldName) ? (
                     <Check className="w-3 h-3 text-emerald-400" />
                   ) : (

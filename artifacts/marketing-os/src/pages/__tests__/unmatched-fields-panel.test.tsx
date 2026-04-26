@@ -155,6 +155,130 @@ describe("deriveMappingScope", () => {
   });
 });
 
+describe("UnmatchedFieldsPanel — captured field values", () => {
+  beforeEach(() => {
+    toastMock.success.mockReset();
+    toastMock.error.mockReset();
+    vi.spyOn(global, "fetch").mockReset();
+    __resetLearnedSuggestionsCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetLearnedSuggestionsCacheForTests();
+  });
+
+  it("renders the captured value next to each field name when fieldValues is provided", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({});
+    render(
+      <UnmatchedFieldsPanel
+        evt={makeEvent({
+          fieldNames: ["company_url", "phone"],
+          fieldValues: { company_url: "https://acme.com", phone: "555-1234" },
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(screen.getByTestId("captured-value-company_url")).toHaveTextContent("https://acme.com");
+    expect(screen.getByTestId("captured-value-phone")).toHaveTextContent("555-1234");
+  });
+
+  it("renders the (empty) placeholder for an empty-string captured value (the screenshot bug)", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({});
+    render(
+      <UnmatchedFieldsPanel
+        evt={makeEvent({
+          fieldNames: ["company_url"],
+          fieldValues: { company_url: "" },
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(screen.getByTestId("captured-value-company_url")).toHaveTextContent("(empty)");
+  });
+
+  it("renders (no value) placeholders for null/undefined and compact JSON for objects/arrays", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({});
+    render(
+      <UnmatchedFieldsPanel
+        evt={makeEvent({
+          fieldNames: ["a", "b", "c", "d"],
+          fieldValues: { a: null, b: undefined, c: { nested: true }, d: ["x", "y"] },
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(screen.getByTestId("captured-value-a")).toHaveTextContent("(no value)");
+    expect(screen.getByTestId("captured-value-b")).toHaveTextContent("(no value)");
+    expect(screen.getByTestId("captured-value-c")).toHaveTextContent('{"nested":true}');
+    expect(screen.getByTestId("captured-value-d")).toHaveTextContent('["x","y"]');
+  });
+
+  it("omits the value row entirely when fieldValues is not provided (live SSE feed parity)", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({});
+    render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(screen.queryByTestId("captured-value-field_3")).not.toBeInTheDocument();
+  });
+
+  it("omits the value row for fields whose name is not present in fieldValues (partial map)", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({});
+    render(
+      <UnmatchedFieldsPanel
+        evt={makeEvent({
+          fieldNames: ["field_3", "field_4"],
+          fieldValues: { field_3: "captured" },
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(screen.getByTestId("captured-value-field_3")).toHaveTextContent("captured");
+    expect(screen.queryByTestId("captured-value-field_4")).not.toBeInTheDocument();
+  });
+
+  it("preserves the captured value display after the field is mapped (saved row)", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      onOther: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ rule: { id: 1 } }),
+      } as Response),
+    });
+
+    render(
+      <UnmatchedFieldsPanel
+        evt={makeEvent({
+          fieldNames: ["field_3"],
+          fieldValues: { field_3: "555-1234" },
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    expect(screen.getByTestId("captured-value-field_3")).toHaveTextContent("555-1234");
+
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    expect(await screen.findByText(/mapped → phone/)).toBeInTheDocument();
+
+    // The submitted value still renders next to the field name on the saved row.
+    expect(screen.getByTestId("captured-value-field_3")).toHaveTextContent("555-1234");
+  });
+});
+
 describe("UnmatchedFieldsPanel", () => {
   beforeEach(() => {
     toastMock.success.mockReset();
