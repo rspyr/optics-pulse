@@ -210,6 +210,9 @@ describe("POST /collect/submit", () => {
     mockDb.selectResults = [];
     mockDb.insertResults = [];
     mockDb.resetCounters();
+    // Clear socket-mock call history so per-test inspection of
+    // `emitNewAttributionEvent` only sees this test's call.
+    vi.clearAllMocks();
     await setupApp();
   });
 
@@ -442,5 +445,103 @@ describe("POST /collect/submit", () => {
       notes: "urgent",
       _custom: { funnel: "hvac-install" },
     });
+  });
+
+  // --- Live Attribution Feed payload (Task #254) ---
+  // Operators rely on the Live Feed to diagnose unmatched form fills. The
+  // live socket emit must include the captured raw field NAMES (not values)
+  // and a one-line reason so they can map a non-semantic field name like
+  // `field_3` → `phone` without leaving the page.
+  it("includes raw field names in the live attribution emit (no values)", async () => {
+    const tenant = { id: 11, name: "Live Feed Tenant" };
+    const fakeEvent = { id: 700, tenantId: 11 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: {
+        field_1: "Alice O'Sullivan",
+        field_2: "alice@example.com",
+        field_3: "555-1234",
+        comment: "Urgent — broken AC",
+      },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const calls = vi.mocked(emitNewAttributionEvent).mock.calls;
+    expect(calls.length).toBe(1);
+    const payload = calls[0][1] as Record<string, unknown>;
+
+    // (a) field NAMES are present, exact set
+    expect(payload.fieldNames).toEqual(["field_1", "field_2", "field_3", "comment"]);
+    // (c) field VALUES are NEVER present anywhere in the live payload
+    const flat = JSON.stringify(payload);
+    expect(flat).not.toContain("Alice O'Sullivan");
+    expect(flat).not.toContain("alice@example.com");
+    expect(flat).not.toContain("555-1234");
+    expect(flat).not.toContain("Urgent");
+  });
+
+  it("excludes _custom keys and caps the field-name list at 30", async () => {
+    const tenant = { id: 12, name: "Cap Tenant" };
+    const fakeEvent = { id: 701, tenantId: 12 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    const fields: Record<string, string> = {};
+    for (let i = 0; i < 35; i++) fields[`raw_field_${i}`] = `v${i}`;
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields,
+      custom: { funnel: "hvac" },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const calls = vi.mocked(emitNewAttributionEvent).mock.calls;
+    const payload = calls[0][1] as Record<string, unknown>;
+    const names = payload.fieldNames as string[];
+    expect(names.length).toBe(30);
+    // `_custom` is a server-side wrapper key — it must not surface as a field
+    // name the operator could be tempted to map.
+    expect(names.every((n) => !n.startsWith("_"))).toBe(true);
+  });
+
+  it("sets unmatchedReason for unmatched form fills (no phone/email/click ID)", async () => {
+    const tenant = { id: 13, name: "Reason Tenant" };
+    const fakeEvent = { id: 702, tenantId: 13 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: { field_a: "anonymous", field_b: "data" },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const payload = vi.mocked(emitNewAttributionEvent).mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.matchLevel).toBe("unmatched");
+    expect(payload.unmatchedReason).toBe(
+      "No phone or email field detected and no click ID present.",
+    );
+  });
+
+  it("leaves unmatchedReason null for matched (golden) form fills", async () => {
+    const tenant = { id: 14, name: "Matched Tenant" };
+    const fakeEvent = { id: 703, tenantId: 14 };
+    const fakeLead = { id: 60, tenantId: 14 };
+    mockDb.selectResults = [[tenant], [fakeLead]];
+    mockDb.insertResults = [[fakeEvent], [fakeLead], []];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: { phone: "555-987-6543", first_name: "Bob" },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const payload = vi.mocked(emitNewAttributionEvent).mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.matchLevel).toBe("golden");
+    expect(payload.unmatchedReason).toBeNull();
   });
 });

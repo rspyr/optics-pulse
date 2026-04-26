@@ -287,6 +287,34 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       : "unmatched" as const;
     const matchConfidence = gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0;
 
+    // PII-safe field-name list for the Live Attribution Feed. We send the raw
+    // form field NAMES only (never values) so operators can map an unrecognised
+    // field name (e.g. `field_3`) to a semantic target (phone, email, …) from
+    // the feed without leaving the page. Capped to keep the payload bounded.
+    const FIELD_NAMES_CAP = 30;
+    const liveFieldNames = Object.keys(fields)
+      .filter((k) => !k.startsWith("_"))
+      .slice(0, FIELD_NAMES_CAP);
+
+    // Build a one-line diagnosis for unmatched events explaining which signals
+    // were missing. Only populated when matchLevel === "unmatched" — matched
+    // events don't need a "why unmatched" hint.
+    let unmatchedReason: string | null = null;
+    if (matchLevel === "unmatched") {
+      const anyClickId = !!(gclid || fbclid || wbraid || msclkid || ttclid || liFatId);
+      const hasPhoneSignal = !!pii.phone;
+      const hasEmailSignal = !!pii.email;
+      if (!anyClickId && !hasPhoneSignal && !hasEmailSignal) {
+        unmatchedReason = "No phone or email field detected and no click ID present.";
+      } else if (anyClickId && !hasPhoneSignal && !hasEmailSignal) {
+        unmatchedReason = "Click ID present but no phone or email field detected.";
+      } else if (!anyClickId && (hasPhoneSignal || hasEmailSignal)) {
+        unmatchedReason = "Phone or email captured but the matcher did not produce a hashed value.";
+      } else {
+        unmatchedReason = "Pulse could not link this fill to a known job, lead, or click.";
+      }
+    }
+
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,
       eventType: "form_fill",
@@ -339,6 +367,8 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       utmCampaign,
       submittedAt: submittedAt instanceof Date ? submittedAt.toISOString() : submittedAt,
       receivedAt: new Date().toISOString(),
+      fieldNames: liveFieldNames,
+      unmatchedReason,
     });
 
     const ingestionMode = tenant.leadIngestionMode || "sheets";
