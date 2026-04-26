@@ -186,17 +186,24 @@ router.get("/attribution/events/:id", async (req, res) => {
     // — that gap is now bounded to legacy rows only.
     const formFieldsRecord = (event.formFields ?? null) as Record<string, unknown> | null;
     const fieldNames = extractFieldNamesForOperator(formFieldsRecord);
-    let unmatchedReason = event.unmatchedReason ?? null;
-    if (unmatchedReason === null && event.matchLevel === "unmatched") {
-      const piiFromStoredFields = formFieldsRecord
-        ? extractPiiFromFields(formFieldsRecord)
-        : { phone: null, email: null, firstName: null, lastName: null };
-      unmatchedReason = computeUnmatchedReason({
-        matchLevel: (event.matchLevel ?? "unmatched") as "diamond" | "golden" | "silver" | "bronze" | "unmatched",
-        hasAnyClickId: !!(event.gclid || event.fbclid || event.wbraid || event.msclkid || event.ttclid || event.liFatId),
-        hasPhoneSignal: !!piiFromStoredFields.phone || !!event.hashedPhone,
-        hasEmailSignal: !!piiFromStoredFields.email || !!event.hashedEmail,
-      });
+    // Defensive: matched events should never surface an "unmatched reason"
+    // even if a stale stored value somehow exists on the row. This keeps
+    // the response contract clean for matched rows regardless of how the
+    // column was written historically.
+    let unmatchedReason: string | null = null;
+    if (event.matchLevel === "unmatched") {
+      unmatchedReason = event.unmatchedReason ?? null;
+      if (unmatchedReason === null) {
+        const piiFromStoredFields = formFieldsRecord
+          ? extractPiiFromFields(formFieldsRecord)
+          : { phone: null, email: null, firstName: null, lastName: null };
+        unmatchedReason = computeUnmatchedReason({
+          matchLevel: "unmatched",
+          hasAnyClickId: !!(event.gclid || event.fbclid || event.wbraid || event.msclkid || event.ttclid || event.liFatId),
+          hasPhoneSignal: !!piiFromStoredFields.phone || !!event.hashedPhone,
+          hasEmailSignal: !!piiFromStoredFields.email || !!event.hashedEmail,
+        });
+      }
     }
 
     res.json({
