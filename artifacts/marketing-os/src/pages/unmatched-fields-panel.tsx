@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, Undo2 } from "lucide-react";
 import {
   MAP_TO_OPTIONS,
   normalizeFieldName,
@@ -107,6 +107,16 @@ function recordLearnedSuggestion(tenantId: number, fieldName: string, mapsTo: Ma
   notifyLearnedSubscribers(tenantId);
 }
 
+// After a rule is deleted the per-tenant aggregate suggestion may have changed
+// (e.g. another rule for the same normalized field now wins, or there are no
+// rules left at all). Drop the cache and refetch so all subscribed panels see
+// the new authoritative answer.
+function invalidateLearnedSuggestions(tenantId: number) {
+  learnedSuggestionsByTenant.delete(tenantId);
+  notifyLearnedSubscribers(tenantId);
+  void fetchLearnedSuggestions(tenantId);
+}
+
 function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): LearnedSuggestions {
   const [, setVersion] = useState(0);
 
@@ -136,10 +146,13 @@ function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): Learne
   return learnedSuggestionsByTenant.get(tenantId) ?? new Map();
 }
 
+type SavedEntry = { mapsTo: MapToTarget; ruleId: number | null };
+
 export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }) {
   const [expanded, setExpanded] = useState(false);
   const [savingField, setSavingField] = useState<string | null>(null);
-  const [savedFields, setSavedFields] = useState<Map<string, MapToTarget>>(new Map());
+  const [savedFields, setSavedFields] = useState<Map<string, SavedEntry>>(new Map());
+  const [undoingField, setUndoingField] = useState<string | null>(null);
   const [selectionOverrides, setSelectionOverrides] = useState<Map<string, MapToTarget | "">>(new Map());
   const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
@@ -194,9 +207,11 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         const d = await res.json().catch(() => ({} as { error?: string }));
         return { ok: false, errorMsg: d.error || `Failed to save mapping (HTTP ${res.status})` };
       }
+      const data = (await res.json().catch(() => ({}))) as { rule?: { id?: number } };
+      const ruleId = typeof data.rule?.id === "number" ? data.rule.id : null;
       setSavedFields((prev) => {
         const next = new Map(prev);
-        next.set(fieldName, mapsTo);
+        next.set(fieldName, { mapsTo, ruleId });
         return next;
       });
       recordLearnedSuggestion(evt.tenantId, fieldName, mapsTo);
@@ -214,6 +229,41 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       toast.success(`Mapped "${fieldName}" → ${mapsTo}. Applies to future fills of this form only.`);
     } else if (result.errorMsg) {
       toast.error(result.errorMsg);
+    }
+  };
+
+  const undoMapping = async (fieldName: string) => {
+    const entry = savedFields.get(fieldName);
+    if (!entry) return;
+    if (entry.ruleId == null) {
+      toast.error("Can't undo this mapping — the rule ID was not returned when it was saved. Refresh and try again.");
+      return;
+    }
+    setUndoingField(fieldName);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/field-mapping-rules/${entry.ruleId}?tenantId=${evt.tenantId}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({} as { error?: string }));
+        toast.error(d.error || `Failed to undo mapping (HTTP ${res.status})`);
+        return;
+      }
+      // Drop the field from the local saved set so the row reverts to the
+      // editable Map-to state, and refresh the per-tenant learned cache so
+      // sibling panels stop pre-selecting the now-deleted target.
+      setSavedFields((prev) => {
+        const next = new Map(prev);
+        next.delete(fieldName);
+        return next;
+      });
+      invalidateLearnedSuggestions(evt.tenantId);
+      toast.success(`Removed mapping for "${fieldName}". The field is editable again.`);
+    } catch {
+      toast.error("Network error removing mapping rule.");
+    } finally {
+      setUndoingField(null);
     }
   };
 
@@ -304,21 +354,27 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                 </div>
               )}
               <div className="space-y-1">
-                {fieldNames.map((name) => (
-                  <UnmatchedFieldRow
-                    key={name}
-                    name={name}
-                    savedAs={savedFields.get(name)}
-                    isSaving={savingField === name}
-                    selected={getSelection(name)}
-                    suggested={suggestions.get(name) ?? null}
-                    isTouched={touchedFields.has(name)}
-                    disabled={bulkInProgress}
-                    onSelect={handleSelect}
-                    onSave={saveMapping}
-                    learnedSuggestions={learnedSuggestions}
-                  />
-                ))}
+                {fieldNames.map((name) => {
+                  const saved = savedFields.get(name);
+                  return (
+                    <UnmatchedFieldRow
+                      key={name}
+                      name={name}
+                      savedAs={saved?.mapsTo}
+                      canUndo={saved?.ruleId != null}
+                      isSaving={savingField === name}
+                      isUndoing={undoingField === name}
+                      selected={getSelection(name)}
+                      suggested={suggestions.get(name) ?? null}
+                      isTouched={touchedFields.has(name)}
+                      disabled={bulkInProgress}
+                      onSelect={handleSelect}
+                      onSave={saveMapping}
+                      onUndo={undoMapping}
+                      learnedSuggestions={learnedSuggestions}
+                    />
+                  );
+                })}
               </div>
             </>
           )}
@@ -331,24 +387,30 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
 function UnmatchedFieldRow({
   name,
   savedAs,
+  canUndo,
   isSaving,
+  isUndoing,
   selected,
   suggested,
   isTouched,
   disabled,
   onSelect,
   onSave,
+  onUndo,
   learnedSuggestions,
 }: {
   name: string;
   savedAs: MapToTarget | undefined;
+  canUndo: boolean;
   isSaving: boolean;
+  isUndoing: boolean;
   selected: MapToTarget | "";
   suggested: MapToTarget | null;
   isTouched: boolean;
   disabled: boolean;
   onSelect: (name: string, value: MapToTarget | "") => void;
   onSave: (fieldName: string, target: MapToTarget) => void;
+  onUndo: (fieldName: string) => void;
   learnedSuggestions: LearnedSuggestions;
 }) {
   const isLearnedSuggestion = useMemo(
@@ -366,6 +428,17 @@ function UnmatchedFieldRow({
           <Check className="w-3 h-3" />
           mapped → {savedAs}
         </span>
+        <button
+          type="button"
+          aria-label={`Undo mapping for ${name}`}
+          disabled={!canUndo || isUndoing || disabled}
+          onClick={() => onUndo(name)}
+          title={canUndo ? "Delete this saved mapping and edit it again" : "Can't undo — rule ID unavailable"}
+          className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-white/20 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Undo2 className="w-3 h-3" />
+          {isUndoing ? "Undoing…" : "Undo"}
+        </button>
       </div>
     );
   }

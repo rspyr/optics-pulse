@@ -420,6 +420,151 @@ describe("UnmatchedFieldsPanel", () => {
     expect(await screen.findByText("learned")).toBeInTheDocument();
   });
 
+  it("saved row exposes an Undo button and DELETEs the rule by id, returning the row to editable state", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST" && /\/api\/field-mapping-rules\?tenantId=/.test(url)) {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 777 } }) } as Response;
+      }
+      if (method === "DELETE" && /\/api\/field-mapping-rules\/777/.test(url)) {
+        return { ok: true, status: 200, json: async () => ({ success: true }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    expect(await screen.findByText(/mapped → phone/)).toBeInTheDocument();
+
+    // Undo button is present on the saved row.
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    expect(undoBtn).toBeInTheDocument();
+    await user.click(undoBtn);
+
+    // A DELETE for rule id 777 was issued, with tenantId in the query string.
+    await waitFor(() => {
+      const deleteCalls = fetchMock.mock.calls.filter(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        return (init?.method || "").toUpperCase() === "DELETE" && url.includes("/api/field-mapping-rules/777");
+      });
+      expect(deleteCalls.length).toBe(1);
+      const [calledUrl, calledInit] = deleteCalls[0];
+      expect(calledUrl).toMatch(/\/api\/field-mapping-rules\/777\?tenantId=42$/);
+      expect(calledInit?.credentials).toBe("include");
+    });
+
+    // Row reverts to the editable Map-to state and the saved indicator is gone.
+    await waitFor(() => {
+      expect(screen.queryByText(/mapped → phone/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+    expect(toastMock.success).toHaveBeenLastCalledWith(expect.stringMatching(/Removed mapping for "field_3"/));
+  });
+
+  it("undo failure (HTTP 4xx) shows error toast and keeps the row in saved state", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 12 } }) } as Response;
+      }
+      if (method === "DELETE") {
+        return { ok: false, status: 404, json: async () => ({ error: "Rule not found" }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    await user.click(screen.getByRole("button", { name: "Undo mapping for field_3" }));
+
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith("Rule not found");
+    });
+    // Row stays in saved state because the delete failed.
+    expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
+  });
+
+  it("works for rows saved via 'Save all suggested': each saved row exposes its own Undo", async () => {
+    const user = userEvent.setup();
+    let nextRuleId = 100;
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: { field_3: "phone", field_4: "email" } }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: nextRuleId++ } }) } as Response;
+      }
+      if (method === "DELETE") {
+        return { ok: true, status: 200, json: async () => ({ success: true }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    // Wait for both fields to be pre-selected from learned suggestions, then bulk-save.
+    await waitFor(() => {
+      const sel3 = screen.getByRole("combobox", { name: "Map field_3 to" }) as HTMLSelectElement;
+      const sel4 = screen.getByRole("combobox", { name: "Map field_4 to" }) as HTMLSelectElement;
+      expect(sel3.value).toBe("phone");
+      expect(sel4.value).toBe("email");
+    });
+    await user.click(screen.getByRole("button", { name: /Save all suggested/ }));
+
+    // Both rows are now saved.
+    await waitFor(() => {
+      expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
+      expect(screen.getByText(/mapped → email/)).toBeInTheDocument();
+    });
+
+    // Each saved row exposes its own Undo button.
+    const undo3 = screen.getByRole("button", { name: "Undo mapping for field_3" });
+    const undo4 = screen.getByRole("button", { name: "Undo mapping for field_4" });
+    expect(undo3).toBeInTheDocument();
+    expect(undo4).toBeInTheDocument();
+
+    // Undo just field_3 — field_4 stays saved.
+    await user.click(undo3);
+    await waitFor(() => {
+      expect(screen.queryByText(/mapped → phone/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/mapped → email/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+
+    // The DELETE was sent for the rule id assigned to field_3 (the first POST: 100).
+    const deleteCalls = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      return (init?.method || "").toUpperCase() === "DELETE" && /\/api\/field-mapping-rules\/100/.test(url);
+    });
+    expect(deleteCalls.length).toBe(1);
+  });
+
   it("silently tolerates a failing tenant-suggestions fetch (still falls back to the static heuristic)", async () => {
     const user = userEvent.setup();
     // Fail the suggestions endpoint AND any other call.
