@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Check, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, Undo2, X } from "lucide-react";
 import {
   MAP_TO_OPTIONS,
   normalizeFieldName,
@@ -422,24 +422,14 @@ function UnmatchedFieldRow({
 
   if (savedAs) {
     return (
-      <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
-        <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
-        <span className="flex items-center gap-1 text-[11px] text-emerald-300">
-          <Check className="w-3 h-3" />
-          mapped → {savedAs}
-        </span>
-        <button
-          type="button"
-          aria-label={`Undo mapping for ${name}`}
-          disabled={!canUndo || isUndoing || disabled}
-          onClick={() => onUndo(name)}
-          title={canUndo ? "Delete this saved mapping and edit it again" : "Can't undo — rule ID unavailable"}
-          className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-white/20 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Undo2 className="w-3 h-3" />
-          {isUndoing ? "Undoing…" : "Undo"}
-        </button>
-      </div>
+      <SavedFieldRow
+        name={name}
+        savedAs={savedAs}
+        canUndo={canUndo}
+        isUndoing={isUndoing}
+        disabled={disabled}
+        onUndo={onUndo}
+      />
     );
   }
 
@@ -474,6 +464,92 @@ function UnmatchedFieldRow({
           className="text-[11px] px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
         >
           {isSaving ? "Saving…" : "Save"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SavedFieldRow({
+  name,
+  savedAs,
+  canUndo,
+  isUndoing,
+  disabled,
+  onUndo,
+}: {
+  name: string;
+  savedAs: MapToTarget;
+  canUndo: boolean;
+  isUndoing: boolean;
+  disabled: boolean;
+  onUndo: (fieldName: string) => void;
+}) {
+  // Two-step inline confirmation. The first click on Undo arms `confirming`;
+  // only a second click on the (now relabeled) Undo button actually triggers
+  // the DELETE. Cancel disarms it. This protects against accidental clicks
+  // when several Undo buttons sit next to each other (e.g. after
+  // "Save all suggested" lands several mappings in adjacent rows).
+  const [confirming, setConfirming] = useState(false);
+
+  const handleUndoClick = () => {
+    if (!canUndo || isUndoing || disabled) return;
+    if (confirming) {
+      setConfirming(false);
+      onUndo(name);
+    } else {
+      setConfirming(true);
+    }
+  };
+
+  const handleCancel = () => {
+    setConfirming(false);
+  };
+
+  const undoLabel = isUndoing
+    ? "Undoing…"
+    : confirming
+      ? "Click again to confirm"
+      : "Undo";
+  const undoTitle = !canUndo
+    ? "Can't undo — rule ID unavailable"
+    : confirming
+      ? "Click again to permanently delete this saved mapping"
+      : "Delete this saved mapping and edit it again";
+  const undoClassName = confirming
+    ? "flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-amber-400/60 text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+    : "flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-white/20 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed";
+
+  return (
+    <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
+      <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
+      <span className="flex items-center gap-1 text-[11px] text-emerald-300">
+        <Check className="w-3 h-3" />
+        mapped → {savedAs}
+      </span>
+      <button
+        type="button"
+        aria-label={`Undo mapping for ${name}`}
+        aria-pressed={confirming}
+        disabled={!canUndo || isUndoing || disabled}
+        onClick={handleUndoClick}
+        title={undoTitle}
+        className={undoClassName}
+      >
+        <Undo2 className="w-3 h-3" />
+        {undoLabel}
+      </button>
+      {confirming && !isUndoing && (
+        <button
+          type="button"
+          aria-label={`Cancel undo for ${name}`}
+          disabled={disabled}
+          onClick={handleCancel}
+          title="Keep this saved mapping"
+          className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-white/20 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <X className="w-3 h-3" />
+          Cancel
         </button>
       )}
     </div>
