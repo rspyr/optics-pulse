@@ -1245,4 +1245,220 @@ describe("UnmatchedFieldsPanel", () => {
     });
     expect(toggle).toHaveTextContent("2 fields captured");
   });
+
+  // ---------------------------------------------------------------
+  // Shared scope-rules cache (Task #271): many panels for the same
+  // (tenantId, pageUrlPattern, formIdentifier) scope share one fetch
+  // and reflect each other's saves without an extra network call.
+  // ---------------------------------------------------------------
+
+  it("two panels with the same scope share a single rules-fetch on expand", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    const evt = makeEvent({ fieldNames: ["field_3", "field_4"] });
+    render(
+      <>
+        <UnmatchedFieldsPanel evt={evt} />
+        <UnmatchedFieldsPanel evt={evt} />
+      </>,
+    );
+
+    const toggles = screen.getAllByRole("button", { name: /Why unmatched\?/ });
+    expect(toggles).toHaveLength(2);
+    await user.click(toggles[0]);
+    await user.click(toggles[1]);
+
+    // Both panels should preload the same rule from the shared cache.
+    await waitFor(() => {
+      expect(screen.getAllByText(/already mapped → phone/)).toHaveLength(2);
+    });
+
+    // Exactly ONE rules GET should have been issued for the shared scope —
+    // the second panel must hit the cache instead of refetching.
+    const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET"
+        && url.includes("/api/field-mapping-rules")
+        && !url.includes("/suggestions")
+        && url.includes("pageUrlPattern=");
+    });
+    expect(ruleGets.length).toBe(1);
+  });
+
+  it("a save in one panel updates the shared cache; the sibling panel reflects the new rule without an extra fetch", async () => {
+    const user = userEvent.setup();
+    let nextRuleId = 800;
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        // Both panels share this scope — there should only ever be one such GET.
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+      }
+      if (method === "POST" && /\/api\/field-mapping-rules\?tenantId=/.test(url)) {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: nextRuleId++ } }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+
+    const evt = makeEvent({ fieldNames: ["field_3"] });
+    render(
+      <>
+        <UnmatchedFieldsPanel evt={evt} />
+        <UnmatchedFieldsPanel evt={evt} />
+      </>,
+    );
+
+    const toggles = screen.getAllByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggles[0]);
+    await user.click(toggles[1]);
+
+    // Both panels start out with editable Map-to dropdowns (no preloaded rules).
+    await waitFor(() => {
+      expect(screen.getAllByRole("combobox", { name: "Map field_3 to" })).toHaveLength(2);
+    });
+
+    // Panel A saves field_3 → phone.
+    const selects = screen.getAllByRole("combobox", { name: "Map field_3 to" });
+    await user.selectOptions(selects[0], "phone");
+    await user.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+
+    // After the save, the cache update notifies the sibling panel:
+    // - Panel A (the saver) shows "mapped → phone" (in-session).
+    // - Panel B (the sibling) shows "already mapped → phone" (preloaded from cache).
+    await waitFor(() => {
+      expect(screen.getByText(/already mapped → phone/)).toBeInTheDocument();
+    });
+    // Distinguish "mapped → phone" (panel A) from "already mapped → phone" (panel B):
+    // both badges should be present, exactly one each.
+    const allMappedBadges = screen.getAllByText(/mapped → phone/);
+    expect(allMappedBadges).toHaveLength(2);
+    const newlyMapped = allMappedBadges.filter((el) => !/already mapped/.test(el.textContent || ""));
+    expect(newlyMapped).toHaveLength(1);
+
+    // No additional rules-fetch was issued — the sibling reflected the update via the cache subscriber.
+    const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET"
+        && url.includes("/api/field-mapping-rules")
+        && !url.includes("/suggestions")
+        && url.includes("pageUrlPattern=");
+    });
+    expect(ruleGets.length).toBe(1);
+  });
+
+  it("a save that happens while a same-scope rules-fetch is still in flight survives the fetch's completion", async () => {
+    const user = userEvent.setup();
+    let releaseRulesGet: (() => void) | null = null;
+    let nextRuleId = 900;
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        // Hold the rules-fetch open until the test releases it. This lets us
+        // sandwich a successful POST between fetch start and fetch resolve.
+        await new Promise<void>((resolve) => { releaseRulesGet = resolve; });
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+      }
+      if (method === "POST" && /\/api\/field-mapping-rules\?tenantId=/.test(url)) {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: nextRuleId++ } }) } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+
+    const evt = makeEvent({ fieldNames: ["field_3"] });
+    render(
+      <>
+        <UnmatchedFieldsPanel evt={evt} />
+        <UnmatchedFieldsPanel evt={evt} />
+      </>,
+    );
+
+    const toggles = screen.getAllByRole("button", { name: /Why unmatched\?/ });
+    // Panel A starts the rules fetch (which blocks until releaseRulesGet runs).
+    await user.click(toggles[0]);
+    // Panel B joins the inflight fetch — does not issue its own.
+    await user.click(toggles[1]);
+
+    // Both panels render their editable rows even while rules are loading.
+    await waitFor(() => {
+      expect(screen.getAllByRole("combobox", { name: "Map field_3 to" })).toHaveLength(2);
+    });
+
+    // While the GET is still pending, save in Panel A.
+    const selects = screen.getAllByRole("combobox", { name: "Map field_3 to" });
+    await user.selectOptions(selects[0], "phone");
+    await user.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);
+
+    // Panel A should already show "mapped → phone" before the GET resolves.
+    await waitFor(() => {
+      expect(screen.getByText(/^mapped → phone$/)).toBeInTheDocument();
+    });
+
+    // Now release the GET — it returns an empty rules list. The fetch
+    // completion must NOT clobber Panel A's freshly saved mapping; instead
+    // it should merge the local write into the result, so:
+    // - Panel A keeps "mapped → phone".
+    // - Panel B picks up the new rule as "already mapped → phone".
+    expect(releaseRulesGet).not.toBeNull();
+    releaseRulesGet?.();
+
+    await waitFor(() => {
+      expect(screen.getByText(/already mapped → phone/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/^mapped → phone$/)).toBeInTheDocument();
+
+    // Still only one rules GET — sibling panel B never fetched on its own.
+    const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET"
+        && url.includes("/api/field-mapping-rules")
+        && !url.includes("/suggestions")
+        && url.includes("pageUrlPattern=");
+    });
+    expect(ruleGets.length).toBe(1);
+  });
+
+  it("panels with different scopes do NOT share the cache — each issues its own rules-fetch", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(
+      <>
+        <UnmatchedFieldsPanel evt={makeEvent({ formId: "form-A", fieldNames: ["field_3"] })} />
+        <UnmatchedFieldsPanel evt={makeEvent({ formId: "form-B", fieldNames: ["field_3"] })} />
+      </>,
+    );
+
+    const toggles = screen.getAllByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggles[0]);
+    await user.click(toggles[1]);
+
+    await waitFor(() => {
+      const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "GET"
+          && url.includes("/api/field-mapping-rules")
+          && !url.includes("/suggestions")
+          && url.includes("pageUrlPattern=");
+      });
+      // Two scopes → two fetches.
+      expect(ruleGets.length).toBe(2);
+    });
+  });
 });

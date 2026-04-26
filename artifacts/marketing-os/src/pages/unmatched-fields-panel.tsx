@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Check, Undo2, X } from "lucide-react";
 import {
@@ -10,6 +10,8 @@ import {
 } from "@/lib/field-mapping-heuristic";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+
+type SavedEntry = { mapsTo: MapToTarget; ruleId: number | null };
 
 export interface UnmatchedFieldsPanelEvent {
   tenantId: number;
@@ -42,10 +44,156 @@ const learnedSuggestionsByTenant = new Map<number, LearnedMap>();
 const learnedFetchInflight = new Map<number, Promise<LearnedMap>>();
 const learnedSubscribers = new Map<number, Set<() => void>>();
 
+// Module-level cache of preloaded existing field-mapping rules per
+// (tenantId, pageUrlPattern, formIdentifier) scope. Many unmatched events on
+// the live attribution feed and past-unmatched view share the same scope, so
+// without this cache every panel expand re-fetches the same rule list.
+// Subscribers are notified whenever the cache is updated so panels for the
+// same scope reflect new rules (e.g. after a sibling panel saves) without a
+// manual refresh.
+type ScopedRulesMap = Map<string, SavedEntry>;
+type ScopedRulesEntry = { rules: ScopedRulesMap; status: "loading" | "loaded" };
+const scopedRulesByKey = new Map<string, ScopedRulesEntry>();
+const scopedRulesFetchInflight = new Map<string, Promise<ScopedRulesMap>>();
+const scopedRulesSubscribers = new Map<string, Set<() => void>>();
+
+function scopeKeyOf(tenantId: number, pageUrlPattern: string, formIdentifier: string): string {
+  return `${tenantId}\u0000${pageUrlPattern}\u0000${formIdentifier}`;
+}
+
+function notifyScopedRulesSubscribers(key: string) {
+  const subs = scopedRulesSubscribers.get(key);
+  if (!subs) return;
+  for (const fn of subs) fn();
+}
+
+export function getCachedScopedRules(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): ScopedRulesMap | null {
+  const entry = scopedRulesByKey.get(scopeKeyOf(tenantId, pageUrlPattern, formIdentifier));
+  if (entry && entry.status === "loaded") return entry.rules;
+  return null;
+}
+
+export async function fetchScopedRules(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): Promise<ScopedRulesMap> {
+  const key = scopeKeyOf(tenantId, pageUrlPattern, formIdentifier);
+  const cached = scopedRulesByKey.get(key);
+  if (cached && cached.status === "loaded") return cached.rules;
+  const inflight = scopedRulesFetchInflight.get(key);
+  if (inflight) return inflight;
+
+  // Snapshot whatever rules the cache currently holds so we can detect (and
+  // preserve) any local writes via recordScopedRule / removeScopedRule that
+  // happen while this fetch is in flight. Without this, an in-flight fetch
+  // returning a stale/empty rule set could clobber a freshly saved mapping.
+  const snapshot = new Map<string, SavedEntry>(cached?.rules ?? new Map());
+  scopedRulesByKey.set(key, { rules: new Map(snapshot), status: "loading" });
+
+  const promise = (async () => {
+    const params = new URLSearchParams({
+      tenantId: String(tenantId),
+      pageUrlPattern,
+      formIdentifier,
+    });
+    const result = new Map<string, SavedEntry>();
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/field-mapping-rules?${params.toString()}`,
+        { credentials: "include" },
+      );
+      if (res && res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          rules?: Array<{ id?: number; fieldName?: string; mapsTo?: string }>;
+        };
+        for (const r of data.rules ?? []) {
+          if (r && typeof r.fieldName === "string" && typeof r.mapsTo === "string") {
+            result.set(r.fieldName, {
+              mapsTo: r.mapsTo as MapToTarget,
+              ruleId: typeof r.id === "number" ? r.id : null,
+            });
+          }
+        }
+      }
+      // Non-OK (403/404/etc) is silently treated as "no rules" — operator can still attempt to map.
+    } catch {
+      // Network error: silently treat as "no rules" — operator can still attempt to map.
+    } finally {
+      scopedRulesFetchInflight.delete(key);
+    }
+    // Merge in any local writes that happened while we were in flight. The
+    // current cache reflects intermediate writes from recordScopedRule /
+    // removeScopedRule (each of which clones the rules map). Diff against
+    // the snapshot to know which fields were locally added/changed (local
+    // wins) vs locally removed (drop from merged result).
+    const liveRules = scopedRulesByKey.get(key)?.rules ?? new Map<string, SavedEntry>();
+    const merged = new Map(result);
+    for (const [f, v] of liveRules) {
+      const snap = snapshot.get(f);
+      if (!snap || snap.mapsTo !== v.mapsTo || snap.ruleId !== v.ruleId) {
+        merged.set(f, v);
+      }
+    }
+    for (const f of snapshot.keys()) {
+      if (!liveRules.has(f)) merged.delete(f);
+    }
+    scopedRulesByKey.set(key, { rules: merged, status: "loaded" });
+    notifyScopedRulesSubscribers(key);
+    return merged;
+  })();
+
+  scopedRulesFetchInflight.set(key, promise);
+  return promise;
+}
+
+function recordScopedRule(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  fieldName: string,
+  mapsTo: MapToTarget,
+  ruleId: number | null,
+) {
+  const key = scopeKeyOf(tenantId, pageUrlPattern, formIdentifier);
+  const existing = scopedRulesByKey.get(key);
+  // Clone to make change detection trivial for subscribers.
+  const nextRules = new Map(existing?.rules ?? new Map<string, SavedEntry>());
+  nextRules.set(fieldName, { mapsTo, ruleId });
+  scopedRulesByKey.set(key, { rules: nextRules, status: existing?.status ?? "loaded" });
+  notifyScopedRulesSubscribers(key);
+}
+
+function removeScopedRule(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  fieldName: string,
+) {
+  const key = scopeKeyOf(tenantId, pageUrlPattern, formIdentifier);
+  const existing = scopedRulesByKey.get(key);
+  if (!existing || !existing.rules.has(fieldName)) return;
+  const nextRules = new Map(existing.rules);
+  nextRules.delete(fieldName);
+  scopedRulesByKey.set(key, { rules: nextRules, status: existing.status });
+  notifyScopedRulesSubscribers(key);
+}
+
+export function __resetScopedRulesCacheForTests() {
+  scopedRulesByKey.clear();
+  scopedRulesFetchInflight.clear();
+  scopedRulesSubscribers.clear();
+}
+
 export function __resetLearnedSuggestionsCacheForTests() {
   learnedSuggestionsByTenant.clear();
   learnedFetchInflight.clear();
   learnedSubscribers.clear();
+  __resetScopedRulesCacheForTests();
 }
 
 function notifyLearnedSubscribers(tenantId: number) {
@@ -148,8 +296,6 @@ function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): Learne
   return learnedSuggestionsByTenant.get(tenantId) ?? new Map();
 }
 
-type SavedEntry = { mapsTo: MapToTarget; ruleId: number | null };
-
 export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }) {
   const [expanded, setExpanded] = useState(false);
   const [savingField, setSavingField] = useState<string | null>(null);
@@ -169,6 +315,15 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
 
   const fieldNames = Array.isArray(evt.fieldNames) ? evt.fieldNames : [];
   const reason = evt.unmatchedReason || "Pulse could not link this fill to a known job, lead, or click.";
+
+  // Track which fields THIS panel saved/changed in-session, so cross-panel
+  // cache updates know whether to mark a field as "preloaded" (rule existed
+  // when this panel opened, or another panel saved it) vs "newly mapped here".
+  // Held in a ref so the cache-subscriber callback can read the latest value
+  // without resubscribing on every save.
+  const inSessionSavedFieldsRef = useRef<Set<string>>(new Set());
+  const fieldNamesRef = useRef<string[]>(fieldNames);
+  fieldNamesRef.current = fieldNames;
 
   const suggestions = useMemo(() => {
     const m = new Map<string, MapToTarget>();
@@ -198,9 +353,94 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     });
   };
 
+  // Hydrate local state from the shared scope-rules cache. Used both on first
+  // expand (cache hit OR after fetch resolves) and from the cache subscriber
+  // when sibling panels save/undo a rule for the same scope. Captures fields
+  // already present in cache as "preloaded" unless THIS panel saved them
+  // in-session (in which case they keep their "mapped → X" badge).
+  const hydrateFromScopedCache = (cacheRules: ScopedRulesMap) => {
+    const names = fieldNamesRef.current;
+    const inSession = inSessionSavedFieldsRef.current;
+    setSavedFields((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const name of names) {
+        const entry = cacheRules.get(name);
+        if (entry) {
+          const existing = next.get(name);
+          if (
+            !existing ||
+            existing.mapsTo !== entry.mapsTo ||
+            existing.ruleId !== entry.ruleId
+          ) {
+            // Don't clobber an in-session save with a stale cache entry that
+            // happens to differ — in-session writes always win.
+            if (!existing || !inSession.has(name)) {
+              next.set(name, entry);
+              changed = true;
+            }
+          }
+        } else if (next.has(name) && !inSession.has(name)) {
+          // A preloaded rule was deleted by another panel — drop locally too.
+          next.delete(name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setPreloadedFields((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const name of names) {
+        if (cacheRules.has(name) && !inSession.has(name)) {
+          if (!next.has(name)) {
+            next.add(name);
+            changed = true;
+          }
+        } else if (!cacheRules.has(name) && next.has(name)) {
+          next.delete(name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  };
+
+  const { pageUrlPattern, formIdentifier } = useMemo(
+    () => deriveMappingScope(evt),
+    [evt.pageUrl, evt.formId, evt.formName],
+  );
+  const scopeKey = scopeKeyOf(evt.tenantId, pageUrlPattern, formIdentifier);
+
+  // Subscribe to scoped-rules cache changes whenever the panel is expanded so
+  // that saves / undos in sibling panels for the same scope are reflected
+  // here without a manual refresh.
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    let subs = scopedRulesSubscribers.get(scopeKey);
+    if (!subs) {
+      subs = new Set();
+      scopedRulesSubscribers.set(scopeKey, subs);
+    }
+    const trigger = () => {
+      if (cancelled) return;
+      const entry = scopedRulesByKey.get(scopeKey);
+      if (!entry) return;
+      hydrateFromScopedCache(entry.rules);
+    };
+    subs.add(trigger);
+    return () => {
+      cancelled = true;
+      subs?.delete(trigger);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey, expanded]);
+
   // Preload rules already saved for this event's (pageUrlPattern, formIdentifier)
   // scope, so operators triaging a backlog can see at a glance which captured
-  // fields already have a rule and skip them. Fired once on first expand.
+  // fields already have a rule and skip them. Fired once on first expand —
+  // subsequent panels for the same scope hit the shared module-level cache.
   const handleToggle = async () => {
     const willExpand = !expanded;
     setExpanded(willExpand);
@@ -210,61 +450,23 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       setRulesLoaded(true);
       return;
     }
-    setRulesLoading(true);
-    try {
-      const { pageUrlPattern, formIdentifier } = deriveMappingScope(evt);
-      const params = new URLSearchParams({
-        tenantId: String(evt.tenantId),
-        pageUrlPattern,
-        formIdentifier,
-      });
-      const res = await fetch(`${API_BASE}/api/field-mapping-rules?${params.toString()}`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = (await res.json().catch(() => ({}))) as {
-          rules?: Array<{ id?: number; fieldName?: string; mapsTo?: string }>;
-        };
-        const loaded = new Map<string, SavedEntry>();
-        for (const r of data.rules ?? []) {
-          if (r && typeof r.fieldName === "string" && typeof r.mapsTo === "string") {
-            loaded.set(r.fieldName, {
-              mapsTo: r.mapsTo as MapToTarget,
-              ruleId: typeof r.id === "number" ? r.id : null,
-            });
-          }
-        }
-        if (loaded.size > 0) {
-          setSavedFields((prev) => {
-            // In-session saves take precedence over preloaded rules.
-            const next = new Map(loaded);
-            prev.forEach((v, k) => next.set(k, v));
-            return next;
-          });
-          setPreloadedFields((prev) => {
-            const next = new Set(prev);
-            for (const k of loaded.keys()) {
-              // A field is "preloaded" only if it's not already a session save.
-              if (!savedFields.has(k)) next.add(k);
-            }
-            return next;
-          });
-        }
-      }
-      // Non-OK (403/404/etc) is silently treated as "no rules" — operator can still attempt to map.
-    } catch {
-      // Network error: silently treat as "no rules" — operator can still attempt to map.
-    } finally {
-      setRulesLoading(false);
+    const cached = getCachedScopedRules(evt.tenantId, pageUrlPattern, formIdentifier);
+    if (cached) {
+      hydrateFromScopedCache(cached);
       setRulesLoaded(true);
+      return;
     }
+    setRulesLoading(true);
+    const result = await fetchScopedRules(evt.tenantId, pageUrlPattern, formIdentifier);
+    hydrateFromScopedCache(result);
+    setRulesLoading(false);
+    setRulesLoaded(true);
   };
 
   const doSave = async (
     fieldName: string,
     mapsTo: MapToTarget,
   ): Promise<{ ok: boolean; errorMsg: string | null }> => {
-    const { pageUrlPattern, formIdentifier } = deriveMappingScope(evt);
     try {
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${evt.tenantId}`, {
         method: "POST",
@@ -278,6 +480,9 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       }
       const data = (await res.json().catch(() => ({}))) as { rule?: { id?: number } };
       const ruleId = typeof data.rule?.id === "number" ? data.rule.id : null;
+      // Mark as in-session BEFORE notifying cache subscribers so the hydrate
+      // logic in this same panel knows not to flip it to "preloaded".
+      inSessionSavedFieldsRef.current.add(fieldName);
       setSavedFields((prev) => {
         const next = new Map(prev);
         next.set(fieldName, { mapsTo, ruleId });
@@ -288,6 +493,9 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       // a re-save of an already-preloaded field still reads as "already mapped".
       // Brand-new in-session saves stay out of preloadedFields naturally.
       recordLearnedSuggestion(evt.tenantId, fieldName, mapsTo);
+      // Update the shared scope cache so sibling panels for the same scope see
+      // the new rule without an extra fetch (and treat it as "already mapped").
+      recordScopedRule(evt.tenantId, pageUrlPattern, formIdentifier, fieldName, mapsTo, ruleId);
       return { ok: true, errorMsg: null };
     } catch {
       return { ok: false, errorMsg: "Network error saving mapping rule." };
@@ -350,6 +558,10 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         next.delete(fieldName);
         return next;
       });
+      inSessionSavedFieldsRef.current.delete(fieldName);
+      // Drop the rule from the shared scope cache so other panels stop
+      // showing it as "already mapped".
+      removeScopedRule(evt.tenantId, pageUrlPattern, formIdentifier, fieldName);
       invalidateLearnedSuggestions(evt.tenantId);
       toast.success(`Removed mapping for "${fieldName}". The field is editable again.`);
     } catch {
