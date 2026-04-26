@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { io as socketIOClient, type Socket } from "socket.io-client";
 import { toast } from "sonner";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Loader2, Radio, ChevronDown, ChevronRight, Check } from "lucide-react";
+import { MAP_TO_OPTIONS, suggestMapTarget, type MapToTarget } from "@/lib/field-mapping-heuristic";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -698,13 +699,6 @@ function Field({ label, value, mono = false }: { label: string; value: string | 
   );
 }
 
-const MAP_TO_OPTIONS = [
-  "phone", "email", "firstName", "lastName", "fullName",
-  "address", "city", "state", "zip",
-  "funnel", "appointmentDate", "appointmentTime",
-] as const;
-type MapToTarget = typeof MAP_TO_OPTIONS[number];
-
 function deriveMappingScope(evt: LiveAttributionEvent): { pageUrlPattern: string; formIdentifier: string } {
   let pageUrlPattern = "*";
   if (evt.pageUrl) {
@@ -779,44 +773,80 @@ function UnmatchedFieldsPanel({ evt }: { evt: LiveAttributionEvent }) {
                 Mappings apply to <strong className="text-white/85">future fills of this form only</strong> — they do not re-match this event.
               </p>
               <div className="space-y-1">
-                {fieldNames.map((name) => {
-                  const savedAs = savedFields.get(name);
-                  const isSaving = savingField === name;
-                  return (
-                    <div
-                      key={name}
-                      className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5"
-                    >
-                      <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
-                      {savedAs ? (
-                        <span className="flex items-center gap-1 text-[11px] text-emerald-300">
-                          <Check className="w-3 h-3" />
-                          mapped → {savedAs}
-                        </span>
-                      ) : (
-                        <select
-                          aria-label={`Map ${name} to`}
-                          value=""
-                          disabled={isSaving}
-                          onChange={(e) => {
-                            const target = e.target.value as MapToTarget | "";
-                            if (target) saveMapping(name, target);
-                          }}
-                          className="bg-black/40 border border-white/15 rounded text-[11px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 cursor-pointer disabled:opacity-50"
-                        >
-                          <option value="">{isSaving ? "Saving…" : "Map to…"}</option>
-                          {MAP_TO_OPTIONS.map((opt) => (
-                            <option key={opt} value={opt} className="text-white">{opt}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  );
-                })}
+                {fieldNames.map((name) => (
+                  <UnmatchedFieldRow
+                    key={name}
+                    name={name}
+                    savedAs={savedFields.get(name)}
+                    isSaving={savingField === name}
+                    onSave={saveMapping}
+                  />
+                ))}
               </div>
             </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function UnmatchedFieldRow({
+  name,
+  savedAs,
+  isSaving,
+  onSave,
+}: {
+  name: string;
+  savedAs: MapToTarget | undefined;
+  isSaving: boolean;
+  onSave: (fieldName: string, target: MapToTarget) => void;
+}) {
+  const suggested = useMemo(() => suggestMapTarget(name), [name]);
+  const [selected, setSelected] = useState<MapToTarget | "">(suggested ?? "");
+  const showSuggestedHint = !savedAs && suggested !== null && selected === suggested;
+
+  if (savedAs) {
+    return (
+      <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
+        <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
+        <span className="flex items-center gap-1 text-[11px] text-emerald-300">
+          <Check className="w-3 h-3" />
+          mapped → {savedAs}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
+      <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
+      <select
+        aria-label={`Map ${name} to`}
+        value={selected}
+        disabled={isSaving}
+        onChange={(e) => setSelected(e.target.value as MapToTarget | "")}
+        className="bg-black/40 border border-white/15 rounded text-[11px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 cursor-pointer disabled:opacity-50"
+      >
+        <option value="">Map to…</option>
+        {MAP_TO_OPTIONS.map((opt) => (
+          <option key={opt} value={opt} className="text-white">{opt}</option>
+        ))}
+      </select>
+      {showSuggestedHint && (
+        <span className="text-[10px] text-amber-300/70 italic" title="Pre-selected based on field name">
+          suggested
+        </span>
+      )}
+      {selected && (
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={() => onSave(name, selected as MapToTarget)}
+          className="text-[11px] px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+        >
+          {isSaving ? "Saving…" : "Save"}
+        </button>
       )}
     </div>
   );
