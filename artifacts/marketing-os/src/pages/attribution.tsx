@@ -786,7 +786,7 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   );
 }
 
-function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
   const [correcting, setCorrecting] = useState<string | null>(null);
   const [selectedMapping, setSelectedMapping] = useState("");
   const [saving, setSaving] = useState(false);
