@@ -58,11 +58,28 @@ const learnedSubscribers = new Map<number, Set<() => void>>();
 // Subscribers are notified whenever the cache is updated so panels for the
 // same scope reflect new rules (e.g. after a sibling panel saves) without a
 // manual refresh.
+//
+// `fetchedAt` is the wall-clock timestamp of the most recent successful load
+// for this scope. The visibility-driven background refresh (see
+// `refreshStaleScopedRules` below) uses it to decide whether a cached entry
+// is still fresh enough to keep, or whether it should be revalidated against
+// the server when the operator returns to the tab.
 type ScopedRulesMap = Map<string, SavedEntry>;
-type ScopedRulesEntry = { rules: ScopedRulesMap; status: "loading" | "loaded" };
+type ScopedRulesEntry = {
+  rules: ScopedRulesMap;
+  status: "loading" | "loaded";
+  fetchedAt: number;
+};
 const scopedRulesByKey = new Map<string, ScopedRulesEntry>();
 const scopedRulesFetchInflight = new Map<string, Promise<ScopedRulesMap>>();
 const scopedRulesSubscribers = new Map<string, Set<() => void>>();
+
+// How long a successfully loaded scoped-rules cache entry is considered
+// "fresh" before the visibility-change refresh will revalidate it. Long
+// enough that flicking between tabs doesn't hammer the server, short enough
+// that a teammate editing a rule in another session won't go unnoticed for
+// the rest of the day. Exported for tests.
+export const SCOPED_RULES_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
 
 function scopeKeyOf(tenantId: number, pageUrlPattern: string, formIdentifier: string): string {
   return `${tenantId}\u0000${pageUrlPattern}\u0000${formIdentifier}`;
@@ -88,10 +105,14 @@ export async function fetchScopedRules(
   tenantId: number,
   pageUrlPattern: string,
   formIdentifier: string,
+  opts?: { force?: boolean },
 ): Promise<ScopedRulesMap> {
   const key = scopeKeyOf(tenantId, pageUrlPattern, formIdentifier);
   const cached = scopedRulesByKey.get(key);
-  if (cached && cached.status === "loaded") return cached.rules;
+  // `force` (used by the visibility-driven background refresh) bypasses the
+  // cache hit so a stale entry can be revalidated against the server. An
+  // already-in-flight fetch is still shared so we don't issue duplicate GETs.
+  if (!opts?.force && cached && cached.status === "loaded") return cached.rules;
   const inflight = scopedRulesFetchInflight.get(key);
   if (inflight) return inflight;
 
@@ -100,7 +121,14 @@ export async function fetchScopedRules(
   // happen while this fetch is in flight. Without this, an in-flight fetch
   // returning a stale/empty rule set could clobber a freshly saved mapping.
   const snapshot = new Map<string, SavedEntry>(cached?.rules ?? new Map());
-  scopedRulesByKey.set(key, { rules: new Map(snapshot), status: "loading" });
+  // Preserve the previous fetchedAt during the loading window so a refetch
+  // that fails / is slow doesn't reset our freshness tracking to "now" and
+  // suppress further refresh attempts.
+  scopedRulesByKey.set(key, {
+    rules: new Map(snapshot),
+    status: "loading",
+    fetchedAt: cached?.fetchedAt ?? 0,
+  });
 
   const promise = (async () => {
     const params = new URLSearchParams({
@@ -149,7 +177,7 @@ export async function fetchScopedRules(
     for (const f of snapshot.keys()) {
       if (!liveRules.has(f)) merged.delete(f);
     }
-    scopedRulesByKey.set(key, { rules: merged, status: "loaded" });
+    scopedRulesByKey.set(key, { rules: merged, status: "loaded", fetchedAt: Date.now() });
     notifyScopedRulesSubscribers(key);
     return merged;
   })();
@@ -171,7 +199,11 @@ function recordScopedRule(
   // Clone to make change detection trivial for subscribers.
   const nextRules = new Map(existing?.rules ?? new Map<string, SavedEntry>());
   nextRules.set(fieldName, { mapsTo, ruleId });
-  scopedRulesByKey.set(key, { rules: nextRules, status: existing?.status ?? "loaded" });
+  scopedRulesByKey.set(key, {
+    rules: nextRules,
+    status: existing?.status ?? "loaded",
+    fetchedAt: existing?.fetchedAt ?? Date.now(),
+  });
   notifyScopedRulesSubscribers(key);
 }
 
@@ -186,9 +218,54 @@ function removeScopedRule(
   if (!existing || !existing.rules.has(fieldName)) return;
   const nextRules = new Map(existing.rules);
   nextRules.delete(fieldName);
-  scopedRulesByKey.set(key, { rules: nextRules, status: existing.status });
+  scopedRulesByKey.set(key, {
+    rules: nextRules,
+    status: existing.status,
+    fetchedAt: existing.fetchedAt,
+  });
   notifyScopedRulesSubscribers(key);
 }
+
+// Walk every loaded scoped-rules entry and kick off a background revalidation
+// for any whose `fetchedAt` is older than the freshness window. Called when
+// the page regains visibility — we don't want to silently keep showing stale
+// "already mapped → X" badges if a teammate edited rules in another session
+// while this tab sat idle. Errored or in-flight entries are skipped (they
+// aren't "loaded" yet) and re-tried only on the next visibility event after
+// they settle.
+function refreshStaleScopedRules() {
+  const now = Date.now();
+  // Snapshot keys first so the iteration isn't affected by entries we mutate
+  // (each fetchScopedRules call writes a "loading" entry back into the map).
+  const keys = Array.from(scopedRulesByKey.keys());
+  for (const key of keys) {
+    const entry = scopedRulesByKey.get(key);
+    if (!entry || entry.status !== "loaded") continue;
+    if (now - entry.fetchedAt < SCOPED_RULES_FRESHNESS_WINDOW_MS) continue;
+    const parts = key.split("\u0000");
+    if (parts.length !== 3) continue;
+    const tenantId = Number(parts[0]);
+    if (!Number.isFinite(tenantId)) continue;
+    void fetchScopedRules(tenantId, parts[1], parts[2], { force: true });
+  }
+}
+
+let scopedRulesVisibilityListenerInstalled = false;
+function installScopedRulesVisibilityListener() {
+  if (scopedRulesVisibilityListenerInstalled) return;
+  if (typeof document === "undefined") return;
+  scopedRulesVisibilityListenerInstalled = true;
+  document.addEventListener("visibilitychange", () => {
+    // Only refresh when the tab actually became visible — firing a refresh
+    // when the operator switches AWAY would be wasted work and might race
+    // with the browser unloading the page.
+    if (document.visibilityState !== "visible") return;
+    refreshStaleScopedRules();
+  });
+}
+// Install at module load so tests and production both get the listener
+// without each panel needing to opt in.
+installScopedRulesVisibilityListener();
 
 export function __resetScopedRulesCacheForTests() {
   scopedRulesByKey.clear();

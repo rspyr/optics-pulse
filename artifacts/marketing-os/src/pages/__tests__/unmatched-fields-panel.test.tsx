@@ -15,6 +15,7 @@ vi.mock("sonner", () => ({
 import {
   __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
+  SCOPED_RULES_FRESHNESS_WINDOW_MS,
   UNDO_CONFIRMATION_TIMEOUT_MS,
   UnmatchedFieldsPanel,
   type UnmatchedFieldsPanelEvent,
@@ -1583,6 +1584,183 @@ describe("UnmatchedFieldsPanel", () => {
       });
       // Two scopes → two fetches.
       expect(ruleGets.length).toBe(2);
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // Scope-rules cache refresh on visibility change (Task #281).
+  //
+  // The shared scope-rules cache lives forever otherwise. If a teammate
+  // edits or deletes a rule in another session, an open tab will keep
+  // showing stale "already mapped → X" badges until a hard reload. These
+  // tests pin down the visibility-driven background refresh.
+  // ---------------------------------------------------------------
+
+  describe("scope-rules cache refresh on visibilitychange", () => {
+    // Helpers to drive jsdom's visibility state — the property isn't
+    // writable normally, so each test redefines it before dispatching.
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    };
+
+    afterEach(() => {
+      // Restore the default to "visible" so unrelated tests aren't affected.
+      setVisibility("visible");
+    });
+
+    it("refetches a stale scoped-rules entry on visibilitychange (visible) and re-hydrates the expanded panel without a loading flicker", async () => {
+      const user = userEvent.setup();
+      let getCount = 0;
+      const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = (init?.method || "GET").toUpperCase();
+        if (url.includes("/api/field-mapping-rules/suggestions")) {
+          return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+        }
+        if (url.includes("/api/field-mapping-rules") && method === "GET") {
+          getCount++;
+          // First fetch: rule maps field_3 → phone. Subsequent fetches
+          // (the visibility-driven refresh) return field_3 → email so we
+          // can prove the panel re-hydrated from the new server data.
+          if (getCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }] }),
+            } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "email", id: 12 }] }),
+          } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+
+      // Capture the count of scoped GETs after the initial preload.
+      const scopedGetCount = () =>
+        fetchMock.mock.calls.filter(([u, init]) => {
+          const url = typeof u === "string" ? u : (u as URL | Request).toString();
+          const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+          return method === "GET"
+            && url.includes("/api/field-mapping-rules")
+            && !url.includes("/suggestions")
+            && url.includes("pageUrlPattern=");
+        }).length;
+      expect(scopedGetCount()).toBe(1);
+
+      // Step time forward past the freshness window. Use real wall clock —
+      // the panel reads Date.now() directly, and using fake timers here
+      // would interfere with userEvent's microtask scheduling.
+      const realDateNow = Date.now;
+      const advancedTo = realDateNow() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000;
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(advancedTo);
+
+      try {
+        // Simulate the operator returning to the tab.
+        setVisibility("visible");
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+
+        // The visibility-driven refresh should have issued exactly one new GET.
+        await waitFor(() => {
+          expect(scopedGetCount()).toBe(2);
+        });
+
+        // The expanded panel should re-hydrate to the updated mapping
+        // (phone → email) once the refetch resolves, without ever flipping
+        // back to the editable "Map field_3 to" combobox in between (no flicker).
+        expect(await screen.findByText(/already mapped → email/)).toBeInTheDocument();
+        expect(screen.queryByText(/already mapped → phone/)).not.toBeInTheDocument();
+        expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("does NOT refetch when visibilitychange fires with the page hidden (idle entry stays cached)", async () => {
+      const user = userEvent.setup();
+      const fetchMock = mockFetchAll({
+        rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+
+      const scopedGetCount = () =>
+        fetchMock.mock.calls.filter(([u, init]) => {
+          const url = typeof u === "string" ? u : (u as URL | Request).toString();
+          const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+          return method === "GET"
+            && url.includes("/api/field-mapping-rules")
+            && !url.includes("/suggestions")
+            && url.includes("pageUrlPattern=");
+        }).length;
+      expect(scopedGetCount()).toBe(1);
+
+      // Push wall clock past the freshness window to make the entry "stale"
+      // by time alone — but the page is hidden, so we expect no refresh.
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        setVisibility("hidden");
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+
+        // Give any stray microtasks a chance to flush before asserting.
+        await new Promise((r) => setTimeout(r, 0));
+
+        // Still exactly one scoped GET — the hidden tab was left alone.
+        expect(scopedGetCount()).toBe(1);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("does NOT refetch when visibilitychange fires before the freshness window has elapsed (entry still fresh)", async () => {
+      const user = userEvent.setup();
+      const fetchMock = mockFetchAll({
+        rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+
+      const scopedGetCount = () =>
+        fetchMock.mock.calls.filter(([u, init]) => {
+          const url = typeof u === "string" ? u : (u as URL | Request).toString();
+          const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+          return method === "GET"
+            && url.includes("/api/field-mapping-rules")
+            && !url.includes("/suggestions")
+            && url.includes("pageUrlPattern=");
+        }).length;
+      expect(scopedGetCount()).toBe(1);
+
+      // The user briefly switches tabs and comes right back — well within
+      // the freshness window. We don't want to hammer the server every
+      // time focus changes, so no refetch should be issued.
+      setVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(scopedGetCount()).toBe(1);
     });
   });
 });
