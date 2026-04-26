@@ -113,8 +113,10 @@ function recordLearnedSuggestion(tenantId: number, fieldName: string, mapsTo: Ma
 // the new authoritative answer.
 function invalidateLearnedSuggestions(tenantId: number) {
   learnedSuggestionsByTenant.delete(tenantId);
-  notifyLearnedSubscribers(tenantId);
+  learnedFetchInflight.delete(tenantId);
+  // Kick off a refetch and notify subscribers when it lands.
   void fetchLearnedSuggestions(tenantId);
+  notifyLearnedSubscribers(tenantId);
 }
 
 function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): LearnedSuggestions {
@@ -151,11 +153,16 @@ type SavedEntry = { mapsTo: MapToTarget; ruleId: number | null };
 export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }) {
   const [expanded, setExpanded] = useState(false);
   const [savingField, setSavingField] = useState<string | null>(null);
-  const [savedFields, setSavedFields] = useState<Map<string, SavedEntry>>(new Map());
   const [undoingField, setUndoingField] = useState<string | null>(null);
+  const [savedFields, setSavedFields] = useState<Map<string, SavedEntry>>(new Map());
+  const [preloadedFields, setPreloadedFields] = useState<Set<string>>(new Set());
+  const [editingFields, setEditingFields] = useState<Set<string>>(new Set());
   const [selectionOverrides, setSelectionOverrides] = useState<Map<string, MapToTarget | "">>(new Map());
   const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [rulesLoaded, setRulesLoaded] = useState(false);
+  const [rulesLoading, setRulesLoading] = useState(false);
+
   // Only fetch learned suggestions once the operator opens the panel — there's
   // no value loading them while collapsed.
   const learnedSuggestions = useTenantLearnedSuggestions(evt.tenantId, expanded);
@@ -191,6 +198,68 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     });
   };
 
+  // Preload rules already saved for this event's (pageUrlPattern, formIdentifier)
+  // scope, so operators triaging a backlog can see at a glance which captured
+  // fields already have a rule and skip them. Fired once on first expand.
+  const handleToggle = async () => {
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+    if (!willExpand) return;
+    if (rulesLoaded || rulesLoading) return;
+    if (fieldNames.length === 0) {
+      setRulesLoaded(true);
+      return;
+    }
+    setRulesLoading(true);
+    try {
+      const { pageUrlPattern, formIdentifier } = deriveMappingScope(evt);
+      const params = new URLSearchParams({
+        tenantId: String(evt.tenantId),
+        pageUrlPattern,
+        formIdentifier,
+      });
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          rules?: Array<{ id?: number; fieldName?: string; mapsTo?: string }>;
+        };
+        const loaded = new Map<string, SavedEntry>();
+        for (const r of data.rules ?? []) {
+          if (r && typeof r.fieldName === "string" && typeof r.mapsTo === "string") {
+            loaded.set(r.fieldName, {
+              mapsTo: r.mapsTo as MapToTarget,
+              ruleId: typeof r.id === "number" ? r.id : null,
+            });
+          }
+        }
+        if (loaded.size > 0) {
+          setSavedFields((prev) => {
+            // In-session saves take precedence over preloaded rules.
+            const next = new Map(loaded);
+            prev.forEach((v, k) => next.set(k, v));
+            return next;
+          });
+          setPreloadedFields((prev) => {
+            const next = new Set(prev);
+            for (const k of loaded.keys()) {
+              // A field is "preloaded" only if it's not already a session save.
+              if (!savedFields.has(k)) next.add(k);
+            }
+            return next;
+          });
+        }
+      }
+      // Non-OK (403/404/etc) is silently treated as "no rules" — operator can still attempt to map.
+    } catch {
+      // Network error: silently treat as "no rules" — operator can still attempt to map.
+    } finally {
+      setRulesLoading(false);
+      setRulesLoaded(true);
+    }
+  };
+
   const doSave = async (
     fieldName: string,
     mapsTo: MapToTarget,
@@ -214,6 +283,10 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         next.set(fieldName, { mapsTo, ruleId });
         return next;
       });
+      // Note: preloadedFields is intentionally NOT cleared here — "preloaded"
+      // describes the fact that the rule existed when the panel was opened, so
+      // a re-save of an already-preloaded field still reads as "already mapped".
+      // Brand-new in-session saves stay out of preloadedFields naturally.
       recordLearnedSuggestion(evt.tenantId, fieldName, mapsTo);
       return { ok: true, errorMsg: null };
     } catch {
@@ -226,6 +299,13 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     const result = await doSave(fieldName, mapsTo);
     setSavingField(null);
     if (result.ok) {
+      // Exit re-mapping edit mode if applicable.
+      setEditingFields((prev) => {
+        if (!prev.has(fieldName)) return prev;
+        const next = new Set(prev);
+        next.delete(fieldName);
+        return next;
+      });
       toast.success(`Mapped "${fieldName}" → ${mapsTo}. Applies to future fills of this form only.`);
     } else if (result.errorMsg) {
       toast.error(result.errorMsg);
@@ -258,6 +338,18 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         next.delete(fieldName);
         return next;
       });
+      setPreloadedFields((prev) => {
+        if (!prev.has(fieldName)) return prev;
+        const next = new Set(prev);
+        next.delete(fieldName);
+        return next;
+      });
+      setEditingFields((prev) => {
+        if (!prev.has(fieldName)) return prev;
+        const next = new Set(prev);
+        next.delete(fieldName);
+        return next;
+      });
       invalidateLearnedSuggestions(evt.tenantId);
       toast.success(`Removed mapping for "${fieldName}". The field is editable again.`);
     } catch {
@@ -267,6 +359,48 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     }
   };
 
+  const startReMapping = (name: string) => {
+    setEditingFields((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+    // Pre-fill the dropdown with the current saved target so the operator can
+    // see what it is and either change it or cancel.
+    const current = savedFields.get(name);
+    if (current) {
+      setSelectionOverrides((prev) => {
+        const next = new Map(prev);
+        next.set(name, current.mapsTo);
+        return next;
+      });
+    }
+  };
+
+  const cancelReMapping = (name: string) => {
+    setEditingFields((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    // Discard the in-progress override so the badge state restores cleanly.
+    setSelectionOverrides((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Map(prev);
+      next.delete(name);
+      return next;
+    });
+    setTouchedFields((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  };
+
+  // Bulk-save excludes fields that already have a rule (preloaded or
+  // session-saved) so it only acts on the remaining "actually new" suggestions.
   const bulkEligible = fieldNames.filter(
     (n) => suggestions.has(n) && !touchedFields.has(n) && !savedFields.has(n),
   );
@@ -310,7 +444,7 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     <div className="mt-3 pt-3 border-t border-white/10">
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={handleToggle}
         className="flex items-center gap-1.5 text-xs text-amber-300 hover:text-amber-200 transition-colors"
       >
         {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -334,6 +468,11 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                 Map a captured field to a semantic target (e.g. <code className="text-white/70">field_3 → phone</code>).
                 Mappings apply to <strong className="text-white/85">future fills of this form only</strong> — they do not re-match this event.
               </p>
+              {rulesLoading && (
+                <p className="text-[11px] text-muted-foreground italic" role="status">
+                  Loading existing rules…
+                </p>
+              )}
               {(bulkEligible.length > 0 || bulkInProgress) && (
                 <div className="flex items-center justify-between gap-2 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-2.5 py-1.5">
                   <span className="text-[11px] text-emerald-200/85">
@@ -362,6 +501,8 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                       name={name}
                       savedAs={saved?.mapsTo}
                       canUndo={saved?.ruleId != null}
+                      isPreloaded={preloadedFields.has(name)}
+                      isEditing={editingFields.has(name)}
                       isSaving={savingField === name}
                       isUndoing={undoingField === name}
                       selected={getSelection(name)}
@@ -371,6 +512,8 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                       onSelect={handleSelect}
                       onSave={saveMapping}
                       onUndo={undoMapping}
+                      onStartReMapping={startReMapping}
+                      onCancelReMapping={cancelReMapping}
                       learnedSuggestions={learnedSuggestions}
                     />
                   );
@@ -388,6 +531,8 @@ function UnmatchedFieldRow({
   name,
   savedAs,
   canUndo,
+  isPreloaded,
+  isEditing,
   isSaving,
   isUndoing,
   selected,
@@ -397,11 +542,15 @@ function UnmatchedFieldRow({
   onSelect,
   onSave,
   onUndo,
+  onStartReMapping,
+  onCancelReMapping,
   learnedSuggestions,
 }: {
   name: string;
   savedAs: MapToTarget | undefined;
   canUndo: boolean;
+  isPreloaded: boolean;
+  isEditing: boolean;
   isSaving: boolean;
   isUndoing: boolean;
   selected: MapToTarget | "";
@@ -411,6 +560,8 @@ function UnmatchedFieldRow({
   onSelect: (name: string, value: MapToTarget | "") => void;
   onSave: (fieldName: string, target: MapToTarget) => void;
   onUndo: (fieldName: string) => void;
+  onStartReMapping: (fieldName: string) => void;
+  onCancelReMapping: (fieldName: string) => void;
   learnedSuggestions: LearnedSuggestions;
 }) {
   const isLearnedSuggestion = useMemo(
@@ -418,17 +569,20 @@ function UnmatchedFieldRow({
     [learnedSuggestions, name, suggested],
   );
   const showSuggestedHint = !savedAs && suggested !== null && !isTouched && selected === suggested;
-  const controlsDisabled = isSaving || disabled;
+  const controlsDisabled = isSaving || isUndoing || disabled;
 
-  if (savedAs) {
+  if (savedAs && !isEditing) {
     return (
       <SavedFieldRow
         name={name}
         savedAs={savedAs}
+        isPreloaded={isPreloaded}
         canUndo={canUndo}
         isUndoing={isUndoing}
         disabled={disabled}
+        isSaving={isSaving}
         onUndo={onUndo}
+        onStartReMapping={onStartReMapping}
       />
     );
   }
@@ -456,7 +610,7 @@ function UnmatchedFieldRow({
           {isLearnedSuggestion ? "learned" : "suggested"}
         </span>
       )}
-      {selected && (
+      {selected && selected !== savedAs && (
         <button
           type="button"
           disabled={controlsDisabled}
@@ -466,6 +620,16 @@ function UnmatchedFieldRow({
           {isSaving ? "Saving…" : "Save"}
         </button>
       )}
+      {isEditing && (
+        <button
+          type="button"
+          disabled={controlsDisabled}
+          onClick={() => onCancelReMapping(name)}
+          className="text-[11px] px-2 py-0.5 rounded border border-white/15 text-white/60 hover:text-white/85 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      )}
     </div>
   );
 }
@@ -473,17 +637,23 @@ function UnmatchedFieldRow({
 function SavedFieldRow({
   name,
   savedAs,
+  isPreloaded,
   canUndo,
   isUndoing,
+  isSaving,
   disabled,
   onUndo,
+  onStartReMapping,
 }: {
   name: string;
   savedAs: MapToTarget;
+  isPreloaded: boolean;
   canUndo: boolean;
   isUndoing: boolean;
+  isSaving: boolean;
   disabled: boolean;
   onUndo: (fieldName: string) => void;
+  onStartReMapping: (fieldName: string) => void;
 }) {
   // Two-step inline confirmation. The first click on Undo arms `confirming`;
   // only a second click on the (now relabeled) Undo button actually triggers
@@ -520,13 +690,25 @@ function SavedFieldRow({
     ? "flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-amber-400/60 text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
     : "flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-white/20 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed";
 
+  const badgeText = isPreloaded ? `already mapped → ${savedAs}` : `mapped → ${savedAs}`;
+  const changeDisabled = isSaving || isUndoing || disabled || confirming;
+
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
       <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
       <span className="flex items-center gap-1 text-[11px] text-emerald-300">
         <Check className="w-3 h-3" />
-        mapped → {savedAs}
+        {badgeText}
       </span>
+      <button
+        type="button"
+        onClick={() => onStartReMapping(name)}
+        disabled={changeDisabled}
+        className="text-[11px] px-2 py-0.5 rounded border border-white/15 text-white/70 hover:text-white hover:bg-white/5 disabled:opacity-50"
+        aria-label={`Change mapping for ${name}`}
+      >
+        Change
+      </button>
       <button
         type="button"
         aria-label={`Undo mapping for ${name}`}

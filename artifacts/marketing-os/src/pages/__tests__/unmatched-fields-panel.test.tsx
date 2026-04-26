@@ -19,26 +19,34 @@ import {
   type UnmatchedFieldsPanelEvent,
 } from "../unmatched-fields-panel";
 
-// Helper to install a fetch mock that routes the per-tenant learned-suggestions
-// GET to a specific payload (default: empty), and forwards everything else to
-// the per-test mock provided by the caller.
-function mockFetchWithSuggestions(
+// Unified fetch mock that routes:
+//   - GET /api/field-mapping-rules/suggestions  → tenant-wide learned suggestions
+//   - GET /api/field-mapping-rules?...          → scoped preloaded rules
+//   - POST/DELETE                               → per-test handler via `onOther`
+function mockFetchAll(
   options: {
     suggestions?: Record<string, string>;
-    onOther: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response;
+    rules?: Array<{ fieldName: string; mapsTo: string; id?: number }>;
+    rulesGetResponse?: Partial<Response> & { json?: () => Promise<unknown> };
+    onOther?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response;
   },
 ) {
   const suggestions = options.suggestions ?? {};
+  const rules = options.rules ?? [];
   return vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
+    const method = (init?.method || "GET").toUpperCase();
     if (url.includes("/api/field-mapping-rules/suggestions")) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ suggestions }),
-      } as Response;
+      return { ok: true, status: 200, json: async () => ({ suggestions }) } as Response;
     }
-    return options.onOther(input, init);
+    if (url.includes("/api/field-mapping-rules") && method === "GET") {
+      if (options.rulesGetResponse) {
+        return { ok: true, status: 200, json: async () => ({ rules }), ...options.rulesGetResponse } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ rules }) } as Response;
+    }
+    if (options.onOther) return options.onOther(input, init);
+    return { ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response;
   });
 }
 
@@ -164,7 +172,6 @@ describe("UnmatchedFieldsPanel", () => {
     const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
     expect(toggle).toBeInTheDocument();
     expect(toggle).toHaveTextContent("2 fields captured");
-    // Reason banner only appears once expanded.
     expect(screen.queryByText(/No matching click or lead found\./)).not.toBeInTheDocument();
   });
 
@@ -175,6 +182,7 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("expanding shows the reason banner", async () => {
     const user = userEvent.setup();
+    mockFetchAll({});
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     expect(screen.getByText("No matching click or lead found.")).toBeInTheDocument();
@@ -182,6 +190,7 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("uses default reason text when unmatchedReason is missing", async () => {
     const user = userEvent.setup();
+    mockFetchAll({});
     render(<UnmatchedFieldsPanel evt={makeEvent({ unmatchedReason: null })} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     expect(
@@ -191,15 +200,15 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("expanding reveals a 'Map to…' dropdown for each captured field", async () => {
     const user = userEvent.setup();
+    mockFetchAll({});
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
 
-    const select1 = screen.getByRole("combobox", { name: "Map field_3 to" });
+    const select1 = await screen.findByRole("combobox", { name: "Map field_3 to" });
     const select2 = screen.getByRole("combobox", { name: "Map field_4 to" });
     expect(select1).toBeInTheDocument();
     expect(select2).toBeInTheDocument();
 
-    // Verify options include core targets.
     const optionLabels = Array.from(select1.querySelectorAll("option")).map((o) => o.textContent);
     expect(optionLabels).toContain("phone");
     expect(optionLabels).toContain("email");
@@ -216,9 +225,24 @@ describe("UnmatchedFieldsPanel", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
+  it("does not issue any fetch when there are no captured field names", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({});
+    render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: [] })} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    // No rules to preload because the row list is empty — skip the GET entirely.
+    // Note: the learned-suggestions fetch is also gated when there's nothing to suggest for.
+    const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET" && url.includes("/api/field-mapping-rules") && !url.includes("/suggestions");
+    });
+    expect(ruleGets.length).toBe(0);
+  });
+
   it("selecting a target POSTs to /api/field-mapping-rules with the correct body and shows success toast", async () => {
     const user = userEvent.setup();
-    const fetchMock = mockFetchWithSuggestions({
+    const fetchMock = mockFetchAll({
       onOther: async () => ({
         ok: true,
         status: 200,
@@ -229,17 +253,16 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
-    // The new UX requires an explicit Save click after selecting a target,
-    // so the operator can confirm the (possibly heuristic-suggested) value.
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
 
     const postCalls = await waitFor(() => {
-      const calls = fetchMock.mock.calls.filter(([u]) => {
+      const calls = fetchMock.mock.calls.filter(([u, init]) => {
         const url = typeof u === "string" ? u : (u as URL | Request).toString();
-        return /\/api\/field-mapping-rules\?tenantId=/.test(url);
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "POST" && /\/api\/field-mapping-rules\?tenantId=/.test(url);
       });
       expect(calls.length).toBe(1);
       return calls;
@@ -264,13 +287,12 @@ describe("UnmatchedFieldsPanel", () => {
     // Field is now marked as saved — dropdown is replaced by the "mapped → phone" indicator.
     expect(await screen.findByText(/mapped → phone/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
-    // The other field is unaffected.
     expect(screen.getByRole("combobox", { name: "Map field_4 to" })).toBeInTheDocument();
   });
 
   it("HTTP 4xx shows error toast and does not mark the field as saved", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
+    mockFetchAll({
       onOther: async () => ({
         ok: false,
         status: 400,
@@ -281,7 +303,7 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -292,14 +314,13 @@ describe("UnmatchedFieldsPanel", () => {
     expect(toastMock.error.mock.calls[0][0]).toBe("mapsTo must be one of: phone, email");
     expect(toastMock.success).not.toHaveBeenCalled();
 
-    // Dropdown is still present — the field was NOT marked as saved.
     expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
     expect(screen.queryByText(/mapped → phone/)).not.toBeInTheDocument();
   });
 
   it("uses fallback error message when 4xx body has no error field", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
+    mockFetchAll({
       onOther: async () => ({
         ok: false,
         status: 403,
@@ -310,7 +331,7 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -323,7 +344,7 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("network error shows error toast and does not mark the field as saved", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
+    mockFetchAll({
       onOther: async () => {
         throw new Error("network down");
       },
@@ -332,7 +353,7 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -345,39 +366,28 @@ describe("UnmatchedFieldsPanel", () => {
   });
 
   it("does NOT fetch tenant suggestions while the panel is collapsed", async () => {
-    const fetchMock = mockFetchWithSuggestions({
-      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
-    });
+    const fetchMock = mockFetchAll({});
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
-    // No expand → no fetch at all (suggestions endpoint should be untouched).
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fetches tenant suggestions on expand and pre-selects a learned target the static heuristic can't infer", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
-      suggestions: { field_3: "phone" },
-      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
-    });
+    mockFetchAll({ suggestions: { field_3: "phone" } });
 
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
 
     const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
-    // Wait for the async fetch + state update to settle.
     await waitFor(() => {
       expect((select as HTMLSelectElement).value).toBe("phone");
     });
-    // The hint label should say "learned" for a tenant-history-driven pre-selection.
     expect(await screen.findByText("learned")).toBeInTheDocument();
   });
 
   it("falls back to the static heuristic when the tenant has no learned suggestion for the field", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
-      suggestions: {},
-      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
-    });
+    mockFetchAll({ suggestions: {} });
 
     render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["phone_number"] })} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
@@ -386,31 +396,26 @@ describe("UnmatchedFieldsPanel", () => {
     await waitFor(() => {
       expect((select as HTMLSelectElement).value).toBe("phone");
     });
-    // For a heuristic-driven (not learned) pre-selection, the hint says "suggested".
     expect(screen.getByText("suggested")).toBeInTheDocument();
   });
 
   it("after saving a mapping, a sibling panel for the same tenant pre-selects that field next time", async () => {
     const user = userEvent.setup();
-    mockFetchWithSuggestions({
+    mockFetchAll({
       suggestions: {},
       onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
     });
 
-    // First panel: operator confirms field_3 → phone.
     const { unmount } = render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByText(/mapped → phone/);
     unmount();
 
-    // Second panel for a DIFFERENT form on the same tenant: field_3 should now
-    // pre-select phone from the in-memory learned cache, even though the
-    // tenant suggestions endpoint still returns nothing.
     render(<UnmatchedFieldsPanel evt={makeEvent({ formId: "different-form", fieldNames: ["field_3"] })} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
@@ -428,6 +433,9 @@ describe("UnmatchedFieldsPanel", () => {
       if (url.includes("/api/field-mapping-rules/suggestions")) {
         return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
       }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+      }
       if (method === "POST" && /\/api\/field-mapping-rules\?tenantId=/.test(url)) {
         return { ok: true, status: 200, json: async () => ({ rule: { id: 777 } }) } as Response;
       }
@@ -440,13 +448,12 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     expect(await screen.findByText(/mapped → phone/)).toBeInTheDocument();
 
-    // Undo button is present on the saved row.
     const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
     expect(undoBtn).toBeInTheDocument();
 
@@ -463,7 +470,6 @@ describe("UnmatchedFieldsPanel", () => {
     // Second click on the same Undo button confirms and triggers the DELETE.
     await user.click(undoBtn);
 
-    // A DELETE for rule id 777 was issued, with tenantId in the query string.
     await waitFor(() => {
       const deleteCalls = fetchMock.mock.calls.filter(([u, init]) => {
         const url = typeof u === "string" ? u : (u as URL | Request).toString();
@@ -475,7 +481,6 @@ describe("UnmatchedFieldsPanel", () => {
       expect(calledInit?.credentials).toBe("include");
     });
 
-    // Row reverts to the editable Map-to state and the saved indicator is gone.
     await waitFor(() => {
       expect(screen.queryByText(/mapped → phone/)).not.toBeInTheDocument();
     });
@@ -631,6 +636,9 @@ describe("UnmatchedFieldsPanel", () => {
       if (url.includes("/api/field-mapping-rules/suggestions")) {
         return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
       }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+      }
       if (method === "POST") {
         return { ok: true, status: 200, json: async () => ({ rule: { id: 12 } }) } as Response;
       }
@@ -643,7 +651,7 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
       "phone",
     );
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -657,7 +665,6 @@ describe("UnmatchedFieldsPanel", () => {
     await waitFor(() => {
       expect(toastMock.error).toHaveBeenCalledWith("Rule not found");
     });
-    // Row stays in saved state because the delete failed.
     expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
   });
@@ -671,6 +678,9 @@ describe("UnmatchedFieldsPanel", () => {
       if (url.includes("/api/field-mapping-rules/suggestions")) {
         return { ok: true, status: 200, json: async () => ({ suggestions: { field_3: "phone", field_4: "email" } }) } as Response;
       }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+      }
       if (method === "POST") {
         return { ok: true, status: 200, json: async () => ({ rule: { id: nextRuleId++ } }) } as Response;
       }
@@ -683,7 +693,6 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
 
-    // Wait for both fields to be pre-selected from learned suggestions, then bulk-save.
     await waitFor(() => {
       const sel3 = screen.getByRole("combobox", { name: "Map field_3 to" }) as HTMLSelectElement;
       const sel4 = screen.getByRole("combobox", { name: "Map field_4 to" }) as HTMLSelectElement;
@@ -692,13 +701,11 @@ describe("UnmatchedFieldsPanel", () => {
     });
     await user.click(screen.getByRole("button", { name: /Save all suggested/ }));
 
-    // Both rows are now saved.
     await waitFor(() => {
       expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
       expect(screen.getByText(/mapped → email/)).toBeInTheDocument();
     });
 
-    // Each saved row exposes its own Undo button.
     const undo3 = screen.getByRole("button", { name: "Undo mapping for field_3" });
     const undo4 = screen.getByRole("button", { name: "Undo mapping for field_4" });
     expect(undo3).toBeInTheDocument();
@@ -713,7 +720,6 @@ describe("UnmatchedFieldsPanel", () => {
     expect(screen.getByText(/mapped → email/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
 
-    // The DELETE was sent for the rule id assigned to field_3 (the first POST: 100).
     const deleteCalls = fetchMock.mock.calls.filter(([u, init]) => {
       const url = typeof u === "string" ? u : (u as URL | Request).toString();
       return (init?.method || "").toUpperCase() === "DELETE" && /\/api\/field-mapping-rules\/100/.test(url);
@@ -723,11 +729,14 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("silently tolerates a failing tenant-suggestions fetch (still falls back to the static heuristic)", async () => {
     const user = userEvent.setup();
-    // Fail the suggestions endpoint AND any other call.
-    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
       if (url.includes("/api/field-mapping-rules/suggestions")) {
         throw new Error("network down");
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
       }
       return { ok: true, status: 200, json: async () => ({}) } as Response;
     });
@@ -735,13 +744,190 @@ describe("UnmatchedFieldsPanel", () => {
     render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["phone_number"] })} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
 
-    // Static heuristic still pre-selects phone.
     const select = await screen.findByRole("combobox", { name: "Map phone_number to" });
     await waitFor(() => {
       expect((select as HTMLSelectElement).value).toBe("phone");
     });
-    // Hint should NOT be "learned" — heuristic only.
     expect(screen.queryByText("learned")).not.toBeInTheDocument();
     expect(screen.getByText("suggested")).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------
+  // Preload-existing-rules behavior (Task #264).
+  // ---------------------------------------------------------------
+
+  it("preloads existing field-mapping rules on expand and shows 'already mapped → X' for each", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [
+        { fieldName: "field_3", mapsTo: "phone", id: 11 },
+        { fieldName: "field_4", mapsTo: "email", id: 12 },
+      ],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent() /* fieldNames: field_3, field_4 */} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    // Find the scoped GET (the rules preload, not the suggestions GET).
+    const getRulesCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "GET"
+          && url.includes("/api/field-mapping-rules")
+          && !url.includes("/suggestions")
+          && url.includes("pageUrlPattern=");
+      });
+      expect(call).toBeDefined();
+      return call!;
+    });
+    const getUrl = getRulesCall[0] as string;
+    expect(getUrl).toMatch(/tenantId=42/);
+    expect(getUrl).toMatch(/pageUrlPattern=%2Fcontact/);
+    expect(getUrl).toMatch(/formIdentifier=contact-form-1/);
+
+    expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+    expect(screen.getByText(/already mapped → email/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Map field_4 to" })).not.toBeInTheDocument();
+  });
+
+  it("preloads only the matching subset and leaves un-mapped fields editable", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Map field_4 to" })).toBeInTheDocument();
+  });
+
+  it("ignores rules that do not match any captured field name in this event", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_99", mapsTo: "phone", id: 99 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Map field_4 to" })).toBeInTheDocument();
+    expect(screen.queryByText(/already mapped → phone/)).not.toBeInTheDocument();
+  });
+
+  it("does not refetch rules on subsequent collapse + re-expand", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+
+    const ruleGetsSoFar = () => fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET" && url.includes("/api/field-mapping-rules") && !url.includes("/suggestions");
+    }).length;
+
+    await user.click(toggle);
+    await waitFor(() => {
+      expect(ruleGetsSoFar()).toBe(1);
+    });
+
+    await user.click(toggle);
+    expect(ruleGetsSoFar()).toBe(1);
+
+    await user.click(toggle);
+    expect(ruleGetsSoFar()).toBe(1);
+  });
+
+  it("treats a forbidden rules-fetch (HTTP 403) as 'no rules' without breaking the panel", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [],
+      rulesGetResponse: { ok: false, status: 403, json: async () => ({ error: "forbidden" }) },
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Map field_4 to" })).toBeInTheDocument();
+    expect(screen.queryByText(/already mapped/)).not.toBeInTheDocument();
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it("treats a network error during rules-fetch as 'no rules' without breaking the panel", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        throw new Error("network down");
+      }
+      return { ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+    expect(screen.queryByText(/already mapped/)).not.toBeInTheDocument();
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it("clicking 'Change' on an already-mapped field opens the dropdown preselected to the current target, and re-saving updates the badge", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 11 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+    const changeButton = screen.getByRole("button", { name: /Change mapping for field_3/ });
+    await user.click(changeButton);
+
+    const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+    expect((select as HTMLSelectElement).value).toBe("phone");
+    // Save button is hidden because the selection equals the current saved value (no change).
+    expect(screen.queryByRole("button", { name: /^Save$/ })).not.toBeInTheDocument();
+
+    await user.selectOptions(select, "email");
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    // Re-saving an already-preloaded field keeps the "already mapped" semantics (just with the new target).
+    expect(await screen.findByText(/already mapped → email/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
+    expect(toastMock.success.mock.calls.at(-1)?.[0]).toMatch(/Mapped "field_3" → email/);
+  });
+
+  it("'Cancel' on a re-mapping in progress reverts to the 'already mapped' badge", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Change mapping for field_3/ }));
+    expect(await screen.findByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^Cancel$/ }));
+
+    expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
   });
 });
