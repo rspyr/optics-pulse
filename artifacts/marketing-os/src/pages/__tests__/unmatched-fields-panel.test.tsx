@@ -1087,4 +1087,162 @@ describe("UnmatchedFieldsPanel", () => {
     expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Map field_3 to" })).not.toBeInTheDocument();
   });
+
+  // ---------------------------------------------------------------
+  // Collapsed-summary 'already mapped' count (Task #270).
+  // ---------------------------------------------------------------
+
+  it("does not show an 'already mapped' count in the toggle before the panel has ever been expanded", () => {
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    expect(toggle).toHaveTextContent("2 fields captured");
+    expect(toggle).not.toHaveTextContent(/already mapped/);
+  });
+
+  it("shows 'X of N already mapped' in the toggle once preload has completed (partial mapping)", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    });
+    // Original "(N fields captured)" hint stays.
+    expect(toggle).toHaveTextContent("2 fields captured");
+  });
+
+  it("shows 'all N already mapped' when every captured field has a preloaded rule", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [
+        { fieldName: "field_3", mapsTo: "phone", id: 11 },
+        { fieldName: "field_4", mapsTo: "email", id: 12 },
+      ],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("all 2 already mapped");
+    });
+    expect(toggle).not.toHaveTextContent(/2 of 2/);
+  });
+
+  it("does not add a count when preload returns no matching rules", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({ rules: [] });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    // Wait for the preload GET to settle and the editable rows to render.
+    await screen.findByRole("combobox", { name: "Map field_3 to" });
+    expect(toggle).toHaveTextContent("2 fields captured");
+    expect(toggle).not.toHaveTextContent(/already mapped/);
+  });
+
+  it("count persists across collapse + re-expand without a refetch", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+
+    const ruleGetsSoFar = () => fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET" && url.includes("/api/field-mapping-rules") && !url.includes("/suggestions");
+    }).length;
+
+    await user.click(toggle);
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    });
+    expect(ruleGetsSoFar()).toBe(1);
+
+    // Collapse — the count should still be visible in the toggle row.
+    await user.click(toggle);
+    expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    expect(ruleGetsSoFar()).toBe(1);
+
+    // Re-expand — still cached, no extra request.
+    await user.click(toggle);
+    expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    expect(ruleGetsSoFar()).toBe(1);
+  });
+
+  it("count updates after the operator saves a new mapping in-session", async () => {
+    const user = userEvent.setup();
+    mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 22 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    });
+
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_4 to" }),
+      "email",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("all 2 already mapped");
+    });
+  });
+
+  it("count drops back after an undo of a preloaded mapping", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "phone", id: 99 }] }),
+        } as Response;
+      }
+      if (method === "DELETE" && /\/api\/field-mapping-rules\/99/.test(url)) {
+        return { ok: true, status: 200, json: async () => ({ success: true }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).toHaveTextContent("1 of 2 already mapped");
+    });
+
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    await user.click(undoBtn);
+    await user.click(undoBtn);
+
+    await waitFor(() => {
+      expect(toggle).not.toHaveTextContent(/already mapped/);
+    });
+    expect(toggle).toHaveTextContent("2 fields captured");
+  });
 });

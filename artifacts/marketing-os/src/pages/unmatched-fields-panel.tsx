@@ -406,6 +406,21 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   );
   const bulkInProgress = bulkProgress !== null;
 
+  // Surface a quick "X of Y already mapped" hint in the collapsed toggle so
+  // operators triaging a backlog can skim and skip events that are already
+  // fully resolved without expanding each one. Only shown after the preload
+  // fetch has completed (otherwise the count would be misleadingly zero).
+  const mappedCount = useMemo(() => {
+    if (!rulesLoaded) return null;
+    if (fieldNames.length === 0) return null;
+    let count = 0;
+    for (const n of fieldNames) {
+      if (savedFields.has(n)) count++;
+    }
+    return count;
+  }, [rulesLoaded, fieldNames.join("\u0000"), savedFields]);
+  const allMapped = mappedCount !== null && mappedCount === fieldNames.length;
+
   const saveAllSuggested = async () => {
     const targets = bulkEligible.slice();
     if (targets.length === 0) return;
@@ -450,6 +465,19 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         <span className="font-medium">Why unmatched?</span>
         <span className="text-[11px] text-muted-foreground">({fieldNames.length} field{fieldNames.length === 1 ? "" : "s"} captured)</span>
+        {mappedCount !== null && mappedCount > 0 && (
+          <span
+            className={
+              allMapped
+                ? "text-[11px] text-emerald-300/80"
+                : "text-[11px] text-muted-foreground"
+            }
+          >
+            {allMapped
+              ? `(all ${mappedCount} already mapped)`
+              : `(${mappedCount} of ${fieldNames.length} already mapped)`}
+          </span>
+        )}
       </button>
 
       {expanded && (
