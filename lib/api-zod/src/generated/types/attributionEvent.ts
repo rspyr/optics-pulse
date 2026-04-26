@@ -35,6 +35,15 @@ export interface AttributionEvent {
   formType?: string | null;
   formId?: string | null;
   formName?: string | null;
+  /** Flat record of submitted form values keyed by field name (e.g.
+`{ phone: "555-1234", email: "a@b.com", field_3: "Acme" }`).
+Keys prefixed with `_` (e.g. `_consent`, `_source`) are reserved
+for internal bookkeeping and should not be displayed to end users.
+Values are surfaced verbatim from the original submission and may
+contain raw PII, so this field is operator-only: the entire
+`/attribution/*` route group is gated by the `denyClientUser`
+middleware and tenant-scoped client users will never see it.
+ */
   formFields?: AttributionEventFormFields;
   /** PII-safe form field NAMES (Object.keys, no `_*` keys, capped at 30).
 Populated on the event detail response so operators can map an

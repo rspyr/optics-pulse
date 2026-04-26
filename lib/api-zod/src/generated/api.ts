@@ -396,7 +396,12 @@ export const ListAttributionEventsResponse = zod.object({
       formType: zod.string().nullish(),
       formId: zod.string().nullish(),
       formName: zod.string().nullish(),
-      formFields: zod.object({}).passthrough().nullish(),
+      formFields: zod
+        .record(zod.string(), zod.unknown())
+        .nullish()
+        .describe(
+          'Flat record of submitted form values keyed by field name (e.g.\n`{ phone: \"555-1234\", email: \"a@b.com\", field_3: \"Acme\" }`).\nKeys prefixed with `_` (e.g. `_consent`, `_source`) are reserved\nfor internal bookkeeping and should not be displayed to end users.\nValues are surfaced verbatim from the original submission and may\ncontain raw PII, so this field is operator-only: the entire\n`\/attribution\/\*` route group is gated by the `denyClientUser`\nmiddleware and tenant-scoped client users will never see it.\n',
+        ),
       fieldNames: zod
         .array(zod.string())
         .nullish()
@@ -454,7 +459,12 @@ export const GetAttributionEventResponse = zod.object({
     formType: zod.string().nullish(),
     formId: zod.string().nullish(),
     formName: zod.string().nullish(),
-    formFields: zod.object({}).passthrough().nullish(),
+    formFields: zod
+      .record(zod.string(), zod.unknown())
+      .nullish()
+      .describe(
+        'Flat record of submitted form values keyed by field name (e.g.\n`{ phone: \"555-1234\", email: \"a@b.com\", field_3: \"Acme\" }`).\nKeys prefixed with `_` (e.g. `_consent`, `_source`) are reserved\nfor internal bookkeeping and should not be displayed to end users.\nValues are surfaced verbatim from the original submission and may\ncontain raw PII, so this field is operator-only: the entire\n`\/attribution\/\*` route group is gated by the `denyClientUser`\nmiddleware and tenant-scoped client users will never see it.\n',
+      ),
     fieldNames: zod
       .array(zod.string())
       .nullish()
