@@ -46,10 +46,26 @@ export function deriveMappingScope(
 // Populated lazily the first time a panel for that tenant is expanded; updated
 // whenever an operator saves a new mapping. Subscribers are notified so all
 // panels for the same tenant re-render together. Exported for tests.
+//
+// `fetchedAt` is the wall-clock timestamp of the most recent successful load
+// for this tenant. The visibility-driven background refresh (see
+// `refreshStaleLearnedSuggestions` below) uses it to decide whether a cached
+// entry is still fresh enough to keep, or whether it should be revalidated
+// against the server when the operator returns to the tab — without that, a
+// teammate confirming or pruning learned suggestions in another session
+// would leave this tab pre-selecting the stale "learned" target indefinitely.
 type LearnedMap = Map<string, MapToTarget>;
-const learnedSuggestionsByTenant = new Map<number, LearnedMap>();
+type LearnedEntry = { map: LearnedMap; fetchedAt: number };
+const learnedSuggestionsByTenant = new Map<number, LearnedEntry>();
 const learnedFetchInflight = new Map<number, Promise<LearnedMap>>();
 const learnedSubscribers = new Map<number, Set<() => void>>();
+
+// How long a successfully loaded learned-suggestions cache entry is
+// considered "fresh" before the visibility-change refresh will revalidate
+// it. Mirrors SCOPED_RULES_FRESHNESS_WINDOW_MS so operators get a
+// consistent freshness guarantee across both auto-suggestion sources.
+// Exported for tests.
+export const LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
 
 // Module-level cache of preloaded existing field-mapping rules per
 // (tenantId, pageUrlPattern, formIdentifier) scope. Many unmatched events on
@@ -250,22 +266,25 @@ function refreshStaleScopedRules() {
   }
 }
 
-let scopedRulesVisibilityListenerInstalled = false;
-function installScopedRulesVisibilityListener() {
-  if (scopedRulesVisibilityListenerInstalled) return;
+let visibilityRefreshListenerInstalled = false;
+function installVisibilityRefreshListener() {
+  if (visibilityRefreshListenerInstalled) return;
   if (typeof document === "undefined") return;
-  scopedRulesVisibilityListenerInstalled = true;
+  visibilityRefreshListenerInstalled = true;
   document.addEventListener("visibilitychange", () => {
     // Only refresh when the tab actually became visible — firing a refresh
     // when the operator switches AWAY would be wasted work and might race
     // with the browser unloading the page.
     if (document.visibilityState !== "visible") return;
+    // Both caches go stale the same way (a teammate edits state in another
+    // session while this tab sits idle), so they share the single listener.
     refreshStaleScopedRules();
+    refreshStaleLearnedSuggestions();
   });
 }
 // Install at module load so tests and production both get the listener
 // without each panel needing to opt in.
-installScopedRulesVisibilityListener();
+installVisibilityRefreshListener();
 
 export function __resetScopedRulesCacheForTests() {
   scopedRulesByKey.clear();
@@ -328,9 +347,15 @@ function notifyLearnedSubscribers(tenantId: number) {
   for (const fn of subs) fn();
 }
 
-async function fetchLearnedSuggestions(tenantId: number): Promise<LearnedMap> {
+async function fetchLearnedSuggestions(
+  tenantId: number,
+  opts?: { force?: boolean },
+): Promise<LearnedMap> {
   const cached = learnedSuggestionsByTenant.get(tenantId);
-  if (cached) return cached;
+  // `force` (used by the visibility-driven background refresh) bypasses the
+  // cache hit so a stale entry can be revalidated against the server. An
+  // already-in-flight fetch is still shared so we don't issue duplicate GETs.
+  if (!opts?.force && cached) return cached.map;
   const inflight = learnedFetchInflight.get(tenantId);
   if (inflight) return inflight;
 
@@ -342,7 +367,7 @@ async function fetchLearnedSuggestions(tenantId: number): Promise<LearnedMap> {
       );
       if (!res || !res.ok) {
         const empty = new Map<string, MapToTarget>();
-        learnedSuggestionsByTenant.set(tenantId, empty);
+        learnedSuggestionsByTenant.set(tenantId, { map: empty, fetchedAt: Date.now() });
         notifyLearnedSubscribers(tenantId);
         return empty;
       }
@@ -354,12 +379,12 @@ async function fetchLearnedSuggestions(tenantId: number): Promise<LearnedMap> {
       for (const [k, v] of Object.entries(suggestions)) {
         map.set(k, v as MapToTarget);
       }
-      learnedSuggestionsByTenant.set(tenantId, map);
+      learnedSuggestionsByTenant.set(tenantId, { map, fetchedAt: Date.now() });
       notifyLearnedSubscribers(tenantId);
       return map;
     } catch {
       const empty = new Map<string, MapToTarget>();
-      learnedSuggestionsByTenant.set(tenantId, empty);
+      learnedSuggestionsByTenant.set(tenantId, { map: empty, fetchedAt: Date.now() });
       notifyLearnedSubscribers(tenantId);
       return empty;
     } finally {
@@ -372,13 +397,33 @@ async function fetchLearnedSuggestions(tenantId: number): Promise<LearnedMap> {
 }
 
 function recordLearnedSuggestion(tenantId: number, fieldName: string, mapsTo: MapToTarget) {
-  let map = learnedSuggestionsByTenant.get(tenantId);
-  if (!map) {
-    map = new Map();
-    learnedSuggestionsByTenant.set(tenantId, map);
+  let entry = learnedSuggestionsByTenant.get(tenantId);
+  if (!entry) {
+    // Brand-new tenant entry from a local save. Stamp `fetchedAt` so the
+    // visibility refresh treats it as fresh until the freshness window elapses
+    // — we just learned this mapping locally, no need to immediately re-GET.
+    entry = { map: new Map(), fetchedAt: Date.now() };
+    learnedSuggestionsByTenant.set(tenantId, entry);
   }
-  map.set(normalizeFieldName(fieldName), mapsTo);
+  entry.map.set(normalizeFieldName(fieldName), mapsTo);
   notifyLearnedSubscribers(tenantId);
+}
+
+// Walk every loaded learned-suggestions entry and kick off a background
+// revalidation for any whose `fetchedAt` is older than the freshness window.
+// Called when the page regains visibility — without this, a teammate
+// confirming or pruning learned suggestions in another session would leave
+// this tab pre-selecting the stale "learned" target indefinitely.
+function refreshStaleLearnedSuggestions() {
+  const now = Date.now();
+  // Snapshot keys first so the iteration isn't affected by entries we mutate.
+  const tenantIds = Array.from(learnedSuggestionsByTenant.keys());
+  for (const tenantId of tenantIds) {
+    const entry = learnedSuggestionsByTenant.get(tenantId);
+    if (!entry) continue;
+    if (now - entry.fetchedAt < LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS) continue;
+    void fetchLearnedSuggestions(tenantId, { force: true });
+  }
 }
 
 // After a rule is deleted the per-tenant aggregate suggestion may have changed
@@ -419,7 +464,7 @@ function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): Learne
     };
   }, [tenantId, enabled]);
 
-  return learnedSuggestionsByTenant.get(tenantId) ?? new Map();
+  return learnedSuggestionsByTenant.get(tenantId)?.map ?? new Map();
 }
 
 export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }) {

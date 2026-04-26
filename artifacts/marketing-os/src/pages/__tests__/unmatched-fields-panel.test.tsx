@@ -15,6 +15,7 @@ vi.mock("sonner", () => ({
 import {
   __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
+  LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS,
   SCOPED_RULES_FRESHNESS_WINDOW_MS,
   UNDO_CONFIRMATION_TIMEOUT_MS,
   UnmatchedFieldsPanel,
@@ -1885,6 +1886,150 @@ describe("UnmatchedFieldsPanel", () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(scopedGetCount()).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // Learned-suggestions cache refresh on visibility change (Task #283).
+  //
+  // The shared per-tenant `learnedSuggestionsByTenant` cache lives forever
+  // otherwise — only invalidated when this same session deletes a rule. If
+  // a teammate confirms or prunes learned suggestions in another session,
+  // an open tab will keep pre-selecting the stale "learned" target until a
+  // hard reload. These tests pin down the visibility-driven background
+  // refresh that closes that gap (parallels the scope-rules block above).
+  // ---------------------------------------------------------------
+
+  describe("learned-suggestions cache refresh on visibilitychange", () => {
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    };
+
+    afterEach(() => {
+      setVisibility("visible");
+    });
+
+    it("refetches a stale learned-suggestions entry on visibilitychange (visible) and re-hydrates the panel's pre-selected dropdown without flicker", async () => {
+      const user = userEvent.setup();
+      let suggestionsGetCount = 0;
+      const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = (init?.method || "GET").toUpperCase();
+        if (url.includes("/api/field-mapping-rules/suggestions")) {
+          suggestionsGetCount++;
+          // First fetch: tenant has learned `field_3 → phone`. Second fetch
+          // (the visibility-driven refresh) returns `field_3 → email` so we
+          // can prove the dropdown re-hydrates with the refreshed suggestion.
+          if (suggestionsGetCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ suggestions: { field_3: "phone" } }),
+            } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ suggestions: { field_3: "email" } }),
+          } as Response;
+        }
+        if (url.includes("/api/field-mapping-rules") && method === "GET") {
+          return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+      // Initial pre-selection from the learned suggestion.
+      const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+      await waitFor(() => {
+        expect((select as HTMLSelectElement).value).toBe("phone");
+      });
+      expect(await screen.findByText("learned")).toBeInTheDocument();
+
+      const suggestionsCount = () =>
+        fetchMock.mock.calls.filter(([u, init]) => {
+          const url = typeof u === "string" ? u : (u as URL | Request).toString();
+          const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+          return method === "GET" && url.includes("/api/field-mapping-rules/suggestions");
+        }).length;
+      expect(suggestionsCount()).toBe(1);
+
+      // Step time forward past the freshness window. Use real wall clock —
+      // the panel reads Date.now() directly, and using fake timers here
+      // would interfere with userEvent's microtask scheduling.
+      const advancedTo = Date.now() + LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS + 1000;
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(advancedTo);
+
+      try {
+        // Simulate the operator returning to the tab.
+        setVisibility("visible");
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+
+        // The visibility-driven refresh should issue exactly one new
+        // suggestions GET.
+        await waitFor(() => {
+          expect(suggestionsCount()).toBe(2);
+        });
+
+        // The dropdown re-hydrates to the refreshed learned target without
+        // flipping into a "no suggestion" state in between.
+        await waitFor(() => {
+          expect((select as HTMLSelectElement).value).toBe("email");
+        });
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("does NOT refetch learned suggestions when visibilitychange fires with the page hidden (idle entry stays cached)", async () => {
+      const user = userEvent.setup();
+      const fetchMock = mockFetchAll({
+        suggestions: { field_3: "phone" },
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+      await waitFor(() => {
+        expect((select as HTMLSelectElement).value).toBe("phone");
+      });
+
+      const suggestionsCount = () =>
+        fetchMock.mock.calls.filter(([u, init]) => {
+          const url = typeof u === "string" ? u : (u as URL | Request).toString();
+          const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+          return method === "GET" && url.includes("/api/field-mapping-rules/suggestions");
+        }).length;
+      expect(suggestionsCount()).toBe(1);
+
+      // Push wall clock past the freshness window to make the entry "stale"
+      // by time alone — but the page is hidden, so we expect no refresh.
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        setVisibility("hidden");
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+
+        // Give any stray microtasks a chance to flush before asserting.
+        await new Promise((r) => setTimeout(r, 0));
+
+        // Still exactly one suggestions GET — the hidden tab was left alone.
+        expect(suggestionsCount()).toBe(1);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
     });
   });
 });
