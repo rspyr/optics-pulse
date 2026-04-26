@@ -8,7 +8,11 @@ export function formatFieldValue(value: unknown): string {
   }
   if (typeof value === "object") {
     try {
-      return JSON.stringify(value);
+      const serialised = JSON.stringify(value);
+      // JSON.stringify can return undefined when the value (or its toJSON())
+      // is itself undefined / a function — fall back to (no value) so the row
+      // never silently renders blank.
+      return serialised ?? "(no value)";
     } catch {
       return "(unserialisable)";
     }

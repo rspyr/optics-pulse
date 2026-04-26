@@ -837,11 +837,12 @@ function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: A
   if (entries.length === 0) return null;
 
   return (
-    <DetailSection title="Inline Field Correction" icon={<Settings className="w-4 h-4" />}>
-      <p className="text-xs text-muted-foreground mb-3">
-        Click a field to create a mapping rule for this page + form scope.{' '}
-        <span className="text-white/50">· {entries.length} {entries.length === 1 ? 'field' : 'fields'} captured</span>
-      </p>
+    <DetailSection
+      title="Inline Field Correction"
+      subtitle={`${entries.length} ${entries.length === 1 ? 'field' : 'fields'} captured`}
+      icon={<Settings className="w-4 h-4" />}
+    >
+      <p className="text-xs text-muted-foreground mb-3">Click a field to create a mapping rule for this page + form scope.</p>
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
           <p className="text-xs text-red-400">{error}</p>
@@ -1283,12 +1284,17 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
   );
 }
 
-function DetailSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function DetailSection({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
         <span className="text-muted-foreground">{icon}</span>
-        <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider">{title}</h4>
+        <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider">
+          {title}
+          {subtitle && (
+            <span className="ml-2 text-white/35 normal-case tracking-normal font-normal">· {subtitle}</span>
+          )}
+        </h4>
       </div>
       <div className="space-y-1 pl-6">{children}</div>
     </div>

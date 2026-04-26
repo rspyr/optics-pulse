@@ -42,4 +42,9 @@ describe("formatFieldValue", () => {
     cyclic.self = cyclic;
     expect(formatFieldValue(cyclic)).toBe("(unserialisable)");
   });
+
+  it("falls back to (no value) when JSON.stringify returns undefined (e.g. toJSON returns undefined)", () => {
+    const objWithBadToJson = { toJSON: () => undefined };
+    expect(formatFieldValue(objWithBadToJson)).toBe("(no value)");
+  });
 });
