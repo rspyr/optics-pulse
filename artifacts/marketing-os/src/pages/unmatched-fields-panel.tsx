@@ -86,9 +86,20 @@ type ScopedRulesEntry = {
   status: "loading" | "loaded";
   fetchedAt: number;
 };
+// Metadata passed to scope-rules subscribers when a notification was caused by
+// a background refresh that ACTUALLY changed the cached rules (vs. local
+// writes via recordScopedRule / removeScopedRule, which leave it undefined).
+// Subscribers use this to surface a non-blocking "rules updated from another
+// session" hint so operators don't see "already mapped → X" badges silently
+// flip on them after a teammate edited rules in another tab.
+type ScopedRulesBackgroundChange = {
+  changedFields: ReadonlySet<string>;
+  at: number;
+};
+type ScopedRulesSubscriber = (change?: ScopedRulesBackgroundChange) => void;
 const scopedRulesByKey = new Map<string, ScopedRulesEntry>();
 const scopedRulesFetchInflight = new Map<string, Promise<ScopedRulesMap>>();
-const scopedRulesSubscribers = new Map<string, Set<() => void>>();
+const scopedRulesSubscribers = new Map<string, Set<ScopedRulesSubscriber>>();
 
 // How long a successfully loaded scoped-rules cache entry is considered
 // "fresh" before the visibility-change refresh will revalidate it. Long
@@ -101,11 +112,21 @@ function scopeKeyOf(tenantId: number, pageUrlPattern: string, formIdentifier: st
   return `${tenantId}\u0000${pageUrlPattern}\u0000${formIdentifier}`;
 }
 
-function notifyScopedRulesSubscribers(key: string) {
+function notifyScopedRulesSubscribers(
+  key: string,
+  change?: ScopedRulesBackgroundChange,
+) {
   const subs = scopedRulesSubscribers.get(key);
   if (!subs) return;
-  for (const fn of subs) fn();
+  for (const fn of subs) fn(change);
 }
+
+// How long the "rules updated from another session" hint stays visible after
+// a background refresh changed at least one rule for an expanded panel's
+// scope. A few seconds — long enough for the operator to notice and connect
+// it to the badge change, short enough to fade out on its own and not clutter
+// the panel. Exported for tests so the value isn't duplicated.
+export const RULES_UPDATED_HINT_DURATION_MS = 5000;
 
 export function getCachedScopedRules(
   tenantId: number,
@@ -194,7 +215,31 @@ export async function fetchScopedRules(
       if (!liveRules.has(f)) merged.delete(f);
     }
     scopedRulesByKey.set(key, { rules: merged, status: "loaded", fetchedAt: Date.now() });
-    notifyScopedRulesSubscribers(key);
+    // For background refreshes (force === true) compute which fields actually
+    // changed on the server vs. what we had cached pre-refresh. The diff is
+    // `result` (raw server payload) vs. `snapshot` (the cache contents at the
+    // moment the fetch began). We deliberately exclude local writes that
+    // happened mid-fetch — those live in `merged` via the live-rules merge
+    // above and aren't a "change from another session". When at least one
+    // field differs, we notify subscribers with the change so expanded panels
+    // can briefly surface a "rules updated from another session" hint.
+    let backgroundChange: ScopedRulesBackgroundChange | undefined;
+    if (opts?.force && cached && cached.status === "loaded") {
+      const changed = new Set<string>();
+      for (const [f, v] of result) {
+        const prev = snapshot.get(f);
+        if (!prev || prev.mapsTo !== v.mapsTo || prev.ruleId !== v.ruleId) {
+          changed.add(f);
+        }
+      }
+      for (const f of snapshot.keys()) {
+        if (!result.has(f)) changed.add(f);
+      }
+      if (changed.size > 0) {
+        backgroundChange = { changedFields: changed, at: Date.now() };
+      }
+    }
+    notifyScopedRulesSubscribers(key, backgroundChange);
     return merged;
   })();
 
@@ -479,6 +524,11 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [rulesLoaded, setRulesLoaded] = useState(false);
   const [rulesLoading, setRulesLoading] = useState(false);
+  // Timestamp of the most recent background refresh that ACTUALLY changed a
+  // rule for one of THIS panel's fields. Drives the brief "rules updated
+  // from another session" hint and an auto-clear timer below. Null means
+  // either nothing has changed yet or the hint window has elapsed.
+  const [rulesUpdatedAt, setRulesUpdatedAt] = useState<number | null>(null);
 
   // Only fetch learned suggestions once the operator opens the panel — there's
   // no value loading them while collapsed.
@@ -594,11 +644,31 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       subs = new Set();
       scopedRulesSubscribers.set(scopeKey, subs);
     }
-    const trigger = () => {
+    const trigger = (change?: ScopedRulesBackgroundChange) => {
       if (cancelled) return;
       const entry = scopedRulesByKey.get(scopeKey);
       if (!entry) return;
       hydrateFromScopedCache(entry.rules);
+      // Only surface the "rules updated from another session" hint when the
+      // notification carries a background-change diff AND at least one of
+      // the changed fields is actually displayed by THIS panel and wasn't
+      // saved in this session. Local writes (via recordScopedRule /
+      // removeScopedRule) come through with `change` undefined and are
+      // intentionally silent. Cross-scope changes never fire here because
+      // the subscriber set is per scope key.
+      if (!change) return;
+      const myFields = fieldNamesRef.current;
+      const inSession = inSessionSavedFieldsRef.current;
+      let relevant = false;
+      for (const f of myFields) {
+        if (change.changedFields.has(f) && !inSession.has(f)) {
+          relevant = true;
+          break;
+        }
+      }
+      if (relevant) {
+        setRulesUpdatedAt(change.at);
+      }
     };
     subs.add(trigger);
     return () => {
@@ -607,6 +677,24 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey, expanded]);
+
+  // Auto-clear the "rules updated from another session" hint a few seconds
+  // after it appears. Using `rulesUpdatedAt` (a timestamp, not a boolean) as
+  // the dep means a SECOND background change while the hint is still
+  // visible resets the timer cleanly — the operator gets the full window to
+  // notice the latest update rather than the hint vanishing mid-glance.
+  useEffect(() => {
+    if (rulesUpdatedAt === null) return;
+    const t = setTimeout(() => setRulesUpdatedAt(null), RULES_UPDATED_HINT_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [rulesUpdatedAt]);
+
+  // Collapsing the panel should drop the hint too — there's nothing for the
+  // operator to glance at while collapsed, and we don't want a stale hint
+  // re-appearing the next time they expand.
+  useEffect(() => {
+    if (!expanded && rulesUpdatedAt !== null) setRulesUpdatedAt(null);
+  }, [expanded, rulesUpdatedAt]);
 
   // Preload rules already saved for this event's (pageUrlPattern, formIdentifier)
   // scope, so operators triaging a backlog can see at a glance which captured
@@ -868,6 +956,15 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
           <p className="text-xs text-amber-200/85 bg-amber-500/[0.06] border border-amber-500/20 rounded-md px-2.5 py-1.5">
             {reason}
           </p>
+          {rulesUpdatedAt !== null && (
+            <p
+              role="status"
+              data-testid="rules-updated-hint"
+              className="text-[11px] text-sky-200/85 italic"
+            >
+              Rules updated from another session.
+            </p>
+          )}
 
           {fieldNames.length === 0 ? (
             <p className="text-[11px] text-muted-foreground italic">

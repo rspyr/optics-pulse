@@ -16,6 +16,7 @@ import {
   __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
   LEARNED_SUGGESTIONS_FRESHNESS_WINDOW_MS,
+  RULES_UPDATED_HINT_DURATION_MS,
   SCOPED_RULES_FRESHNESS_WINDOW_MS,
   UNDO_CONFIRMATION_TIMEOUT_MS,
   UnmatchedFieldsPanel,
@@ -1850,6 +1851,209 @@ describe("UnmatchedFieldsPanel", () => {
 
         // Still exactly one scoped GET — the hidden tab was left alone.
         expect(scopedGetCount()).toBe(1);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("surfaces a 'rules updated from another session' hint when the background refresh actually changes a rule for an expanded panel's field, and auto-clears it after the hint window", async () => {
+      const user = userEvent.setup();
+      let getCount = 0;
+      vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = (init?.method || "GET").toUpperCase();
+        if (url.includes("/api/field-mapping-rules/suggestions")) {
+          return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+        }
+        if (url.includes("/api/field-mapping-rules") && method === "GET") {
+          getCount++;
+          if (getCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }] }),
+            } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "email", id: 12 }] }),
+          } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+      // No hint on initial preload — that's not a "background refresh".
+      expect(screen.queryByTestId("rules-updated-hint")).not.toBeInTheDocument();
+
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+
+        // The hint shows up once the refresh resolves and the diff is applied.
+        const hint = await screen.findByTestId("rules-updated-hint");
+        expect(hint).toHaveTextContent(/rules updated from another session/i);
+        // And the badge re-hydrates to the new mapping in the same render.
+        expect(await screen.findByText(/already mapped → email/)).toBeInTheDocument();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+
+      // Hint auto-clears after its display window. The setTimeout was
+      // scheduled with the real wall clock (before any fake timers were
+      // installed), so we wait it out with a real-timer waitFor whose
+      // budget exceeds the hint duration.
+      await waitFor(
+        () => {
+          expect(screen.queryByTestId("rules-updated-hint")).not.toBeInTheDocument();
+        },
+        { timeout: RULES_UPDATED_HINT_DURATION_MS + 1000 },
+      );
+      // The badge stays — only the hint fades.
+      expect(screen.getByText(/already mapped → email/)).toBeInTheDocument();
+    });
+
+    it("does NOT show the hint when a background refresh returns the same rules (no real change)", async () => {
+      const user = userEvent.setup();
+      mockFetchAll({
+        rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        // Give the refresh promise a chance to settle.
+        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
+
+        // Same data came back → no hint, badge unchanged.
+        expect(screen.queryByTestId("rules-updated-hint")).not.toBeInTheDocument();
+        expect(screen.getByText(/already mapped → phone/)).toBeInTheDocument();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("does NOT show the hint when the only changed field was saved in this session (local write wins, no surprise to flag)", async () => {
+      const user = userEvent.setup();
+      let getCount = 0;
+      vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = (init?.method || "GET").toUpperCase();
+        if (url.includes("/api/field-mapping-rules/suggestions")) {
+          return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+        }
+        if (url.includes("/api/field-mapping-rules") && method === "GET") {
+          getCount++;
+          if (getCount === 1) {
+            return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+          }
+          // Background refresh: server still doesn't know about the local
+          // save, so it returns empty. The diff (snapshot has field_3,
+          // result doesn't) flags field_3 as changed — but field_3 is in
+          // the in-session save set so the panel must NOT show the hint.
+          return { ok: true, status: 200, json: async () => ({ rules: [] }) } as Response;
+        }
+        if (method === "POST") {
+          return { ok: true, status: 200, json: async () => ({ rule: { id: 99 } }) } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+      // Save a mapping locally — this puts field_3 into the in-session set.
+      const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+      await user.selectOptions(select, "phone");
+      await user.click(screen.getByRole("button", { name: /^Save$/ }));
+      expect(await screen.findByText(/^mapped → phone/)).toBeInTheDocument();
+
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(screen.queryByTestId("rules-updated-hint")).not.toBeInTheDocument();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("does NOT show the hint when the changed field isn't displayed by this panel (different scope's fields)", async () => {
+      const user = userEvent.setup();
+      let getCount = 0;
+      vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = (init?.method || "GET").toUpperCase();
+        if (url.includes("/api/field-mapping-rules/suggestions")) {
+          return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+        }
+        if (url.includes("/api/field-mapping-rules") && method === "GET") {
+          getCount++;
+          if (getCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }] }),
+            } as Response;
+          }
+          // Background refresh changed an UNRELATED field (field_99) for
+          // the same scope — this panel only displays field_3, so the
+          // hint should stay hidden.
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              rules: [
+                { fieldName: "field_3", mapsTo: "phone", id: 11 },
+                { fieldName: "field_99", mapsTo: "name", id: 22 },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      });
+
+      render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["field_3"] })} />);
+      await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+      expect(await screen.findByText(/already mapped → phone/)).toBeInTheDocument();
+
+      const dateNowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.now() + SCOPED_RULES_FRESHNESS_WINDOW_MS + 1000);
+
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(screen.queryByTestId("rules-updated-hint")).not.toBeInTheDocument();
       } finally {
         dateNowSpy.mockRestore();
       }
