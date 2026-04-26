@@ -447,7 +447,11 @@ describe("POST /collect/submit", () => {
     });
   });
 
-  it("emits field names (not values) on the live attribution payload", async () => {
+  // Task #288: the live attribution feed now mirrors the historical
+  // attribution side-peek (Task #287) and includes captured field values
+  // alongside field names so the same UnmatchedFieldsPanel renders the
+  // same name + value rows on both surfaces.
+  it("emits field names AND captured values on the live attribution payload", async () => {
     const tenant = { id: 11, name: "Tenant" };
     const fakeEvent = { id: 700, tenantId: 11 };
     mockDb.selectResults = [[tenant]];
@@ -469,14 +473,15 @@ describe("POST /collect/submit", () => {
     const payload = calls[0][1] as Record<string, unknown>;
 
     expect(payload.fieldNames).toEqual(["field_1", "field_2", "field_3", "comment"]);
-    const flat = JSON.stringify(payload);
-    expect(flat).not.toContain("Alice O'Sullivan");
-    expect(flat).not.toContain("alice@example.com");
-    expect(flat).not.toContain("555-1234");
-    expect(flat).not.toContain("Urgent");
+    expect(payload.fieldValues).toEqual({
+      field_1: "Alice O'Sullivan",
+      field_2: "alice@example.com",
+      field_3: "555-1234",
+      comment: "Urgent — broken AC",
+    });
   });
 
-  it("caps fieldNames at 30 and excludes underscore-prefixed keys", async () => {
+  it("caps fieldNames AND fieldValues at 30 and excludes underscore-prefixed keys", async () => {
     const tenant = { id: 12, name: "Tenant" };
     const fakeEvent = { id: 701, tenantId: 12 };
     mockDb.selectResults = [[tenant]];
@@ -496,6 +501,14 @@ describe("POST /collect/submit", () => {
     const names = payload.fieldNames as string[];
     expect(names.length).toBe(30);
     expect(names.every((n) => !n.startsWith("_"))).toBe(true);
+
+    const values = payload.fieldValues as Record<string, unknown>;
+    expect(Object.keys(values).length).toBe(30);
+    expect(Object.keys(values).every((n) => !n.startsWith("_"))).toBe(true);
+    // Keys returned in fieldValues are a subset of fieldNames (same order
+    // and same cap), so the panel never renders a value row for a name it
+    // doesn't have a key for.
+    expect(Object.keys(values)).toEqual(names);
   });
 
   it("sets unmatchedReason on unmatched events", async () => {

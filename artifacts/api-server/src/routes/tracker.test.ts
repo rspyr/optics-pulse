@@ -3,6 +3,7 @@ import { hashValue, normalizePhone } from "../lib/phone-utils";
 import {
   extractPiiFromFields,
   extractFieldNamesForOperator,
+  extractFieldEntriesForOperator,
   computeUnmatchedReason,
   FIELD_NAMES_CAP,
 } from "./tracker";
@@ -175,6 +176,46 @@ describe("extractFieldNamesForOperator", () => {
   it("returns [] for null/undefined input", () => {
     expect(extractFieldNamesForOperator(null)).toEqual([]);
     expect(extractFieldNamesForOperator(undefined)).toEqual([]);
+  });
+});
+
+// Companion to extractFieldNamesForOperator. Used by the live socket emit
+// (Task #288) so the Live Attribution Feed renders the same name + value
+// rows as the historical attribution side-peek (Task #287).
+describe("extractFieldEntriesForOperator", () => {
+  it("returns the captured values keyed by field name in insertion order", () => {
+    expect(extractFieldEntriesForOperator({ b: 1, a: "x", c: true })).toEqual({
+      b: 1, a: "x", c: true,
+    });
+  });
+
+  it("excludes underscore-prefixed internal keys (e.g. _custom)", () => {
+    expect(extractFieldEntriesForOperator({
+      phone: "555-1234",
+      _custom: { funnel: "y" },
+      _internal: 1,
+    })).toEqual({ phone: "555-1234" });
+  });
+
+  it("caps at the same FIELD_NAMES_CAP as the names helper", () => {
+    const fields: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) fields[`f${i}`] = `v${i}`;
+    const out = extractFieldEntriesForOperator(fields)!;
+    expect(Object.keys(out).length).toBe(FIELD_NAMES_CAP);
+    // Keys are a prefix of the names list — same source, same iteration
+    // order, so the panel never tries to render a value for a name that
+    // wasn't in the names list.
+    expect(Object.keys(out)).toEqual(extractFieldNamesForOperator(fields));
+  });
+
+  it("returns null for null/undefined input", () => {
+    expect(extractFieldEntriesForOperator(null)).toBeNull();
+    expect(extractFieldEntriesForOperator(undefined)).toBeNull();
+  });
+
+  it("returns null when there are no operator-visible keys", () => {
+    expect(extractFieldEntriesForOperator({})).toBeNull();
+    expect(extractFieldEntriesForOperator({ _custom: { x: 1 } })).toBeNull();
   });
 });
 

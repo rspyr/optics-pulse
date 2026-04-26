@@ -104,6 +104,29 @@ export function extractFieldNamesForOperator(fields: Record<string, unknown> | n
     .slice(0, FIELD_NAMES_CAP);
 }
 
+// Companion to extractFieldNamesForOperator that also returns the captured
+// values, so the Live Attribution Feed can render the same name+value rows
+// as the historical attribution side-peek (Task #287/#288). Same cap and
+// same underscore-prefix exclusion as the names list, so the keys returned
+// here are always a subset of the names returned by the names helper. We
+// keep raw captured values (not hashed) — the panel formats/redacts as it
+// sees fit. Returns null when there's nothing to send so the socket payload
+// stays small for events with no fields.
+export function extractFieldEntriesForOperator(
+  fields: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!fields || typeof fields !== "object") return null;
+  const out: Record<string, unknown> = {};
+  let count = 0;
+  for (const [k, v] of Object.entries(fields)) {
+    if (k.startsWith("_")) continue;
+    if (count >= FIELD_NAMES_CAP) break;
+    out[k] = v;
+    count++;
+  }
+  return count > 0 ? out : null;
+}
+
 // Build a one-line diagnosis for unmatched events explaining which signals
 // were missing. Returns null when the event is not unmatched — matched
 // events don't need a "why unmatched" hint. Shared between the live socket
@@ -328,6 +351,7 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     const matchConfidence = gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0;
 
     const liveFieldNames = extractFieldNamesForOperator(fields);
+    const liveFieldValues = extractFieldEntriesForOperator(fields);
 
     const unmatchedReason = computeUnmatchedReason({
       matchLevel,
@@ -394,6 +418,7 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       submittedAt: submittedAt instanceof Date ? submittedAt.toISOString() : submittedAt,
       receivedAt: new Date().toISOString(),
       fieldNames: liveFieldNames,
+      fieldValues: liveFieldValues,
       unmatchedReason,
     });
 

@@ -44,6 +44,11 @@ interface LiveAttributionEvent {
   submittedAt: string;
   receivedAt: string;
   fieldNames?: string[] | null;
+  // Captured form values keyed by field name, mirroring the historical
+  // attribution side-peek so the same UnmatchedFieldsPanel renders name +
+  // value rows here too. Server caps to the same 30-key limit as
+  // fieldNames and excludes `_`-prefixed internal keys.
+  fieldValues?: Record<string, unknown> | null;
   unmatchedReason?: string | null;
 }
 
