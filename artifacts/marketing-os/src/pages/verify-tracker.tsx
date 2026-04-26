@@ -719,10 +719,8 @@ function deriveMappingScope(evt: LiveAttributionEvent): { pageUrlPattern: string
 
 function UnmatchedFieldsPanel({ evt }: { evt: LiveAttributionEvent }) {
   const [expanded, setExpanded] = useState(false);
-  const [mappingField, setMappingField] = useState<string | null>(null);
-  const [selectedTarget, setSelectedTarget] = useState<string>("");
   const [savingField, setSavingField] = useState<string | null>(null);
-  const [savedFields, setSavedFields] = useState<Set<string>>(new Set());
+  const [savedFields, setSavedFields] = useState<Map<string, MapToTarget>>(new Map());
 
   const fieldNames = Array.isArray(evt.fieldNames) ? evt.fieldNames : [];
   const reason = evt.unmatchedReason || "Pulse could not link this fill to a known job, lead, or click.";
@@ -743,12 +741,10 @@ function UnmatchedFieldsPanel({ evt }: { evt: LiveAttributionEvent }) {
         return;
       }
       setSavedFields((prev) => {
-        const next = new Set(prev);
-        next.add(fieldName);
+        const next = new Map(prev);
+        next.set(fieldName, mapsTo);
         return next;
       });
-      setMappingField(null);
-      setSelectedTarget("");
       toast.success(`Mapped "${fieldName}" → ${mapsTo}. Applies to future fills of this form only.`);
     } catch {
       toast.error("Network error saving mapping rule.");
@@ -787,8 +783,7 @@ function UnmatchedFieldsPanel({ evt }: { evt: LiveAttributionEvent }) {
               </p>
               <div className="space-y-1">
                 {fieldNames.map((name) => {
-                  const isSaved = savedFields.has(name);
-                  const isEditing = mappingField === name;
+                  const savedAs = savedFields.get(name);
                   const isSaving = savingField === name;
                   return (
                     <div
@@ -796,52 +791,27 @@ function UnmatchedFieldsPanel({ evt }: { evt: LiveAttributionEvent }) {
                       className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5"
                     >
                       <code className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={name}>{name}</code>
-                      {isSaved ? (
+                      {savedAs ? (
                         <span className="flex items-center gap-1 text-[11px] text-emerald-300">
                           <Check className="w-3 h-3" />
-                          rule saved
+                          mapped → {savedAs}
                         </span>
-                      ) : isEditing ? (
-                        <>
-                          <select
-                            value={selectedTarget}
-                            onChange={(e) => setSelectedTarget(e.target.value)}
-                            disabled={isSaving}
-                            className="bg-black/40 border border-white/15 rounded text-[11px] text-white px-1.5 py-0.5"
-                          >
-                            <option value="">Select…</option>
-                            {MAP_TO_OPTIONS.map((opt) => (
-                              <option key={opt} value={opt}>{opt}</option>
-                            ))}
-                          </select>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={!selectedTarget || isSaving}
-                            onClick={() => saveMapping(name, selectedTarget as MapToTarget)}
-                            className="h-6 px-2 text-[11px]"
-                          >
-                            {isSaving ? "…" : "Save"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => { setMappingField(null); setSelectedTarget(""); }}
-                            disabled={isSaving}
-                            className="h-6 px-2 text-[11px] text-muted-foreground"
-                          >
-                            Cancel
-                          </Button>
-                        </>
                       ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => { setMappingField(name); setSelectedTarget(""); }}
-                          className="h-6 px-2 text-[11px] text-amber-300 hover:text-amber-200"
+                        <select
+                          aria-label={`Map ${name} to`}
+                          value=""
+                          disabled={isSaving}
+                          onChange={(e) => {
+                            const target = e.target.value as MapToTarget | "";
+                            if (target) saveMapping(name, target);
+                          }}
+                          className="bg-black/40 border border-white/15 rounded text-[11px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 cursor-pointer disabled:opacity-50"
                         >
-                          Map to…
-                        </Button>
+                          <option value="">{isSaving ? "Saving…" : "Map to…"}</option>
+                          {MAP_TO_OPTIONS.map((opt) => (
+                            <option key={opt} value={opt} className="text-white">{opt}</option>
+                          ))}
+                        </select>
                       )}
                     </div>
                   );
