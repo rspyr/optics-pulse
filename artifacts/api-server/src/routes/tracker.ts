@@ -89,6 +89,46 @@ function extractAddressFromFields(fields: Record<string, unknown>): string | nul
   return normalizeAddress(raw);
 }
 
+// PII-safe field-name list for the Live Attribution Feed AND the historical
+// attribution event detail panel. We expose the raw form field NAMES only
+// (never values) so operators can map an unrecognised field name (e.g.
+// `field_3`) to a semantic target (phone, email, …) without leaving the
+// page. Capped to keep the payload bounded. Underscore-prefixed keys are
+// internal (e.g. `_custom`) and are excluded.
+export const FIELD_NAMES_CAP = 30;
+
+export function extractFieldNamesForOperator(fields: Record<string, unknown> | null | undefined): string[] {
+  if (!fields || typeof fields !== "object") return [];
+  return Object.keys(fields)
+    .filter((k) => !k.startsWith("_"))
+    .slice(0, FIELD_NAMES_CAP);
+}
+
+// Build a one-line diagnosis for unmatched events explaining which signals
+// were missing. Returns null when the event is not unmatched — matched
+// events don't need a "why unmatched" hint. Shared between the live socket
+// emit and the historical attribution event detail endpoint so both
+// surfaces describe the same fill the same way.
+export function computeUnmatchedReason(opts: {
+  matchLevel: "diamond" | "golden" | "silver" | "bronze" | "unmatched";
+  hasAnyClickId: boolean;
+  hasPhoneSignal: boolean;
+  hasEmailSignal: boolean;
+}): string | null {
+  if (opts.matchLevel !== "unmatched") return null;
+  const { hasAnyClickId, hasPhoneSignal, hasEmailSignal } = opts;
+  if (!hasAnyClickId && !hasPhoneSignal && !hasEmailSignal) {
+    return "No phone or email field detected and no click ID present.";
+  }
+  if (hasAnyClickId && !hasPhoneSignal && !hasEmailSignal) {
+    return "Click ID present but no phone or email field detected.";
+  }
+  if (!hasAnyClickId && (hasPhoneSignal || hasEmailSignal)) {
+    return "Phone or email captured but the matcher did not produce a hashed value.";
+  }
+  return "Pulse could not link this fill to a known job, lead, or click.";
+}
+
 export function extractPiiFromFields(fields: Record<string, unknown>): { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } {
   const result: { firstName: string | null; lastName: string | null; email: string | null; phone: string | null } = {
     firstName: null, lastName: null, email: null, phone: null,
@@ -287,33 +327,14 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       : "unmatched" as const;
     const matchConfidence = gclid ? 1.0 : hashedPhone ? 0.9 : hashedEmail ? 0.8 : 0;
 
-    // PII-safe field-name list for the Live Attribution Feed. We send the raw
-    // form field NAMES only (never values) so operators can map an unrecognised
-    // field name (e.g. `field_3`) to a semantic target (phone, email, …) from
-    // the feed without leaving the page. Capped to keep the payload bounded.
-    const FIELD_NAMES_CAP = 30;
-    const liveFieldNames = Object.keys(fields)
-      .filter((k) => !k.startsWith("_"))
-      .slice(0, FIELD_NAMES_CAP);
+    const liveFieldNames = extractFieldNamesForOperator(fields);
 
-    // Build a one-line diagnosis for unmatched events explaining which signals
-    // were missing. Only populated when matchLevel === "unmatched" — matched
-    // events don't need a "why unmatched" hint.
-    let unmatchedReason: string | null = null;
-    if (matchLevel === "unmatched") {
-      const anyClickId = !!(gclid || fbclid || wbraid || msclkid || ttclid || liFatId);
-      const hasPhoneSignal = !!pii.phone;
-      const hasEmailSignal = !!pii.email;
-      if (!anyClickId && !hasPhoneSignal && !hasEmailSignal) {
-        unmatchedReason = "No phone or email field detected and no click ID present.";
-      } else if (anyClickId && !hasPhoneSignal && !hasEmailSignal) {
-        unmatchedReason = "Click ID present but no phone or email field detected.";
-      } else if (!anyClickId && (hasPhoneSignal || hasEmailSignal)) {
-        unmatchedReason = "Phone or email captured but the matcher did not produce a hashed value.";
-      } else {
-        unmatchedReason = "Pulse could not link this fill to a known job, lead, or click.";
-      }
-    }
+    const unmatchedReason = computeUnmatchedReason({
+      matchLevel,
+      hasAnyClickId: !!(gclid || fbclid || wbraid || msclkid || ttclid || liFatId),
+      hasPhoneSignal: !!pii.phone,
+      hasEmailSignal: !!pii.email,
+    });
 
     const [event] = await db.insert(attributionEventsTable).values({
       tenantId,

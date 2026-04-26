@@ -36,6 +36,17 @@ export interface AttributionEvent {
   formId?: string | null;
   formName?: string | null;
   formFields?: AttributionEventFormFields;
+  /** PII-safe form field NAMES (Object.keys, no `_*` keys, capped at 30).
+Populated on the event detail response so operators can map an
+unrecognised field name (e.g. `field_3`) to a semantic target
+(phone, email, …) for any past unmatched fill — not just live ones.
+ */
+  fieldNames?: string[] | null;
+  /** One-line diagnosis of why an event ended up matchLevel === "unmatched".
+Null on matched events. Computed on read so it always reflects the
+current heuristic (shared helper with the live socket emit).
+ */
+  unmatchedReason?: string | null;
   submittedAt?: Date | null;
   matchLevel?: AttributionEventMatchLevel;
   matchConfidence?: number | null;

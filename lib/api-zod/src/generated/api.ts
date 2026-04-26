@@ -397,6 +397,18 @@ export const ListAttributionEventsResponse = zod.object({
       formId: zod.string().nullish(),
       formName: zod.string().nullish(),
       formFields: zod.object({}).passthrough().nullish(),
+      fieldNames: zod
+        .array(zod.string())
+        .nullish()
+        .describe(
+          "PII-safe form field NAMES (Object.keys, no `_\*` keys, capped at 30).\nPopulated on the event detail response so operators can map an\nunrecognised field name (e.g. `field_3`) to a semantic target\n(phone, email, …) for any past unmatched fill — not just live ones.\n",
+        ),
+      unmatchedReason: zod
+        .string()
+        .nullish()
+        .describe(
+          'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nNull on matched events. Computed on read so it always reflects the\ncurrent heuristic (shared helper with the live socket emit).\n',
+        ),
       submittedAt: zod.date().nullish(),
       matchLevel: zod
         .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
@@ -443,6 +455,18 @@ export const GetAttributionEventResponse = zod.object({
     formId: zod.string().nullish(),
     formName: zod.string().nullish(),
     formFields: zod.object({}).passthrough().nullish(),
+    fieldNames: zod
+      .array(zod.string())
+      .nullish()
+      .describe(
+        "PII-safe form field NAMES (Object.keys, no `_\*` keys, capped at 30).\nPopulated on the event detail response so operators can map an\nunrecognised field name (e.g. `field_3`) to a semantic target\n(phone, email, …) for any past unmatched fill — not just live ones.\n",
+      ),
+    unmatchedReason: zod
+      .string()
+      .nullish()
+      .describe(
+        'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nNull on matched events. Computed on read so it always reflects the\ncurrent heuristic (shared helper with the live socket emit).\n',
+      ),
     submittedAt: zod.date().nullish(),
     matchLevel: zod
       .enum(["diamond", "golden", "silver", "bronze", "unmatched"])

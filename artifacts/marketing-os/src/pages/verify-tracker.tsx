@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { io as socketIOClient, type Socket } from "socket.io-client";
-import { toast } from "sonner";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";

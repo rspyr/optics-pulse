@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
+import { UnmatchedFieldsPanel } from "./unmatched-fields-panel";
 import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
@@ -380,7 +381,26 @@ export default function Attribution() {
                   </DetailSection>
                 )}
 
-                {effectiveTenantId && selectedEvent.formFields && (
+                {effectiveTenantId && selectedEvent.matchLevel === "unmatched" && (
+                  <DetailSection title="Why unmatched?" icon={<AlertTriangle className="w-4 h-4" />}>
+                    <p className="text-xs text-muted-foreground mb-1">
+                      Same panel as the Live Attribution Feed — backfill mapping rules from any past unmatched fill, not just live ones.
+                    </p>
+                    <UnmatchedFieldsPanel
+                      key={`unmatched-${selectedEvent.id}`}
+                      evt={{
+                        tenantId: effectiveTenantId,
+                        pageUrl: selectedEvent.pageUrl ?? null,
+                        formId: selectedEvent.formId ?? null,
+                        formName: selectedEvent.formName ?? null,
+                        fieldNames: selectedEvent.fieldNames,
+                        unmatchedReason: selectedEvent.unmatchedReason,
+                      }}
+                    />
+                  </DetailSection>
+                )}
+
+                {effectiveTenantId && selectedEvent.formFields && selectedEvent.matchLevel !== "unmatched" && (
                   <InlineFieldCorrection
                     key={`field-${selectedEvent.id}`}
                     tenantId={effectiveTenantId}
