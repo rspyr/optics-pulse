@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { toastMock } = vi.hoisted(() => ({
@@ -15,6 +15,7 @@ vi.mock("sonner", () => ({
 import {
   __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
+  UNDO_CONFIRMATION_TIMEOUT_MS,
   UnmatchedFieldsPanel,
   type UnmatchedFieldsPanelEvent,
 } from "../unmatched-fields-panel";
@@ -725,6 +726,162 @@ describe("UnmatchedFieldsPanel", () => {
       return (init?.method || "").toUpperCase() === "DELETE" && /\/api\/field-mapping-rules\/100/.test(url);
     });
     expect(deleteCalls.length).toBe(1);
+  });
+
+  it("auto-cancels an armed undo confirmation after a short idle period", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 999 } }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+
+    // Switch to fake timers AFTER the async setup is done — using fake timers
+    // earlier would freeze the polling inside findBy*/waitFor.
+    vi.useFakeTimers();
+    try {
+      // fireEvent is synchronous and avoids userEvent's internal delays
+      // (which would otherwise hang under fake timers).
+      fireEvent.click(undoBtn);
+      // Armed.
+      expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+      expect(screen.getByRole("button", { name: "Cancel undo for field_3" })).toBeInTheDocument();
+
+      // Just shy of the timeout — still armed.
+      act(() => {
+        vi.advanceTimersByTime(UNDO_CONFIRMATION_TIMEOUT_MS - 1);
+      });
+      expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+
+      // Cross the timeout — confirmation auto-disarms back to idle.
+      act(() => {
+        vi.advanceTimersByTime(2);
+      });
+      expect(undoBtn).toHaveTextContent(/^Undo$/);
+      expect(screen.queryByRole("button", { name: "Cancel undo for field_3" })).not.toBeInTheDocument();
+      // Mapping is still saved — the auto-cancel does NOT delete anything.
+      expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a fresh click within the idle window resets the auto-cancel timer", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 888 } }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(undoBtn);
+      expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+
+      // Operator cancels well before the timeout, then re-arms — the auto-
+      // cancel should restart from the second arming, not fire from the first.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel undo for field_3" }));
+      expect(undoBtn).toHaveTextContent(/^Undo$/);
+
+      fireEvent.click(undoBtn);
+      expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+
+      // Advance only past where the FIRST arming would have expired — the new
+      // arming should still be hot.
+      act(() => {
+        vi.advanceTimersByTime(UNDO_CONFIRMATION_TIMEOUT_MS - 500);
+      });
+      expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+
+      // Now cross the timeout for the second arming.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(undoBtn).toHaveTextContent(/^Undo$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapsing the 'Why unmatched?' panel disarms any pending undo confirmations inside it", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 444 } }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent() } />);
+    const toggle = screen.getByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    // Arm the undo confirmation.
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    await user.click(undoBtn);
+    expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+    expect(screen.getByRole("button", { name: "Cancel undo for field_3" })).toBeInTheDocument();
+
+    // Collapse the panel — the saved row unmounts, dropping its armed state.
+    await user.click(toggle);
+    expect(screen.queryByRole("button", { name: "Undo mapping for field_3" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel undo for field_3" })).not.toBeInTheDocument();
+
+    // Re-expand — the row comes back in its idle state, NOT still armed.
+    await user.click(toggle);
+    const undoBtnAgain = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    expect(undoBtnAgain).toHaveTextContent(/^Undo$/);
+    expect(screen.queryByRole("button", { name: "Cancel undo for field_3" })).not.toBeInTheDocument();
+    // Mapping is still saved — collapse/expand does not delete anything.
+    expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
   });
 
   it("silently tolerates a failing tenant-suggestions fetch (still falls back to the static heuristic)", async () => {

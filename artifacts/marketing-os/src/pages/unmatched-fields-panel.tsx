@@ -634,6 +634,12 @@ function UnmatchedFieldRow({
   );
 }
 
+// How long an armed Undo confirmation stays "hot" before it auto-disarms
+// itself. Long enough that an attentive operator can reach for the second
+// click, short enough that walking away clears the red state before a stray
+// click can fire the DELETE. Exported for tests so the value isn't duplicated.
+export const UNDO_CONFIRMATION_TIMEOUT_MS = 6000;
+
 function SavedFieldRow({
   name,
   savedAs,
@@ -661,6 +667,18 @@ function SavedFieldRow({
   // when several Undo buttons sit next to each other (e.g. after
   // "Save all suggested" lands several mappings in adjacent rows).
   const [confirming, setConfirming] = useState(false);
+
+  // If the operator arms the confirmation but never follows through, auto-
+  // disarm after a short idle window so a stray click later doesn't delete
+  // the saved mapping. Collapsing the parent panel unmounts this row, which
+  // also clears the armed state for free.
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = setTimeout(() => {
+      setConfirming(false);
+    }, UNDO_CONFIRMATION_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [confirming]);
 
   const handleUndoClick = () => {
     if (!canUndo || isUndoing || disabled) return;
