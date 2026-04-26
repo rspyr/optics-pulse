@@ -3,6 +3,8 @@ import {
   classifyScriptKind,
   extractScriptDataAttrs,
   buildFormInventory,
+  isScriptResponseDead,
+  computeInstallVerdict,
 } from "./verify-tracker";
 
 /**
@@ -124,5 +126,156 @@ describe("buildFormInventory", () => {
 
   it("returns an empty list for HTML with no forms or iframes", () => {
     expect(buildFormInventory("<p>Just text</p>", "https://example.com/")).toEqual([]);
+  });
+});
+
+/**
+ * Tests for Task #253: Verify Tracker should stop screaming "Wrong tracker
+ * installed" (red) when the legacy `tracker.js` URL is dead AND pulse.js is
+ * actively running via GTM. Instead it emits a `legacy-tag-dead` amber.
+ */
+describe("isScriptResponseDead", () => {
+  it("flags a fetch error as dead", () => {
+    expect(isScriptResponseDead({ ok: false, contentType: null, body: "", fetchError: "ETIMEDOUT" })).toBe(true);
+  });
+  it("flags a 4xx HTTP response as dead", () => {
+    expect(isScriptResponseDead({ ok: false, contentType: "text/plain", body: "Not Found" })).toBe(true);
+  });
+  it("flags an HTML body served as a script as dead (Vance failure mode)", () => {
+    expect(isScriptResponseDead({ ok: true, contentType: "text/html; charset=utf-8", body: "<!doctype html><html>404</html>" })).toBe(true);
+  });
+  it("flags HTML detected by body sniff when content-type is missing", () => {
+    expect(isScriptResponseDead({ ok: true, contentType: null, body: "<!DOCTYPE html><html>oops</html>" })).toBe(true);
+  });
+  it("flags non-JS content-types as dead", () => {
+    expect(isScriptResponseDead({ ok: true, contentType: "text/plain", body: "var x = 1;" })).toBe(true);
+  });
+  it("treats a real JS response as alive", () => {
+    expect(isScriptResponseDead({
+      ok: true,
+      contentType: "application/javascript",
+      body: `(function(){var ATTR_COOKIE="_attr_data"; fetch("/api/collect/submit");})();`,
+    })).toBe(false);
+  });
+  it("treats text/javascript responses as alive", () => {
+    expect(isScriptResponseDead({ ok: true, contentType: "text/javascript", body: "console.log('hi')" })).toBe(false);
+  });
+});
+
+describe("computeInstallVerdict — Task #253 legacy-tag-dead downgrade", () => {
+  it("(a) downgrades dead legacy URL + active pulse heartbeats → legacy-tag-dead amber", () => {
+    // Vance's exact failure mode: static HTML still has a <script src=tracker.js>
+    // tag pointing at a sleeping Replit app that returns HTML, but pulse.js is
+    // actively running via GTM so heartbeats are fresh.
+    const verdict = computeInstallVerdict({
+      pageScriptKind: "optics-legacy",
+      scripts: [{ kind: "optics-legacy", isDeadResource: true }],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    });
+    expect(verdict).toBe("legacy-tag-dead");
+  });
+
+  it("(b) regression guard — live legacy URL still serving JS → wrong-tracker-installed red", () => {
+    // The legacy script actually executes — this is genuinely the wrong tracker
+    // and submits will go to the wrong tenant. Must NOT downgrade.
+    const verdict = computeInstallVerdict({
+      pageScriptKind: "optics-legacy",
+      scripts: [{ kind: "optics-legacy", isDeadResource: false }],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    });
+    expect(verdict).toBe("wrong-tracker-installed");
+  });
+
+  it("(c) legacy tag with no heartbeats at all → wrong-tracker-installed red (no false-positive downgrade)", () => {
+    // Legacy URL is dead but there's no evidence that the new pulse is running
+    // anywhere. Cannot assume GTM is firing pulse.js — keep it red.
+    const verdict = computeInstallVerdict({
+      pageScriptKind: "optics-legacy",
+      scripts: [{ kind: "optics-legacy", isDeadResource: true }],
+      hasFreshHeartbeat: false,
+      hasAnyHeartbeat: false,
+      submitOk7d: 0,
+    });
+    expect(verdict).toBe("wrong-tracker-installed");
+  });
+
+  it("legacy tag dead but only stale heartbeats → wrong-tracker-installed red", () => {
+    // A heartbeat from 3 days ago is not proof that pulse is running NOW.
+    const verdict = computeInstallVerdict({
+      pageScriptKind: "optics-legacy",
+      scripts: [{ kind: "optics-legacy", isDeadResource: true }],
+      hasFreshHeartbeat: false,
+      hasAnyHeartbeat: true,
+      submitOk7d: 0,
+    });
+    expect(verdict).toBe("wrong-tracker-installed");
+  });
+
+  it("mixed legacy scripts (one dead, one alive) → wrong-tracker-installed (any live legacy script is an error)", () => {
+    const verdict = computeInstallVerdict({
+      pageScriptKind: "optics-legacy",
+      scripts: [
+        { kind: "optics-legacy", isDeadResource: true },
+        { kind: "optics-legacy", isDeadResource: false },
+      ],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    });
+    expect(verdict).toBe("wrong-tracker-installed");
+  });
+
+  it("pulse-current with fresh heartbeat and successful submits → pulse-ok", () => {
+    expect(computeInstallVerdict({
+      pageScriptKind: "pulse-current",
+      scripts: [{ kind: "pulse-current", isDeadResource: false }],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    })).toBe("pulse-ok");
+  });
+
+  it("pulse-current with stale heartbeat and successful submits → stale-install", () => {
+    expect(computeInstallVerdict({
+      pageScriptKind: "pulse-current",
+      scripts: [{ kind: "pulse-current", isDeadResource: false }],
+      hasFreshHeartbeat: false,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    })).toBe("stale-install");
+  });
+
+  it("pulse-current with heartbeat but no submits → heartbeat-only-never-submitted", () => {
+    expect(computeInstallVerdict({
+      pageScriptKind: "pulse-current",
+      scripts: [{ kind: "pulse-current", isDeadResource: false }],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 0,
+    })).toBe("heartbeat-only-never-submitted");
+  });
+
+  it("no script tag in HTML but heartbeat with submits (GTM-only install) → pulse-ok", () => {
+    expect(computeInstallVerdict({
+      pageScriptKind: "none",
+      scripts: [],
+      hasFreshHeartbeat: true,
+      hasAnyHeartbeat: true,
+      submitOk7d: 12,
+    })).toBe("pulse-ok");
+  });
+
+  it("no script tag and no heartbeat → no-tracker-found", () => {
+    expect(computeInstallVerdict({
+      pageScriptKind: "none",
+      scripts: [],
+      hasFreshHeartbeat: false,
+      hasAnyHeartbeat: false,
+      submitOk7d: 0,
+    })).toBe("no-tracker-found");
   });
 });

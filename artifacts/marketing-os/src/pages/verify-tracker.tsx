@@ -48,6 +48,7 @@ type ScriptKind = "pulse-current" | "pulse-legacy" | "optics-legacy" | "unknown-
 type InstallVerdict =
   | "pulse-ok"
   | "wrong-tracker-installed"
+  | "legacy-tag-dead"
   | "no-tracker-found"
   | "heartbeat-only-never-submitted"
   | "stale-install";
@@ -61,6 +62,7 @@ interface ScriptResult {
   looksLikePulse: boolean;
   kind: ScriptKind;
   dataAttrs: Record<string, string> | null;
+  isDeadResource?: boolean;
   error?: string;
 }
 
@@ -694,6 +696,7 @@ function InstallVerdictBanner({ verdict, pageScriptKind, captureUrl }: { verdict
   const config = {
     "pulse-ok": { color: "border-emerald-500/40 bg-emerald-500/[0.08]", chip: "bg-emerald-500/30 text-emerald-200", icon: <CheckCircle2 className="h-5 w-5 text-emerald-300" />, label: "Pulse OK", body: "Current Pulse build is installed and submits are flowing. Heartbeat fresh." },
     "wrong-tracker-installed": { color: "border-red-500/40 bg-red-500/[0.10]", chip: "bg-red-500/30 text-red-200", icon: <XCircle className="h-5 w-5 text-red-300" />, label: "Wrong tracker installed", body: pageScriptKind === "optics-legacy" ? "This page is loading the LEGACY Optics tracker (tracker.js / hvaclaunch-optics.replit.app). Submits go to a different deployment AND a different tenant id — this is the exact failure mode that broke Vance Heating. Replace with the Pulse install snippet from Settings → Tracker Health." : "This page has a tracker-shaped script tag that is not a recognised Pulse build." },
+    "legacy-tag-dead": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "Legacy tag is dead", body: "The legacy <script src=…tracker.js> tag is still in this page's HTML, but the URL is dead (returns non-JS / 4xx / 5xx). Pulse is actively running via GTM (heartbeats in the last 24h) — submits are flowing to the right tenant. The legacy tag is harmless. Remove the <script> tag from the page HTML at your convenience." },
     "no-tracker-found": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "No tracker found", body: "No <script src=…pulse.js> or recognised tracker tag in the static HTML. If pulse.js is injected via GTM, the static HTML scan won't see it — load the page in capture mode to confirm." },
     "heartbeat-only-never-submitted": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "Heartbeats but no submits", body: "pulse.js loads (heartbeats are coming in) but no successful submits in the last 7 days. Forms exist but pulse.js can't see them — check the form inventory below and use capture mode to investigate." },
     "stale-install": { color: "border-amber-500/40 bg-amber-500/[0.08]", chip: "bg-amber-500/30 text-amber-200", icon: <AlertTriangle className="h-5 w-5 text-amber-300" />, label: "Stale install", body: "Pulse is installed but the most recent heartbeat is over 24 hours old. Either the page hasn't been visited recently or the tracker has been removed." },

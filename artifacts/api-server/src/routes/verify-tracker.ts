@@ -381,6 +381,73 @@ export type ScriptVerdict =
   | { level: "warning"; message: string }
   | { level: "error"; message: string };
 
+export type InstallVerdict =
+  | "pulse-ok"
+  | "wrong-tracker-installed"
+  | "legacy-tag-dead"
+  | "no-tracker-found"
+  | "heartbeat-only-never-submitted"
+  | "stale-install";
+
+/**
+ * Pure, testable mapping from (page script kind + per-script dead-resource flags +
+ * heartbeat freshness + 7d submit-success count) to an install verdict.
+ *
+ * The crucial new rule lives here: an `optics-legacy` page is only flagged red as
+ * `wrong-tracker-installed` when the legacy URL is actually still serving JavaScript.
+ * When every legacy script tag is dead AND a fresh heartbeat exists in the last 24h
+ * (proving pulse.js is running via GTM), we downgrade to amber `legacy-tag-dead`.
+ */
+export function computeInstallVerdict(args: {
+  pageScriptKind: ScriptKind;
+  scripts: Array<{ kind: ScriptKind; isDeadResource: boolean }>;
+  hasFreshHeartbeat: boolean;
+  hasAnyHeartbeat: boolean;
+  submitOk7d: number;
+}): InstallVerdict {
+  const { pageScriptKind, scripts, hasFreshHeartbeat, hasAnyHeartbeat, submitOk7d } = args;
+  if (pageScriptKind === "optics-legacy") {
+    const opticsLegacyScripts = scripts.filter(s => s.kind === "optics-legacy");
+    const allLegacyDead = opticsLegacyScripts.length > 0 && opticsLegacyScripts.every(s => s.isDeadResource);
+    return (allLegacyDead && hasFreshHeartbeat) ? "legacy-tag-dead" : "wrong-tracker-installed";
+  }
+  if (pageScriptKind === "pulse-current" || pageScriptKind === "pulse-legacy") {
+    if (submitOk7d === 0 && hasAnyHeartbeat) return "heartbeat-only-never-submitted";
+    if (hasAnyHeartbeat && !hasFreshHeartbeat) return "stale-install";
+    return "pulse-ok";
+  }
+  if (hasAnyHeartbeat) {
+    return submitOk7d > 0 ? "pulse-ok" : "heartbeat-only-never-submitted";
+  }
+  return "no-tracker-found";
+}
+
+/**
+ * Reports whether a fetched script response is "dead" from the browser's perspective:
+ * fetch error, non-2xx HTTP, HTML body served as a script, or a non-JS content-type.
+ * A live, executing JS file is the ONLY non-dead case.
+ *
+ * Used by the install-verdict logic to downgrade a legacy `tracker.js` `<script>` tag
+ * to a `legacy-tag-dead` warning when the URL no longer serves JS but pulse.js is
+ * known to be running via GTM (active heartbeats).
+ */
+export function isScriptResponseDead(args: {
+  ok: boolean;
+  contentType: string | null;
+  body: string;
+  fetchError?: string;
+}): boolean {
+  const { ok, contentType, body, fetchError } = args;
+  if (fetchError) return true;
+  if (!ok) return true;
+  const ctRaw = (contentType || "").toLowerCase();
+  const isJs = ctRaw.includes("javascript") || ctRaw.includes("ecmascript");
+  const isHtmlScript = ctRaw.includes("text/html") || (!ctRaw && /<!doctype html|<html[\s>]/i.test(body));
+  if (isHtmlScript) return true;
+  if (!isJs) return true;
+  return false;
+}
+
 /**
  * Classifies a fetched script response into a verdict. Critically: an HTML response is
  * ALWAYS an error — even when the URL path looks like our tracker (Vance failure mode).
@@ -481,8 +548,21 @@ router.post("/verify-tracker", async (req, res) => {
     looksLikePulse: boolean;
     kind: ScriptKind;
     dataAttrs: Record<string, string> | null;
+    isDeadResource: boolean;
     error?: string;
   }> = [];
+
+  // Optics-legacy script + page-level findings are deferred until after the
+  // heartbeat lookup, so we can downgrade them from red ("wrong tracker
+  // installed") to amber ("legacy tag is dead — Pulse is running via GTM")
+  // when the legacy URL is provably dead AND fresh heartbeats are present.
+  const deferredOpticsLegacyScriptFindings: Array<{
+    src: string;
+    level: "warning" | "error";
+    message: string;
+    isDead: boolean;
+  }> = [];
+  let pageScriptKindIsOpticsLegacy = false;
 
   // page verdict = best of (pulse-current > pulse-legacy > optics-legacy > unknown-tracker > none)
   let pageScriptKind: ScriptKind = "none";
@@ -499,7 +579,7 @@ router.post("/verify-tracker", async (req, res) => {
     const dataAttrs = extractScriptDataAttrs(page.body, src);
     if (!resolved) {
       const kind: ScriptKind = classifyScriptKind({ src, resolvedUrl: null, ok: false, contentType: null, body: "" });
-      scripts.push({ src, resolvedUrl: null, status: 0, contentType: null, bytes: 0, looksLikePulse: false, kind, dataAttrs, error: "Could not resolve URL" });
+      scripts.push({ src, resolvedUrl: null, status: 0, contentType: null, bytes: 0, looksLikePulse: false, kind, dataAttrs, isDeadResource: true, error: "Could not resolve URL" });
       if (rankKind(kind) > rankKind(pageScriptKind)) pageScriptKind = kind;
       continue;
     }
@@ -510,6 +590,9 @@ router.post("/verify-tracker", async (req, res) => {
     const kind: ScriptKind = classifyScriptKind({
       src, resolvedUrl: resolved, ok: r.ok, contentType: r.contentType, body: r.body,
     });
+    const isDeadResource = isScriptResponseDead({
+      ok: r.ok, contentType: r.contentType, body: r.body, fetchError: r.error,
+    });
     scripts.push({
       src,
       resolvedUrl: resolved,
@@ -519,20 +602,28 @@ router.post("/verify-tracker", async (req, res) => {
       looksLikePulse: looksLikePulseScript(resolved, r.body),
       kind,
       dataAttrs,
+      isDeadResource,
       error: r.error,
     });
     if (verdict.level !== "ok") {
-      findings.push({ level: verdict.level, message: verdict.message });
+      // Defer optics-legacy script findings: severity depends on whether the
+      // legacy URL is dead AND pulse-current is running via GTM (heartbeats).
+      if (kind === "optics-legacy") {
+        deferredOpticsLegacyScriptFindings.push({
+          src, level: verdict.level, message: verdict.message, isDead: isDeadResource,
+        });
+      } else {
+        findings.push({ level: verdict.level, message: verdict.message });
+      }
     }
     if (rankKind(kind) > rankKind(pageScriptKind)) pageScriptKind = kind;
   }
 
   // banner-ready: page is on the wrong tracker entirely
+  // optics-legacy push is deferred until after the heartbeat lookup so we can
+  // downgrade it to amber when the legacy tag is dead + pulse is alive via GTM.
   if (pageScriptKind === "optics-legacy") {
-    findings.push({
-      level: "error",
-      message: `This page loads the LEGACY Optics tracker (tracker.js / hvaclaunch-optics.replit.app), not the current Pulse build. Submits will go to the wrong deployment and a different tenant id — this is exactly how the Vance Heating outage happened. Replace the script tag with the per-tenant Pulse install snippet from Settings → Tracker Health.`,
-    });
+    pageScriptKindIsOpticsLegacy = true;
   } else if (pageScriptKind === "pulse-legacy") {
     findings.push({
       level: "warning",
@@ -694,20 +785,44 @@ router.post("/verify-tracker", async (req, res) => {
   ]);
 
   // per-domain install verdict (script + heartbeat + submit history)
-  let installVerdict: "pulse-ok" | "wrong-tracker-installed" | "no-tracker-found" | "heartbeat-only-never-submitted" | "stale-install" = "no-tracker-found";
-  if (pageScriptKind === "optics-legacy") {
-    installVerdict = "wrong-tracker-installed";
-  } else if (pageScriptKind === "pulse-current" || pageScriptKind === "pulse-legacy") {
-    if (breakdown7d.submitOk === 0 && heartbeats.length > 0) {
-      installVerdict = "heartbeat-only-never-submitted";
-    } else if (heartbeats.length > 0 && new Date(heartbeats[0].lastSeenAt) < twentyFourHoursAgo) {
-      installVerdict = "stale-install";
-    } else {
-      installVerdict = "pulse-ok";
+  const hasFreshHeartbeat = heartbeats.length > 0 && new Date(heartbeats[0].lastSeenAt) >= twentyFourHoursAgo;
+  const installVerdict: InstallVerdict = computeInstallVerdict({
+    pageScriptKind,
+    scripts: scripts.map(s => ({ kind: s.kind, isDeadResource: s.isDeadResource })),
+    hasFreshHeartbeat,
+    hasAnyHeartbeat: heartbeats.length > 0,
+    submitOk7d: breakdown7d.submitOk,
+  });
+
+  // Now that the install verdict is known, push the deferred optics-legacy
+  // findings at the right severity. When `legacy-tag-dead` is in effect, the
+  // operator does not need a red alarm — Pulse is running via GTM and the
+  // legacy <script> tag is harmless until it can be removed.
+  if (installVerdict === "legacy-tag-dead") {
+    for (const f of deferredOpticsLegacyScriptFindings) {
+      findings.push({
+        level: "warning",
+        message: f.isDead
+          ? `Legacy <script src="${f.src}"> is dead (URL no longer serves JavaScript). Pulse is running via GTM — this tag is harmless. Remove it from the page HTML when convenient.`
+          : f.message,
+      });
     }
-  } else if (heartbeats.length > 0) {
-    // no script tag in static HTML but heartbeat exists (probably GTM-injected)
-    installVerdict = breakdown7d.submitOk > 0 ? "pulse-ok" : "heartbeat-only-never-submitted";
+    if (pageScriptKindIsOpticsLegacy) {
+      findings.push({
+        level: "warning",
+        message: `Legacy <script src=…tracker.js> tag still in this page's HTML, but the URL is dead (returns non-JS / 4xx / 5xx). Pulse.js is actively running via GTM (active heartbeat in the last 24h) — safe to remove the legacy tag at your convenience. No action required for tracking.`,
+      });
+    }
+  } else {
+    for (const f of deferredOpticsLegacyScriptFindings) {
+      findings.push({ level: f.level, message: f.message });
+    }
+    if (pageScriptKindIsOpticsLegacy) {
+      findings.push({
+        level: "error",
+        message: `This page loads the LEGACY Optics tracker (tracker.js / hvaclaunch-optics.replit.app), not the current Pulse build. Submits will go to the wrong deployment and a different tenant id — this is exactly how the Vance Heating outage happened. Replace the script tag with the per-tenant Pulse install snippet from Settings → Tracker Health.`,
+      });
+    }
   }
 
   const overall: "green" | "amber" | "red" =
