@@ -39,6 +39,7 @@ vi.mock("sonner", () => ({
 }));
 
 import VerifyTracker from "../verify-tracker";
+import { __resetLearnedSuggestionsCacheForTests } from "../unmatched-fields-panel";
 
 function makeVerifyResult(overrides: Record<string, unknown> = {}) {
   return {
@@ -75,10 +76,14 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
     // The page persists captured events to localStorage by host —
     // clear so events don't leak between tests.
     window.localStorage.clear();
+    // Prefetch and panel hydration share a module-level cache; reset it so
+    // prior tests don't make the prefetch a no-op cache hit.
+    __resetLearnedSuggestionsCacheForTests();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    __resetLearnedSuggestionsCacheForTests();
   });
 
   it("renders UnmatchedFieldsPanel inside the matching LiveEventCard when an unmatched event arrives over the socket", async () => {
@@ -210,5 +215,90 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
       expect(screen.getByText(/Event #9002/)).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: /Why unmatched\?/ })).not.toBeInTheDocument();
+  });
+
+  // Task #282: prefetch field-mapping rules for visible unmatched events so
+  // the first time the operator clicks "Why unmatched?" the panel hydrates
+  // from the shared cache instead of paying the round-trip.
+  it("prefetches field-mapping rules when an unmatched event arrives, so expanding the panel issues no extra GET", async () => {
+    const user = userEvent.setup();
+
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules") && method === "GET") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ rules: [{ id: 77, fieldName: "field_3", mapsTo: "phone" }] }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    socketState.handlers.get("connect")!();
+    socketState.handlers.get("new-attribution-event")!({
+      id: 9101,
+      tenantId: 42,
+      matchLevel: "unmatched",
+      matchConfidence: 0,
+      resolvedLeadSource: null,
+      resolvedFunnel: null,
+      formType: "native",
+      formId: "ac-breakdown-prevention",
+      formName: "AC Breakdown",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true,
+      hasEmail: false,
+      gclid: null,
+      utmSource: null,
+      utmMedium: null,
+      utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z",
+      receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["field_3", "field_4"],
+      unmatchedReason: "No matching click or lead found.",
+    });
+
+    const ruleGetsFor = () =>
+      fetchMock.mock.calls.filter(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "GET"
+          && url.includes("/api/field-mapping-rules")
+          && !url.includes("/suggestions")
+          && url.includes("pageUrlPattern=");
+      });
+
+    // Prefetch should fire as soon as the unmatched event renders.
+    await waitFor(() => {
+      expect(ruleGetsFor().length).toBe(1);
+    });
+    const prefetchCount = ruleGetsFor().length;
+
+    // Now the operator opens the panel. The shared cache should already have
+    // the rule, so expanding must NOT issue an additional rules-fetch.
+    const toggle = await screen.findByRole("button", { name: /Why unmatched\?/ });
+    await user.click(toggle);
+
+    // The preloaded rule from the prefetch should appear instantly.
+    await waitFor(() => {
+      expect(screen.getByText(/already mapped → phone/)).toBeInTheDocument();
+    });
+
+    // Still exactly the prefetched count — no extra GET on expand.
+    expect(ruleGetsFor().length).toBe(prefetchCount);
   });
 });

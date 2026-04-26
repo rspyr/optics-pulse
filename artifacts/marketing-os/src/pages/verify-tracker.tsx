@@ -4,7 +4,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Loader2, Radio } from "lucide-react";
-import { UnmatchedFieldsPanel } from "./unmatched-fields-panel";
+import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -581,6 +581,20 @@ function LiveEventCard({
   const hasEvents = events.length > 0;
   const timedOut = waitingSince !== null && !hasEvents && seconds >= 60;
   const hasPriorSession = events.some(e => e.sessionId !== currentSessionId);
+
+  // Opportunistically prefetch field-mapping rules for every visible unmatched
+  // event so the first time the operator clicks "Why unmatched?" the rule list
+  // is already in cache. Deduped by scope inside the hook; errors swallowed.
+  usePrefetchScopedRules(
+    events
+      .filter(({ evt }) => evt.matchLevel === "unmatched")
+      .map(({ evt }) => ({
+        tenantId: evt.tenantId,
+        pageUrl: evt.pageUrl ?? null,
+        formId: evt.formId ?? null,
+        formName: evt.formName ?? null,
+      })),
+  );
 
   return (
     <PremiumCard className="p-6">

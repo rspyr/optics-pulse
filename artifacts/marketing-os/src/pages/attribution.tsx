@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
-import { UnmatchedFieldsPanel } from "./unmatched-fields-panel";
+import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
 import { formatFieldValue } from "@/lib/format-field-value";
 import { format } from "date-fns";
 import {
@@ -103,6 +103,25 @@ export default function Attribution() {
   const selectedEvent = detailData?.event;
   const matchedJob = detailData?.matchedJob;
   const matchedLead = detailData?.matchedLead;
+
+  // Opportunistically prefetch field-mapping rules for every visible unmatched
+  // event so the first time the operator opens the per-event sheet and expands
+  // the "Why unmatched?" panel, the rule list is already in cache. Deduped by
+  // scope inside the hook; errors are swallowed.
+  const prefetchTargets = effectiveTenantId
+    ? filteredEvents
+        .filter((ev) => ev.matchLevel === "unmatched")
+        .map((ev) => {
+          const e = ev as Record<string, unknown>;
+          return {
+            tenantId: effectiveTenantId,
+            pageUrl: (e.pageUrl as string | null | undefined) ?? null,
+            formId: (e.formId as string | null | undefined) ?? null,
+            formName: (e.formName as string | null | undefined) ?? null,
+          };
+        })
+    : [];
+  usePrefetchScopedRules(prefetchTargets);
 
   return (
     <div className="space-y-6">

@@ -273,6 +273,48 @@ export function __resetScopedRulesCacheForTests() {
   scopedRulesSubscribers.clear();
 }
 
+// Opportunistically warm the shared scoped-rules cache for a list of visible
+// (or about-to-be-visible) unmatched events. Callers on the live attribution
+// feed and the past-unmatched view pass the events they're rendering; this
+// hook fans out a `fetchScopedRules` per unique (tenantId, pageUrlPattern,
+// formIdentifier) scope so the FIRST expand for any given panel hits the
+// cache instead of paying a round-trip.
+//
+// - Deduped: each scope key is only attempted once per hook instance, even
+//   if the event list re-renders or contains many events sharing a scope.
+// - `fetchScopedRules` itself also dedupes via its module-level cache and
+//   in-flight map, so even cross-page mounts won't fan out duplicate GETs.
+// - Errors are swallowed; if the prefetch fails, the panel still falls back
+//   to "no rules" the first time the operator expands it.
+export function usePrefetchScopedRules(
+  events: ReadonlyArray<
+    Pick<UnmatchedFieldsPanelEvent, "tenantId" | "pageUrl" | "formId" | "formName">
+  >,
+) {
+  const attemptedRef = useRef<Set<string>>(new Set());
+  // Fingerprint the relevant fields so the effect re-runs only when the set
+  // of scopes actually changes (not on every parent re-render).
+  const fingerprint = events
+    .map(
+      (e) =>
+        `${e.tenantId}\u0001${e.pageUrl ?? ""}\u0001${e.formId ?? ""}\u0001${e.formName ?? ""}`,
+    )
+    .join("\u0002");
+  useEffect(() => {
+    for (const evt of events) {
+      const { pageUrlPattern, formIdentifier } = deriveMappingScope(evt);
+      const key = scopeKeyOf(evt.tenantId, pageUrlPattern, formIdentifier);
+      if (attemptedRef.current.has(key)) continue;
+      attemptedRef.current.add(key);
+      // Swallow errors — fetchScopedRules already handles network/HTTP errors
+      // internally, but guard against unexpected throws so a bad event in the
+      // list never surfaces a toast or breaks the host page.
+      void fetchScopedRules(evt.tenantId, pageUrlPattern, formIdentifier).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fingerprint]);
+}
+
 export function __resetLearnedSuggestionsCacheForTests() {
   learnedSuggestionsByTenant.clear();
   learnedFetchInflight.clear();

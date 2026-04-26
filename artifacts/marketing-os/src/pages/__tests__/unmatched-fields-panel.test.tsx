@@ -18,6 +18,7 @@ import {
   SCOPED_RULES_FRESHNESS_WINDOW_MS,
   UNDO_CONFIRMATION_TIMEOUT_MS,
   UnmatchedFieldsPanel,
+  usePrefetchScopedRules,
   type UnmatchedFieldsPanelEvent,
 } from "../unmatched-fields-panel";
 
@@ -1554,6 +1555,129 @@ describe("UnmatchedFieldsPanel", () => {
         && url.includes("pageUrlPattern=");
     });
     expect(ruleGets.length).toBe(1);
+  });
+
+  // ---------------------------------------------------------------
+  // Prefetch (Task #282): visible unmatched events warm the shared
+  // scoped-rules cache so the FIRST expand for any given panel hits
+  // the cache instead of paying a round-trip.
+  // ---------------------------------------------------------------
+
+  it("usePrefetchScopedRules issues exactly one rules-fetch per unique scope and dedupes shared scopes", async () => {
+    const fetchMock = mockFetchAll({});
+
+    function Harness({
+      events,
+    }: {
+      events: Array<Pick<UnmatchedFieldsPanelEvent, "tenantId" | "pageUrl" | "formId" | "formName">>;
+    }) {
+      usePrefetchScopedRules(events);
+      return null;
+    }
+
+    // Three events: two share a scope (same pageUrl + formId), one is distinct.
+    const sharedA = { tenantId: 42, pageUrl: "https://example.com/contact", formId: "form-A", formName: null };
+    const sharedB = { tenantId: 42, pageUrl: "https://example.com/contact", formId: "form-A", formName: null };
+    const distinct = { tenantId: 42, pageUrl: "https://example.com/quote", formId: "form-B", formName: null };
+
+    render(<Harness events={[sharedA, sharedB, distinct]} />);
+
+    await waitFor(() => {
+      const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "GET"
+          && url.includes("/api/field-mapping-rules")
+          && !url.includes("/suggestions")
+          && url.includes("pageUrlPattern=");
+      });
+      // Two unique scopes → exactly two GETs (sharedA and sharedB collapse).
+      expect(ruleGets.length).toBe(2);
+    });
+  });
+
+  it("expanding a panel whose scope was prefetched issues no additional GET", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchAll({
+      rules: [{ fieldName: "field_3", mapsTo: "phone", id: 11 }],
+    });
+
+    const evt = makeEvent({ fieldNames: ["field_3", "field_4"] });
+
+    function Harness({ enablePanel }: { enablePanel: boolean }) {
+      // Prefetch warms the shared cache for the event's scope.
+      usePrefetchScopedRules([{
+        tenantId: evt.tenantId,
+        pageUrl: evt.pageUrl,
+        formId: evt.formId,
+        formName: evt.formName,
+      }]);
+      return enablePanel ? <UnmatchedFieldsPanel evt={evt} /> : null;
+    }
+
+    // First mount: prefetch only — wait for it to land in the cache.
+    const { rerender } = render(<Harness enablePanel={false} />);
+
+    await waitFor(() => {
+      const ruleGets = fetchMock.mock.calls.filter(([u, init]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+        return method === "GET"
+          && url.includes("/api/field-mapping-rules")
+          && !url.includes("/suggestions")
+          && url.includes("pageUrlPattern=");
+      });
+      expect(ruleGets.length).toBe(1);
+    });
+
+    // Now mount the panel and expand it. Because the scope was prefetched,
+    // the panel should hydrate from the shared cache and issue NO additional
+    // GET against /api/field-mapping-rules.
+    rerender(<Harness enablePanel={true} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    // The preloaded rule should be visible without any extra fetch.
+    await waitFor(() => {
+      expect(screen.getByText(/already mapped → phone/)).toBeInTheDocument();
+    });
+
+    const ruleGetsAfter = fetchMock.mock.calls.filter(([u, init]) => {
+      const url = typeof u === "string" ? u : (u as URL | Request).toString();
+      const method = ((init as RequestInit | undefined)?.method || "GET").toUpperCase();
+      return method === "GET"
+        && url.includes("/api/field-mapping-rules")
+        && !url.includes("/suggestions")
+        && url.includes("pageUrlPattern=");
+    });
+    // Still exactly one rules-fetch — the prefetch one. The expand was free.
+    expect(ruleGetsAfter.length).toBe(1);
+  });
+
+  it("usePrefetchScopedRules swallows fetch errors silently (no toast)", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async () => {
+      throw new Error("network down");
+    });
+
+    function Harness() {
+      usePrefetchScopedRules([{
+        tenantId: 99,
+        pageUrl: "https://example.com/contact",
+        formId: "form-X",
+        formName: null,
+      }]);
+      return null;
+    }
+
+    render(<Harness />);
+
+    // Give the prefetch microtask a chance to run.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(toastMock.error).not.toHaveBeenCalled();
+    expect(toastMock.success).not.toHaveBeenCalled();
   });
 
   it("panels with different scopes do NOT share the cache — each issues its own rules-fetch", async () => {
