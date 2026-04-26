@@ -40,6 +40,13 @@ export const attributionEventsTable = pgTable("attribution_events", {
   submittedAt: timestamp("submitted_at"),
   matchLevel: matchLevelEnum("match_level"),
   matchConfidence: real("match_confidence"),
+  // One-line "why unmatched?" diagnosis frozen at insert time so audit
+  // trails and old screenshots stay reproducible even if the heuristic
+  // (computeUnmatchedReason in routes/tracker.ts) is reworded later.
+  // Null on matched events and on legacy rows written before this column
+  // was added — the read-side fallback in /attribution/events/:id
+  // recomputes on demand for those cases.
+  unmatchedReason: text("unmatched_reason"),
   createdLeadId: integer("created_lead_id").references(() => leadsTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({

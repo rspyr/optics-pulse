@@ -160,35 +160,44 @@ router.get("/attribution/events/:id", async (req, res) => {
       if (lead) matchedLead = lead;
     }
 
-    // Surface the same redacted field-name list + computed unmatched reason
-    // that the live socket emit exposes, so operators can backfill mapping
+    // Surface the same redacted field-name list + unmatched reason that
+    // the live socket emit exposes, so operators can backfill mapping
     // rules from any past unmatched fill — not just one they happened to
-    // be watching live. The values are derived (not persisted on the
-    // event row) so they always reflect the current heuristic. Helpers
-    // are shared with /collect/submit in tracker.ts.
+    // be watching live. Helpers are shared with /collect/submit in
+    // tracker.ts.
     //
-    // IMPORTANT: phone/email signals must mirror the live flow, which uses
-    // the *captured* (pre-hash) values — `hasPhoneSignal: !!pii.phone`. If
-    // we only checked `event.hashedPhone` we would lose the "phone/email
-    // captured but matcher produced no hash" reason for past events. We
-    // re-derive raw PII from the stored form fields using the same helper
-    // the live submit handler uses (extractPiiFromFields). The remaining
-    // gap vs. live is that the live flow runs the richer detectFields()
-    // pipeline (which can pick up tenant-specific aliases on top of
-    // extractPiiFromFields) — for read-side parity that's good enough,
-    // and follow-up #263 will eliminate the gap by persisting the reason
-    // at write time.
+    // The unmatched reason is now persisted on the event row at insert
+    // time (column `unmatched_reason`, migration 0042) so historical
+    // detail loads return the exact wording the event was originally
+    // classified with — important for audit trails and old screenshots
+    // that would otherwise silently re-explain themselves if the
+    // heuristic is later reworded.
+    //
+    // For legacy rows written before that column existed, the value will
+    // be null and we recompute on the fly as a fallback. The fallback
+    // mirrors the live flow's signal sources: phone/email come from the
+    // *captured* (pre-hash) values (`!!pii.phone`), not just the hashed
+    // columns, otherwise we would lose the "phone/email captured but
+    // matcher produced no hash" reason. We re-derive raw PII from the
+    // stored form fields using the same helper the live submit handler
+    // uses (extractPiiFromFields). The only remaining gap vs. live is
+    // that the live flow runs the richer detectFields() pipeline (which
+    // can pick up tenant-specific aliases on top of extractPiiFromFields)
+    // — that gap is now bounded to legacy rows only.
     const formFieldsRecord = (event.formFields ?? null) as Record<string, unknown> | null;
     const fieldNames = extractFieldNamesForOperator(formFieldsRecord);
-    const piiFromStoredFields = formFieldsRecord
-      ? extractPiiFromFields(formFieldsRecord)
-      : { phone: null, email: null, firstName: null, lastName: null };
-    const unmatchedReason = computeUnmatchedReason({
-      matchLevel: (event.matchLevel ?? "unmatched") as "diamond" | "golden" | "silver" | "bronze" | "unmatched",
-      hasAnyClickId: !!(event.gclid || event.fbclid || event.wbraid || event.msclkid || event.ttclid || event.liFatId),
-      hasPhoneSignal: !!piiFromStoredFields.phone || !!event.hashedPhone,
-      hasEmailSignal: !!piiFromStoredFields.email || !!event.hashedEmail,
-    });
+    let unmatchedReason = event.unmatchedReason ?? null;
+    if (unmatchedReason === null && event.matchLevel === "unmatched") {
+      const piiFromStoredFields = formFieldsRecord
+        ? extractPiiFromFields(formFieldsRecord)
+        : { phone: null, email: null, firstName: null, lastName: null };
+      unmatchedReason = computeUnmatchedReason({
+        matchLevel: (event.matchLevel ?? "unmatched") as "diamond" | "golden" | "silver" | "bronze" | "unmatched",
+        hasAnyClickId: !!(event.gclid || event.fbclid || event.wbraid || event.msclkid || event.ttclid || event.liFatId),
+        hasPhoneSignal: !!piiFromStoredFields.phone || !!event.hashedPhone,
+        hasEmailSignal: !!piiFromStoredFields.email || !!event.hashedEmail,
+      });
+    }
 
     res.json({
       event: { ...event, fieldNames, unmatchedReason },

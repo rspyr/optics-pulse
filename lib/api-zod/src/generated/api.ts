@@ -407,7 +407,7 @@ export const ListAttributionEventsResponse = zod.object({
         .string()
         .nullish()
         .describe(
-          'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nNull on matched events. Computed on read so it always reflects the\ncurrent heuristic (shared helper with the live socket emit).\n',
+          'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nPersisted on the event row at insert time (column unmatched_reason)\nso audit trails and old screenshots stay reproducible even if the\nheuristic is reworded later. Null on matched events and on legacy\nrows written before the column existed; for those legacy unmatched\nrows the detail endpoint recomputes on read using the same shared\nhelper as the live socket emit.\n',
         ),
       submittedAt: zod.date().nullish(),
       matchLevel: zod
@@ -465,7 +465,7 @@ export const GetAttributionEventResponse = zod.object({
       .string()
       .nullish()
       .describe(
-        'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nNull on matched events. Computed on read so it always reflects the\ncurrent heuristic (shared helper with the live socket emit).\n',
+        'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nPersisted on the event row at insert time (column unmatched_reason)\nso audit trails and old screenshots stay reproducible even if the\nheuristic is reworded later. Null on matched events and on legacy\nrows written before the column existed; for those legacy unmatched\nrows the detail endpoint recomputes on read using the same shared\nhelper as the live socket emit.\n',
       ),
     submittedAt: zod.date().nullish(),
     matchLevel: zod

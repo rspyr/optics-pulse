@@ -367,6 +367,11 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       submittedAt,
       matchLevel,
       matchConfidence,
+      // Persist the diagnosis so historical reads return the exact wording
+      // the event was classified with at write time, even if the heuristic
+      // is later reworded. Read-side falls back to recomputing when null
+      // (legacy rows written before column 0042 existed).
+      unmatchedReason,
     }).returning();
 
     emitNewAttributionEvent(tenantId, {

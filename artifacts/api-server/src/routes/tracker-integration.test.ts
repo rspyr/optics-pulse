@@ -517,6 +517,55 @@ describe("POST /collect/submit", () => {
     );
   });
 
+  // Task #263: the diagnosis must also be persisted on the event row at
+  // insert time (not just emitted live) so historical reads return the
+  // exact wording the event was originally classified with — even if the
+  // heuristic is later reworded.
+  it("persists unmatchedReason on the inserted attribution_events row", async () => {
+    const tenant = { id: 15, name: "Tenant" };
+    const fakeEvent = { id: 704, tenantId: 15 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: { field_a: "x", field_b: "y" },
+    });
+
+    const eventInsert = mockDb.insertCalls.find((c) => {
+      const v = c.values as Record<string, unknown>;
+      return v && v.eventType === "form_fill";
+    });
+    expect(eventInsert).toBeDefined();
+    const persisted = eventInsert!.values as Record<string, unknown>;
+    expect(persisted.matchLevel).toBe("unmatched");
+    expect(persisted.unmatchedReason).toBe(
+      "No phone or email field detected and no click ID present.",
+    );
+  });
+
+  it("persists null unmatchedReason on matched events", async () => {
+    const tenant = { id: 16, name: "Tenant" };
+    const fakeEvent = { id: 705, tenantId: 16 };
+    const fakeLead = { id: 61, tenantId: 16 };
+    mockDb.selectResults = [[tenant], [fakeLead]];
+    mockDb.insertResults = [[fakeEvent], [fakeLead], []];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: { phone: "555-111-2222", first_name: "Carol" },
+    });
+
+    const eventInsert = mockDb.insertCalls.find((c) => {
+      const v = c.values as Record<string, unknown>;
+      return v && v.eventType === "form_fill";
+    });
+    expect(eventInsert).toBeDefined();
+    const persisted = eventInsert!.values as Record<string, unknown>;
+    expect(persisted.matchLevel).toBe("golden");
+    expect(persisted.unmatchedReason).toBeNull();
+  });
+
   it("leaves unmatchedReason null on matched events", async () => {
     const tenant = { id: 14, name: "Tenant" };
     const fakeEvent = { id: 703, tenantId: 14 };
