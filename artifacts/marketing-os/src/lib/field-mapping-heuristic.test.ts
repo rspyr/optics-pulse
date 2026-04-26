@@ -47,6 +47,23 @@ describe("suggestMapTarget", () => {
       ["state", "state"],
       ["State", "state"],
       ["province", "state"],
+
+      ["appt_date", "appointmentDate"],
+      ["appointment_date", "appointmentDate"],
+      ["AppointmentDate", "appointmentDate"],
+      ["booking_date", "appointmentDate"],
+      ["apptDate", "appointmentDate"],
+
+      ["appt_time", "appointmentTime"],
+      ["appointment_time", "appointmentTime"],
+      ["AppointmentTime", "appointmentTime"],
+      ["booking_time", "appointmentTime"],
+      ["apptTime", "appointmentTime"],
+
+      ["funnel", "funnel"],
+      ["Funnel", "funnel"],
+      ["funnel_name", "funnel"],
+      ["funnelName", "funnel"],
     ])("maps %s -> %s", (input, expected) => {
       expect(suggestMapTarget(input)).toBe(expected);
     });
@@ -67,6 +84,11 @@ describe("suggestMapTarget", () => {
       "input_42",
       "custom_value",
       "",
+      "date",
+      "time",
+      "birthday",
+      "random_date",
+      "timezone",
     ])("does not pre-select for %s", (input) => {
       expect(suggestMapTarget(input)).toBeNull();
     });
