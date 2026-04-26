@@ -6,6 +6,8 @@ export const MAP_TO_OPTIONS = [
 
 export type MapToTarget = typeof MAP_TO_OPTIONS[number];
 
+const MAP_TO_OPTIONS_SET: ReadonlySet<string> = new Set(MAP_TO_OPTIONS);
+
 const HEURISTIC_RULES: ReadonlyArray<{ pattern: RegExp; target: MapToTarget }> = [
   { pattern: /phone|tel/i, target: "phone" },
   { pattern: /email|mail/i, target: "email" },
@@ -21,8 +23,21 @@ const HEURISTIC_RULES: ReadonlyArray<{ pattern: RegExp; target: MapToTarget }> =
   { pattern: /state|province/i, target: "state" },
 ];
 
-export function suggestMapTarget(fieldName: string): MapToTarget | null {
+export function normalizeFieldName(fieldName: string): string {
+  return fieldName.toLowerCase().replace(/[\s\-\.]/g, "_");
+}
+
+export type LearnedSuggestions = ReadonlyMap<string, MapToTarget>;
+
+export function suggestMapTarget(
+  fieldName: string,
+  learned?: LearnedSuggestions,
+): MapToTarget | null {
   if (!fieldName) return null;
+  if (learned && learned.size > 0) {
+    const learnedHit = learned.get(normalizeFieldName(fieldName));
+    if (learnedHit && MAP_TO_OPTIONS_SET.has(learnedHit)) return learnedHit;
+  }
   for (const rule of HEURISTIC_RULES) {
     if (rule.pattern.test(fieldName)) return rule.target;
   }

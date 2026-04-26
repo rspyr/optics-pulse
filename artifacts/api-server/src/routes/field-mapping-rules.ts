@@ -25,6 +25,67 @@ function resolveTenantId(req: Request): number | null {
 
 router.use("/field-mapping-rules", requireManagerRole);
 
+const VALID_MAPS_TO = [
+  "firstName", "lastName", "fullName", "email", "phone",
+  "address", "city", "state", "zip",
+  "funnel", "appointmentDate", "appointmentTime",
+] as const;
+const VALID_MAPS_TO_SET: ReadonlySet<string> = new Set(VALID_MAPS_TO);
+
+function normalizeFieldKey(key: string): string {
+  return key.toLowerCase().replace(/[\s\-\.]/g, "_");
+}
+
+router.get("/field-mapping-rules/suggestions", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ suggestions: {} });
+    return;
+  }
+
+  const rows = await db.select().from(fieldMappingRulesTable)
+    .where(eq(fieldMappingRulesTable.tenantId, tenantId));
+
+  // Aggregate per normalized field name: pick the most-frequently-used mapsTo,
+  // tie-broken by the most recently created rule. Skip targets that aren't
+  // valid (defensive against legacy/garbage rows).
+  type Tally = { counts: Map<string, number>; latestAt: Map<string, number> };
+  const byField = new Map<string, Tally>();
+
+  for (const row of rows) {
+    if (!VALID_MAPS_TO_SET.has(row.mapsTo)) continue;
+    const key = normalizeFieldKey(row.fieldName);
+    if (!key) continue;
+    let tally = byField.get(key);
+    if (!tally) {
+      tally = { counts: new Map(), latestAt: new Map() };
+      byField.set(key, tally);
+    }
+    tally.counts.set(row.mapsTo, (tally.counts.get(row.mapsTo) ?? 0) + 1);
+    const at = row.createdAt instanceof Date ? row.createdAt.getTime() : 0;
+    const prev = tally.latestAt.get(row.mapsTo) ?? 0;
+    if (at > prev) tally.latestAt.set(row.mapsTo, at);
+  }
+
+  const suggestions: Record<string, string> = {};
+  for (const [fieldName, tally] of byField.entries()) {
+    let bestTarget: string | null = null;
+    let bestCount = -1;
+    let bestLatest = -1;
+    for (const [target, count] of tally.counts.entries()) {
+      const latest = tally.latestAt.get(target) ?? 0;
+      if (count > bestCount || (count === bestCount && latest > bestLatest)) {
+        bestTarget = target;
+        bestCount = count;
+        bestLatest = latest;
+      }
+    }
+    if (bestTarget) suggestions[fieldName] = bestTarget;
+  }
+
+  res.json({ suggestions });
+});
+
 router.get("/field-mapping-rules", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
@@ -53,19 +114,13 @@ router.post("/field-mapping-rules", async (req, res) => {
     return;
   }
 
-  const VALID_MAPS_TO = [
-    "firstName", "lastName", "fullName", "email", "phone",
-    "address", "city", "state", "zip",
-    "funnel", "appointmentDate", "appointmentTime",
-  ];
-
   const { pageUrlPattern, formIdentifier, fieldName, mapsTo, priority } = req.body;
   if (!pageUrlPattern || !formIdentifier || !fieldName || !mapsTo) {
     res.status(400).json({ error: "pageUrlPattern, formIdentifier, fieldName, and mapsTo are required" });
     return;
   }
 
-  if (!VALID_MAPS_TO.includes(mapsTo)) {
+  if (!VALID_MAPS_TO_SET.has(mapsTo)) {
     res.status(400).json({ error: `mapsTo must be one of: ${VALID_MAPS_TO.join(", ")}` });
     return;
   }

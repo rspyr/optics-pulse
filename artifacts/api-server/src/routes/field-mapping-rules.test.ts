@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const insertCalls: Array<{ values: Record<string, unknown> }> = [];
+let selectRowsQueue: Array<unknown[]> = [];
 
 vi.mock("@workspace/db", () => ({
   db: {
     select: vi.fn().mockImplementation(() => ({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([]),
+        where: vi.fn().mockImplementation(() => {
+          const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
+          return Promise.resolve(next);
+        }),
       }),
     })),
     insert: vi.fn().mockImplementation(() => ({
@@ -37,6 +41,7 @@ let app: express.Express;
 async function setupApp(role: string | undefined, tenantId: number | null) {
   vi.resetModules();
   insertCalls.length = 0;
+  selectRowsQueue = [];
   const mod = await import("./field-mapping-rules");
   app = express();
   app.use(express.json());
@@ -90,6 +95,104 @@ function postJson(
     });
   });
 }
+
+function getJson(
+  expressApp: express.Express,
+  path: string,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  return new Promise((resolve) => {
+    const http = require("http");
+    const server = http.createServer(expressApp);
+    server.listen(0, () => {
+      const port = (server.address() as { port: number }).port;
+      const req = http.request(
+        { hostname: "127.0.0.1", port, path, method: "GET" },
+        (res: { statusCode: number; on: Function }) => {
+          let data = "";
+          res.on("data", (chunk: string) => (data += chunk));
+          res.on("end", () => {
+            server.close();
+            resolve({
+              status: res.statusCode,
+              json: data ? JSON.parse(data) : {},
+            });
+          });
+        },
+      );
+      req.end();
+    });
+  });
+}
+
+describe("GET /field-mapping-rules/suggestions", () => {
+  beforeEach(async () => {
+    await setupApp("agency_user", 42);
+  });
+
+  it("returns an empty suggestions object when the tenant has no rules", async () => {
+    selectRowsQueue.push([]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ suggestions: {} });
+  });
+
+  it("returns suggestions keyed by normalized field name", async () => {
+    selectRowsQueue.push([
+      { id: 1, fieldName: "q1_first", mapsTo: "firstName", createdAt: new Date("2025-01-01") },
+      { id: 2, fieldName: "signup_zipcode", mapsTo: "zip", createdAt: new Date("2025-01-02") },
+      { id: 3, fieldName: "Q1 First", mapsTo: "firstName", createdAt: new Date("2025-01-03") },
+    ]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({
+      suggestions: {
+        q1_first: "firstName",
+        signup_zipcode: "zip",
+      },
+    });
+  });
+
+  it("picks the most-frequently-used target when the same field name has been mapped multiple ways", async () => {
+    selectRowsQueue.push([
+      { id: 1, fieldName: "field_3", mapsTo: "phone", createdAt: new Date("2025-01-01") },
+      { id: 2, fieldName: "field_3", mapsTo: "phone", createdAt: new Date("2025-01-02") },
+      { id: 3, fieldName: "field_3", mapsTo: "email", createdAt: new Date("2025-01-03") },
+    ]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.json).toEqual({ suggestions: { field_3: "phone" } });
+  });
+
+  it("breaks ties on count by preferring the most recently created mapping", async () => {
+    selectRowsQueue.push([
+      { id: 1, fieldName: "field_3", mapsTo: "phone", createdAt: new Date("2025-01-01") },
+      { id: 2, fieldName: "field_3", mapsTo: "email", createdAt: new Date("2025-02-01") },
+    ]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.json).toEqual({ suggestions: { field_3: "email" } });
+  });
+
+  it("ignores rows whose mapsTo is not a recognised semantic target", async () => {
+    selectRowsQueue.push([
+      { id: 1, fieldName: "weird_field", mapsTo: "garbage", createdAt: new Date("2025-01-01") },
+    ]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.json).toEqual({ suggestions: {} });
+  });
+
+  it("rejects non-manager roles", async () => {
+    await setupApp("csr", 42);
+    selectRowsQueue.push([]);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.status).toBe(403);
+  });
+
+  it("returns empty suggestions when no tenant context resolves", async () => {
+    await setupApp("client_admin", null);
+    const res = await getJson(app, "/field-mapping-rules/suggestions");
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ suggestions: {} });
+  });
+});
 
 describe("POST /field-mapping-rules", () => {
   beforeEach(async () => {

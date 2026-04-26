@@ -93,6 +93,9 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
           json: async () => makeVerifyResult(),
         } as Response;
       }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
 

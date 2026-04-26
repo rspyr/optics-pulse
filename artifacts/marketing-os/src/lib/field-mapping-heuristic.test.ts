@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { suggestMapTarget } from "./field-mapping-heuristic";
+import { normalizeFieldName, suggestMapTarget, type MapToTarget } from "./field-mapping-heuristic";
 
 describe("suggestMapTarget", () => {
   describe("positive matches", () => {
@@ -71,6 +71,59 @@ describe("suggestMapTarget", () => {
     it("prefers fullName over firstName/lastName when both could match", () => {
       expect(suggestMapTarget("full_name")).toBe("fullName");
       expect(suggestMapTarget("customer_full_name")).toBe("fullName");
+    });
+  });
+
+  describe("learned suggestions from confirmed mappings", () => {
+    it("prefers a learned suggestion over the static heuristic", () => {
+      const learned = new Map<string, MapToTarget>([["phone", "fullName"]]);
+      expect(suggestMapTarget("phone", learned)).toBe("fullName");
+    });
+
+    it("returns a learned suggestion for an opaque field name the static heuristic cannot match", () => {
+      const learned = new Map<string, MapToTarget>([
+        ["q1_first", "firstName"],
+        ["signup_zipcode", "zip"],
+      ]);
+      expect(suggestMapTarget("q1_first", learned)).toBe("firstName");
+      expect(suggestMapTarget("signup_zipcode", learned)).toBe("zip");
+    });
+
+    it("normalizes the lookup key (case + separators) before consulting learned suggestions", () => {
+      const learned = new Map<string, MapToTarget>([["q1_first", "firstName"]]);
+      expect(suggestMapTarget("Q1 First", learned)).toBe("firstName");
+      expect(suggestMapTarget("Q1-First", learned)).toBe("firstName");
+      expect(suggestMapTarget("Q1.First", learned)).toBe("firstName");
+    });
+
+    it("falls back to the static heuristic when there is no learned suggestion", () => {
+      const learned = new Map<string, MapToTarget>([["q1_first", "firstName"]]);
+      expect(suggestMapTarget("phone_number", learned)).toBe("phone");
+    });
+
+    it("falls back to the static heuristic when the learned map is empty", () => {
+      expect(suggestMapTarget("phone_number", new Map())).toBe("phone");
+    });
+
+    it("works the same as before when no learned map is supplied (back-compat)", () => {
+      expect(suggestMapTarget("phone_number")).toBe("phone");
+      expect(suggestMapTarget("q1_first")).toBeNull();
+    });
+
+    it("ignores learned values that aren't valid MapToTarget options", () => {
+      const learned = new Map<string, MapToTarget>([
+        ["weird_field", "not_a_real_target" as unknown as MapToTarget],
+      ]);
+      expect(suggestMapTarget("weird_field", learned)).toBeNull();
+    });
+  });
+
+  describe("normalizeFieldName", () => {
+    it("lowercases and replaces separators with underscores", () => {
+      expect(normalizeFieldName("First Name")).toBe("first_name");
+      expect(normalizeFieldName("first-name")).toBe("first_name");
+      expect(normalizeFieldName("first.name")).toBe("first_name");
+      expect(normalizeFieldName("FirstName")).toBe("firstname");
     });
   });
 

@@ -1,7 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Check } from "lucide-react";
-import { MAP_TO_OPTIONS, suggestMapTarget, type MapToTarget } from "@/lib/field-mapping-heuristic";
+import {
+  MAP_TO_OPTIONS,
+  normalizeFieldName,
+  suggestMapTarget,
+  type LearnedSuggestions,
+  type MapToTarget,
+} from "@/lib/field-mapping-heuristic";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -27,10 +33,116 @@ export function deriveMappingScope(
   return { pageUrlPattern, formIdentifier };
 }
 
+// Module-level cache of confirmed field-name → mapsTo suggestions per tenant.
+// Populated lazily the first time a panel for that tenant is expanded; updated
+// whenever an operator saves a new mapping. Subscribers are notified so all
+// panels for the same tenant re-render together. Exported for tests.
+type LearnedMap = Map<string, MapToTarget>;
+const learnedSuggestionsByTenant = new Map<number, LearnedMap>();
+const learnedFetchInflight = new Map<number, Promise<LearnedMap>>();
+const learnedSubscribers = new Map<number, Set<() => void>>();
+
+export function __resetLearnedSuggestionsCacheForTests() {
+  learnedSuggestionsByTenant.clear();
+  learnedFetchInflight.clear();
+  learnedSubscribers.clear();
+}
+
+function notifyLearnedSubscribers(tenantId: number) {
+  const subs = learnedSubscribers.get(tenantId);
+  if (!subs) return;
+  for (const fn of subs) fn();
+}
+
+async function fetchLearnedSuggestions(tenantId: number): Promise<LearnedMap> {
+  const cached = learnedSuggestionsByTenant.get(tenantId);
+  if (cached) return cached;
+  const inflight = learnedFetchInflight.get(tenantId);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/field-mapping-rules/suggestions?tenantId=${tenantId}`,
+        { credentials: "include" },
+      );
+      if (!res || !res.ok) {
+        const empty = new Map<string, MapToTarget>();
+        learnedSuggestionsByTenant.set(tenantId, empty);
+        notifyLearnedSubscribers(tenantId);
+        return empty;
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        suggestions?: Record<string, string>;
+      };
+      const map = new Map<string, MapToTarget>();
+      const suggestions = data.suggestions || {};
+      for (const [k, v] of Object.entries(suggestions)) {
+        map.set(k, v as MapToTarget);
+      }
+      learnedSuggestionsByTenant.set(tenantId, map);
+      notifyLearnedSubscribers(tenantId);
+      return map;
+    } catch {
+      const empty = new Map<string, MapToTarget>();
+      learnedSuggestionsByTenant.set(tenantId, empty);
+      notifyLearnedSubscribers(tenantId);
+      return empty;
+    } finally {
+      learnedFetchInflight.delete(tenantId);
+    }
+  })();
+
+  learnedFetchInflight.set(tenantId, promise);
+  return promise;
+}
+
+function recordLearnedSuggestion(tenantId: number, fieldName: string, mapsTo: MapToTarget) {
+  let map = learnedSuggestionsByTenant.get(tenantId);
+  if (!map) {
+    map = new Map();
+    learnedSuggestionsByTenant.set(tenantId, map);
+  }
+  map.set(normalizeFieldName(fieldName), mapsTo);
+  notifyLearnedSubscribers(tenantId);
+}
+
+function useTenantLearnedSuggestions(tenantId: number, enabled: boolean): LearnedSuggestions {
+  const [, setVersion] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let subs = learnedSubscribers.get(tenantId);
+    if (!subs) {
+      subs = new Set();
+      learnedSubscribers.set(tenantId, subs);
+    }
+    const trigger = () => {
+      if (!cancelled) setVersion((v) => v + 1);
+    };
+    subs.add(trigger);
+
+    if (!learnedSuggestionsByTenant.has(tenantId)) {
+      void fetchLearnedSuggestions(tenantId);
+    }
+
+    return () => {
+      cancelled = true;
+      subs?.delete(trigger);
+    };
+  }, [tenantId, enabled]);
+
+  return learnedSuggestionsByTenant.get(tenantId) ?? new Map();
+}
+
 export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }) {
   const [expanded, setExpanded] = useState(false);
   const [savingField, setSavingField] = useState<string | null>(null);
   const [savedFields, setSavedFields] = useState<Map<string, MapToTarget>>(new Map());
+  // Only fetch learned suggestions once the operator opens the panel — there's
+  // no value loading them while collapsed.
+  const learnedSuggestions = useTenantLearnedSuggestions(evt.tenantId, expanded);
 
   const fieldNames = Array.isArray(evt.fieldNames) ? evt.fieldNames : [];
   const reason = evt.unmatchedReason || "Pulse could not link this fill to a known job, lead, or click.";
@@ -55,6 +167,7 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         next.set(fieldName, mapsTo);
         return next;
       });
+      recordLearnedSuggestion(evt.tenantId, fieldName, mapsTo);
       toast.success(`Mapped "${fieldName}" → ${mapsTo}. Applies to future fills of this form only.`);
     } catch {
       toast.error("Network error saving mapping rule.");
@@ -99,6 +212,7 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                     savedAs={savedFields.get(name)}
                     isSaving={savingField === name}
                     onSave={saveMapping}
+                    learnedSuggestions={learnedSuggestions}
                   />
                 ))}
               </div>
@@ -115,14 +229,28 @@ function UnmatchedFieldRow({
   savedAs,
   isSaving,
   onSave,
+  learnedSuggestions,
 }: {
   name: string;
   savedAs: MapToTarget | undefined;
   isSaving: boolean;
   onSave: (fieldName: string, target: MapToTarget) => void;
+  learnedSuggestions: LearnedSuggestions;
 }) {
-  const suggested = useMemo(() => suggestMapTarget(name), [name]);
+  const suggested = useMemo(
+    () => suggestMapTarget(name, learnedSuggestions),
+    [name, learnedSuggestions],
+  );
+  const isLearnedSuggestion = useMemo(
+    () => suggested !== null && learnedSuggestions.get(normalizeFieldName(name)) === suggested,
+    [learnedSuggestions, name, suggested],
+  );
   const [selected, setSelected] = useState<MapToTarget | "">(suggested ?? "");
+  // Auto-update selection when a freshly-fetched learned suggestion arrives,
+  // but only if the operator hasn't already picked something else themselves.
+  useEffect(() => {
+    setSelected((prev) => (prev === "" && suggested ? suggested : prev));
+  }, [suggested]);
   const showSuggestedHint = !savedAs && suggested !== null && selected === suggested;
 
   if (savedAs) {
@@ -153,8 +281,11 @@ function UnmatchedFieldRow({
         ))}
       </select>
       {showSuggestedHint && (
-        <span className="text-[10px] text-amber-300/70 italic" title="Pre-selected based on field name">
-          suggested
+        <span
+          className="text-[10px] text-amber-300/70 italic"
+          title={isLearnedSuggestion ? "Pre-selected from a previously confirmed mapping for this tenant" : "Pre-selected based on field name"}
+        >
+          {isLearnedSuggestion ? "learned" : "suggested"}
         </span>
       )}
       {selected && (

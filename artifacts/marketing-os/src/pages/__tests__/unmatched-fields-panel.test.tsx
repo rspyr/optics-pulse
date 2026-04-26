@@ -13,10 +13,34 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
   UnmatchedFieldsPanel,
   type UnmatchedFieldsPanelEvent,
 } from "../unmatched-fields-panel";
+
+// Helper to install a fetch mock that routes the per-tenant learned-suggestions
+// GET to a specific payload (default: empty), and forwards everything else to
+// the per-test mock provided by the caller.
+function mockFetchWithSuggestions(
+  options: {
+    suggestions?: Record<string, string>;
+    onOther: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response;
+  },
+) {
+  const suggestions = options.suggestions ?? {};
+  return vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/api/field-mapping-rules/suggestions")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ suggestions }),
+      } as Response;
+    }
+    return options.onOther(input, init);
+  });
+}
 
 function makeEvent(overrides: Partial<UnmatchedFieldsPanelEvent> = {}): UnmatchedFieldsPanelEvent {
   return {
@@ -127,10 +151,12 @@ describe("UnmatchedFieldsPanel", () => {
     toastMock.success.mockReset();
     toastMock.error.mockReset();
     vi.spyOn(global, "fetch").mockReset();
+    __resetLearnedSuggestionsCacheForTests();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    __resetLearnedSuggestionsCacheForTests();
   });
 
   it("renders the 'Why unmatched?' toggle with field count, collapsed by default", () => {
@@ -192,11 +218,13 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("selecting a target POSTs to /api/field-mapping-rules with the correct body and shows success toast", async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ rule: { id: 1 } }),
-    } as Response);
+    const fetchMock = mockFetchWithSuggestions({
+      onOther: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ rule: { id: 1 } }),
+      } as Response),
+    });
 
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
@@ -208,11 +236,16 @@ describe("UnmatchedFieldsPanel", () => {
     // so the operator can confirm the (possibly heuristic-suggested) value.
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+    const postCalls = await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(([u]) => {
+        const url = typeof u === "string" ? u : (u as URL | Request).toString();
+        return /\/api\/field-mapping-rules\?tenantId=/.test(url);
+      });
+      expect(calls.length).toBe(1);
+      return calls;
     });
 
-    const [calledUrl, calledInit] = fetchMock.mock.calls[0];
+    const [calledUrl, calledInit] = postCalls[0];
     expect(calledUrl).toMatch(/\/api\/field-mapping-rules\?tenantId=42$/);
     expect(calledInit?.method).toBe("POST");
     expect(calledInit?.credentials).toBe("include");
@@ -237,11 +270,13 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("HTTP 4xx shows error toast and does not mark the field as saved", async () => {
     const user = userEvent.setup();
-    vi.spyOn(global, "fetch").mockResolvedValue({
-      ok: false,
-      status: 400,
-      json: async () => ({ error: "mapsTo must be one of: phone, email" }),
-    } as Response);
+    mockFetchWithSuggestions({
+      onOther: async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: "mapsTo must be one of: phone, email" }),
+      } as Response),
+    });
 
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
@@ -264,11 +299,13 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("uses fallback error message when 4xx body has no error field", async () => {
     const user = userEvent.setup();
-    vi.spyOn(global, "fetch").mockResolvedValue({
-      ok: false,
-      status: 403,
-      json: async () => ({}),
-    } as Response);
+    mockFetchWithSuggestions({
+      onOther: async () => ({
+        ok: false,
+        status: 403,
+        json: async () => ({}),
+      } as Response),
+    });
 
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
@@ -286,7 +323,11 @@ describe("UnmatchedFieldsPanel", () => {
 
   it("network error shows error toast and does not mark the field as saved", async () => {
     const user = userEvent.setup();
-    vi.spyOn(global, "fetch").mockRejectedValue(new Error("network down"));
+    mockFetchWithSuggestions({
+      onOther: async () => {
+        throw new Error("network down");
+      },
+    });
 
     render(<UnmatchedFieldsPanel evt={makeEvent()} />);
     await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
@@ -301,5 +342,105 @@ describe("UnmatchedFieldsPanel", () => {
     });
     expect(toastMock.error.mock.calls[0][0]).toBe("Network error saving mapping rule.");
     expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
+  });
+
+  it("does NOT fetch tenant suggestions while the panel is collapsed", async () => {
+    const fetchMock = mockFetchWithSuggestions({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
+    });
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    // No expand → no fetch at all (suggestions endpoint should be untouched).
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches tenant suggestions on expand and pre-selects a learned target the static heuristic can't infer", async () => {
+    const user = userEvent.setup();
+    mockFetchWithSuggestions({
+      suggestions: { field_3: "phone" },
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+    // Wait for the async fetch + state update to settle.
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe("phone");
+    });
+    // The hint label should say "learned" for a tenant-history-driven pre-selection.
+    expect(await screen.findByText("learned")).toBeInTheDocument();
+  });
+
+  it("falls back to the static heuristic when the tenant has no learned suggestion for the field", async () => {
+    const user = userEvent.setup();
+    mockFetchWithSuggestions({
+      suggestions: {},
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({}) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["phone_number"] })} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    const select = await screen.findByRole("combobox", { name: "Map phone_number to" });
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe("phone");
+    });
+    // For a heuristic-driven (not learned) pre-selection, the hint says "suggested".
+    expect(screen.getByText("suggested")).toBeInTheDocument();
+  });
+
+  it("after saving a mapping, a sibling panel for the same tenant pre-selects that field next time", async () => {
+    const user = userEvent.setup();
+    mockFetchWithSuggestions({
+      suggestions: {},
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    // First panel: operator confirms field_3 → phone.
+    const { unmount } = render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    unmount();
+
+    // Second panel for a DIFFERENT form on the same tenant: field_3 should now
+    // pre-select phone from the in-memory learned cache, even though the
+    // tenant suggestions endpoint still returns nothing.
+    render(<UnmatchedFieldsPanel evt={makeEvent({ formId: "different-form", fieldNames: ["field_3"] })} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    const select = await screen.findByRole("combobox", { name: "Map field_3 to" });
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe("phone");
+    });
+    expect(await screen.findByText("learned")).toBeInTheDocument();
+  });
+
+  it("silently tolerates a failing tenant-suggestions fetch (still falls back to the static heuristic)", async () => {
+    const user = userEvent.setup();
+    // Fail the suggestions endpoint AND any other call.
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        throw new Error("network down");
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent({ fieldNames: ["phone_number"] })} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+
+    // Static heuristic still pre-selects phone.
+    const select = await screen.findByRole("combobox", { name: "Map phone_number to" });
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe("phone");
+    });
+    // Hint should NOT be "learned" — heuristic only.
+    expect(screen.queryByText("learned")).not.toBeInTheDocument();
+    expect(screen.getByText("suggested")).toBeInTheDocument();
   });
 });
