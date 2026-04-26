@@ -55,6 +55,37 @@ describe("tracker-diagnostics envelope schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts a formScans entry tagged with the Task #292 honeypotOnly + wideScanFired flags", () => {
+    const result = DiagnosticEnvelope.safeParse({
+      client_id: "vance-heating",
+      page_url: "https://vance.protect.neighborhood-hvac.com/quote",
+      domain: "vance.protect.neighborhood-hvac.com",
+      pulseVersion: "2026.04.26",
+      diagnostics: {
+        reason: "pagehide" as const,
+        sessionStartedAt: "2026-04-26T12:00:00.000Z",
+        flushedAt: "2026-04-26T12:00:30.000Z",
+        formScans: [
+          {
+            formId: "ghl-form-abc",
+            formName: null,
+            formAction: null,
+            fields: [{ name: "company_url", type: "text", required: false }],
+            builder: "native",
+            iframe: false,
+            iframeOrigin: null,
+            source: "initial",
+            honeypotOnly: true,
+            wideScanFired: true,
+          },
+        ],
+        postMessages: [],
+        submitClicks: [],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts the minimum payload pulse.js sends on first interval flush", () => {
     const result = DiagnosticEnvelope.safeParse({
       client_id: "tenant-slug",

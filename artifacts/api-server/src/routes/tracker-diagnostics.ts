@@ -29,6 +29,14 @@ const FormScan = z.object({
   // form ("initial" | "mutation" | etc). Allowed but capped to keep
   // payloads bounded.
   source: z.string().max(40).nullish(),
+  // Task #292 — honeypot rescue diagnostics. `honeypotOnly` is set true
+  // when every input on the form has a known honeypot name (e.g.
+  // `company_url` on GoHighLevel-hosted funnels). `wideScanFired` is set
+  // true when pulse.js had to rescan the form's ancestors after a submit
+  // returned only honeypot decoys, swapping in the visible inputs that
+  // were rendered OUTSIDE the form shell.
+  honeypotOnly: z.boolean().nullish(),
+  wideScanFired: z.boolean().nullish(),
 }).strict();
 
 const PostMessageObservation = z.object({

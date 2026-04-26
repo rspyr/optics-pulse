@@ -5,6 +5,7 @@ import {
   buildFormInventory,
   isScriptResponseDead,
   computeInstallVerdict,
+  formInventoryHasHoneypotOnlyShape,
 } from "./verify-tracker";
 
 /**
@@ -126,6 +127,69 @@ describe("buildFormInventory", () => {
 
   it("returns an empty list for HTML with no forms or iframes", () => {
     expect(buildFormInventory("<p>Just text</p>", "https://example.com/")).toEqual([]);
+  });
+});
+
+/**
+ * Task #292 — honeypot-only form detection. The exact failure mode this
+ * fixes: GHL-hosted funnels expose a <form> wrapping ONLY their hidden
+ * `company_url` honeypot, and pulse.js's FormData call returned just the
+ * decoy with empty PII. Verify Tracker should call this out before a
+ * customer reports missing leads.
+ */
+describe("formInventoryHasHoneypotOnlyShape", () => {
+  it("flags a form whose only named field is company_url (Vance failure mode)", () => {
+    const inv = buildFormInventory(
+      `<form><input name="company_url" type="text" tabindex="-1" autocomplete="off" /></form>`,
+      "https://vance.protect.neighborhood-hvac.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(true);
+  });
+
+  it("flags a form whose only named fields are multiple known honeypots", () => {
+    const inv = buildFormInventory(
+      `<form><input name="company_url" /><input name="homepage" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(true);
+  });
+
+  it("does NOT flag a form with at least one real named field alongside a honeypot", () => {
+    const inv = buildFormInventory(
+      `<form><input name="company_url" /><input name="email" /><input name="phone" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);
+  });
+
+  it("does NOT flag a form with zero named fields (the inventory shows nothing to warn about)", () => {
+    const inv = buildFormInventory(`<form></form>`, "https://example.com/");
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);
+  });
+
+  it("does NOT classify `address` as a honeypot — real customer field", () => {
+    const inv = buildFormInventory(
+      `<form><input name="address" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);
+  });
+
+  it("ignores iframe entries (only native <form>s carry honeypot inputs)", () => {
+    const inv = buildFormInventory(
+      `<iframe src="https://link.msgsndr.com/widget/abc"></iframe>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);
+  });
+
+  it("returns true if ANY form in the inventory is honeypot-only, even when other forms are real", () => {
+    const inv = buildFormInventory(
+      `<form><input name="email" /></form>
+       <form><input name="company_url" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(true);
   });
 });
 

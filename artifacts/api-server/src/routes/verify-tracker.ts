@@ -333,6 +333,44 @@ function classifyIframeBuilder(iframeHost: string | null): string {
   return "unknown";
 }
 
+/**
+ * Task #292 — known honeypot field-name decoys. Mirrors the list in
+ * `public/pulse.js` so that a form built around one of these names is
+ * recognised as a honeypot-only shell from the static HTML scan too.
+ * Conservative on purpose: real customer field names like `address` are
+ * NOT included.
+ */
+const HONEYPOT_FIELD_NAMES = new Set<string>([
+  "company_url", "homepage", "honeypot", "bot_field",
+  "leave_blank", "_gotcha", "form_honeypot", "winnie_the_pooh",
+]);
+
+function normalizeHoneypotName(name: string): string {
+  return name.toLowerCase().replace(/[\s-]/g, "_");
+}
+
+/**
+ * Given a `buildFormInventory()` result, return true if any native
+ * `<form>` in the inventory has at least one named field AND every named
+ * field is a honeypot decoy. This is the static-HTML signal for the
+ * exact failure mode Task #292 fixes: GHL-hosted funnels expose only the
+ * `company_url` honeypot inside the `<form>` shell, so a Verify Tracker
+ * scan that hits the page can warn the operator before a customer
+ * complains about missing leads.
+ */
+export function formInventoryHasHoneypotOnlyShape(items: FormInventoryItem[]): boolean {
+  for (const item of items) {
+    if (item.kind !== "form") continue;
+    if (item.fieldNames.length === 0) continue;
+    let allHoneypot = true;
+    for (const n of item.fieldNames) {
+      if (!HONEYPOT_FIELD_NAMES.has(normalizeHoneypotName(n))) { allHoneypot = false; break; }
+    }
+    if (allHoneypot) return true;
+  }
+  return false;
+}
+
 export function buildFormInventory(html: string, baseUrl: string): FormInventoryItem[] {
   const out: FormInventoryItem[] = [];
 
@@ -680,6 +718,21 @@ router.post("/verify-tracker", async (req, res) => {
     findings.push({
       level: "info",
       message: `Detected form-builder iframes: ${Array.from(new Set(iframeBuilders)).join(", ")}. Make sure pulse.js is installed in the parent page (not just inside the iframe) — Framer / GHL iframes need the script in the page <head>, not via GTM-only injection.`,
+    });
+  }
+
+  // Task #292 — proactively flag the honeypot-only failure mode: a
+  // <form> whose only named inputs are anti-bot decoys (company_url etc).
+  // The visible name/email/phone inputs almost certainly bind via
+  // React state without a `name=` attribute (and so are invisible to
+  // FormData), whether on a custom Replit booking widget or a
+  // GoHighLevel-hosted funnel. Pulse.js's wide-scan rescue catches
+  // these, but operators should know before customers complain about
+  // missing leads.
+  if (formInventoryHasHoneypotOnlyShape(formInventory)) {
+    findings.push({
+      level: "warning",
+      message: `Honeypot-only form detected — the page has a <form> whose only named inputs are anti-bot decoys (e.g. company_url). Visible inputs are likely React-managed siblings without a name= attribute, so FormData captures only the honeypot. Pulse.js falls back to a wider scan and labels these submissions as honeypot-rescue; if heartbeats are healthy but submits arrive empty, this is the cause.`,
     });
   }
 

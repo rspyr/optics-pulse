@@ -1,7 +1,7 @@
 (function() {
   "use strict";
 
-  var PULSE_VERSION = "2026.04.25";
+  var PULSE_VERSION = "2026.04.26";
 
   var CONFIG = {
     clientId: "",
@@ -114,12 +114,24 @@
         fields.push({ name: String(name), type: String(el.type || "text") });
       }
     } catch(e) {}
+    // Pre-compute the honeypot-only flag from the static input list at
+    // scan time so Verify Tracker sees the signal even on pages that
+    // never submit. Submit-time may upgrade `wideScanFired` separately.
+    var hpOnly = false;
+    if (fields.length > 0) {
+      hpOnly = true;
+      for (var hi = 0; hi < fields.length; hi++) {
+        if (!isHoneypotName(fields[hi].name)) { hpOnly = false; break; }
+      }
+    }
     captureBuf.formScans.push({
       formId: (form.getAttribute && form.getAttribute("id")) || null,
       formName: (form.getAttribute && form.getAttribute("name")) || null,
       builder: (form.getAttribute && (form.getAttribute("data-pulse-builder") || form.getAttribute("data-form-builder"))) || "native",
       source: source || "initial",
-      fields: fields
+      fields: fields,
+      honeypotOnly: hpOnly,
+      wideScanFired: false
     });
   }
   // recognised form-builder origins for postMessage capture filter
@@ -369,6 +381,114 @@
     return fields;
   }
 
+  // Honeypot field-name patterns. Conservative: classic anti-bot decoys
+  // only. We treat fields as honeypot-shaped purely on NAME, so a real
+  // customer input named `address` (street address) is NOT classified as
+  // honeypot. Names like `homepage` / `website` / `url` are intentionally
+  // EXCLUDED — those are plausible legitimate customer fields and
+  // stripping them would silently drop real submitted data.
+  var HONEYPOT_NAMES = {
+    "company_url": 1, "honeypot": 1, "bot_field": 1,
+    "leave_blank": 1, "_gotcha": 1, "form_honeypot": 1, "winnie_the_pooh": 1
+  };
+  function normalizeHoneypotKey(name) {
+    return String(name || "").toLowerCase().replace(/[\s-]/g, "_");
+  }
+  function isHoneypotName(name) {
+    if (!name) return false;
+    return HONEYPOT_NAMES[normalizeHoneypotKey(name)] === 1;
+  }
+  function stripHoneypotKeys(fields) {
+    var out = {};
+    for (var k in fields) {
+      if (!fields.hasOwnProperty(k)) continue;
+      if (isHoneypotName(k)) continue;
+      out[k] = fields[k];
+    }
+    return out;
+  }
+  // honeypotOnly = the form supplied at least one entry, AND every supplied
+  // entry is a honeypot-named field (regardless of value). The "at least
+  // one" requirement avoids labelling a totally empty <form> shell as
+  // honeypot-only and keeps this signal aimed at the real failure mode:
+  // GHL's hidden `company_url` decoy being the only thing FormData returned.
+  function isHoneypotOnly(fields) {
+    var keys = fields ? Object.keys(fields) : [];
+    if (keys.length === 0) return false;
+    for (var i = 0; i < keys.length; i++) {
+      if (!isHoneypotName(keys[i])) return false;
+    }
+    return true;
+  }
+  // Resolve a field key from an input element for the rescue scan. Keys
+  // come from (in priority order) `name`, `data-testid`, `data-q`, `id`,
+  // `aria-label`, `placeholder`. The `input-` prefix is stripped ONLY
+  // when the source is a `data-testid` attribute (a React test-selector
+  // convention like `input-name` / `input-phone` that doesn't carry
+  // semantic meaning) — never when the source is a real `name=`
+  // attribute, where a customer's chosen name like `input_foo` must be
+  // preserved verbatim.
+  function resolveRescueKey(el) {
+    if (!el) return "";
+    if (el.name) return String(el.name);
+    var testid = el.getAttribute && el.getAttribute("data-testid");
+    if (testid) {
+      var s = String(testid);
+      if (/^input[-_]/i.test(s)) return s.replace(/^input[-_]/i, "");
+      return s;
+    }
+    var dataQ = el.getAttribute && el.getAttribute("data-q");
+    if (dataQ) return String(dataQ);
+    if (el.id) return String(el.id);
+    var aria = el.getAttribute && el.getAttribute("aria-label");
+    if (aria) return String(aria);
+    if (el.placeholder) return String(el.placeholder);
+    return "";
+  }
+
+  // When the in-form FormData returned only honeypot decoys, walk the
+  // form's nearest meaningful ancestors (up to 3 levels) and collect any
+  // visible inputs we find. The shallow depth cap is intentional —
+  // covers sibling/cousin layouts (form's parent or grandparent) where
+  // React-managed inputs are placed alongside the honeypot-only <form>
+  // shell, but avoids ingesting unrelated inputs from larger page
+  // sections (header search bars, newsletter widgets, sidebar forms,
+  // etc.). Honeypot keys are dropped before return.
+  function extractFieldsBeyondForm(form) {
+    var fields = {};
+    if (!form) return fields;
+    var container = form.parentElement || form;
+    for (var depth = 0; depth < 3 && container; depth++) {
+      var inputs = container.querySelectorAll
+        ? container.querySelectorAll("input, textarea, select")
+        : [];
+      for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        var type = (el.type || "").toLowerCase();
+        if (type === "hidden" || type === "submit" || type === "button") continue;
+        var name = resolveRescueKey(el);
+        if (!name) continue;
+        if (isHoneypotName(name)) continue;
+        if (!shouldCaptureField(name, type)) continue;
+        var v;
+        if (el.tagName === "SELECT") {
+          v = el.options[el.selectedIndex] ? el.options[el.selectedIndex].value : "";
+        } else if (type === "checkbox") {
+          v = el.checked ? (el.value || "on") : "";
+        } else if (type === "radio") {
+          if (!el.checked) continue;
+          v = el.value;
+        } else {
+          v = el.value || "";
+        }
+        if (v) fields[name] = v;
+      }
+      if (Object.keys(fields).length > 0) return fields;
+      container = container.parentElement;
+    }
+    return fields;
+  }
+
   // walk sibling inputs (up to 6 ancestors) for buttons without a form
   function extractFieldsNearButton(button) {
     var fields = {};
@@ -576,6 +696,8 @@
   function captureFormSubmit(form) {
     if (!form || form.tagName !== "FORM") return;
     var fields = extractFormFields(form);
+    var honeypotOnly = isHoneypotOnly(fields);
+    var wideScanFired = false;
     var meta = {
       id: form.id || null,
       name: form.name || form.getAttribute("name") || null,
@@ -588,6 +710,45 @@
     } else if (form.closest && form.closest(".gform_wrapper")) {
       meta.type = "gravity";
     }
+
+    // Honeypot rescue: when the real <form> wrapped only honeypot decoys
+    // (e.g. company_url) but the visible inputs sit OUTSIDE the form
+    // shell — either GHL-hosted funnels (data-q / aria-label) or custom
+    // React booking widgets that bind via useState and tag inputs with
+    // data-testid — re-scan the form's ancestors to capture them. Label
+    // the submission `honeypot-rescue` so operators can distinguish it
+    // from a normal native submit in the live attribution feed.
+    if (honeypotOnly) {
+      var beyond = extractFieldsBeyondForm(form);
+      if (Object.keys(beyond).length > 0) {
+        wideScanFired = true;
+        fields = beyond;
+        meta.type = "honeypot-rescue";
+      }
+    }
+    // Always strip honeypot keys from the final payload, whether the
+    // rescue fired or not. Honeypots add no signal to the field-mapping
+    // UI / learned-field library and would otherwise pollute the live
+    // attribution feed (a "submit" that's just an empty company_url
+    // looks like a real lead).
+    fields = stripHoneypotKeys(fields);
+
+    // Annotate the matching scan entry in the capture buffer with the new
+    // honeypot/wide-scan flags so ?pulse_capture=1 diagnostics + Verify
+    // Tracker can flag pages that are silently honeypot-only.
+    try {
+      if (CAPTURE && captureBuf.formScans.length > 0) {
+        var formIdAttr = (form.getAttribute && form.getAttribute("id")) || null;
+        for (var i = captureBuf.formScans.length - 1; i >= 0; i--) {
+          var entry = captureBuf.formScans[i];
+          if (formIdAttr == null || entry.formId === formIdAttr) {
+            entry.honeypotOnly = honeypotOnly;
+            entry.wideScanFired = wideScanFired;
+            break;
+          }
+        }
+      }
+    } catch(e) {}
 
     handleFormSubmit(fields, meta);
   }
