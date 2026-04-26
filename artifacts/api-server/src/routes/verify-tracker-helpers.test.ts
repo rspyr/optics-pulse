@@ -132,10 +132,12 @@ describe("buildFormInventory", () => {
 
 /**
  * Task #292 — honeypot-only form detection. The exact failure mode this
- * fixes: GHL-hosted funnels expose a <form> wrapping ONLY their hidden
- * `company_url` honeypot, and pulse.js's FormData call returned just the
- * decoy with empty PII. Verify Tracker should call this out before a
- * customer reports missing leads.
+ * fixes: a <form> wrapping ONLY a hidden anti-bot honeypot (e.g.
+ * `company_url`) while the visible inputs are React-managed siblings of
+ * the form shell — so pulse.js's FormData call returned just the decoy
+ * with empty PII. Affects both custom Replit-built React booking
+ * widgets and GoHighLevel-hosted funnels. Verify Tracker should call
+ * this out before a customer reports missing leads.
  */
 describe("formInventoryHasHoneypotOnlyShape", () => {
   it("flags a form whose only named field is company_url (Vance failure mode)", () => {
@@ -148,7 +150,7 @@ describe("formInventoryHasHoneypotOnlyShape", () => {
 
   it("flags a form whose only named fields are multiple known honeypots", () => {
     const inv = buildFormInventory(
-      `<form><input name="company_url" /><input name="homepage" /></form>`,
+      `<form><input name="company_url" /><input name="bot_field" /></form>`,
       "https://example.com/",
     );
     expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(true);
@@ -170,6 +172,20 @@ describe("formInventoryHasHoneypotOnlyShape", () => {
   it("does NOT classify `address` as a honeypot — real customer field", () => {
     const inv = buildFormInventory(
       `<form><input name="address" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);
+  });
+
+  // Pinned consistency check: `homepage` is intentionally excluded from
+  // the honeypot table in BOTH `public/pulse.js` and `verify-tracker.ts`
+  // because it's a plausible legitimate website-URL field on a contact
+  // form. If you re-add it to either side without the other, the
+  // verifier and the runtime capture path will silently disagree about
+  // what's real vs. decoy data.
+  it("does NOT classify `homepage` as a honeypot — must mirror pulse.js HONEYPOT_NAMES", () => {
+    const inv = buildFormInventory(
+      `<form><input name="homepage" /></form>`,
       "https://example.com/",
     );
     expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(false);

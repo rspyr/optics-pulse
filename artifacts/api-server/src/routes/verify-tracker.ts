@@ -334,14 +334,17 @@ function classifyIframeBuilder(iframeHost: string | null): string {
 }
 
 /**
- * Task #292 — known honeypot field-name decoys. Mirrors the list in
- * `public/pulse.js` so that a form built around one of these names is
- * recognised as a honeypot-only shell from the static HTML scan too.
- * Conservative on purpose: real customer field names like `address` are
- * NOT included.
+ * Task #292 — known honeypot field-name decoys. MUST stay in sync with
+ * the `HONEYPOT_NAMES` table in `public/pulse.js` so that a form built
+ * around one of these names is recognised as a honeypot-only shell from
+ * the static HTML scan AND from the runtime capture path.
+ *
+ * Conservative on purpose: real customer field names like `address` and
+ * `homepage` (a plausible website-URL field) are NOT included — adding
+ * them would silently misclassify legitimate forms as honeypot-only.
  */
 const HONEYPOT_FIELD_NAMES = new Set<string>([
-  "company_url", "homepage", "honeypot", "bot_field",
+  "company_url", "honeypot", "bot_field",
   "leave_blank", "_gotcha", "form_honeypot", "winnie_the_pooh",
 ]);
 
