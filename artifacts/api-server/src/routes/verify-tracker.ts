@@ -440,6 +440,10 @@ export function isScriptResponseDead(args: {
   const { ok, contentType, body, fetchError } = args;
   if (fetchError) return true;
   if (!ok) return true;
+  // An empty 200 response is dead from the browser's perspective — nothing
+  // executes. Catches the case where a CDN serves an empty file at the
+  // legacy URL.
+  if (body.trim().length === 0) return true;
   const ctRaw = (contentType || "").toLowerCase();
   const isJs = ctRaw.includes("javascript") || ctRaw.includes("ecmascript");
   const isHtmlScript = ctRaw.includes("text/html") || (!ctRaw && /<!doctype html|<html[\s>]/i.test(body));

@@ -150,6 +150,11 @@ describe("isScriptResponseDead", () => {
   it("flags non-JS content-types as dead", () => {
     expect(isScriptResponseDead({ ok: true, contentType: "text/plain", body: "var x = 1;" })).toBe(true);
   });
+  it("flags an empty 200 body as dead even with a JS content-type", () => {
+    // A CDN serving an empty file at the legacy URL — browser executes nothing.
+    expect(isScriptResponseDead({ ok: true, contentType: "application/javascript", body: "" })).toBe(true);
+    expect(isScriptResponseDead({ ok: true, contentType: "application/javascript", body: "   \n\t  " })).toBe(true);
+  });
   it("treats a real JS response as alive", () => {
     expect(isScriptResponseDead({
       ok: true,
