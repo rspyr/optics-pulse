@@ -107,29 +107,93 @@ export function hasActiveClaim(leadId: number): { claimed: boolean; csrId?: numb
 
 const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"] as const;
 
-function isStickyTerminalAtRest(
-  config: { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null },
+type StickyConfig = { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null };
+
+export function isStickyActiveInOrder(config: StickyConfig, activeOrder: number[]): boolean {
+  return !!(config.stickyCsrId && activeOrder.includes(config.stickyCsrId));
+}
+
+export function isStickyTerminalAtRest(
+  config: StickyConfig,
   assignedCsrId: number,
   cascadePassCount: number,
-  activeOrderLength: number,
+  activeOrder: number[],
 ): boolean {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return false;
   if (assignedCsrId !== config.stickyCsrId) return false;
-  return cascadePassCount >= activeOrderLength - 1;
+  if (!isStickyActiveInOrder(config, activeOrder)) return false;
+  return cascadePassCount >= activeOrder.length - 1;
 }
 
-function isStickyTerminalOnTransition(
-  config: { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null },
+export function isStickyTerminalOnTransition(
+  config: StickyConfig,
   nextCsrId: number,
   newPassCount: number,
   priorPassCount: number,
-  activeOrderLength: number,
+  activeOrder: number[],
 ): { terminal: boolean; reason: 'end_of_cycle' | 'rotation_arrival' | null } {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return { terminal: false, reason: null };
   if (nextCsrId !== config.stickyCsrId) return { terminal: false, reason: null };
-  if (newPassCount >= activeOrderLength - 1) return { terminal: true, reason: 'end_of_cycle' };
+  if (!isStickyActiveInOrder(config, activeOrder)) return { terminal: false, reason: null };
+  if (newPassCount >= activeOrder.length - 1) return { terminal: true, reason: 'end_of_cycle' };
   if (priorPassCount > 0) return { terminal: true, reason: 'rotation_arrival' };
   return { terminal: false, reason: null };
+}
+
+export interface PickNextCsrInput {
+  config: StickyConfig;
+  assignedCsrId: number;
+  cascadePassCount: number;
+  activeOrder: number[];
+}
+
+export type PickNextCsrResult =
+  | { action: 'pass'; nextCsrId: number; viaSticky: boolean; rotationLandedOnSticky: boolean }
+  | { action: 'terminal_at_sticky' }
+  | { action: 'no_next' };
+
+export function pickNextCsrForCascade(input: PickNextCsrInput): PickNextCsrResult {
+  const { config, assignedCsrId, cascadePassCount, activeOrder } = input;
+  const currentIdx = activeOrder.indexOf(assignedCsrId);
+  const stickyIsActive = isStickyActiveInOrder(config, activeOrder);
+
+  if (config.allowPassBack) {
+    if (isStickyTerminalAtRest(config, assignedCsrId, cascadePassCount, activeOrder)) {
+      return { action: 'terminal_at_sticky' };
+    }
+
+    let nextCsrId: number;
+    let viaSticky = false;
+    if (config.stickyAfterCascade && config.stickyCsrId && stickyIsActive
+        && cascadePassCount >= activeOrder.length - 1) {
+      nextCsrId = config.stickyCsrId;
+      viaSticky = true;
+    } else if (currentIdx === -1) {
+      nextCsrId = activeOrder[0];
+    } else {
+      nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
+    }
+
+    const rotationLandedOnSticky = !!(
+      !viaSticky
+      && config.stickyAfterCascade
+      && config.stickyCsrId
+      && stickyIsActive
+      && nextCsrId === config.stickyCsrId
+      && cascadePassCount > 0
+      && cascadePassCount < activeOrder.length - 1
+    );
+
+    return { action: 'pass', nextCsrId, viaSticky, rotationLandedOnSticky };
+  }
+
+  if (currentIdx === -1) {
+    return { action: 'pass', nextCsrId: activeOrder[0], viaSticky: false, rotationLandedOnSticky: false };
+  }
+  if (currentIdx < activeOrder.length - 1) {
+    return { action: 'pass', nextCsrId: activeOrder[currentIdx + 1], viaSticky: false, rotationLandedOnSticky: false };
+  }
+  return { action: 'no_next' };
 }
 
 export function scheduleAutoPass(leadId: number, delayMs: number): void {
@@ -297,41 +361,29 @@ async function fireAutoPass(leadId: number): Promise<void> {
     return;
   }
 
-  const currentIdx = activeOrder.indexOf(lead.assignedCsrId);
-  let nextCsrId: number;
+  const cascadePassCount = lead.cascadePassCount ?? 0;
+  const decision = pickNextCsrForCascade({
+    config,
+    assignedCsrId: lead.assignedCsrId,
+    cascadePassCount,
+    activeOrder,
+  });
 
-  if (config.allowPassBack) {
-    const cascadePassCount = lead.cascadePassCount ?? 0;
+  if (decision.action === 'terminal_at_sticky') {
+    console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} after full cycle (terminal) — no further passes`);
+    return;
+  }
+  if (decision.action === 'no_next') {
+    return;
+  }
 
-    if (isStickyTerminalAtRest(config, lead.assignedCsrId, cascadePassCount, activeOrder.length)) {
-      console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} after full cycle (terminal) — no further passes`);
-      return;
-    }
+  const nextCsrId = decision.nextCsrId;
 
-    if (config.stickyAfterCascade && config.stickyCsrId
-        && cascadePassCount >= activeOrder.length - 1) {
-      nextCsrId = config.stickyCsrId;
-      console.log(`[auto-pass] Lead ${leadId}: end-of-cycle redirect to sticky CSR ${config.stickyCsrId}`);
-    } else if (currentIdx === -1) {
-      nextCsrId = activeOrder[0];
-    } else {
-      nextCsrId = activeOrder[(currentIdx + 1) % activeOrder.length];
-    }
-
-    if (config.stickyAfterCascade && config.stickyCsrId
-        && nextCsrId === config.stickyCsrId
-        && cascadePassCount > 0
-        && cascadePassCount < activeOrder.length - 1) {
-      console.log(`[auto-pass] Lead ${leadId}: rotation reached sticky CSR ${config.stickyCsrId} — sticking`);
-    }
-  } else {
-    if (currentIdx === -1) {
-      nextCsrId = activeOrder[0];
-    } else if (currentIdx < activeOrder.length - 1) {
-      nextCsrId = activeOrder[currentIdx + 1];
-    } else {
-      return;
-    }
+  if (decision.viaSticky) {
+    console.log(`[auto-pass] Lead ${leadId}: end-of-cycle redirect to sticky CSR ${config.stickyCsrId}`);
+  }
+  if (decision.rotationLandedOnSticky) {
+    console.log(`[auto-pass] Lead ${leadId}: rotation reached sticky CSR ${config.stickyCsrId} — sticking`);
   }
 
   let resolvedName = userMap.get(nextCsrId);
@@ -353,7 +405,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
     ? (lead.cascadePassCount ?? 0) + 1
     : (lead.cascadePassCount ?? 0);
 
-  const stickyResult = isStickyTerminalOnTransition(config, nextCsrId, newPassCount, lead.cascadePassCount ?? 0, activeOrder.length);
+  const stickyResult = isStickyTerminalOnTransition(config, nextCsrId, newPassCount, lead.cascadePassCount ?? 0, activeOrder);
 
   if (stickyResult.terminal && stickyResult.reason === 'rotation_arrival') {
     newPassCount = Math.max(newPassCount, activeOrder.length - 1);
@@ -474,7 +526,7 @@ export async function recoverTimers(): Promise<number> {
       if (timers.has(lead.id)) continue;
 
       if (activeRecoverOrder.length >= 2
-          && isStickyTerminalAtRest(config, lead.assignedCsrId!, lead.cascadePassCount ?? 0, activeRecoverOrder.length)) {
+          && isStickyTerminalAtRest(config, lead.assignedCsrId!, lead.cascadePassCount ?? 0, activeRecoverOrder)) {
         continue;
       }
 
@@ -508,4 +560,136 @@ export async function recoverTimers(): Promise<number> {
 
   console.log(`[auto-pass] Recovered ${scheduled} timer(s) across ${configs.length} config(s)`);
   return scheduled;
+}
+
+export interface StrandedRerouteInput {
+  config: { stickyAfterCascade: boolean | null; stickyCsrId: number | null };
+  stickyPauseSchedule: { isPaused: boolean; pauseEnd: Date | null } | null;
+  activeOrder: number[];
+  now: Date;
+}
+
+export type StrandedRerouteDecision =
+  | { shouldReroute: false; reason: 'no_sticky_config' | 'sticky_not_paused' | 'pause_expired' | 'no_active_csrs' | 'sticky_still_in_active_order' }
+  | { shouldReroute: true; targetCsrId: number };
+
+export function evaluateStrandedRerouteEligibility(input: StrandedRerouteInput): StrandedRerouteDecision {
+  const { config, stickyPauseSchedule, activeOrder, now } = input;
+  if (!config.stickyAfterCascade || !config.stickyCsrId) {
+    return { shouldReroute: false, reason: 'no_sticky_config' };
+  }
+  if (!stickyPauseSchedule || !stickyPauseSchedule.isPaused) {
+    return { shouldReroute: false, reason: 'sticky_not_paused' };
+  }
+  if (stickyPauseSchedule.pauseEnd && stickyPauseSchedule.pauseEnd <= now) {
+    return { shouldReroute: false, reason: 'pause_expired' };
+  }
+  if (activeOrder.length === 0) {
+    return { shouldReroute: false, reason: 'no_active_csrs' };
+  }
+  if (activeOrder.includes(config.stickyCsrId)) {
+    return { shouldReroute: false, reason: 'sticky_still_in_active_order' };
+  }
+  return { shouldReroute: true, targetCsrId: activeOrder[0] };
+}
+
+export async function rerouteLeadsStrandedOnPausedStickyCsr(): Promise<number> {
+  const configs = await db.select().from(routingConfigTable)
+    .where(and(
+      eq(routingConfigTable.isActive, true),
+      eq(routingConfigTable.stickyAfterCascade, true),
+      isNotNull(routingConfigTable.stickyCsrId),
+    ));
+
+  if (configs.length === 0) return 0;
+
+  const now = new Date();
+  let totalRerouted = 0;
+
+  for (const config of configs) {
+    if (!config.stickyCsrId) continue;
+
+    const [stickySched] = await db.select().from(csrScheduleTable)
+      .where(and(
+        eq(csrScheduleTable.tenantId, config.tenantId),
+        eq(csrScheduleTable.userId, config.stickyCsrId),
+        eq(csrScheduleTable.isPaused, true),
+      ));
+
+    const { order: activeOrder, userMap } = await getActiveOrderForConfig(config);
+
+    const decision = evaluateStrandedRerouteEligibility({
+      config,
+      stickyPauseSchedule: stickySched
+        ? { isPaused: stickySched.isPaused, pauseEnd: stickySched.pauseEnd }
+        : null,
+      activeOrder,
+      now,
+    });
+
+    if (!decision.shouldReroute) {
+      if (decision.reason === 'no_active_csrs') {
+        console.warn(`[auto-pass][reroute] Tenant ${config.tenantId}: paused sticky CSR ${config.stickyCsrId} but no active CSRs available for reroute`);
+      }
+      continue;
+    }
+
+    const targetCsrId = decision.targetCsrId;
+
+    const leadConditions = [
+      eq(leadsTable.tenantId, config.tenantId),
+      eq(leadsTable.assignedCsrId, config.stickyCsrId),
+      inArray(leadsTable.hubStatus, AUTO_PASS_STATUSES),
+      eq(leadsTable.manuallyTransferred, false),
+    ];
+    if (config.funnelTypeId !== null) {
+      leadConditions.push(eq(leadsTable.funnelId, config.funnelTypeId));
+    }
+
+    const stranded = await db.select({
+      id: leadsTable.id,
+      tenantId: leadsTable.tenantId,
+    }).from(leadsTable).where(and(...leadConditions));
+
+    if (stranded.length === 0) continue;
+
+    const targetName = userMap.get(targetCsrId);
+    if (!targetName) continue;
+
+    for (const lead of stranded) {
+      const [updated] = await db.update(leadsTable)
+        .set({
+          assignedCsrId: targetCsrId,
+          assignedTo: targetName,
+          assignedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(leadsTable.id, lead.id))
+        .returning();
+
+      await db.insert(callAttemptsTable).values({
+        leadId: lead.id,
+        userId: targetCsrId,
+        method: "transfer",
+        outcome: "auto_passed",
+        platform: "native",
+        actionType: "transfer",
+        notes: "Re-routed: previous CSR is paused",
+      });
+
+      if (updated) {
+        emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
+      }
+
+      const passMinutes = config.passIntervalMinutes ?? 1440;
+      scheduleAutoPass(lead.id, passMinutes * 60 * 1000);
+      totalRerouted++;
+      console.log(`[auto-pass][reroute] Lead ${lead.id}: re-routed from paused sticky CSR ${config.stickyCsrId} to ${targetName} (CSR ${targetCsrId})`);
+    }
+  }
+
+  if (totalRerouted > 0) {
+    console.log(`[auto-pass][reroute] Re-routed ${totalRerouted} lead(s) stranded on paused sticky CSRs`);
+  }
+  return totalRerouted;
 }

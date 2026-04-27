@@ -193,7 +193,9 @@ router.get("/leads-hub/queue", async (req, res) => {
         const currentIdx = activeOrder.indexOf(l.assignedCsrId);
         let hasNextCsr: boolean;
         if (cfg.allowPassBack) {
+          const stickyIsActive = !!(cfg.stickyCsrId && activeOrder.includes(cfg.stickyCsrId));
           if (cfg.stickyAfterCascade && cfg.stickyCsrId
+              && stickyIsActive
               && (l.cascadePassCount ?? 0) >= activeOrder.length - 1
               && cfg.stickyCsrId === l.assignedCsrId) {
             hasNextCsr = false;

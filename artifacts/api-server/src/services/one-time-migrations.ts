@@ -3,6 +3,7 @@ import { eq, and, sql, isNull, isNotNull, or, ne, inArray, desc } from "drizzle-
 import { emitLeadUpdated } from "../socket";
 import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
 import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
+import { rerouteLeadsStrandedOnPausedStickyCsr } from "./auto-pass-scheduler";
 
 interface Migration {
   id: string;
@@ -962,6 +963,14 @@ const migrations: Migration[] = [
         END $$
       `);
       console.log("[Migration] Added check constraint for lead_ingestion_mode");
+    },
+  },
+  {
+    id: "2026-04-27_reroute-leads-on-paused-sticky-csr",
+    description: "Re-route leads stranded on a paused sticky CSR (one-shot remediation)",
+    run: async () => {
+      const count = await rerouteLeadsStrandedOnPausedStickyCsr();
+      console.log(`[Migration] Re-routed ${count} lead(s) previously stranded on paused sticky CSRs`);
     },
   },
 ];
