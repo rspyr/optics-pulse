@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { cn } from "@/lib/utils";
@@ -1307,6 +1307,24 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   };
   const isDirty = lastSavedState !== null && JSON.stringify(currentState) !== JSON.stringify(lastSavedState);
 
+  const pausedStickyConfigs = useMemo(() => {
+    return configs.flatMap(c => {
+      if (!c.stickyAfterCascade || !c.stickyCsrId) return [];
+      const csr = csrs.find(u => u.id === c.stickyCsrId);
+      if (!csr || !csr.isPaused) return [];
+      const funnelName = c.funnelTypeId
+        ? (funnels.find(f => f.id === c.funnelTypeId)?.name ?? `Funnel #${c.funnelTypeId}`)
+        : "Default (All Funnels)";
+      return [{ configId: c.id, funnelTypeId: c.funnelTypeId, funnelName, csrId: csr.id, csrName: csr.name }];
+    });
+  }, [configs, csrs, funnels]);
+
+  const currentStickyCsrPaused = useMemo(() => {
+    if (!stickyAfterCascade || !stickyCsrId) return null;
+    const csr = csrs.find(u => u.id === stickyCsrId);
+    return csr && csr.isPaused ? csr : null;
+  }, [stickyAfterCascade, stickyCsrId, csrs]);
+
   useEffect(() => {
     const specificConfig = configs.find(c =>
       selectedFunnelId ? c.funnelTypeId === selectedFunnelId : c.funnelTypeId === null
@@ -1436,6 +1454,28 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
           </span>
         )}
       </div>
+
+      {pausedStickyConfigs.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-1">
+              <p className="text-xs font-medium text-amber-300">
+                {pausedStickyConfigs.length === 1 ? "Sticky redirect suspended" : "Sticky redirects suspended"}
+              </p>
+              <ul className="space-y-0.5">
+                {pausedStickyConfigs.map(p => (
+                  <li key={p.configId} className="text-[11px] text-amber-200/80">
+                    <span className="font-medium">{p.funnelName}:</span> Sticky CSR{" "}
+                    <span className="font-medium">{p.csrName}</span> is currently paused — sticky redirect is
+                    disabled until they resume.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <PremiumCard className="p-5">
@@ -1617,6 +1657,14 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                       </SelectContent>
                     </Select>
                     <p className="text-[10px] text-white/20 mt-0.5">Lead will be assigned to this CSR after cycling through all cascade positions</p>
+                    {currentStickyCsrPaused && (
+                      <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-amber-200/90 leading-snug">
+                          Sticky CSR <span className="font-medium text-amber-100">{currentStickyCsrPaused.name}</span> is currently paused — sticky redirect is disabled until they resume.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
