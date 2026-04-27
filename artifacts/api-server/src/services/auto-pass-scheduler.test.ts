@@ -212,6 +212,62 @@ describe("pickNextCsrForCascade", () => {
     });
   });
 
+  describe("backup sticky CSR support", () => {
+    it("end-of-cycle redirects to backup CSR when primary sticky is paused and backup is active", () => {
+      const result = pickNextCsrForCascade({
+        config: { allowPassBack: true, stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 12 },
+        assignedCsrId: 11,
+        cascadePassCount: 1,
+        // primary (10) is paused; active order excludes it. Lead is at 11
+        // after one prior pass — would normally rotate, but should redirect
+        // to the active backup sticky (12).
+        activeOrder: [11, 12],
+      });
+      expect(result.action).toBe("pass");
+      if (result.action !== "pass") return;
+      expect(result.nextCsrId).toBe(12);
+      expect(result.viaSticky).toBe(true);
+    });
+
+    it("treats backup CSR as terminal_at_sticky after a full cycle when primary is paused", () => {
+      const result = pickNextCsrForCascade({
+        config: { allowPassBack: true, stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 12 },
+        assignedCsrId: 12,
+        cascadePassCount: 2,
+        activeOrder: [11, 12, 13],
+      });
+      expect(result).toEqual({ action: "terminal_at_sticky" });
+    });
+
+    it("ignores backup when primary sticky is active (primary takes precedence)", () => {
+      const result = pickNextCsrForCascade({
+        config: { allowPassBack: true, stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 12 },
+        assignedCsrId: 12,
+        cascadePassCount: 2,
+        // primary (10) is active
+        activeOrder: [10, 11, 12],
+      });
+      expect(result.action).toBe("pass");
+      if (result.action !== "pass") return;
+      expect(result.nextCsrId).toBe(10);
+      expect(result.viaSticky).toBe(true);
+    });
+
+    it("falls back to next-in-rotation when both primary and backup are paused", () => {
+      const result = pickNextCsrForCascade({
+        config: { allowPassBack: true, stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 13 },
+        assignedCsrId: 12,
+        cascadePassCount: 2,
+        // both 10 and 13 paused
+        activeOrder: [11, 12],
+      });
+      expect(result.action).toBe("pass");
+      if (result.action !== "pass") return;
+      expect(result.nextCsrId).toBe(11);
+      expect(result.viaSticky).toBe(false);
+    });
+  });
+
   describe("Advantage production scenario: tenant 3, sticky=Corey(10) paused", () => {
     it("Manny(11) → Zeke(12) → next-active-CSR (NOT Corey)", () => {
       // Active order excludes paused Corey (10): [11, 12]
@@ -241,7 +297,7 @@ describe("evaluateStrandedRerouteEligibility (one-shot remediation)", () => {
       activeOrder: [11, 12],
       now,
     });
-    expect(result).toEqual({ shouldReroute: true, targetCsrId: 11 });
+    expect(result).toEqual({ shouldReroute: true, targetCsrId: 11, viaBackup: false });
   });
 
   it("re-routes when pause has a future end time", () => {
@@ -251,7 +307,28 @@ describe("evaluateStrandedRerouteEligibility (one-shot remediation)", () => {
       activeOrder: [11, 12],
       now,
     });
-    expect(result).toEqual({ shouldReroute: true, targetCsrId: 11 });
+    expect(result).toEqual({ shouldReroute: true, targetCsrId: 11, viaBackup: false });
+  });
+
+  it("re-routes to the backup sticky CSR when set and active", () => {
+    const result = evaluateStrandedRerouteEligibility({
+      config: { stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 12 },
+      stickyPauseSchedule: { isPaused: true, pauseEnd: null },
+      activeOrder: [11, 12],
+      now,
+    });
+    expect(result).toEqual({ shouldReroute: true, targetCsrId: 12, viaBackup: true });
+  });
+
+  it("falls back to first active CSR when backup is also paused", () => {
+    // Backup CSR (13) is configured but not in active order (paused).
+    const result = evaluateStrandedRerouteEligibility({
+      config: { stickyAfterCascade: true, stickyCsrId: 10, backupStickyCsrId: 13 },
+      stickyPauseSchedule: { isPaused: true, pauseEnd: null },
+      activeOrder: [11, 12],
+      now,
+    });
+    expect(result).toEqual({ shouldReroute: true, targetCsrId: 11, viaBackup: false });
   });
 
   it("does not re-route when sticky CSR is not configured", () => {

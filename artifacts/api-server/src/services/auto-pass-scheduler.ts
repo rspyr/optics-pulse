@@ -107,10 +107,27 @@ export function hasActiveClaim(leadId: number): { claimed: boolean; csrId?: numb
 
 const AUTO_PASS_STATUSES = ["day_1", "day_2", "day_3", "day_4"] as const;
 
-type StickyConfig = { allowPassBack: boolean | null; stickyAfterCascade: boolean | null; stickyCsrId: number | null };
+type StickyConfig = {
+  allowPassBack: boolean | null;
+  stickyAfterCascade: boolean | null;
+  stickyCsrId: number | null;
+  backupStickyCsrId?: number | null;
+};
+
+/**
+ * Resolves the effective sticky CSR for a given active order. If the primary
+ * sticky CSR is in the active order, it wins. Otherwise, if a backup sticky
+ * CSR is configured and is in the active order, the backup is used. Returns
+ * null when neither is available (i.e. the sticky redirect is disabled).
+ */
+export function resolveActiveStickyCsrId(config: StickyConfig, activeOrder: number[]): number | null {
+  if (config.stickyCsrId && activeOrder.includes(config.stickyCsrId)) return config.stickyCsrId;
+  if (config.backupStickyCsrId && activeOrder.includes(config.backupStickyCsrId)) return config.backupStickyCsrId;
+  return null;
+}
 
 export function isStickyActiveInOrder(config: StickyConfig, activeOrder: number[]): boolean {
-  return !!(config.stickyCsrId && activeOrder.includes(config.stickyCsrId));
+  return resolveActiveStickyCsrId(config, activeOrder) !== null;
 }
 
 export function isStickyTerminalAtRest(
@@ -120,8 +137,9 @@ export function isStickyTerminalAtRest(
   activeOrder: number[],
 ): boolean {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return false;
-  if (assignedCsrId !== config.stickyCsrId) return false;
-  if (!isStickyActiveInOrder(config, activeOrder)) return false;
+  const effectiveStickyId = resolveActiveStickyCsrId(config, activeOrder);
+  if (effectiveStickyId === null) return false;
+  if (assignedCsrId !== effectiveStickyId) return false;
   return cascadePassCount >= activeOrder.length - 1;
 }
 
@@ -133,8 +151,9 @@ export function isStickyTerminalOnTransition(
   activeOrder: number[],
 ): { terminal: boolean; reason: 'end_of_cycle' | 'rotation_arrival' | null } {
   if (!config.allowPassBack || !config.stickyAfterCascade || !config.stickyCsrId) return { terminal: false, reason: null };
-  if (nextCsrId !== config.stickyCsrId) return { terminal: false, reason: null };
-  if (!isStickyActiveInOrder(config, activeOrder)) return { terminal: false, reason: null };
+  const effectiveStickyId = resolveActiveStickyCsrId(config, activeOrder);
+  if (effectiveStickyId === null) return { terminal: false, reason: null };
+  if (nextCsrId !== effectiveStickyId) return { terminal: false, reason: null };
   if (newPassCount >= activeOrder.length - 1) return { terminal: true, reason: 'end_of_cycle' };
   if (priorPassCount > 0) return { terminal: true, reason: 'rotation_arrival' };
   return { terminal: false, reason: null };
@@ -155,7 +174,7 @@ export type PickNextCsrResult =
 export function pickNextCsrForCascade(input: PickNextCsrInput): PickNextCsrResult {
   const { config, assignedCsrId, cascadePassCount, activeOrder } = input;
   const currentIdx = activeOrder.indexOf(assignedCsrId);
-  const stickyIsActive = isStickyActiveInOrder(config, activeOrder);
+  const effectiveStickyId = resolveActiveStickyCsrId(config, activeOrder);
 
   if (config.allowPassBack) {
     if (isStickyTerminalAtRest(config, assignedCsrId, cascadePassCount, activeOrder)) {
@@ -164,9 +183,9 @@ export function pickNextCsrForCascade(input: PickNextCsrInput): PickNextCsrResul
 
     let nextCsrId: number;
     let viaSticky = false;
-    if (config.stickyAfterCascade && config.stickyCsrId && stickyIsActive
+    if (config.stickyAfterCascade && config.stickyCsrId && effectiveStickyId !== null
         && cascadePassCount >= activeOrder.length - 1) {
-      nextCsrId = config.stickyCsrId;
+      nextCsrId = effectiveStickyId;
       viaSticky = true;
     } else if (currentIdx === -1) {
       nextCsrId = activeOrder[0];
@@ -178,8 +197,8 @@ export function pickNextCsrForCascade(input: PickNextCsrInput): PickNextCsrResul
       !viaSticky
       && config.stickyAfterCascade
       && config.stickyCsrId
-      && stickyIsActive
-      && nextCsrId === config.stickyCsrId
+      && effectiveStickyId !== null
+      && nextCsrId === effectiveStickyId
       && cascadePassCount > 0
       && cascadePassCount < activeOrder.length - 1
     );
@@ -369,8 +388,13 @@ async function fireAutoPass(leadId: number): Promise<void> {
     activeOrder,
   });
 
+  const effectiveStickyForLog = resolveActiveStickyCsrId(config, activeOrder);
+  const stickyLabelForLog = effectiveStickyForLog !== null && effectiveStickyForLog === config.backupStickyCsrId
+    ? `backup sticky CSR ${effectiveStickyForLog}`
+    : `sticky CSR ${effectiveStickyForLog ?? config.stickyCsrId}`;
+
   if (decision.action === 'terminal_at_sticky') {
-    console.log(`[auto-pass] Lead ${leadId}: at sticky CSR ${config.stickyCsrId} after full cycle (terminal) — no further passes`);
+    console.log(`[auto-pass] Lead ${leadId}: at ${stickyLabelForLog} after full cycle (terminal) — no further passes`);
     return;
   }
   if (decision.action === 'no_next') {
@@ -380,10 +404,10 @@ async function fireAutoPass(leadId: number): Promise<void> {
   const nextCsrId = decision.nextCsrId;
 
   if (decision.viaSticky) {
-    console.log(`[auto-pass] Lead ${leadId}: end-of-cycle redirect to sticky CSR ${config.stickyCsrId}`);
+    console.log(`[auto-pass] Lead ${leadId}: end-of-cycle redirect to ${stickyLabelForLog}`);
   }
   if (decision.rotationLandedOnSticky) {
-    console.log(`[auto-pass] Lead ${leadId}: rotation reached sticky CSR ${config.stickyCsrId} — sticking`);
+    console.log(`[auto-pass] Lead ${leadId}: rotation reached ${stickyLabelForLog} — sticking`);
   }
 
   let resolvedName = userMap.get(nextCsrId);
@@ -563,7 +587,7 @@ export async function recoverTimers(): Promise<number> {
 }
 
 export interface StrandedRerouteInput {
-  config: { stickyAfterCascade: boolean | null; stickyCsrId: number | null };
+  config: { stickyAfterCascade: boolean | null; stickyCsrId: number | null; backupStickyCsrId?: number | null };
   stickyPauseSchedule: { isPaused: boolean; pauseEnd: Date | null } | null;
   activeOrder: number[];
   now: Date;
@@ -571,7 +595,7 @@ export interface StrandedRerouteInput {
 
 export type StrandedRerouteDecision =
   | { shouldReroute: false; reason: 'no_sticky_config' | 'sticky_not_paused' | 'pause_expired' | 'no_active_csrs' | 'sticky_still_in_active_order' }
-  | { shouldReroute: true; targetCsrId: number };
+  | { shouldReroute: true; targetCsrId: number; viaBackup: boolean };
 
 export function evaluateStrandedRerouteEligibility(input: StrandedRerouteInput): StrandedRerouteDecision {
   const { config, stickyPauseSchedule, activeOrder, now } = input;
@@ -590,7 +614,12 @@ export function evaluateStrandedRerouteEligibility(input: StrandedRerouteInput):
   if (activeOrder.includes(config.stickyCsrId)) {
     return { shouldReroute: false, reason: 'sticky_still_in_active_order' };
   }
-  return { shouldReroute: true, targetCsrId: activeOrder[0] };
+  if (config.backupStickyCsrId
+      && config.backupStickyCsrId !== config.stickyCsrId
+      && activeOrder.includes(config.backupStickyCsrId)) {
+    return { shouldReroute: true, targetCsrId: config.backupStickyCsrId, viaBackup: true };
+  }
+  return { shouldReroute: true, targetCsrId: activeOrder[0], viaBackup: false };
 }
 
 export async function rerouteLeadsStrandedOnPausedStickyCsr(): Promise<number> {
@@ -684,7 +713,8 @@ export async function rerouteLeadsStrandedOnPausedStickyCsr(): Promise<number> {
       const passMinutes = config.passIntervalMinutes ?? 1440;
       scheduleAutoPass(lead.id, passMinutes * 60 * 1000);
       totalRerouted++;
-      console.log(`[auto-pass][reroute] Lead ${lead.id}: re-routed from paused sticky CSR ${config.stickyCsrId} to ${targetName} (CSR ${targetCsrId})`);
+      const targetLabel = decision.viaBackup ? `backup sticky CSR` : `next-active CSR`;
+      console.log(`[auto-pass][reroute] Lead ${lead.id}: re-routed from paused sticky CSR ${config.stickyCsrId} to ${targetLabel} ${targetName} (CSR ${targetCsrId})`);
     }
   }
 

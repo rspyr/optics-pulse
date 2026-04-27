@@ -89,6 +89,7 @@ interface RoutingConfig {
   allowPassBack: boolean;
   stickyAfterCascade: boolean;
   stickyCsrId: number | null;
+  backupStickyCsrId: number | null;
   isActive: boolean;
 }
 
@@ -1279,6 +1280,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
   const [allowPassBack, setAllowPassBack] = useState(false);
   const [stickyAfterCascade, setStickyAfterCascade] = useState(false);
   const [stickyCsrId, setStickyCsrId] = useState<number | null>(null);
+  const [backupStickyCsrId, setBackupStickyCsrId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
   const [scheduleEditId, setScheduleEditId] = useState<number | null>(null);
@@ -1293,6 +1295,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
     allowPassBack: boolean;
     stickyAfterCascade: boolean;
     stickyCsrId: number | null;
+    backupStickyCsrId: number | null;
   }
   const [lastSavedState, setLastSavedState] = useState<SavedState | null>(null);
 
@@ -1304,6 +1307,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
     allowPassBack,
     stickyAfterCascade,
     stickyCsrId,
+    backupStickyCsrId,
   };
   const isDirty = lastSavedState !== null && JSON.stringify(currentState) !== JSON.stringify(lastSavedState);
 
@@ -1312,10 +1316,19 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       if (!c.stickyAfterCascade || !c.stickyCsrId) return [];
       const csr = csrs.find(u => u.id === c.stickyCsrId);
       if (!csr || !csr.isPaused) return [];
+      const backupCsr = c.backupStickyCsrId ? csrs.find(u => u.id === c.backupStickyCsrId) : null;
+      const backupActive = !!(backupCsr && !backupCsr.isPaused);
       const funnelName = c.funnelTypeId
         ? (funnels.find(f => f.id === c.funnelTypeId)?.name ?? `Funnel #${c.funnelTypeId}`)
         : "Default (All Funnels)";
-      return [{ configId: c.id, funnelTypeId: c.funnelTypeId, funnelName, csrId: csr.id, csrName: csr.name }];
+      return [{
+        configId: c.id,
+        funnelTypeId: c.funnelTypeId,
+        funnelName,
+        csrId: csr.id,
+        csrName: csr.name,
+        backupCsrName: backupActive ? backupCsr!.name : null,
+      }];
     });
   }, [configs, csrs, funnels]);
 
@@ -1324,6 +1337,11 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
     const csr = csrs.find(u => u.id === stickyCsrId);
     return csr && csr.isPaused ? csr : null;
   }, [stickyAfterCascade, stickyCsrId, csrs]);
+
+  const currentBackupStickyCsr = useMemo(() => {
+    if (!stickyAfterCascade || !backupStickyCsrId) return null;
+    return csrs.find(u => u.id === backupStickyCsrId) ?? null;
+  }, [stickyAfterCascade, backupStickyCsrId, csrs]);
 
   useEffect(() => {
     const specificConfig = configs.find(c =>
@@ -1340,13 +1358,15 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       const apb = config.allowPassBack || false;
       const sac = config.stickyAfterCascade || false;
       const sci = config.stickyCsrId || null;
+      const bsci = config.backupStickyCsrId || null;
       setCascadeOrder(co);
       setPassInterval(mins);
       setPassUnit(unit);
       setAllowPassBack(apb);
       setStickyAfterCascade(sac);
       setStickyCsrId(sci);
-      setLastSavedState({ cascadeOrder: co, passInterval: mins, allowPassBack: apb, stickyAfterCascade: sac, stickyCsrId: sci });
+      setBackupStickyCsrId(bsci);
+      setLastSavedState({ cascadeOrder: co, passInterval: mins, allowPassBack: apb, stickyAfterCascade: sac, stickyCsrId: sci, backupStickyCsrId: bsci });
     } else {
       setCascadeOrder([]);
       setPassInterval(1440);
@@ -1354,7 +1374,8 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
       setAllowPassBack(false);
       setStickyAfterCascade(false);
       setStickyCsrId(null);
-      setLastSavedState({ cascadeOrder: [], passInterval: 1440, allowPassBack: false, stickyAfterCascade: false, stickyCsrId: null });
+      setBackupStickyCsrId(null);
+      setLastSavedState({ cascadeOrder: [], passInterval: 1440, allowPassBack: false, stickyAfterCascade: false, stickyCsrId: null, backupStickyCsrId: null });
     }
   }, [selectedFunnelId, configs]);
 
@@ -1373,10 +1394,11 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
           allowPassBack,
           stickyAfterCascade,
           stickyCsrId,
+          backupStickyCsrId: stickyAfterCascade ? backupStickyCsrId : null,
         }),
       });
       if (res.ok) {
-        setLastSavedState({ cascadeOrder, passInterval, allowPassBack, stickyAfterCascade, stickyCsrId });
+        setLastSavedState({ cascadeOrder, passInterval, allowPassBack, stickyAfterCascade, stickyCsrId, backupStickyCsrId: stickyAfterCascade ? backupStickyCsrId : null });
         setIsInherited(false);
         refetchConfigs();
       } else {
@@ -1461,14 +1483,16 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
             <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1 space-y-1">
               <p className="text-xs font-medium text-amber-300">
-                {pausedStickyConfigs.length === 1 ? "Sticky redirect suspended" : "Sticky redirects suspended"}
+                {pausedStickyConfigs.length === 1 ? "Sticky CSR paused" : "Sticky CSRs paused"}
               </p>
               <ul className="space-y-0.5">
                 {pausedStickyConfigs.map(p => (
                   <li key={p.configId} className="text-[11px] text-amber-200/80">
                     <span className="font-medium">{p.funnelName}:</span> Sticky CSR{" "}
-                    <span className="font-medium">{p.csrName}</span> is currently paused — sticky redirect is
-                    disabled until they resume.
+                    <span className="font-medium">{p.csrName}</span> is currently paused —{" "}
+                    {p.backupCsrName
+                      ? <>backup CSR <span className="font-medium">{p.backupCsrName}</span> is taking the sticky overflow until they resume.</>
+                      : <>sticky redirect is disabled until they resume.</>}
                   </li>
                 ))}
               </ul>
@@ -1601,7 +1625,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                 onClick={() => {
                   const next = !allowPassBack;
                   setAllowPassBack(next);
-                  if (!next) { setStickyAfterCascade(false); setStickyCsrId(null); }
+                  if (!next) { setStickyAfterCascade(false); setStickyCsrId(null); setBackupStickyCsrId(null); }
                 }}
                 className={cn(
                   "w-10 h-5 rounded-full transition-colors relative",
@@ -1626,7 +1650,7 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                     onClick={() => {
                       const next = !stickyAfterCascade;
                       setStickyAfterCascade(next);
-                      if (!next) setStickyCsrId(null);
+                      if (!next) { setStickyCsrId(null); setBackupStickyCsrId(null); }
                     }}
                     className={cn(
                       "w-10 h-5 rounded-full transition-colors relative",
@@ -1640,31 +1664,64 @@ function RoutingTab({ tenantId, funnels, timezone = "America/New_York" }: { tena
                   </button>
                 </div>
                 {stickyAfterCascade && (
-                  <div>
-                    <label className="text-[10px] text-white/30 uppercase tracking-wider">Assign To</label>
-                    <Select
-                      value={stickyCsrId != null ? String(stickyCsrId) : "__none__"}
-                      onValueChange={v => setStickyCsrId(v === "__none__" ? null : Number(v))}
-                    >
-                      <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
-                        <SelectValue placeholder="Select a CSR..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Select a CSR...</SelectItem>
-                        {csrs.map(csr => (
-                          <SelectItem key={csr.id} value={String(csr.id)}>{csr.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[10px] text-white/20 mt-0.5">Lead will be assigned to this CSR after cycling through all cascade positions</p>
-                    {currentStickyCsrPaused && (
-                      <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-amber-200/90 leading-snug">
-                          Sticky CSR <span className="font-medium text-amber-100">{currentStickyCsrPaused.name}</span> is currently paused — sticky redirect is disabled until they resume.
-                        </p>
-                      </div>
-                    )}
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[10px] text-white/30 uppercase tracking-wider">Assign To</label>
+                      <Select
+                        value={stickyCsrId != null ? String(stickyCsrId) : "__none__"}
+                        onValueChange={v => setStickyCsrId(v === "__none__" ? null : Number(v))}
+                      >
+                        <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                          <SelectValue placeholder="Select a CSR..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Select a CSR...</SelectItem>
+                          {csrs.map(csr => (
+                            <SelectItem key={csr.id} value={String(csr.id)}>{csr.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-white/20 mt-0.5">Lead will be assigned to this CSR after cycling through all cascade positions</p>
+                      {currentStickyCsrPaused && (
+                        <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                          <p className="text-[11px] text-amber-200/90 leading-snug">
+                            Sticky CSR <span className="font-medium text-amber-100">{currentStickyCsrPaused.name}</span> is currently paused —{" "}
+                            {currentBackupStickyCsr && !currentBackupStickyCsr.isPaused
+                              ? <>backup CSR <span className="font-medium text-amber-100">{currentBackupStickyCsr.name}</span> is taking the sticky overflow until they resume.</>
+                              : <>sticky redirect is disabled until they resume.</>}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-white/30 uppercase tracking-wider">Backup CSR (when primary is paused)</label>
+                      <Select
+                        value={backupStickyCsrId != null ? String(backupStickyCsrId) : "__none__"}
+                        onValueChange={v => setBackupStickyCsrId(v === "__none__" ? null : Number(v))}
+                      >
+                        <SelectTrigger className="w-full mt-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto">
+                          <SelectValue placeholder="None — fall back to cascade" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None — fall back to cascade</SelectItem>
+                          {csrs
+                            .filter(csr => csr.id !== stickyCsrId)
+                            .map(csr => (
+                              <SelectItem key={csr.id} value={String(csr.id)}>{csr.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-white/20 mt-0.5">Optional — picks up the sticky overflow only while the primary sticky CSR is paused.</p>
+                      {currentBackupStickyCsr?.isPaused && (
+                        <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                          <p className="text-[11px] text-amber-200/90 leading-snug">
+                            Backup CSR <span className="font-medium text-amber-100">{currentBackupStickyCsr.name}</span> is also paused — sticky overflow will fall back to the open cascade.
+                          </p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

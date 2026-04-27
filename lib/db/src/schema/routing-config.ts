@@ -12,6 +12,7 @@ export const routingConfigTable = pgTable("routing_config", {
   allowPassBack: boolean("allow_pass_back").notNull().default(false),
   stickyAfterCascade: boolean("sticky_after_cascade").notNull().default(false),
   stickyCsrId: integer("sticky_csr_id").references(() => usersTable.id),
+  backupStickyCsrId: integer("backup_sticky_csr_id").references(() => usersTable.id),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

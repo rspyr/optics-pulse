@@ -8,7 +8,7 @@ import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, 
 import { emitLeadUpdated, emitNewLead } from "../socket";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
-import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim } from "../services/auto-pass-scheduler";
+import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim, isStickyTerminalAtRest } from "../services/auto-pass-scheduler";
 import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 
@@ -193,11 +193,10 @@ router.get("/leads-hub/queue", async (req, res) => {
         const currentIdx = activeOrder.indexOf(l.assignedCsrId);
         let hasNextCsr: boolean;
         if (cfg.allowPassBack) {
-          const stickyIsActive = !!(cfg.stickyCsrId && activeOrder.includes(cfg.stickyCsrId));
-          if (cfg.stickyAfterCascade && cfg.stickyCsrId
-              && stickyIsActive
-              && (l.cascadePassCount ?? 0) >= activeOrder.length - 1
-              && cfg.stickyCsrId === l.assignedCsrId) {
+          // The lead has no further auto-pass when it has reached the
+          // effective sticky CSR (primary if active, else backup if active)
+          // after a full cycle.
+          if (isStickyTerminalAtRest(cfg, l.assignedCsrId, l.cascadePassCount ?? 0, activeOrder)) {
             hasNextCsr = false;
           } else {
             hasNextCsr = true;
@@ -992,7 +991,7 @@ router.put("/leads-hub/routing-config", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
-  const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack, stickyAfterCascade, stickyCsrId } = req.body;
+  const { funnelTypeId, cascadeOrder, passIntervalMinutes, allowPassBack, stickyAfterCascade, stickyCsrId, backupStickyCsrId } = req.body;
 
   if (stickyAfterCascade && !allowPassBack) {
     res.status(400).json({ error: "Allow Pass-Back must be enabled to use Sticky After Cascade" });
@@ -1001,6 +1000,16 @@ router.put("/leads-hub/routing-config", async (req, res) => {
 
   if (stickyAfterCascade && !stickyCsrId) {
     res.status(400).json({ error: "A CSR must be selected when Sticky After Cascade is enabled" });
+    return;
+  }
+
+  if (backupStickyCsrId && !stickyAfterCascade) {
+    res.status(400).json({ error: "A backup sticky CSR can only be set while Sticky After Cascade is enabled" });
+    return;
+  }
+
+  if (backupStickyCsrId && stickyCsrId && backupStickyCsrId === stickyCsrId) {
+    res.status(400).json({ error: "Backup sticky CSR must be different from the primary sticky CSR" });
     return;
   }
 
@@ -1018,6 +1027,20 @@ router.put("/leads-hub/routing-config", async (req, res) => {
     }
   }
 
+  if (backupStickyCsrId) {
+    const [backupExists] = await db.select({ id: usersTable.id, isActive: usersTable.isActive })
+      .from(usersTable)
+      .where(and(eq(usersTable.id, backupStickyCsrId), eq(usersTable.tenantId, tenantId)));
+    if (!backupExists) {
+      res.status(400).json({ error: "Selected backup sticky CSR does not belong to this tenant" });
+      return;
+    }
+    if (!backupExists.isActive) {
+      res.status(400).json({ error: "Selected backup sticky CSR is inactive" });
+      return;
+    }
+  }
+
   const existing = await db.select().from(routingConfigTable)
     .where(and(
       eq(routingConfigTable.tenantId, tenantId),
@@ -1031,6 +1054,10 @@ router.put("/leads-hub/routing-config", async (req, res) => {
     if (allowPassBack !== undefined) updates.allowPassBack = allowPassBack;
     if (stickyAfterCascade !== undefined) updates.stickyAfterCascade = stickyAfterCascade;
     if (stickyCsrId !== undefined) updates.stickyCsrId = stickyCsrId;
+    if (backupStickyCsrId !== undefined) updates.backupStickyCsrId = backupStickyCsrId;
+    // Always clear the backup when sticky-after-cascade is being turned off,
+    // so we never carry orphaned backup state on a non-sticky config.
+    if (stickyAfterCascade === false) updates.backupStickyCsrId = null;
 
     const [updated] = await db.update(routingConfigTable)
       .set(updates)
@@ -1046,6 +1073,7 @@ router.put("/leads-hub/routing-config", async (req, res) => {
       allowPassBack: allowPassBack || false,
       stickyAfterCascade: stickyAfterCascade || false,
       stickyCsrId: stickyCsrId || null,
+      backupStickyCsrId: stickyAfterCascade ? (backupStickyCsrId || null) : null,
     }).returning();
     res.json(created);
   }
