@@ -145,6 +145,8 @@ export default function VerifyTracker() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [ignoredCount, setIgnoredCount] = useState(0);
   const [storedHostCount, setStoredHostCount] = useState(0);
+  const [highlightHoneypotRescue, setHighlightHoneypotRescue] = useState(false);
+  const honeypotHighlightTimerRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const persistHostRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string>(`s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -227,6 +229,34 @@ export default function VerifyTracker() {
   useEffect(() => () => stopWaiting(), []);
 
   useEffect(() => { setStoredHostCount(countAllPersistedHosts()); }, []);
+
+  // Task #294 — invoked from the "Honeypot-only form detected" warning.
+  // Scrolls the live attribution feed into view and briefly highlights any
+  // rows whose form.type is `honeypot-rescue` so operators can match the
+  // warning to the actual captures it's referring to.
+  const jumpToHoneypotRescueRows = () => {
+    const el = document.getElementById(LIVE_FEED_ANCHOR_ID);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    setHighlightHoneypotRescue(true);
+    if (honeypotHighlightTimerRef.current !== null) {
+      window.clearTimeout(honeypotHighlightTimerRef.current);
+    }
+    honeypotHighlightTimerRef.current = window.setTimeout(() => {
+      setHighlightHoneypotRescue(false);
+      honeypotHighlightTimerRef.current = null;
+    }, 4000);
+  };
+
+  // Clear the honeypot-rescue highlight timer on unmount so it can't fire
+  // setHighlightHoneypotRescue against an unmounted component.
+  useEffect(() => () => {
+    if (honeypotHighlightTimerRef.current !== null) {
+      window.clearTimeout(honeypotHighlightTimerRef.current);
+      honeypotHighlightTimerRef.current = null;
+    }
+  }, []);
 
   const handleClearAllHistory = () => {
     const total = countAllPersistedHosts();
@@ -384,8 +414,33 @@ export default function VerifyTracker() {
                   const c = f.level === "error" ? "text-red-300 border-red-500/30 bg-red-500/[0.05]"
                     : f.level === "warning" ? "text-amber-300 border-amber-500/30 bg-amber-500/[0.05]"
                     : "text-muted-foreground border-white/10 bg-white/[0.02]";
+                  // Task #294 — when a finding refers to the honeypot-rescue
+                  // capture path (either by the path name itself or by the
+                  // canonical "Honeypot-only form detected" warning header),
+                  // give operators a one-click way to jump to the live feed
+                  // where those rows are highlighted. We match both phrasings
+                  // case-insensitively so small copy tweaks on the API side
+                  // don't silently drop the link.
+                  const msgLower = f.message.toLowerCase();
+                  const linksToHoneypotRescue =
+                    msgLower.includes("honeypot-rescue")
+                    || msgLower.includes("honeypot-only form detected");
                   return (
-                    <li key={i} className={`text-sm border rounded-md px-3 py-2 ${c}`}>{f.message}</li>
+                    <li key={i} className={`text-sm border rounded-md px-3 py-2 ${c}`}>
+                      <span>{f.message}</span>
+                      {linksToHoneypotRescue && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-amber-200 font-medium"
+                            onClick={() => jumpToHoneypotRescueRows()}
+                          >
+                            Jump to honeypot-rescue rows in feed →
+                          </button>
+                        </>
+                      )}
+                    </li>
                   );
                 })}
               </ul>
@@ -404,6 +459,7 @@ export default function VerifyTracker() {
             expectedHost={result.host}
             ignoredCount={ignoredCount}
             currentSessionId={sessionIdRef.current}
+            highlightHoneypotRescue={highlightHoneypotRescue}
           />
 
           <InstallVerdictBanner verdict={result.installVerdict} pageScriptKind={result.pageScriptKind} captureUrl={result.captureUrl} />
@@ -548,6 +604,52 @@ function matchPillClass(level: LiveAttributionEvent["matchLevel"]): string {
     : "bg-red-500/20 text-red-200 border-red-400/30";
 }
 
+// Task #294 — surface non-`native` capture paths as a small chip on each
+// row of the live attribution feed so operators can tell at a glance when
+// pulse.js had to fall back to a builder-specific or wide-scan rescue path
+// (which usually means the customer's HTML is worth investigating).
+const CAPTURE_PATH_BADGES: Record<string, { label: string; tooltip: string; classes: string }> = {
+  "honeypot-rescue": {
+    label: "honeypot-rescue",
+    tooltip:
+      "Captured via pulse.js's wide-scan rescue path because the form's only named inputs were anti-bot decoys (e.g. company_url). The visible inputs likely bind via React state without a name= attribute. Worth investigating the customer's HTML.",
+    classes: "bg-amber-500/15 text-amber-200 border-amber-400/30",
+  },
+  leadconnector: {
+    label: "leadconnector",
+    tooltip:
+      "Captured from a GoHighLevel / LeadConnector embed (msgsndr.com / leadconnectorhq.com / ghl.io). Pulse.js used the LeadConnector-specific path instead of native FormData.",
+    classes: "bg-purple-500/15 text-purple-200 border-purple-400/30",
+  },
+  gravity: {
+    label: "gravity",
+    tooltip: "Captured from a Gravity Forms (WordPress) submission via the gravity-specific path.",
+    classes: "bg-cyan-500/15 text-cyan-200 border-cyan-400/30",
+  },
+  wpcf7: {
+    label: "wpcf7",
+    tooltip: "Captured from a Contact Form 7 (WordPress) submission via the wpcf7-specific path.",
+    classes: "bg-cyan-500/15 text-cyan-200 border-cyan-400/30",
+  },
+};
+
+function CapturePathBadge({ formType }: { formType: string | null }) {
+  if (!formType) return null;
+  const cfg = CAPTURE_PATH_BADGES[formType];
+  if (!cfg) return null;
+  return (
+    <span
+      className={`text-[11px] px-2 py-0.5 rounded border cursor-help ${cfg.classes}`}
+      title={cfg.tooltip}
+      data-testid={`capture-path-badge-${cfg.label}`}
+    >
+      capture: {cfg.label}
+    </span>
+  );
+}
+
+const LIVE_FEED_ANCHOR_ID = "live-attribution-feed";
+
 function formatAge(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s ago`;
@@ -569,6 +671,7 @@ function LiveEventCard({
   expectedHost,
   ignoredCount,
   currentSessionId,
+  highlightHoneypotRescue,
 }: {
   events: StoredEvent[];
   nowMs: number;
@@ -581,6 +684,7 @@ function LiveEventCard({
   expectedHost: string;
   ignoredCount: number;
   currentSessionId: string;
+  highlightHoneypotRescue: boolean;
 }) {
   const seconds = Math.floor(elapsedMs / 1000);
   const hasEvents = events.length > 0;
@@ -602,7 +706,7 @@ function LiveEventCard({
   );
 
   return (
-    <PremiumCard className="p-6">
+    <PremiumCard id={LIVE_FEED_ANCHOR_ID} className="p-6 scroll-mt-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Radio className={`w-5 h-5 mt-0.5 ${hasEvents ? "text-emerald-400" : timedOut ? "text-amber-400" : "text-primary animate-pulse"}`} />
@@ -673,12 +777,21 @@ function LiveEventCard({
               const capturedAtLabel = Number.isFinite(capturedAtMs)
                 ? new Date(capturedAtMs).toLocaleString()
                 : new Date(arrivedAt).toLocaleString();
+              const isHoneypotRescue = evt.formType === "honeypot-rescue";
+              const rowHighlight = highlightHoneypotRescue && isHoneypotRescue
+                ? "border-amber-400/60 bg-amber-500/[0.06] ring-2 ring-amber-400/40"
+                : "border-white/10 bg-white/[0.02]";
               return (
-              <div key={`${evt.id}-${arrivedAt}`} className="border border-white/10 bg-white/[0.02] rounded-md p-3">
+              <div
+                key={`${evt.id}-${arrivedAt}`}
+                className={`border rounded-md p-3 transition-colors duration-500 ${rowHighlight}`}
+                data-form-type={evt.formType ?? ""}
+              >
                 <div className="flex items-center gap-2 text-sm text-emerald-300 flex-wrap">
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Event #{evt.id}</span>
                   <span className={`text-[11px] px-2 py-0.5 rounded border ${matchPillClass(evt.matchLevel)}`}>match: {evt.matchLevel}</span>
+                  <CapturePathBadge formType={evt.formType} />
                   {fromPriorSession && (
                     <span className="text-[11px] px-2 py-0.5 rounded border bg-white/[0.04] text-muted-foreground border-white/15">from previous session</span>
                   )}

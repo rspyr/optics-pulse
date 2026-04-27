@@ -301,4 +301,265 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
     // Still exactly the prefetched count — no extra GET on expand.
     expect(ruleGetsFor().length).toBe(prefetchCount);
   });
+
+  // Task #294 — surface non-`native` capture paths as a chip on each row of
+  // the live attribution feed so operators can tell at a glance when
+  // pulse.js had to fall back to a builder-specific or wide-scan path.
+  it("renders a CapturePathBadge with tooltip for honeypot-rescue events and skips it for native events", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    const handler = socketState.handlers.get("new-attribution-event")!;
+    socketState.handlers.get("connect")!();
+
+    // First, a native-path event — should NOT get a capture-path badge.
+    handler({
+      id: 9201,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "native",
+      formId: "ac-form",
+      formName: "AC",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z",
+      receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    await waitFor(() => expect(screen.getByText(/Event #9201/)).toBeInTheDocument());
+    expect(screen.queryByTestId(/^capture-path-badge-/)).not.toBeInTheDocument();
+
+    // Now a honeypot-rescue event — should render the amber badge with tooltip.
+    handler({
+      id: 9202,
+      tenantId: 42,
+      matchLevel: "golden",
+      matchConfidence: 0.8,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "honeypot-rescue",
+      formId: "rescue-form",
+      formName: "Rescue",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:02.000Z",
+      receivedAt: "2026-04-26T01:00:03.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    const badge = await screen.findByTestId("capture-path-badge-honeypot-rescue");
+    expect(badge).toHaveTextContent(/honeypot-rescue/);
+    expect(badge.getAttribute("title") ?? "").toMatch(/wide-scan|honeypot/i);
+
+    // And a leadconnector event — distinct purple badge with its own tooltip.
+    handler({
+      id: 9203,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "leadconnector",
+      formId: "ghl-form",
+      formName: "GHL",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:04.000Z",
+      receivedAt: "2026-04-26T01:00:05.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    const ghlBadge = await screen.findByTestId("capture-path-badge-leadconnector");
+    expect(ghlBadge).toHaveTextContent(/leadconnector/);
+    expect(ghlBadge.getAttribute("title") ?? "").toMatch(/GoHighLevel|LeadConnector/i);
+
+    // gravity and wpcf7 are also non-`native` capture paths — they should
+    // each get their own badge so operators can spot the WordPress builders.
+    handler({
+      id: 9204,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "gravity",
+      formId: "gf-1",
+      formName: "GF",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:06.000Z",
+      receivedAt: "2026-04-26T01:00:07.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    const gfBadge = await screen.findByTestId("capture-path-badge-gravity");
+    expect(gfBadge).toHaveTextContent(/gravity/);
+    expect(gfBadge.getAttribute("title") ?? "").toMatch(/Gravity Forms/i);
+
+    handler({
+      id: 9205,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "wpcf7",
+      formId: "cf7-1",
+      formName: "CF7",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:08.000Z",
+      receivedAt: "2026-04-26T01:00:09.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    const cf7Badge = await screen.findByTestId("capture-path-badge-wpcf7");
+    expect(cf7Badge).toHaveTextContent(/wpcf7/);
+    expect(cf7Badge.getAttribute("title") ?? "").toMatch(/Contact Form 7/i);
+  });
+
+  // Task #294 (review) — the warning-link detector should fire on the
+  // canonical "Honeypot-only form detected" header (case-insensitive) too,
+  // not only when the literal token "honeypot-rescue" appears in the
+  // message. This guards against future copy tweaks on the API side.
+  it("renders the jump-to-feed link when the warning uses 'Honeypot-only form detected' header instead of the literal 'honeypot-rescue' token", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => makeVerifyResult({
+            findings: [
+              { level: "warning", message: "HONEYPOT-ONLY FORM DETECTED — investigate the customer's HTML." },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    // The jump-to-feed link must still render even though the message
+    // doesn't contain the lowercase "honeypot-rescue" token.
+    expect(
+      screen.getByRole("button", { name: /Jump to honeypot-rescue rows in feed/i }),
+    ).toBeInTheDocument();
+  });
+
+  // Task #294 — the "Honeypot-only form detected" warning should expose a
+  // jump-to-feed control that scrolls the live feed into view AND highlights
+  // any honeypot-rescue rows so operators can match the warning to captures.
+  it("renders a 'Jump to honeypot-rescue rows' link on the honeypot warning that highlights matching feed rows", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => makeVerifyResult({
+            findings: [
+              {
+                level: "warning",
+                message: "Honeypot-only form detected — Pulse.js falls back to a wider scan and labels these submissions as honeypot-rescue.",
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    // Stub scrollIntoView (jsdom doesn't implement it).
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy as unknown as Element["scrollIntoView"];
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    // Push a honeypot-rescue event so there's something to highlight.
+    socketState.handlers.get("connect")!();
+    socketState.handlers.get("new-attribution-event")!({
+      id: 9301,
+      tenantId: 42,
+      matchLevel: "golden",
+      matchConfidence: 0.8,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "honeypot-rescue",
+      formId: "rescue-form",
+      formName: "Rescue",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z",
+      receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    await waitFor(() => expect(screen.getByText(/Event #9301/)).toBeInTheDocument());
+
+    // The row starts un-highlighted.
+    const row = screen.getByText(/Event #9301/).closest("[data-form-type]") as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row.className).not.toMatch(/ring-amber-400/);
+
+    // Click the "Jump to" link in the warning.
+    const jumpBtn = screen.getByRole("button", { name: /Jump to honeypot-rescue rows in feed/i });
+    await user.click(jumpBtn);
+
+    // It scrolls the live feed anchor into view…
+    expect(scrollSpy).toHaveBeenCalled();
+    // …and the honeypot-rescue row picks up the amber highlight ring.
+    await waitFor(() => {
+      const updated = screen.getByText(/Event #9301/).closest("[data-form-type]") as HTMLElement;
+      expect(updated.className).toMatch(/ring-amber-400/);
+    });
+  });
 });
