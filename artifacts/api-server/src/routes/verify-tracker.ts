@@ -323,6 +323,14 @@ export interface FormInventoryItem {
   host: string | null;
   // native-form input names (empty for iframes — capture-mode covers those)
   fieldNames: string[];
+  // total count of visible (non-hidden, non-button/submit/reset/image) input,
+  // select, and textarea elements inside this <form>. Always 0 for iframes —
+  // the parent page can't introspect cross-origin form internals.
+  visibleInputCount: number;
+  // subset of visibleInputCount that lack a `name=` attribute. The Vance
+  // failure mode (Task #295) was a React form whose visible inputs only had
+  // `data-testid`, so `new FormData(form)` skipped them entirely.
+  unnamedVisibleInputCount: number;
 }
 
 function classifyIframeBuilder(iframeHost: string | null): string {
@@ -374,6 +382,36 @@ export function formInventoryHasHoneypotOnlyShape(items: FormInventoryItem[]): b
   return false;
 }
 
+/**
+ * Task #295 — broader sibling of `formInventoryHasHoneypotOnlyShape`.
+ * Returns true if any native `<form>` in the inventory has at least 2
+ * visible inputs (non-hidden, non-button) AND ≥50% of them lack a
+ * `name=` attribute.
+ *
+ * The Vance Heating outage (Task #292) was triggered by a React form
+ * whose visible inputs only carried `data-testid` — `new FormData(form)`
+ * silently skipped them and Pulse received only the honeypot. The
+ * honeypot-only check catches that exact page; this broader check
+ * surfaces the underlying mistake on ANY scanned form, even ones
+ * without a honeypot decoy, before customers complain about missing
+ * leads.
+ *
+ * The 50% threshold is deliberate: a single forgotten `name=` on an
+ * otherwise well-formed contact form is too noisy to flag, but a form
+ * where half (or more) of the visible inputs are unnamed is almost
+ * certainly built around a state-only React/Vue binding that bypasses
+ * FormData entirely.
+ */
+export function formInventoryHasMissingNameShape(items: FormInventoryItem[]): boolean {
+  for (const item of items) {
+    if (item.kind !== "form") continue;
+    if (item.visibleInputCount < 2) continue;
+    // ≥50% unnamed → ratio test without floating point: unnamed * 2 >= total
+    if (item.unnamedVisibleInputCount * 2 >= item.visibleInputCount) return true;
+  }
+  return false;
+}
+
 export function buildFormInventory(html: string, baseUrl: string): FormInventoryItem[] {
   const out: FormInventoryItem[] = [];
 
@@ -386,14 +424,45 @@ export function buildFormInventory(html: string, baseUrl: string): FormInventory
     const innerHtml = fm[2] || "";
     const actionMatch = /\baction\s*=\s*(['"])([^'"]*)\1/i.exec(attrs);
     const action = actionMatch ? actionMatch[2] : null;
-    const fieldNameRe = /<(?:input|select|textarea)\b[^>]*\bname\s*=\s*(['"])([^'"]+)\1/gi;
+
+    // Per-tag scan so we can also count visible-but-unnamed inputs.
+    // Browsers' `new FormData(form)` only includes elements with a
+    // `name=` attribute, so unnamed visible inputs are the diagnostic
+    // signal Task #295 wants surfaced.
+    const tagRe = /<(input|select|textarea)\b([^>]*?)\/?>/gi;
     const names = new Set<string>();
-    let nm: RegExpExecArray | null;
-    while ((nm = fieldNameRe.exec(innerHtml)) !== null) {
-      names.add(nm[2]);
-      if (names.size >= 50) break;
+    let visibleInputCount = 0;
+    let unnamedVisibleInputCount = 0;
+    let scanned = 0;
+    let tm: RegExpExecArray | null;
+    while ((tm = tagRe.exec(innerHtml)) !== null && scanned < 200) {
+      scanned++;
+      const tagName = tm[1].toLowerCase();
+      const tagAttrs = tm[2] || "";
+      const typeMatch = /\btype\s*=\s*(?:(['"])([^'"]*)\1|([^\s>]+))/i.exec(tagAttrs);
+      const type = (typeMatch ? (typeMatch[2] ?? typeMatch[3] ?? "") : "").toLowerCase();
+      const nameMatch = /\bname\s*=\s*(['"])([^'"]+)\1/i.exec(tagAttrs);
+      if (nameMatch && names.size < 50) names.add(nameMatch[2]);
+      // <input> with non-data type (hidden / submit-style) is not a
+      // visible data input. <select> and <textarea> have no equivalent
+      // non-data type, so they always count as visible.
+      if (tagName === "input") {
+        if (type === "hidden" || type === "submit" || type === "button" || type === "reset" || type === "image") {
+          continue;
+        }
+      }
+      visibleInputCount++;
+      if (!nameMatch) unnamedVisibleInputCount++;
     }
-    out.push({ kind: "form", source: action, builder: null, host: null, fieldNames: Array.from(names) });
+    out.push({
+      kind: "form",
+      source: action,
+      builder: null,
+      host: null,
+      fieldNames: Array.from(names),
+      visibleInputCount,
+      unnamedVisibleInputCount,
+    });
   }
 
   const iframeRe = /<iframe\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1[^>]*>/gi;
@@ -411,6 +480,8 @@ export function buildFormInventory(html: string, baseUrl: string): FormInventory
       builder,
       host: iframeHost,
       fieldNames: [],
+      visibleInputCount: 0,
+      unnamedVisibleInputCount: 0,
     });
   }
 
@@ -737,6 +808,29 @@ router.post("/verify-tracker", async (req, res) => {
       level: "warning",
       message: `Honeypot-only form detected — the page has a <form> whose only named inputs are anti-bot decoys (e.g. company_url). Visible inputs are likely React-managed siblings without a name= attribute, so FormData captures only the honeypot. Pulse.js falls back to a wider scan and labels these submissions as honeypot-rescue; if heartbeats are healthy but submits arrive empty, this is the cause.`,
     });
+  }
+
+  // Task #295 — broader sibling check: catch the underlying mistake
+  // (visible inputs without `name=`) on any scanned form, not just
+  // pages that also happen to have a honeypot. This surfaces the
+  // problem before any leads are lost. Find the worst offender so the
+  // operator sees concrete numbers in the warning.
+  if (formInventoryHasMissingNameShape(formInventory)) {
+    let worst: FormInventoryItem | null = null;
+    for (const item of formInventory) {
+      if (item.kind !== "form") continue;
+      if (item.visibleInputCount < 2) continue;
+      if (item.unnamedVisibleInputCount * 2 < item.visibleInputCount) continue;
+      if (!worst || item.unnamedVisibleInputCount > worst.unnamedVisibleInputCount) {
+        worst = item;
+      }
+    }
+    if (worst) {
+      findings.push({
+        level: "warning",
+        message: `Form on this page has ${worst.unnamedVisibleInputCount} of ${worst.visibleInputCount} visible inputs missing a name= attribute. Browsers' new FormData(form) only includes inputs with name=, so React/Vue forms that bind via state or test-ids will silently submit empty. Add name="…" to each visible input (first_name, email, phone, etc.). Pulse.js's wide-scan rescue can recover some of these, but a proper name= is the only reliable fix. See https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData for the FormData contract.`,
+      });
+    }
   }
 
   // heartbeat lookup scoped to caller visibility

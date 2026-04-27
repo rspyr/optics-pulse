@@ -6,6 +6,7 @@ import {
   isScriptResponseDead,
   computeInstallVerdict,
   formInventoryHasHoneypotOnlyShape,
+  formInventoryHasMissingNameShape,
 } from "./verify-tracker";
 
 /**
@@ -102,6 +103,30 @@ describe("buildFormInventory", () => {
     expect(inv[0].kind).toBe("form");
     expect(inv[0].source).toBe("/submit");
     expect(inv[0].fieldNames.sort()).toEqual(["first_name", "phone", "service"]);
+    // All three are visible (text/tel + select), and all are named.
+    expect(inv[0].visibleInputCount).toBe(3);
+    expect(inv[0].unnamedVisibleInputCount).toBe(0);
+  });
+
+  it("counts unnamed visible inputs and ignores hidden / submit / button inputs", () => {
+    const html = `
+      <form>
+        <input name="first_name" />
+        <input data-testid="email-field" />
+        <input type="hidden" name="csrf" value="abc" />
+        <input type="submit" value="Send" />
+        <button type="button">Cancel</button>
+      </form>
+    `;
+    const inv = buildFormInventory(html, "https://example.com/");
+    expect(inv).toHaveLength(1);
+    // Only the two visible <input>s count: the named first_name and the
+    // unnamed data-testid one. <input type=hidden|submit> and <button>
+    // are excluded; <button> isn't even matched by the tag scanner.
+    expect(inv[0].visibleInputCount).toBe(2);
+    expect(inv[0].unnamedVisibleInputCount).toBe(1);
+    // fieldNames still captures hidden inputs' names (existing contract).
+    expect(inv[0].fieldNames.sort()).toEqual(["csrf", "first_name"]);
   });
 
   it("identifies leadconnector iframes by host", () => {
@@ -206,6 +231,150 @@ describe("formInventoryHasHoneypotOnlyShape", () => {
       "https://example.com/",
     );
     expect(formInventoryHasHoneypotOnlyShape(inv)).toBe(true);
+  });
+});
+
+/**
+ * Task #295 — broader missing-name-attribute detection. The exact
+ * failure mode this catches: a React form whose visible inputs only
+ * carry `data-testid`, so `new FormData(form)` returns an empty body
+ * (or only a honeypot decoy). The honeypot-only check (Task #292) only
+ * fires on pages that ALSO happen to have a honeypot decoy; this
+ * broader check surfaces the same root cause on plain forms before any
+ * leads are lost.
+ *
+ * Threshold rule: ≥2 visible inputs AND ≥50% of them lack a `name=`
+ * attribute. The 50% gate keeps a single forgotten name on a
+ * well-formed contact form from triggering noise.
+ */
+describe("formInventoryHasMissingNameShape", () => {
+  it("flags a React-style form where every visible input has only data-testid (Vance failure mode)", () => {
+    const inv = buildFormInventory(
+      `<form>
+         <input data-testid="first-name" />
+         <input data-testid="email" type="email" />
+         <input data-testid="phone" type="tel" />
+         <input type="hidden" name="company_url" />
+       </form>`,
+      "https://example.com/book",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(true);
+  });
+
+  it("flags a form at exactly the 50% threshold (2 visible, 1 unnamed)", () => {
+    const inv = buildFormInventory(
+      `<form><input name="email" /><input data-testid="phone" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(true);
+  });
+
+  it("does NOT flag a form where only 1 of 3 visible inputs is unnamed (33%)", () => {
+    const inv = buildFormInventory(
+      `<form>
+         <input name="first_name" />
+         <input name="email" />
+         <input data-testid="phone" />
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
+  });
+
+  it("does NOT flag a single visible unnamed input (need >=2 visible to fire)", () => {
+    // A 1-input form with a missing name is too noisy to flag on its
+    // own — a search box, a comment field, etc.
+    const inv = buildFormInventory(
+      `<form><input data-testid="search" /></form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
+  });
+
+  it("does NOT flag a form whose every visible input is named", () => {
+    const inv = buildFormInventory(
+      `<form>
+         <input name="first_name" />
+         <input name="email" />
+         <input name="phone" />
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
+  });
+
+  it("ignores hidden inputs when computing the visible-input ratio", () => {
+    // Two visible (both named) + many hidden (no name). Ratio is 0/2,
+    // not influenced by the hidden inputs.
+    const inv = buildFormInventory(
+      `<form>
+         <input name="first_name" />
+         <input name="email" />
+         <input type="hidden" />
+         <input type="hidden" />
+         <input type="hidden" />
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
+  });
+
+  it("ignores submit/button/reset inputs when computing the visible-input ratio", () => {
+    // Two visible inputs (both unnamed) plus a submit button. The
+    // submit button must NOT count toward `visibleInputCount` —
+    // otherwise 2/3 = 67% would still flag, masking that the ratio is
+    // really 2/2 = 100%.
+    const inv = buildFormInventory(
+      `<form>
+         <input data-testid="first-name" />
+         <input data-testid="email" />
+         <input type="submit" value="Send" />
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(true);
+  });
+
+  it("counts <select> and <textarea> as visible inputs", () => {
+    // 1 visible-named + 1 visible-unnamed (textarea) + 1 visible-unnamed (select)
+    // = 3 visible / 2 unnamed = 67% → flagged.
+    const inv = buildFormInventory(
+      `<form>
+         <input name="first_name" />
+         <textarea data-testid="notes"></textarea>
+         <select data-testid="service"><option>X</option></select>
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(true);
+  });
+
+  it("ignores iframe entries (only native <form>s carry input children)", () => {
+    const inv = buildFormInventory(
+      `<iframe src="https://link.msgsndr.com/widget/abc"></iframe>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
+  });
+
+  it("returns true if ANY form in the inventory matches, even when other forms are well-formed", () => {
+    const inv = buildFormInventory(
+      `<form>
+         <input name="first_name" />
+         <input name="email" />
+       </form>
+       <form>
+         <input data-testid="first-name" />
+         <input data-testid="email" />
+       </form>`,
+      "https://example.com/",
+    );
+    expect(formInventoryHasMissingNameShape(inv)).toBe(true);
+  });
+
+  it("does NOT flag a form with zero visible inputs (e.g. an iframe-only or empty <form> shell)", () => {
+    const inv = buildFormInventory(`<form></form>`, "https://example.com/");
+    expect(formInventoryHasMissingNameShape(inv)).toBe(false);
   });
 });
 
