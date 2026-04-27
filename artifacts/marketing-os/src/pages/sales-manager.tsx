@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip as UiTooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/components/auth-context";
 import {
   Users, Phone, MessageSquare, TrendingUp,
@@ -250,7 +251,7 @@ function useCoachingInsights(tenantId: number | null) {
   return { insights, loading, fetching };
 }
 
-function MetricCard({ label, value, icon: Icon, delta, format = "number", className, subtitle }: {
+function MetricCard({ label, value, icon: Icon, delta, format = "number", className, subtitle, tooltip }: {
   label: string;
   value: number;
   icon: React.ComponentType<{ className?: string }>;
@@ -258,6 +259,7 @@ function MetricCard({ label, value, icon: Icon, delta, format = "number", classN
   format?: "number" | "percent" | "currency" | "time";
   className?: string;
   subtitle?: string;
+  tooltip?: string;
 }) {
   const formatted = format === "percent" ? `${value}%`
     : format === "currency" ? `$${value}`
@@ -267,7 +269,21 @@ function MetricCard({ label, value, icon: Icon, delta, format = "number", classN
   return (
     <PremiumCard className={cn("p-4", className)}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] text-white/30 uppercase tracking-wider font-mono">{label}</span>
+        <span className="text-[10px] text-white/30 uppercase tracking-wider font-mono flex items-center gap-1">
+          {label}
+          {tooltip && (
+            <UiTooltip>
+              <TooltipTrigger asChild>
+                <button type="button" className="text-white/30 hover:text-white/60 transition-colors" aria-label={`About ${label}`}>
+                  <Info className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs text-xs">
+                {tooltip}
+              </TooltipContent>
+            </UiTooltip>
+          )}
+        </span>
         <Icon className="w-4 h-4 text-white/20" />
       </div>
       <div className="flex items-end gap-2">
@@ -679,7 +695,12 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
             subtitle={`$${spiffEarned} earned (spiffs)`}
           />
         ) : (
-          <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
+          <MetricCard
+            label="Appointments"
+            value={stats?.appointments || 0}
+            icon={Target}
+            tooltip="Leads CREATED in this window that became appointments — not bookings that happened in the window. Switch to TODAY for activity-based bookings (matches Pulse)."
+          />
         )}
         <MetricCard
           label={funnelFilter ? "Funnel Rate" : "Booking Rate"}
