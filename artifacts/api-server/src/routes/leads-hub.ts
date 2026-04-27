@@ -1254,14 +1254,17 @@ router.get("/leads-hub/stats", async (req, res) => {
   // Activity-based stats (parity with Pulse mobile getHudStats):
   // count leads booked *during* the window (by updated_at), regardless of when created.
   // This is what drives spiff payouts and matches CSR-facing numbers.
+  // Pulse's getHudStats hard-codes preBooked=false for both the booked count and the
+  // contacted denominator, so we mirror that exactly regardless of the includePreBooked
+  // toggle to keep the dashboard headline numbers reconciled with Pulse.
   const bookedActivityConds: any[] = [
     eq(leadsTable.tenantId, tenantId),
     inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]),
+    eq(leadsTable.preBooked, false),
     gte(leadsTable.updatedAt, startDate),
     lte(leadsTable.updatedAt, endDate),
   ];
   if (funnelId) bookedActivityConds.push(eq(leadsTable.funnelId, funnelId));
-  if (!includePreBooked) bookedActivityConds.push(eq(leadsTable.preBooked, false));
 
   const bookedActivityRows = await db.select({
     funnelId: leadsTable.funnelId,
@@ -1291,15 +1294,17 @@ router.get("/leads-hub/stats", async (req, res) => {
   );
 
   // Activity-based booking rate: booked-in-window / contacted-in-window
-  // (mirrors getHudStats: contacted = leads with hub_status != day_1, updated in window).
+  // (mirrors getHudStats: contacted = leads with hub_status != day_1, updated in window,
+  // pre-booked excluded). We hard-code preBooked=false here for the same Pulse-parity
+  // reason as the booked count above — toggle does not apply to the headline rate.
   const contactedActivityConds: any[] = [
     eq(leadsTable.tenantId, tenantId),
     sql`${leadsTable.hubStatus} NOT IN ('day_1')`,
+    eq(leadsTable.preBooked, false),
     gte(leadsTable.updatedAt, startDate),
     lte(leadsTable.updatedAt, endDate),
   ];
   if (funnelId) contactedActivityConds.push(eq(leadsTable.funnelId, funnelId));
-  if (!includePreBooked) contactedActivityConds.push(eq(leadsTable.preBooked, false));
   const [contactedRow] = await db.select({ count: count() })
     .from(leadsTable).where(and(...contactedActivityConds));
   const activityBookingRate = contactedRow.count > 0
