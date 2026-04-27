@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
 import { formatFieldValue } from "@/lib/format-field-value";
+import { CapturePathBadge } from "@/components/capture-path-badge";
 import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
@@ -338,7 +339,10 @@ export default function Attribution() {
                   {getEventIcon(selectedEvent.eventType)}
                   <span className="text-xs uppercase tracking-wider">{selectedEvent.eventType.replace('_', ' ')} event</span>
                 </div>
-                <SheetTitle className="text-white">Event #{selectedEvent.id}</SheetTitle>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <SheetTitle className="text-white">Event #{selectedEvent.id}</SheetTitle>
+                  <CapturePathBadge formType={selectedEvent.formType} />
+                </div>
                 <SheetDescription>
                   {format(new Date(selectedEvent.createdAt), 'PPpp')}
                   {selectedEvent.submittedAt && (
