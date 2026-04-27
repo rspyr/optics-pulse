@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Loader2, Radio } from "lucide-react";
 import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
-import { CapturePathBadge } from "@/components/capture-path-badge";
+import { CapturePathBadge, CAPTURE_PATH_BADGES, type CapturePathKey } from "@/components/capture-path-badge";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -147,6 +147,7 @@ export default function VerifyTracker() {
   const [ignoredCount, setIgnoredCount] = useState(0);
   const [storedHostCount, setStoredHostCount] = useState(0);
   const [highlightHoneypotRescue, setHighlightHoneypotRescue] = useState(false);
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   const honeypotHighlightTimerRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const persistHostRef = useRef<string | null>(null);
@@ -154,8 +155,41 @@ export default function VerifyTracker() {
 
   const MAX_EVENTS = 5;
   const STORAGE_PREFIX = "verify-tracker:events:";
+  // Task #298 — persist the live-feed capture-path filter per host using the
+  // same per-host localStorage scheme as the events themselves so the
+  // operator's chosen chip survives reloads.
+  const FILTER_STORAGE_PREFIX = "verify-tracker:filter:";
 
   const storageKeyFor = (host: string) => `${STORAGE_PREFIX}${host.toLowerCase()}`;
+  const filterStorageKeyFor = (host: string) => `${FILTER_STORAGE_PREFIX}${host.toLowerCase()}`;
+
+  const loadPersistedFilter = (host: string): FeedFilter => {
+    try {
+      const raw = localStorage.getItem(filterStorageKeyFor(host));
+      if (!raw) return "all";
+      return isFeedFilter(raw) ? raw : "all";
+    } catch {
+      return "all";
+    }
+  };
+
+  const persistFilter = (host: string | null, value: FeedFilter) => {
+    if (!host) return;
+    try {
+      if (value === "all") {
+        localStorage.removeItem(filterStorageKeyFor(host));
+      } else {
+        localStorage.setItem(filterStorageKeyFor(host), value);
+      }
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  };
+
+  const handleFilterChange = (value: FeedFilter) => {
+    setFeedFilter(value);
+    persistFilter(persistHostRef.current, value);
+  };
 
   const loadPersistedEvents = (host: string): StoredEvent[] => {
     try {
@@ -210,10 +244,14 @@ export default function VerifyTracker() {
       const keys: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+        if (k && (k.startsWith(STORAGE_PREFIX) || k.startsWith(FILTER_STORAGE_PREFIX))) {
+          keys.push(k);
+        }
       }
       for (const k of keys) localStorage.removeItem(k);
-      return keys.length;
+      // Only the events keys count toward "saved hosts" — return that count
+      // so the confirm/UX wording remains accurate.
+      return keys.filter(k => k.startsWith(STORAGE_PREFIX)).length;
     } catch {
       return 0;
     }
@@ -290,6 +328,9 @@ export default function VerifyTracker() {
     persistHostRef.current = expectedHost;
     const persisted = loadPersistedEvents(expectedHost);
     if (persisted.length > 0) setLiveEvents(persisted);
+    // Task #298 — restore the saved capture-path filter for this host so the
+    // operator's chip selection survives reloads.
+    setFeedFilter(loadPersistedFilter(expectedHost));
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
     socket.on("connect", () => {
       for (const tid of allowedTenantIds) socket.emit("join-tenant", tid);
@@ -461,6 +502,8 @@ export default function VerifyTracker() {
             ignoredCount={ignoredCount}
             currentSessionId={sessionIdRef.current}
             highlightHoneypotRescue={highlightHoneypotRescue}
+            feedFilter={feedFilter}
+            onFilterChange={handleFilterChange}
           />
 
           <InstallVerdictBanner verdict={result.installVerdict} pageScriptKind={result.pageScriptKind} captureUrl={result.captureUrl} />
@@ -605,6 +648,30 @@ function matchPillClass(level: LiveAttributionEvent["matchLevel"]): string {
     : "bg-red-500/20 text-red-200 border-red-400/30";
 }
 
+// Task #298 — capture-path filter chips above the live attribution feed.
+// "all" shows everything; the others narrow to a single form.type so
+// operators can isolate the rows they care about (e.g. only honeypot-rescue
+// captures when investigating a problem form). The non-"all" options are
+// derived from the keys of CAPTURE_PATH_BADGES (Task #299 extracted that map
+// to @/components/capture-path-badge; we tightened it with `as const
+// satisfies` post-rebase so `keyof typeof` yields a literal union) plus an
+// explicit "native" for the uncolored default-path captures — adding a new
+// badge path there automatically produces a matching chip here.
+type FeedFilter = "all" | "native" | CapturePathKey;
+
+const FEED_FILTER_OPTIONS: { value: FeedFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  ...(Object.keys(CAPTURE_PATH_BADGES) as CapturePathKey[]).map(value => ({
+    value,
+    label: CAPTURE_PATH_BADGES[value].label,
+  })),
+  { value: "native", label: "native" },
+];
+
+function isFeedFilter(value: string): value is FeedFilter {
+  return FEED_FILTER_OPTIONS.some(o => o.value === value);
+}
+
 const LIVE_FEED_ANCHOR_ID = "live-attribution-feed";
 
 function formatAge(ms: number): string {
@@ -629,6 +696,8 @@ function LiveEventCard({
   ignoredCount,
   currentSessionId,
   highlightHoneypotRescue,
+  feedFilter,
+  onFilterChange,
 }: {
   events: StoredEvent[];
   nowMs: number;
@@ -642,17 +711,27 @@ function LiveEventCard({
   ignoredCount: number;
   currentSessionId: string;
   highlightHoneypotRescue: boolean;
+  feedFilter: FeedFilter;
+  onFilterChange: (value: FeedFilter) => void;
 }) {
   const seconds = Math.floor(elapsedMs / 1000);
   const hasEvents = events.length > 0;
   const timedOut = waitingSince !== null && !hasEvents && seconds >= 60;
   const hasPriorSession = events.some(e => e.sessionId !== currentSessionId);
+  // Task #298 — apply the operator's chip selection to hide rows whose
+  // form.type doesn't match. "all" is a passthrough.
+  const visibleEvents = feedFilter === "all"
+    ? events
+    : events.filter(({ evt }) => evt.formType === feedFilter);
+  const filteredOutCount = events.length - visibleEvents.length;
 
   // Opportunistically prefetch field-mapping rules for every visible unmatched
   // event so the first time the operator clicks "Why unmatched?" the rule list
   // is already in cache. Deduped by scope inside the hook; errors swallowed.
+  // Honor the active filter — no point prefetching for rows the operator has
+  // hidden.
   usePrefetchScopedRules(
-    events
+    visibleEvents
       .filter(({ evt }) => evt.matchLevel === "unmatched")
       .map(({ evt }) => ({
         tenantId: evt.tenantId,
@@ -700,6 +779,44 @@ function LiveEventCard({
         </div>
       </div>
 
+      {/* Task #298 — capture-path filter chips. Always visible inside the
+          live-feed card so operators can pre-select the filter they want
+          before any events arrive, and so the chosen chip stays anchored
+          above the feed. */}
+      <div
+        className="mt-4 flex flex-wrap items-center gap-1.5"
+        role="radiogroup"
+        aria-label="Filter live attribution feed by capture path"
+        data-testid="feed-filter-chips"
+      >
+        <span className="text-[11px] uppercase tracking-wide text-muted-foreground mr-1">capture path:</span>
+        {FEED_FILTER_OPTIONS.map(opt => {
+          const active = feedFilter === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onFilterChange(opt.value)}
+              data-testid={`feed-filter-chip-${opt.value}`}
+              className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+                active
+                  ? "bg-primary/20 text-white border-primary/50"
+                  : "bg-white/[0.02] text-white/60 border-white/10 hover:bg-white/[0.05] hover:text-white/80"
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+        {feedFilter !== "all" && hasEvents && filteredOutCount > 0 && (
+          <span className="text-[11px] text-muted-foreground ml-1">
+            ({filteredOutCount} hidden)
+          </span>
+        )}
+      </div>
+
       <div className="mt-4 space-y-3">
         {waitingSince !== null && !timedOut && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -725,9 +842,21 @@ function LiveEventCard({
         {!hasEvents && waitingSince === null && (
           <p className="text-sm text-muted-foreground">Click "Restart" to begin listening for the next inbound attribution event.</p>
         )}
-        {hasEvents && (
+        {hasEvents && visibleEvents.length === 0 && (
+          <p className="text-sm text-muted-foreground" data-testid="feed-filter-empty">
+            No captured events match the <span className="text-white/80">{feedFilter}</span> filter.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-white/80"
+              onClick={() => onFilterChange("all")}
+            >
+              Show all
+            </button>
+          </p>
+        )}
+        {hasEvents && visibleEvents.length > 0 && (
           <div className="space-y-2">
-            {events.map(({ evt, arrivedAt, sessionId }) => {
+            {visibleEvents.map(({ evt, arrivedAt, sessionId }) => {
               const fromPriorSession = sessionId !== currentSessionId;
               const capturedAtIso = evt.receivedAt || evt.submittedAt;
               const capturedAtMs = capturedAtIso ? Date.parse(capturedAtIso) : NaN;

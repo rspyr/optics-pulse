@@ -4,7 +4,11 @@
 // investigating). Originally lived in `verify-tracker.tsx` for the live feed;
 // extracted in Task #299 so the historical attribution side-peek renders the
 // same chip with identical wording.
-export const CAPTURE_PATH_BADGES: Record<string, { label: string; tooltip: string; classes: string }> = {
+// Tightened with `as const satisfies` (post-rebase, Task #298) so consumers
+// (verify-tracker's filter chip strip) can derive a literal union of known
+// capture paths from `keyof typeof CAPTURE_PATH_BADGES` instead of duplicating
+// the list. The `satisfies` clause keeps the original shape contract.
+export const CAPTURE_PATH_BADGES = {
   "honeypot-rescue": {
     label: "honeypot-rescue",
     tooltip:
@@ -27,11 +31,13 @@ export const CAPTURE_PATH_BADGES: Record<string, { label: string; tooltip: strin
     tooltip: "Captured from a Contact Form 7 (WordPress) submission via the wpcf7-specific path.",
     classes: "bg-cyan-500/15 text-cyan-200 border-cyan-400/30",
   },
-};
+} as const satisfies Record<string, { label: string; tooltip: string; classes: string }>;
+
+export type CapturePathKey = keyof typeof CAPTURE_PATH_BADGES;
 
 export function CapturePathBadge({ formType }: { formType: string | null | undefined }) {
   if (!formType) return null;
-  const cfg = CAPTURE_PATH_BADGES[formType];
+  const cfg = (CAPTURE_PATH_BADGES as Record<string, (typeof CAPTURE_PATH_BADGES)[CapturePathKey]>)[formType];
   if (!cfg) return null;
   return (
     <span

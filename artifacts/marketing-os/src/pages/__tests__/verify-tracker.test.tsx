@@ -562,4 +562,209 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
       expect(updated.className).toMatch(/ring-amber-400/);
     });
   });
+
+  // Task #298 — capture-path filter chips above the live feed let operators
+  // narrow the rows to a single capture path (e.g. honeypot-rescue) so they
+  // don't have to scan a mixed list during an investigation.
+  it("filters live feed rows by capture path when a chip is selected, and 'All' restores them", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    const handler = socketState.handlers.get("new-attribution-event")!;
+    socketState.handlers.get("connect")!();
+
+    // Push three events spanning three capture paths.
+    handler({
+      id: 9401, tenantId: 42, matchLevel: "diamond", matchConfidence: 1,
+      resolvedLeadSource: "google", resolvedFunnel: "ac",
+      formType: "native", formId: "n", formName: "N",
+      pageUrl: "https://example.com/contact", landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z", receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["phone"], unmatchedReason: null,
+    });
+    handler({
+      id: 9402, tenantId: 42, matchLevel: "golden", matchConfidence: 0.8,
+      resolvedLeadSource: "google", resolvedFunnel: "ac",
+      formType: "honeypot-rescue", formId: "h", formName: "H",
+      pageUrl: "https://example.com/contact", landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:02.000Z", receivedAt: "2026-04-26T01:00:03.000Z",
+      fieldNames: ["phone"], unmatchedReason: null,
+    });
+    handler({
+      id: 9403, tenantId: 42, matchLevel: "diamond", matchConfidence: 1,
+      resolvedLeadSource: "google", resolvedFunnel: "ac",
+      formType: "leadconnector", formId: "l", formName: "L",
+      pageUrl: "https://example.com/contact", landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:04.000Z", receivedAt: "2026-04-26T01:00:05.000Z",
+      fieldNames: ["phone"], unmatchedReason: null,
+    });
+
+    await waitFor(() => expect(screen.getByText(/Event #9403/)).toBeInTheDocument());
+    expect(screen.getByText(/Event #9401/)).toBeInTheDocument();
+    expect(screen.getByText(/Event #9402/)).toBeInTheDocument();
+
+    // The chip strip is rendered, with "All" selected by default.
+    expect(screen.getByTestId("feed-filter-chips")).toBeInTheDocument();
+    expect(screen.getByTestId("feed-filter-chip-all")).toHaveAttribute("aria-checked", "true");
+
+    // Click "honeypot-rescue" — only the rescue event should remain visible.
+    await user.click(screen.getByTestId("feed-filter-chip-honeypot-rescue"));
+    expect(screen.getByTestId("feed-filter-chip-honeypot-rescue")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/Event #9402/)).toBeInTheDocument();
+    expect(screen.queryByText(/Event #9401/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Event #9403/)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 hidden/)).toBeInTheDocument();
+
+    // Switching to leadconnector swaps the visible row.
+    await user.click(screen.getByTestId("feed-filter-chip-leadconnector"));
+    expect(screen.getByText(/Event #9403/)).toBeInTheDocument();
+    expect(screen.queryByText(/Event #9401/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Event #9402/)).not.toBeInTheDocument();
+
+    // Clicking "All" restores the full list.
+    await user.click(screen.getByTestId("feed-filter-chip-all"));
+    expect(screen.getByText(/Event #9401/)).toBeInTheDocument();
+    expect(screen.getByText(/Event #9402/)).toBeInTheDocument();
+    expect(screen.getByText(/Event #9403/)).toBeInTheDocument();
+  });
+
+  // Task #298 — selecting a chip persists the filter to per-host localStorage
+  // so it survives page reloads (verifying a host with a saved filter
+  // restores that selection, not "all").
+  it("persists the chosen capture-path filter per host and restores it on the next verify", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const { unmount } = render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    // Pick a non-default chip.
+    await user.click(screen.getByTestId("feed-filter-chip-honeypot-rescue"));
+    expect(screen.getByTestId("feed-filter-chip-honeypot-rescue")).toHaveAttribute("aria-checked", "true");
+
+    // It's been written to localStorage under the per-host key.
+    expect(window.localStorage.getItem("verify-tracker:filter:example.com")).toBe("honeypot-rescue");
+
+    // Simulate a reload by unmounting and remounting fresh.
+    unmount();
+    socketState.handlers.clear();
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    // The saved chip should be restored — not the default "all".
+    expect(screen.getByTestId("feed-filter-chip-honeypot-rescue")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("feed-filter-chip-all")).toHaveAttribute("aria-checked", "false");
+
+    // Selecting "All" clears the saved key (default state need not be persisted).
+    await user.click(screen.getByTestId("feed-filter-chip-all"));
+    expect(window.localStorage.getItem("verify-tracker:filter:example.com")).toBeNull();
+  });
+
+  // Task #298 — the live-feed filter chip strip is derived from
+  // CAPTURE_PATH_BADGES so the two never drift. Verify the canonical paths
+  // (plus All / native) all surface as chips and that an unknown formType
+  // never produces a chip.
+  it("renders one filter chip per known capture path plus 'All' and 'native'", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    for (const value of ["all", "honeypot-rescue", "leadconnector", "gravity", "wpcf7", "native"]) {
+      expect(screen.getByTestId(`feed-filter-chip-${value}`)).toBeInTheDocument();
+    }
+    // No stray chip for an unknown form.type.
+    expect(screen.queryByTestId("feed-filter-chip-bogus")).not.toBeInTheDocument();
+  });
+
+  // Task #298 — when a filter hides every captured row, show an empty-state
+  // message with a one-click "Show all" link instead of an unexplained gap.
+  it("shows an empty-state with a 'Show all' shortcut when the filter hides every row", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    socketState.handlers.get("connect")!();
+    socketState.handlers.get("new-attribution-event")!({
+      id: 9501, tenantId: 42, matchLevel: "diamond", matchConfidence: 1,
+      resolvedLeadSource: "google", resolvedFunnel: "ac",
+      formType: "native", formId: "n", formName: "N",
+      pageUrl: "https://example.com/contact", landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z", receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["phone"], unmatchedReason: null,
+    });
+    await waitFor(() => expect(screen.getByText(/Event #9501/)).toBeInTheDocument());
+
+    // Filter to a path with no captured events.
+    await user.click(screen.getByTestId("feed-filter-chip-honeypot-rescue"));
+    expect(screen.queryByText(/Event #9501/)).not.toBeInTheDocument();
+    const empty = screen.getByTestId("feed-filter-empty");
+    expect(empty).toHaveTextContent(/honeypot-rescue/);
+
+    // The "Show all" affordance restores the full list.
+    await user.click(screen.getByRole("button", { name: /Show all/i }));
+    expect(screen.getByText(/Event #9501/)).toBeInTheDocument();
+  });
 });
