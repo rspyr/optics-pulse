@@ -10,6 +10,7 @@ import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim } from "../services/auto-pass-scheduler";
 import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
+import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -1250,6 +1251,61 @@ router.get("/leads-hub/stats", async (req, res) => {
   const appointments = filteredLeads.filter(l => l.hubStatus === "appt_set" || l.hubStatus === "appt_booked").length;
   const bookingRate = totalLeads > 0 ? Math.round((appointments / totalLeads) * 100) : 0;
 
+  // Activity-based stats (parity with Pulse mobile getHudStats):
+  // count leads booked *during* the window (by updated_at), regardless of when created.
+  // This is what drives spiff payouts and matches CSR-facing numbers.
+  const bookedActivityConds: any[] = [
+    eq(leadsTable.tenantId, tenantId),
+    inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]),
+    gte(leadsTable.updatedAt, startDate),
+    lte(leadsTable.updatedAt, endDate),
+  ];
+  if (funnelId) bookedActivityConds.push(eq(leadsTable.funnelId, funnelId));
+  if (!includePreBooked) bookedActivityConds.push(eq(leadsTable.preBooked, false));
+
+  const bookedActivityRows = await db.select({
+    funnelId: leadsTable.funnelId,
+    preBooked: leadsTable.preBooked,
+  }).from(leadsTable).where(and(...bookedActivityConds));
+
+  const bookedInWindow = bookedActivityRows.length;
+
+  // Spiff dollars always exclude pre-booked (matches Pulse + computeSpiffCommission contract).
+  const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
+    .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  const spiffConfig = parseSpiffConfig(tenantRow?.spiffConfig);
+  const spiffEligibleRows = bookedActivityRows.filter(r => !r.preBooked);
+  const spiffFunnelIds = [...new Set(spiffEligibleRows.map(r => r.funnelId).filter((id): id is number => id !== null))];
+  let spiffFunnelNames: Record<number, string> = {};
+  if (spiffFunnelIds.length > 0) {
+    const fRows = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+      .from(funnelTypesTable).where(inArray(funnelTypesTable.id, spiffFunnelIds));
+    spiffFunnelNames = Object.fromEntries(fRows.map(f => [f.id, f.name]));
+  }
+  const spiffEarned = computeSpiffCommission(
+    spiffEligibleRows.map(r => ({
+      status: "booked" as const,
+      funnelName: r.funnelId ? (spiffFunnelNames[r.funnelId] || null) : null,
+    })),
+    spiffConfig,
+  );
+
+  // Activity-based booking rate: booked-in-window / contacted-in-window
+  // (mirrors getHudStats: contacted = leads with hub_status != day_1, updated in window).
+  const contactedActivityConds: any[] = [
+    eq(leadsTable.tenantId, tenantId),
+    sql`${leadsTable.hubStatus} NOT IN ('day_1')`,
+    gte(leadsTable.updatedAt, startDate),
+    lte(leadsTable.updatedAt, endDate),
+  ];
+  if (funnelId) contactedActivityConds.push(eq(leadsTable.funnelId, funnelId));
+  if (!includePreBooked) contactedActivityConds.push(eq(leadsTable.preBooked, false));
+  const [contactedRow] = await db.select({ count: count() })
+    .from(leadsTable).where(and(...contactedActivityConds));
+  const activityBookingRate = contactedRow.count > 0
+    ? Math.round((bookedInWindow / contactedRow.count) * 100)
+    : 0;
+
   const bySource: Record<string, { total: number; appointments: number }> = {};
   const byFunnel: Record<number, { total: number; appointments: number }> = {};
   const byFunnelNonPB: Record<number, number> = {};
@@ -1375,6 +1431,9 @@ router.get("/leads-hub/stats", async (req, res) => {
     totalLeads,
     appointments,
     bookingRate,
+    bookedInWindow,
+    spiffEarned,
+    activityBookingRate,
     totalTouchpoints: totalCalls + totalTexts + totalVms,
     totalCalls,
     totalTexts,

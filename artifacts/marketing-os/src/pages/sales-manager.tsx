@@ -56,6 +56,13 @@ interface StatsData {
   totalLeads: number;
   appointments: number;
   bookingRate: number;
+  bookedInWindow: number;
+  spiffEarned: number;
+  activityBookingRate: number;
+  totalTouchpoints?: number;
+  totalCalls?: number;
+  totalTexts?: number;
+  totalVms?: number;
   bySource: { source: string; total: number; appointments: number; bookingRate: number }[];
   byFunnel: { funnelId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number; nonPBTotal: number; nonPBCalls: number; nonPBTexts: number; nonPBVms: number }[];
   byCsr: { csrId: number; total: number; appointments: number; bookingRate: number; calls: number; texts: number; vms: number }[];
@@ -603,10 +610,14 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
   const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
   const [drilldownFilter, setDrilldownFilter] = useState<DrilldownFilter | null>(null);
 
-  const overallBookingRate = allStats?.bookingRate ?? 0;
+  const isToday = datePreset === "today";
+  const overallBookingRate = (isToday ? allStats?.activityBookingRate : allStats?.bookingRate) ?? 0;
   const selectedFunnelRate = funnelFilter
     ? (allStats?.byFunnel.find(f => f.funnelId === funnelFilter)?.bookingRate ?? 0)
     : null;
+  const headlineBookingRate = (isToday ? stats?.activityBookingRate : stats?.bookingRate) ?? 0;
+  const bookedTodayCount = stats?.bookedInWindow ?? 0;
+  const spiffEarned = stats?.spiffEarned ?? 0;
 
   if (loading || allStatsLoading) {
     return (
@@ -660,8 +671,23 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard label="Total Leads" value={stats?.totalLeads || 0} icon={Users} />
-        <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
-        <MetricCard label={funnelFilter ? "Funnel Rate" : "Booking Rate"} value={stats?.bookingRate || 0} icon={TrendingUp} format="percent" subtitle={funnelFilter ? `Overall: ${overallBookingRate}%` : undefined} />
+        {isToday ? (
+          <MetricCard
+            label="Booked Today"
+            value={bookedTodayCount}
+            icon={Target}
+            subtitle={`$${spiffEarned} earned (spiffs)`}
+          />
+        ) : (
+          <MetricCard label="Appointments" value={stats?.appointments || 0} icon={Target} />
+        )}
+        <MetricCard
+          label={funnelFilter ? "Funnel Rate" : "Booking Rate"}
+          value={headlineBookingRate}
+          icon={TrendingUp}
+          format="percent"
+          subtitle={funnelFilter ? `Overall: ${overallBookingRate}%` : undefined}
+        />
         <MetricCard label="Total Touchpoints" value={(stats?.totalTouchpoints ?? stats?.byCsr.reduce((s, c) => s + c.calls + c.texts + c.vms, 0)) || 0} icon={Phone} />
       </div>
 
