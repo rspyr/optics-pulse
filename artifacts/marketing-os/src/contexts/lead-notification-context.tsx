@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { io as socketIOClient } from "socket.io-client";
 import { useAuth } from "@/components/auth-context";
-import { toast } from "@/hooks/use-toast";
+import { toast, useToast } from "@/hooks/use-toast";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 
 const SW_BASE_URL = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -19,6 +19,8 @@ export interface LeadNotificationData {
 }
 
 const MAX_PENDING_NEW_LEADS = 16;
+const LEAD_TOAST_REPEAT_MS = 2 * 60 * 1000;
+const LEAD_RESUBMITTED_TOAST_TITLE = "Lead Resubmitted";
 
 function getAssignedCsrId(lead: LeadNotificationData | undefined | null): number | null {
   if (!lead) return null;
@@ -278,7 +280,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       if (!isAssignedCsr && !isManager) return;
       const sourcePart = data.source ? ` from ${data.source}` : "";
       toast({
-        title: "Lead Resubmitted",
+        title: LEAD_RESUBMITTED_TOAST_TITLE,
         description: `${data.leadName}${sourcePart} — reach out again`,
       });
       playSound("new-lead");
@@ -302,6 +304,36 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
   }, [user?.id, effectiveTenantId, isAgency, playSound]);
+
+  const { toasts } = useToast();
+  const hasVisibleLeadResubmittedToast = toasts.some(
+    (t) => t.open && t.title === LEAD_RESUBMITTED_TOAST_TITLE,
+  );
+  const hasVisibleLeadToast = pendingNewLeads.length > 0 || hasVisibleLeadResubmittedToast;
+  const isClientAdmin = user?.role === "client_admin";
+  const repeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const clearTimer = () => {
+      if (repeatTimerRef.current != null) {
+        clearInterval(repeatTimerRef.current);
+        repeatTimerRef.current = null;
+      }
+    };
+
+    if (!user || isClientAdmin || !soundEnabled || !hasVisibleLeadToast) {
+      clearTimer();
+      return;
+    }
+
+    if (repeatTimerRef.current != null) return;
+
+    repeatTimerRef.current = setInterval(() => {
+      playSound("new-lead");
+    }, LEAD_TOAST_REPEAT_MS);
+
+    return clearTimer;
+  }, [user?.id, effectiveTenantId, isClientAdmin, soundEnabled, hasVisibleLeadToast, playSound]);
 
   const dismissNewLead = useCallback((leadId: number) => {
     setPendingNewLeads(prev => prev.filter(l => l.id !== leadId));
