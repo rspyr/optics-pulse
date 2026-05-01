@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
-import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
+import type { TrainingItem, TrainingContextualResponseMetrics, Lead } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, formatCurrency, PLATFORM_COLORS } from "@/lib/utils";
@@ -202,7 +202,9 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       if (effectiveLeadType && l.leadType !== effectiveLeadType) return false;
       if (effectiveSalesperson && l.assignedTo !== effectiveSalesperson) return false;
       if (effectiveStatus && l.status !== effectiveStatus) return false;
-      if (effectiveDisposition && l.disposition !== effectiveDisposition) return false;
+      // `disposition` is persisted on the lead row but not yet exposed by the
+      // generated OpenAPI Lead type; access it via a narrow extra-fields cast.
+      if (effectiveDisposition && (l as Lead & { disposition?: string | null }).disposition !== effectiveDisposition) return false;
       if (effectiveDateRange) {
         if (!l.createdAt) return false;
         const created = new Date(l.createdAt).toISOString().split("T")[0];

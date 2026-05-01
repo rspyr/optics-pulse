@@ -33,6 +33,11 @@ interface TenantForm {
   isDemo: boolean;
 }
 
+// Subset of TenantForm fields that are guaranteed to be strings (everything
+// except `isDemo`). Used by integration/secret helpers below so that
+// `form[field]` narrows to `string` instead of `string | boolean`.
+type SecretField = Exclude<keyof TenantForm, "isDemo">;
+
 interface AlertConfig {
   enabled: boolean;
   recipients: string[];
@@ -276,7 +281,7 @@ export default function AdminTenants() {
 
   const buildIntegrationConfig = () => {
     const config: Record<string, string> = {};
-    const integrationKeys: (keyof TenantForm)[] = [
+    const integrationKeys: SecretField[] = [
       "googleAdsApiKey", "googleAdsCustomerId", "googleAdsLoginCustomerId", "googleAdsDeveloperToken",
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey", "callRailAccountId", "callRailCompanyId", "callRailTrackingNumber",
@@ -390,7 +395,7 @@ export default function AdminTenants() {
 
   const secretInputType = (field: string) => dirtyFields.has(field) ? "password" : "text";
 
-  const handleSecretFocus = (field: keyof TenantForm) => {
+  const handleSecretFocus = (field: SecretField) => {
     if (!dirtyFields.has(field) && form[field]?.startsWith("••••")) {
       trackFieldChange(field);
       setForm(f => ({ ...f, [field]: "" }));
@@ -399,13 +404,13 @@ export default function AdminTenants() {
 
   const [clearedFields, setClearedFields] = useState<Set<string>>(new Set());
 
-  const handleClearSecret = (field: keyof TenantForm) => {
+  const handleClearSecret = (field: SecretField) => {
     trackFieldChange(field);
     setForm(f => ({ ...f, [field]: "" }));
     setClearedFields(prev => new Set(prev).add(field));
   };
 
-  const SecretInput = ({ field, label, placeholder = "Enter to update" }: { field: keyof TenantForm; label: string; placeholder?: string }) => {
+  const SecretInput = ({ field, label, placeholder = "Enter to update" }: { field: SecretField; label: string; placeholder?: string }) => {
     const hasValue = form[field] && (form[field].startsWith("••••") || form[field].startsWith("****"));
     const isCleared = clearedFields.has(field);
     return (

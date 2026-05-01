@@ -56,7 +56,7 @@ export default function Leaderboards() {
   const effectiveAnonymized = serverAnonymized || anonymized;
 
   const getDisplayName = (entry: LeaderboardEntry, index: number) => {
-    if ((entry as Record<string, unknown>).isOwnTenant) return entry.tenantName;
+    if ((entry as unknown as Record<string, unknown>).isOwnTenant) return entry.tenantName;
     return effectiveAnonymized ? `Client ${String.fromCharCode(65 + index)}` : entry.tenantName;
   };
 
@@ -168,7 +168,7 @@ export default function Leaderboards() {
                 const vsAvg = agencyAvg > 0 ? ((entry.metricValue - agencyAvg) / agencyAvg) * 100 : 0;
                 const higherIsBetter = activeMetric !== "cpl";
                 const isGood = higherIsBetter ? vsAvg > 0 : vsAvg < 0;
-                const isOwn = (entry as Record<string, unknown>).isOwnTenant === true;
+                const isOwn = (entry as unknown as Record<string, unknown>).isOwnTenant === true;
 
                 return (
                   <tr

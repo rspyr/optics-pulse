@@ -76,7 +76,9 @@ export function usePushNotifications() {
       if (!sub) {
         sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidKey),
+          // Cast to BufferSource: the helper returns Uint8Array<ArrayBufferLike>
+          // but lib.dom expects ArrayBufferView<ArrayBuffer>; runtime is identical.
+          applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
         });
       }
 

@@ -911,10 +911,15 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       vmResult: entry.vmResult || "",
       deadReason: isExistingCustom ? "custom" : dr,
       apptBookedOutcome: existingApptOutcome,
-      spokeResult: entry.spokeResult || "",
-      callbackAt: entry.callbackAt ? new Date(entry.callbackAt).toISOString().slice(0, 16) : defaultCb,
-      appointmentDate: entry.appointmentDate || defaultApptDate,
-      appointmentTime: entry.appointmentTime || "09:00",
+      // The HistoryEntry interface only models fields the editor reads back;
+      // the API returns additional optional fields (spokeResult, callbackAt,
+      // appointmentDate, appointmentTime) that are accessed via an extra-fields cast.
+      spokeResult: ((entry as unknown as Record<string, unknown>).spokeResult as string | undefined) || "",
+      callbackAt: ((entry as unknown as Record<string, unknown>).callbackAt as string | undefined)
+        ? new Date((entry as unknown as Record<string, unknown>).callbackAt as string).toISOString().slice(0, 16)
+        : defaultCb,
+      appointmentDate: ((entry as unknown as Record<string, unknown>).appointmentDate as string | undefined) || defaultApptDate,
+      appointmentTime: ((entry as unknown as Record<string, unknown>).appointmentTime as string | undefined) || "09:00",
     });
   };
 
