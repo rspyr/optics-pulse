@@ -20,6 +20,7 @@ import {
   Pause, Play
 } from "lucide-react";
 import { isUnknownSource } from "@workspace/api-zod";
+import type { HistoryEntry } from "@workspace/api-client-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -223,25 +224,6 @@ interface LeadData {
   hasSoldEstimate?: boolean;
   resubmittedAt?: string | null;
   resubmissionCount?: number | null;
-}
-
-interface HistoryEntry {
-  id: number;
-  userId: number;
-  actionType: string;
-  callResult?: string | null;
-  vmResult?: string | null;
-  textResult?: string | null;
-  deadReason?: string | null;
-  notes?: string | null;
-  attemptedAt: string;
-  csrName: string;
-  method: string;
-  outcome: string;
-  spokeResult?: string | null;
-  callbackAt?: string | null;
-  appointmentDate?: string | null;
-  appointmentTime?: string | null;
 }
 
 interface CsrOption {
@@ -915,15 +897,12 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       vmResult: entry.vmResult || "",
       deadReason: isExistingCustom ? "custom" : dr,
       apptBookedOutcome: existingApptOutcome,
-      // The HistoryEntry interface only models fields the editor reads back;
-      // the API returns additional optional fields (spokeResult, callbackAt,
-      // appointmentDate, appointmentTime) that are accessed via an extra-fields cast.
-      spokeResult: ((entry as unknown as Record<string, unknown>).spokeResult as string | undefined) || "",
-      callbackAt: ((entry as unknown as Record<string, unknown>).callbackAt as string | undefined)
-        ? new Date((entry as unknown as Record<string, unknown>).callbackAt as string).toISOString().slice(0, 16)
+      spokeResult: entry.spokeResult || "",
+      callbackAt: entry.callbackAt
+        ? new Date(entry.callbackAt).toISOString().slice(0, 16)
         : defaultCb,
-      appointmentDate: ((entry as unknown as Record<string, unknown>).appointmentDate as string | undefined) || defaultApptDate,
-      appointmentTime: ((entry as unknown as Record<string, unknown>).appointmentTime as string | undefined) || "09:00",
+      appointmentDate: entry.appointmentDate || defaultApptDate,
+      appointmentTime: entry.appointmentTime || "09:00",
     });
   };
 

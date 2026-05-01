@@ -60,6 +60,11 @@ export interface Lead {
   isNewCustomer: boolean;
   matchedGclid?: string | null;
   assignedTo?: string | null;
+  /** Operator-set disposition recorded on the lead row (e.g. "booked",
+"no_answer"). Persisted in the `leads.disposition` column and
+updated by `/leads/{leadId}` PATCH and the leads-hub action flow.
+ */
+  disposition?: string | null;
   createdAt: string;
 }
 
@@ -84,6 +89,71 @@ export interface UpdateLeadInput {
 export interface LeadListResponse {
   leads: Lead[];
   total: number;
+}
+
+/**
+ * A single action recorded against a lead in the leads-hub workflow.
+Sourced from the `call_attempts` table (joined with the acting CSR's
+display name); follow-up fields like `spokeResult`, `callbackAt`,
+`appointmentDate`, and `appointmentTime` are populated from the
+parent lead row when the action drove a callback or appointment
+booking and are null otherwise.
+
+ */
+export interface HistoryEntry {
+  id: number;
+  leadId: number;
+  userId: number;
+  /** Channel the action was performed on (`call`, `text`,
+`voicemail`, `voicemail_drop`, `transfer`, …). Mirrors the
+persisted `call_attempts.method` column.
+ */
+  method: string;
+  /** Coarse-grained outcome of the action (e.g. `answered`,
+`no_answer`, `appt_confirmed`, `transferred`).
+ */
+  outcome: string;
+  /** Platform the action was logged from (`native`, `podium`, …).
+   */
+  platform?: string | null;
+  attemptedAt: string;
+  notes?: string | null;
+  /** Refined action verb chosen by the operator (`call`, `text`,
+`voicemail_drop`, `transfer`). Distinct from `method` so the
+UI can re-render legacy rows that only set `method`.
+ */
+  actionType?: string | null;
+  callResult?: string | null;
+  vmResult?: string | null;
+  textResult?: string | null;
+  deadReason?: string | null;
+  /** Display name of the CSR who logged the action. */
+  csrName: string;
+  /** When the action was a `spoke_with_customer` call, captures the
+sub-outcome the operator selected (`call_back`,
+`appointment_set`, `dead`). Null on actions that did not branch
+on a spoke result.
+ */
+  spokeResult?: string | null;
+  /** Scheduled callback timestamp when the action's spoke result
+was `call_back`. Mirrors `leads.callback_at` so the editor can
+pre-fill the field when reopening the action.
+ */
+  callbackAt?: string | null;
+  /** ISO date (YYYY-MM-DD) of the appointment booked by this
+action. Mirrors `leads.appointment_date`. Null on actions
+that did not book an appointment.
+ */
+  appointmentDate?: string | null;
+  /** Local time-of-day (HH:mm) of the appointment booked by this
+action. Mirrors `leads.appointment_time`. Null on actions
+that did not book an appointment.
+ */
+  appointmentTime?: string | null;
+}
+
+export interface LeadHistoryResponse {
+  history: HistoryEntry[];
 }
 
 export type CampaignPlatform =
@@ -130,6 +200,28 @@ export const AttributionEventEventType = {
   call: "call",
   form_fill: "form_fill",
 } as const;
+
+/**
+ * Per-field mapping decisions made by the auto-detection pipeline
+for this submission. Keys are the raw submitted field names
+(e.g. `field_3`); values describe what target the value was
+mapped to and how confident the heuristic was.
+
+ */
+export type AttributionEventDetectedMappings = {
+  [key: string]: {
+    /** The semantic target (e.g. `phone`, `email`, `funnel`,
+`firstName`).
+ */
+    mapsTo: string;
+    /** How the mapping was decided — typically `saved_rule`,
+`value_pattern`, or `field_name`.
+ */
+    method: string;
+    /** 0–1 confidence score for the mapping decision. */
+    confidence: number;
+  };
+} | null;
 
 /**
  * Flat record of submitted form values keyed by field name (e.g.
@@ -182,6 +274,29 @@ export interface AttributionEvent {
   formType?: string | null;
   formId?: string | null;
   formName?: string | null;
+  /** Canonicalised lead source after running raw `utm_source` /
+`referrer` through the tenant's lead-source aliases. Set on
+insert by the tracker / webhook ingestion paths and surfaced
+verbatim on read; null on legacy rows.
+ */
+  resolvedLeadSource?: string | null;
+  /** Canonicalised funnel name (matches `funnel_types.name`) after
+running raw form / URL signals through funnel aliases. Set on
+insert; null on legacy rows or when no funnel could be resolved.
+ */
+  resolvedFunnel?: string | null;
+  /** Per-field mapping decisions made by the auto-detection pipeline
+for this submission. Keys are the raw submitted field names
+(e.g. `field_3`); values describe what target the value was
+mapped to and how confident the heuristic was.
+ */
+  detectedMappings?: AttributionEventDetectedMappings;
+  /** ID of the `leads` row this attribution event created (or
+re-attached to, in the case of resubmissions). Null when the
+event was ingested without producing a lead, or for legacy rows
+written before the column existed.
+ */
+  createdLeadId?: number | null;
   /** Flat record of submitted form values keyed by field name (e.g.
 `{ phone: "555-1234", email: "a@b.com", field_3: "Acme" }`).
 Keys prefixed with `_` (e.g. `_consent`, `_source`) are reserved
@@ -893,6 +1008,13 @@ export interface LeaderboardEntry {
   spend: number;
   isOutlier: boolean;
   outlierDirection?: string | null;
+  /** True when this row represents the caller's own tenant. Set so
+that the marketing dashboard can highlight the caller's row even
+in anonymised views (where the displayed `tenantName` is masked
+to e.g. "Client A"). Always set on the response; defaults to
+false for cross-tenant rows.
+ */
+  isOwnTenant?: boolean;
   products: LeaderboardProduct[];
 }
 
@@ -912,6 +1034,13 @@ export interface LeaderboardResponse {
   previousPeriod: LeaderboardResponsePreviousPeriod;
   agencyAverage: number;
   rankings: LeaderboardEntry[];
+  /** True when the server forced anonymisation of cross-tenant
+`tenantName` values (e.g. because the caller's role does not
+permit seeing other tenants by name). The client should treat
+this as a hard override that wins over any local "named view"
+toggle.
+ */
+  forceAnonymized?: boolean;
 }
 
 export type DeleteTenant200 = {

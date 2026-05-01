@@ -127,6 +127,12 @@ export const GetHudQueueResponse = zod.object({
       isNewCustomer: zod.boolean(),
       matchedGclid: zod.string().nullish(),
       assignedTo: zod.string().nullish(),
+      disposition: zod
+        .string()
+        .nullish()
+        .describe(
+          'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+        ),
       createdAt: zod.date(),
     }),
   ),
@@ -152,6 +158,12 @@ export const GetHudQueueResponse = zod.object({
       isNewCustomer: zod.boolean(),
       matchedGclid: zod.string().nullish(),
       assignedTo: zod.string().nullish(),
+      disposition: zod
+        .string()
+        .nullish()
+        .describe(
+          'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+        ),
       createdAt: zod.date(),
     }),
   ),
@@ -177,6 +189,12 @@ export const GetHudQueueResponse = zod.object({
       isNewCustomer: zod.boolean(),
       matchedGclid: zod.string().nullish(),
       assignedTo: zod.string().nullish(),
+      disposition: zod
+        .string()
+        .nullish()
+        .describe(
+          'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+        ),
       createdAt: zod.date(),
     }),
   ),
@@ -245,6 +263,12 @@ export const ListLeadsResponse = zod.object({
       isNewCustomer: zod.boolean(),
       matchedGclid: zod.string().nullish(),
       assignedTo: zod.string().nullish(),
+      disposition: zod
+        .string()
+        .nullish()
+        .describe(
+          'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+        ),
       createdAt: zod.date(),
     }),
   ),
@@ -272,6 +296,12 @@ export const GetLeadResponse = zod.object({
   isNewCustomer: zod.boolean(),
   matchedGclid: zod.string().nullish(),
   assignedTo: zod.string().nullish(),
+  disposition: zod
+    .string()
+    .nullish()
+    .describe(
+      'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+    ),
   createdAt: zod.date(),
 });
 
@@ -304,7 +334,97 @@ export const UpdateLeadResponse = zod.object({
   isNewCustomer: zod.boolean(),
   matchedGclid: zod.string().nullish(),
   assignedTo: zod.string().nullish(),
+  disposition: zod
+    .string()
+    .nullish()
+    .describe(
+      'Operator-set disposition recorded on the lead row (e.g. \"booked\",\n\"no_answer\"). Persisted in the `leads.disposition` column and\nupdated by `\/leads\/{leadId}` PATCH and the leads-hub action flow.\n',
+    ),
   createdAt: zod.date(),
+});
+
+/**
+ * Returns the chronological action history for a single lead in the
+leads-hub workflow. Each entry corresponds to a `call_attempts` row
+for the lead, joined with the acting CSR's display name. Entries
+may carry follow-up state pulled from the parent lead row
+(`spokeResult`, `callbackAt`, `appointmentDate`, `appointmentTime`)
+when the action drove a callback or appointment booking; otherwise
+those fields are null.
+
+ * @summary Get the action history (call attempts, texts, voicemails) for a lead
+ */
+export const GetLeadHistoryParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetLeadHistoryResponse = zod.object({
+  history: zod.array(
+    zod
+      .object({
+        id: zod.number(),
+        leadId: zod.number(),
+        userId: zod.number(),
+        method: zod
+          .string()
+          .describe(
+            "Channel the action was performed on (`call`, `text`,\n`voicemail`, `voicemail_drop`, `transfer`, …). Mirrors the\npersisted `call_attempts.method` column.\n",
+          ),
+        outcome: zod
+          .string()
+          .describe(
+            "Coarse-grained outcome of the action (e.g. `answered`,\n`no_answer`, `appt_confirmed`, `transferred`).\n",
+          ),
+        platform: zod
+          .string()
+          .nullish()
+          .describe(
+            "Platform the action was logged from (`native`, `podium`, …).\n",
+          ),
+        attemptedAt: zod.date(),
+        notes: zod.string().nullish(),
+        actionType: zod
+          .string()
+          .nullish()
+          .describe(
+            "Refined action verb chosen by the operator (`call`, `text`,\n`voicemail_drop`, `transfer`). Distinct from `method` so the\nUI can re-render legacy rows that only set `method`.\n",
+          ),
+        callResult: zod.string().nullish(),
+        vmResult: zod.string().nullish(),
+        textResult: zod.string().nullish(),
+        deadReason: zod.string().nullish(),
+        csrName: zod
+          .string()
+          .describe("Display name of the CSR who logged the action."),
+        spokeResult: zod
+          .string()
+          .nullish()
+          .describe(
+            "When the action was a `spoke_with_customer` call, captures the\nsub-outcome the operator selected (`call_back`,\n`appointment_set`, `dead`). Null on actions that did not branch\non a spoke result.\n",
+          ),
+        callbackAt: zod
+          .date()
+          .nullish()
+          .describe(
+            "Scheduled callback timestamp when the action's spoke result\nwas `call_back`. Mirrors `leads.callback_at` so the editor can\npre-fill the field when reopening the action.\n",
+          ),
+        appointmentDate: zod
+          .string()
+          .nullish()
+          .describe(
+            "ISO date (YYYY-MM-DD) of the appointment booked by this\naction. Mirrors `leads.appointment_date`. Null on actions\nthat did not book an appointment.\n",
+          ),
+        appointmentTime: zod
+          .string()
+          .nullish()
+          .describe(
+            "Local time-of-day (HH:mm) of the appointment booked by this\naction. Mirrors `leads.appointment_time`. Null on actions\nthat did not book an appointment.\n",
+          ),
+      })
+      .describe(
+        "A single action recorded against a lead in the leads-hub workflow.\nSourced from the `call_attempts` table (joined with the acting CSR's\ndisplay name); follow-up fields like `spokeResult`, `callbackAt`,\n`appointmentDate`, and `appointmentTime` are populated from the\nparent lead row when the action drove a callback or appointment\nbooking and are null otherwise.\n",
+      ),
+  ),
 });
 
 /**
@@ -396,6 +516,47 @@ export const ListAttributionEventsResponse = zod.object({
       formType: zod.string().nullish(),
       formId: zod.string().nullish(),
       formName: zod.string().nullish(),
+      resolvedLeadSource: zod
+        .string()
+        .nullish()
+        .describe(
+          "Canonicalised lead source after running raw `utm_source` \/\n`referrer` through the tenant's lead-source aliases. Set on\ninsert by the tracker \/ webhook ingestion paths and surfaced\nverbatim on read; null on legacy rows.\n",
+        ),
+      resolvedFunnel: zod
+        .string()
+        .nullish()
+        .describe(
+          "Canonicalised funnel name (matches `funnel_types.name`) after\nrunning raw form \/ URL signals through funnel aliases. Set on\ninsert; null on legacy rows or when no funnel could be resolved.\n",
+        ),
+      detectedMappings: zod
+        .record(
+          zod.string(),
+          zod.object({
+            mapsTo: zod
+              .string()
+              .describe(
+                "The semantic target (e.g. `phone`, `email`, `funnel`,\n`firstName`).\n",
+              ),
+            method: zod
+              .string()
+              .describe(
+                "How the mapping was decided — typically `saved_rule`,\n`value_pattern`, or `field_name`.\n",
+              ),
+            confidence: zod
+              .number()
+              .describe("0–1 confidence score for the mapping decision."),
+          }),
+        )
+        .nullish()
+        .describe(
+          "Per-field mapping decisions made by the auto-detection pipeline\nfor this submission. Keys are the raw submitted field names\n(e.g. `field_3`); values describe what target the value was\nmapped to and how confident the heuristic was.\n",
+        ),
+      createdLeadId: zod
+        .number()
+        .nullish()
+        .describe(
+          "ID of the `leads` row this attribution event created (or\nre-attached to, in the case of resubmissions). Null when the\nevent was ingested without producing a lead, or for legacy rows\nwritten before the column existed.\n",
+        ),
       formFields: zod
         .record(zod.string(), zod.unknown())
         .nullish()
@@ -459,6 +620,47 @@ export const GetAttributionEventResponse = zod.object({
     formType: zod.string().nullish(),
     formId: zod.string().nullish(),
     formName: zod.string().nullish(),
+    resolvedLeadSource: zod
+      .string()
+      .nullish()
+      .describe(
+        "Canonicalised lead source after running raw `utm_source` \/\n`referrer` through the tenant's lead-source aliases. Set on\ninsert by the tracker \/ webhook ingestion paths and surfaced\nverbatim on read; null on legacy rows.\n",
+      ),
+    resolvedFunnel: zod
+      .string()
+      .nullish()
+      .describe(
+        "Canonicalised funnel name (matches `funnel_types.name`) after\nrunning raw form \/ URL signals through funnel aliases. Set on\ninsert; null on legacy rows or when no funnel could be resolved.\n",
+      ),
+    detectedMappings: zod
+      .record(
+        zod.string(),
+        zod.object({
+          mapsTo: zod
+            .string()
+            .describe(
+              "The semantic target (e.g. `phone`, `email`, `funnel`,\n`firstName`).\n",
+            ),
+          method: zod
+            .string()
+            .describe(
+              "How the mapping was decided — typically `saved_rule`,\n`value_pattern`, or `field_name`.\n",
+            ),
+          confidence: zod
+            .number()
+            .describe("0–1 confidence score for the mapping decision."),
+        }),
+      )
+      .nullish()
+      .describe(
+        "Per-field mapping decisions made by the auto-detection pipeline\nfor this submission. Keys are the raw submitted field names\n(e.g. `field_3`); values describe what target the value was\nmapped to and how confident the heuristic was.\n",
+      ),
+    createdLeadId: zod
+      .number()
+      .nullish()
+      .describe(
+        "ID of the `leads` row this attribution event created (or\nre-attached to, in the case of resubmissions). Null when the\nevent was ingested without producing a lead, or for legacy rows\nwritten before the column existed.\n",
+      ),
     formFields: zod
       .record(zod.string(), zod.unknown())
       .nullish()
@@ -1105,6 +1307,12 @@ export const GetAdminLeaderboardResponse = zod.object({
       spend: zod.number(),
       isOutlier: zod.boolean(),
       outlierDirection: zod.string().nullish(),
+      isOwnTenant: zod
+        .boolean()
+        .optional()
+        .describe(
+          "True when this row represents the caller's own tenant. Set so\nthat the marketing dashboard can highlight the caller's row even\nin anonymised views (where the displayed `tenantName` is masked\nto e.g. \"Client A\"). Always set on the response; defaults to\nfalse for cross-tenant rows.\n",
+        ),
       products: zod.array(
         zod.object({
           name: zod.string(),
@@ -1115,6 +1323,12 @@ export const GetAdminLeaderboardResponse = zod.object({
       ),
     }),
   ),
+  forceAnonymized: zod
+    .boolean()
+    .optional()
+    .describe(
+      'True when the server forced anonymisation of cross-tenant\n`tenantName` values (e.g. because the caller\'s role does not\npermit seeing other tenants by name). The client should treat\nthis as a hard override that wins over any local \"named view\"\ntoggle.\n',
+    ),
 });
 
 /**

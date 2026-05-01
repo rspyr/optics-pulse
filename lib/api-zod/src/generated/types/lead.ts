@@ -21,5 +21,10 @@ export interface Lead {
   isNewCustomer: boolean;
   matchedGclid?: string | null;
   assignedTo?: string | null;
+  /** Operator-set disposition recorded on the lead row (e.g. "booked",
+"no_answer"). Persisted in the `leads.disposition` column and
+updated by `/leads/{leadId}` PATCH and the leads-hub action flow.
+ */
+  disposition?: string | null;
   createdAt: Date;
 }

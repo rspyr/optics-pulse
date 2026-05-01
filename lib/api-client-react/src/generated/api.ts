@@ -54,6 +54,7 @@ import type {
   HudStats,
   JobListResponse,
   Lead,
+  LeadHistoryResponse,
   LeadListResponse,
   LeaderboardResponse,
   ListAllTrainingPurchasesParams,
@@ -1033,6 +1034,101 @@ export const useUpdateLead = <
 > => {
   return useMutation(getUpdateLeadMutationOptions(options));
 };
+
+/**
+ * Returns the chronological action history for a single lead in the
+leads-hub workflow. Each entry corresponds to a `call_attempts` row
+for the lead, joined with the acting CSR's display name. Entries
+may carry follow-up state pulled from the parent lead row
+(`spokeResult`, `callbackAt`, `appointmentDate`, `appointmentTime`)
+when the action drove a callback or appointment booking; otherwise
+those fields are null.
+
+ * @summary Get the action history (call attempts, texts, voicemails) for a lead
+ */
+export const getGetLeadHistoryUrl = (leadId: number) => {
+  return `/api/leads-hub/${leadId}/history`;
+};
+
+export const getLeadHistory = async (
+  leadId: number,
+  options?: RequestInit,
+): Promise<LeadHistoryResponse> => {
+  return customFetch<LeadHistoryResponse>(getGetLeadHistoryUrl(leadId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetLeadHistoryQueryKey = (leadId: number) => {
+  return [`/api/leads-hub/${leadId}/history`] as const;
+};
+
+export const getGetLeadHistoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getLeadHistory>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadHistory>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetLeadHistoryQueryKey(leadId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getLeadHistory>>> = ({
+    signal,
+  }) => getLeadHistory(leadId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getLeadHistory>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetLeadHistoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getLeadHistory>>
+>;
+export type GetLeadHistoryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the action history (call attempts, texts, voicemails) for a lead
+ */
+
+export function useGetLeadHistory<
+  TData = Awaited<ReturnType<typeof getLeadHistory>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadHistory>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetLeadHistoryQueryOptions(leadId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary List campaigns

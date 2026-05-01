@@ -5,6 +5,7 @@
  * Optics API - Attribution Engine & Leads Dashboard
  * OpenAPI spec version: 0.1.0
  */
+import type { AttributionEventDetectedMappings } from "./attributionEventDetectedMappings";
 import type { AttributionEventEventType } from "./attributionEventEventType";
 import type { AttributionEventFormFields } from "./attributionEventFormFields";
 import type { AttributionEventMatchLevel } from "./attributionEventMatchLevel";
@@ -35,6 +36,29 @@ export interface AttributionEvent {
   formType?: string | null;
   formId?: string | null;
   formName?: string | null;
+  /** Canonicalised lead source after running raw `utm_source` /
+`referrer` through the tenant's lead-source aliases. Set on
+insert by the tracker / webhook ingestion paths and surfaced
+verbatim on read; null on legacy rows.
+ */
+  resolvedLeadSource?: string | null;
+  /** Canonicalised funnel name (matches `funnel_types.name`) after
+running raw form / URL signals through funnel aliases. Set on
+insert; null on legacy rows or when no funnel could be resolved.
+ */
+  resolvedFunnel?: string | null;
+  /** Per-field mapping decisions made by the auto-detection pipeline
+for this submission. Keys are the raw submitted field names
+(e.g. `field_3`); values describe what target the value was
+mapped to and how confident the heuristic was.
+ */
+  detectedMappings?: AttributionEventDetectedMappings;
+  /** ID of the `leads` row this attribution event created (or
+re-attached to, in the case of resubmissions). Null when the
+event was ingested without producing a lead, or for legacy rows
+written before the column existed.
+ */
+  createdLeadId?: number | null;
   /** Flat record of submitted form values keyed by field name (e.g.
 `{ phone: "555-1234", email: "a@b.com", field_3: "Acme" }`).
 Keys prefixed with `_` (e.g. `_consent`, `_source`) are reserved

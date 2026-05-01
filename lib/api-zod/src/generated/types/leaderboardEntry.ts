@@ -23,5 +23,12 @@ export interface LeaderboardEntry {
   spend: number;
   isOutlier: boolean;
   outlierDirection?: string | null;
+  /** True when this row represents the caller's own tenant. Set so
+that the marketing dashboard can highlight the caller's row even
+in anonymised views (where the displayed `tenantName` is masked
+to e.g. "Client A"). Always set on the response; defaults to
+false for cross-tenant rows.
+ */
+  isOwnTenant?: boolean;
   products: LeaderboardProduct[];
 }

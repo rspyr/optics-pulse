@@ -52,18 +52,18 @@ export default function Attribution() {
 
   const events: AttributionEvent[] = data?.events || [];
 
-  const uniqueSources = [...new Set(events.map(ev => (ev as unknown as Record<string, unknown>).resolvedLeadSource as string || ev.utmSource || "").filter(Boolean))];
-  const uniqueFunnels = [...new Set(events.map(ev => (ev as unknown as Record<string, unknown>).resolvedFunnel as string || "").filter(Boolean))];
+  const uniqueSources = [...new Set(events.map(ev => ev.resolvedLeadSource || ev.utmSource || "").filter(Boolean))];
+  const uniqueFunnels = [...new Set(events.map(ev => ev.resolvedFunnel || "").filter(Boolean))];
 
   const filteredEvents = events.filter(ev => {
     if (filterType !== "all" && ev.eventType !== filterType) return false;
     if (filterMatch !== "all" && ev.matchLevel !== filterMatch) return false;
     if (filterSource !== "all") {
-      const evSource = (ev as unknown as Record<string, unknown>).resolvedLeadSource as string || ev.utmSource || "";
+      const evSource = ev.resolvedLeadSource || ev.utmSource || "";
       if (evSource !== filterSource) return false;
     }
     if (filterFunnel !== "all") {
-      const evFunnel = (ev as unknown as Record<string, unknown>).resolvedFunnel as string || "";
+      const evFunnel = ev.resolvedFunnel || "";
       if (evFunnel !== filterFunnel) return false;
     }
     if (filterDateRange !== "all") {
@@ -77,8 +77,8 @@ export default function Attribution() {
       const searchable = [
         ev.utmSource, ev.utmCampaign, ev.gclid, ev.fbclid,
         ev.pageUrl, ev.landingPage, ev.formName,
-        (ev as unknown as Record<string, unknown>).resolvedLeadSource as string,
-        (ev as unknown as Record<string, unknown>).resolvedFunnel as string,
+        ev.resolvedLeadSource,
+        ev.resolvedFunnel,
       ].filter(Boolean).join(" ").toLowerCase();
       if (!searchable.includes(s)) return false;
     }
@@ -115,15 +115,12 @@ export default function Attribution() {
   const prefetchTargets = effectiveTenantId
     ? filteredEvents
         .filter((ev) => ev.matchLevel === "unmatched")
-        .map((ev) => {
-          const e = ev as unknown as Record<string, unknown>;
-          return {
-            tenantId: effectiveTenantId,
-            pageUrl: (e.pageUrl as string | null | undefined) ?? null,
-            formId: (e.formId as string | null | undefined) ?? null,
-            formName: (e.formName as string | null | undefined) ?? null,
-          };
-        })
+        .map((ev) => ({
+          tenantId: effectiveTenantId,
+          pageUrl: ev.pageUrl ?? null,
+          formId: ev.formId ?? null,
+          formName: ev.formName ?? null,
+        }))
     : [];
   usePrefetchScopedRules(prefetchTargets);
 
@@ -272,10 +269,9 @@ export default function Attribution() {
                   </thead>
                   <tbody className="divide-y divide-white/5">
                     {filteredEvents.map((ev) => {
-                      const extended = ev as unknown as Record<string, unknown>;
-                      const resolvedSource = (extended.resolvedLeadSource as string) || ev.utmSource || ev.eventType;
-                      const resolvedFunnel = (extended.resolvedFunnel as string) || null;
-                      const detectedMappings = extended.detectedMappings as Record<string, unknown> | null;
+                      const resolvedSource = ev.resolvedLeadSource || ev.utmSource || ev.eventType;
+                      const resolvedFunnel = ev.resolvedFunnel || null;
+                      const detectedMappings = ev.detectedMappings || null;
                       const detectedCount = detectedMappings ? Object.keys(detectedMappings).length : 0;
 
                       return (
@@ -293,7 +289,7 @@ export default function Attribution() {
                           </td>
                           <td className="p-4">{getMatchBadge(ev.matchLevel)}</td>
                           <td className="p-4">
-                            {extended.createdLeadId ? (
+                            {ev.createdLeadId ? (
                               <span className="text-xs text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full">created</span>
                             ) : (
                               <span className="text-white/20">—</span>
@@ -385,10 +381,10 @@ export default function Attribution() {
                   />
                 )}
 
-                {Boolean((selectedEvent as unknown as Record<string, unknown>).detectedMappings) && (
+                {selectedEvent.detectedMappings && (
                   <DetailSection title="Auto-Detected Fields" icon={<Brain className="w-4 h-4" />}>
                     <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
-                      {Object.entries((selectedEvent as unknown as Record<string, unknown>).detectedMappings as Record<string, { mapsTo: string; method: string; confidence: number }>).map(([fieldName, info]) => (
+                      {Object.entries(selectedEvent.detectedMappings).map(([fieldName, info]) => (
                         <div key={fieldName} className="flex items-center justify-between gap-2 text-sm">
                           <span className="text-muted-foreground font-mono text-xs">{fieldName}</span>
                           <div className="flex items-center gap-2">
@@ -581,11 +577,11 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
 }
 
 function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
-  const resolvedSource = (event as unknown as Record<string, unknown>).resolvedLeadSource as string | undefined;
-  const resolvedFunnel = (event as unknown as Record<string, unknown>).resolvedFunnel as string | undefined;
+  const resolvedSource = event.resolvedLeadSource ?? undefined;
+  const resolvedFunnel = event.resolvedFunnel ?? undefined;
   const rawSource = event.utmSource || event.referrer || null;
 
-  const detectedMappings = (event as unknown as Record<string, unknown>).detectedMappings as Record<string, { mapsTo: string }> | null;
+  const detectedMappings = event.detectedMappings ?? null;
   const funnelFieldEntry = detectedMappings
     ? Object.entries(detectedMappings).find(([, v]) => v.mapsTo === "funnel")
     : null;
@@ -807,8 +803,8 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   if (!formFields || typeof formFields !== "object") return null;
 
   const pageUrl = event.pageUrl || "";
-  const formId = (event as unknown as Record<string, unknown>).formId as string || "";
-  const formName = (event as unknown as Record<string, unknown>).formName as string || "";
+  const formId = event.formId || "";
+  const formName = event.formName || "";
 
   const saveRule = async (fieldName: string, mapsTo: string) => {
     setSaving(true);

@@ -15,4 +15,11 @@ export interface LeaderboardResponse {
   previousPeriod: LeaderboardResponsePreviousPeriod;
   agencyAverage: number;
   rankings: LeaderboardEntry[];
+  /** True when the server forced anonymisation of cross-tenant
+`tenantName` values (e.g. because the caller's role does not
+permit seeing other tenants by name). The client should treat
+this as a hard override that wins over any local "named view"
+toggle.
+ */
+  forceAnonymized?: boolean;
 }
