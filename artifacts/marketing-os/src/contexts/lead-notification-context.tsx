@@ -11,10 +11,22 @@ const PUSH_BANNER_DISMISSED_KEY = "pulse_push_banner_dismissed";
 export interface LeadNotificationData {
   id?: number;
   tenantId?: number;
+  assignedCsrId?: number | null;
   firstName?: string;
   lastName?: string;
   source?: string;
   [key: string]: unknown;
+}
+
+const MAX_PENDING_NEW_LEADS = 16;
+
+function getAssignedCsrId(lead: LeadNotificationData | undefined | null): number | null {
+  if (!lead) return null;
+  const fromCsr = lead.assignedCsrId;
+  if (typeof fromCsr === "number") return fromCsr;
+  const fromUser = (lead as { assignedUserId?: unknown }).assignedUserId;
+  if (typeof fromUser === "number") return fromUser;
+  return null;
 }
 
 export interface CallbackDueData {
@@ -44,8 +56,9 @@ type PodiumMessageCallback = (msg: PodiumNotificationData) => void;
 interface LeadNotificationContextType {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
-  latestLead: LeadNotificationData | null;
-  clearLatestLead: () => void;
+  pendingNewLeads: LeadNotificationData[];
+  dismissNewLead: (leadId: number) => void;
+  newLeadSignal: number;
   leadUpdatedSignal: number;
   onReconnect: (cb: ReconnectCallback) => () => void;
   latestPodiumNotification: PodiumNotificationData | null;
@@ -70,8 +83,12 @@ const SOUND_URLS: Record<SoundType, string> = {
 export function LeadNotificationProvider({ children }: { children: React.ReactNode }) {
   const { user, effectiveTenantId, isAgency } = useAuth();
   const [soundEnabled, setSoundEnabledRaw] = useState(true);
-  const [latestLead, setLatestLead] = useState<LeadNotificationData | null>(null);
+  const [pendingNewLeads, setPendingNewLeads] = useState<LeadNotificationData[]>([]);
+  const [newLeadSignal, setNewLeadSignal] = useState(0);
   const [leadUpdatedSignal, setLeadUpdatedSignal] = useState(0);
+  const userIdRef = useRef<number | null>(null);
+  useEffect(() => { userIdRef.current = user?.id ?? null; }, [user?.id]);
+  useEffect(() => { setPendingNewLeads([]); }, [user?.id, effectiveTenantId]);
   const [latestPodiumNotification, setLatestPodiumNotification] = useState<PodiumNotificationData | null>(null);
   const [latestCallbackDue, setLatestCallbackDue] = useState<CallbackDueData | null>(null);
   const audioMapRef = useRef<Record<SoundType, HTMLAudioElement> | null>(null);
@@ -226,7 +243,14 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     });
     socket.on("new-lead", (lead: LeadNotificationData) => {
       if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
-      setLatestLead(lead);
+      if (lead.id == null) return;
+      const normalized: LeadNotificationData = { ...lead, assignedCsrId: getAssignedCsrId(lead) };
+      setPendingNewLeads(prev => {
+        const filtered = prev.filter(l => l.id !== normalized.id);
+        const next = [normalized, ...filtered];
+        return next.slice(0, MAX_PENDING_NEW_LEADS);
+      });
+      setNewLeadSignal(s => s + 1);
       const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
       playSound("new-lead", `${name}${lead.source ? ` from ${lead.source}` : ""}`);
     });
@@ -259,12 +283,29 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       });
       playSound("new-lead");
     });
-    socket.on("lead-updated", () => setLeadUpdatedSignal(prev => prev + 1));
+    socket.on("lead-updated", (lead?: LeadNotificationData) => {
+      setLeadUpdatedSignal(prev => prev + 1);
+      if (!lead || lead.id == null) return;
+      const myUserId = userIdRef.current;
+      if (myUserId == null) return;
+      setPendingNewLeads(prev => {
+        const existing = prev.find(l => l.id === lead.id);
+        if (!existing) return prev;
+        const wasMine = getAssignedCsrId(existing) === myUserId;
+        const stillMine = getAssignedCsrId(lead) === myUserId;
+        if (wasMine && !stillMine) {
+          return prev.filter(l => l.id !== lead.id);
+        }
+        return prev;
+      });
+    });
     socket.on("disconnect", () => console.log("[LeadNotification] Socket.IO disconnected"));
     return () => { socket.disconnect(); };
   }, [user?.id, effectiveTenantId, isAgency, playSound]);
 
-  const clearLatestLead = useCallback(() => setLatestLead(null), []);
+  const dismissNewLead = useCallback((leadId: number) => {
+    setPendingNewLeads(prev => prev.filter(l => l.id !== leadId));
+  }, []);
   const clearPodiumNotification = useCallback(() => setLatestPodiumNotification(null), []);
   const clearCallbackDue = useCallback(() => setLatestCallbackDue(null), []);
   const playCallbackSound = useCallback((_leadName: string) => {
@@ -282,7 +323,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, latestLead, clearLatestLead, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>
