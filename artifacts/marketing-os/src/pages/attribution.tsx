@@ -271,7 +271,7 @@ export default function Attribution() {
                     {filteredEvents.map((ev) => {
                       const resolvedSource = ev.resolvedLeadSource || ev.utmSource || ev.eventType;
                       const resolvedFunnel = ev.resolvedFunnel || null;
-                      const detectedMappings = ev.detectedMappings || null;
+                      const detectedMappings = ev.detectedMappings ?? null;
                       const detectedCount = detectedMappings ? Object.keys(detectedMappings).length : 0;
 
                       return (
