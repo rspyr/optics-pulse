@@ -12,6 +12,7 @@ import { runSchemaMigrations } from "./services/schema-migrations";
 import { startStDataPurgeScheduler } from "./services/st-data-purge";
 import { startSheetSyncScheduler } from "./services/sheet-sync";
 import { recoverTimers } from "./services/auto-pass-scheduler";
+import { recoverPendingNewLeadEmits } from "./services/lead-notify-scheduler";
 import { startCallbackScheduler } from "./services/callback-scheduler";
 import { startHeartbeatMonitor, startStaleInstallMonitor } from "./services/notifications";
 import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
@@ -67,6 +68,9 @@ async function startServer() {
     startSheetSyncScheduler();
     recoverTimers().catch((err) =>
       console.error("[auto-pass] Recovery error:", err),
+    );
+    recoverPendingNewLeadEmits().catch((err) =>
+      console.error("[lead-notify] Recovery error:", err),
     );
     startCallbackScheduler();
     startHeartbeatMonitor();

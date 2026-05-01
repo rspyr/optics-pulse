@@ -52,6 +52,7 @@ export const leadsTable = pgTable("leads", {
   appointmentTime: text("appointment_time"),
   addOns: text("add_ons"),
   visibleAfter: timestamp("visible_after"),
+  newLeadNotifiedAt: timestamp("new_lead_notified_at"),
   podiumContactUid: text("podium_contact_uid"),
   manuallyTransferred: boolean("manually_transferred").notNull().default(false),
   hasSoldEstimate: boolean("has_sold_estimate").notNull().default(false),

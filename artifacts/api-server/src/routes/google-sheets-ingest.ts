@@ -3,7 +3,7 @@ import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttempts
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
-import { emitNewLead } from "../socket";
+import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
@@ -504,8 +504,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
     }
 
     for (const lead of newLeads) {
-      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-      emitNewLead(config.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+      scheduleOrEmitNewLead(lead.id, (lead.visibleAfter as Date | null) ?? null);
     }
 
     for (const leadId of resubmittedLeadIds) {

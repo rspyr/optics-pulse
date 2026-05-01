@@ -1,7 +1,8 @@
 import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable } from "@workspace/db";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
-import { emitNewLead, emitLeadUpdated } from "../socket";
+import { emitLeadUpdated } from "../socket";
+import { scheduleOrEmitNewLead } from "./lead-notify-scheduler";
 import { assignLeadRoundRobin } from "./round-robin";
 import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
@@ -327,8 +328,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     .where(eq(googleSheetConfigsTable.id, config.id));
 
   for (const lead of newLeads) {
-    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-    emitNewLead(config.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+    scheduleOrEmitNewLead(lead.id, (lead.visibleAfter as Date | null) ?? null);
   }
 
   if (imported > 0) {
