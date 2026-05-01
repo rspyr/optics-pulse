@@ -3,7 +3,7 @@ import { db, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelT
 import { IngestWebhookBody } from "@workspace/api-zod";
 import crypto from "crypto";
 import { eq, and, sql, isNotNull, gt } from "drizzle-orm";
-import { emitNewLead } from "../socket";
+import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
@@ -213,7 +213,8 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
           console.warn("[Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
-        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+        const finalLead = refreshed ?? newLead;
+        scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
       }
     }
 
@@ -463,7 +464,8 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
           console.warn("[CallRail Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
-        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+        const finalLead = refreshed ?? newLead;
+        scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
       }
     }
 
@@ -692,7 +694,8 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
           console.warn("[GHL Webhook] Auto-assign round-robin failed for lead", newLead.id, err);
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
-        emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+        const finalLead = refreshed ?? newLead;
+        scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
       }
     }
 

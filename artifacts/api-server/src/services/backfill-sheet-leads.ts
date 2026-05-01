@@ -12,7 +12,7 @@ import { readRawSheetData } from "./integrations/google-sheets";
 import { normalizeSource } from "./source-normalizer";
 import { assignLeadRoundRobin } from "./round-robin";
 import { scheduleAutoPass } from "./auto-pass-scheduler";
-import { emitNewLead } from "../socket";
+import { scheduleOrEmitNewLead } from "./lead-notify-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizePhone } from "../lib/phone-utils";
 
@@ -359,7 +359,8 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
       }
 
       const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-      emitNewLead(opts.tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+      const finalLead = refreshed ?? lead;
+      scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
     }
 
     result.inserted++;

@@ -5,7 +5,8 @@ import {
   tenantsTable, leadSourceAliasesTable, soldEstimatesTable, isUnknownSource,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
-import { emitLeadUpdated, emitNewLead } from "../socket";
+import { emitLeadUpdated } from "../socket";
+import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim, isStickyTerminalAtRest } from "../services/auto-pass-scheduler";
@@ -920,7 +921,8 @@ router.post("/leads-hub/create", async (req, res) => {
         });
 
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
-        emitNewLead(tenantId, (refreshed ?? lead) as unknown as Record<string, unknown>);
+        const finalLead = refreshed ?? lead;
+        scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
         res.status(201).json(refreshed ?? lead);
         return;
       } else {
@@ -936,7 +938,7 @@ router.post("/leads-hub/create", async (req, res) => {
     }
   }
 
-  emitNewLead(tenantId, lead as unknown as Record<string, unknown>);
+  scheduleOrEmitNewLead(lead.id, (lead.visibleAfter as Date | null) ?? null);
   res.status(201).json(lead);
 });
 

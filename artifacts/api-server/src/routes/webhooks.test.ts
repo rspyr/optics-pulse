@@ -104,6 +104,10 @@ vi.mock("../socket", () => ({
   emitPodiumMessage: vi.fn(),
 }));
 
+vi.mock("../services/lead-notify-scheduler", () => ({
+  scheduleOrEmitNewLead: vi.fn(),
+}));
+
 const mockDecryptConfig = vi.fn();
 vi.mock("../lib/encryption", () => ({
   decryptConfig: (s: string) => mockDecryptConfig(s),

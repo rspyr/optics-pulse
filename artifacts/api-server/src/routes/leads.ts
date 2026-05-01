@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
-import { getHudStats, emitNewLead, emitLeadUpdated } from "../socket";
+import { getHudStats, emitLeadUpdated } from "../socket";
 import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
 import { getSmartQueue } from "../services/lead-scoring";
 import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";

@@ -97,6 +97,10 @@ vi.mock("../socket", () => ({
   emitNewLead: vi.fn(),
 }));
 
+vi.mock("./lead-notify-scheduler", () => ({
+  scheduleOrEmitNewLead: vi.fn(),
+}));
+
 vi.mock("../utils/appointment-validation", () => ({
   isValidAppointmentValue: vi.fn().mockReturnValue(false),
 }));

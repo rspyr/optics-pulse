@@ -3,7 +3,8 @@ import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leads
 import { TrackerSubmitBody } from "@workspace/api-zod";
 import { eq, and, gte } from "drizzle-orm";
 import { z } from "zod";
-import { emitNewLead, emitNewAttributionEvent } from "../socket";
+import { emitNewAttributionEvent } from "../socket";
+import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
@@ -567,7 +568,8 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
             console.warn("[Tracker] Auto-assign round-robin failed for lead", newLead.id, err);
           }
           const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
-          emitNewLead(tenantId, (refreshed ?? newLead) as unknown as Record<string, unknown>);
+          const finalLead = refreshed ?? newLead;
+          scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
         }
       }
     }

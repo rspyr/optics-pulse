@@ -90,6 +90,10 @@ vi.mock("../socket", () => ({
   emitLeadUpdated: vi.fn(),
 }));
 
+vi.mock("../services/lead-notify-scheduler", () => ({
+  scheduleOrEmitNewLead: vi.fn(),
+}));
+
 vi.mock("../services/tracker-audit", () => ({
   logTrackerAttempt: vi.fn().mockResolvedValue(null),
   updateTrackerAttempt: vi.fn().mockResolvedValue(undefined),

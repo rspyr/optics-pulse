@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { emitNewLead } from "../../socket";
+import { scheduleOrEmitNewLead } from "../lead-notify-scheduler";
 import { hashPhone } from "../../lib/phone-utils";
 import { withRetry } from "./rate-limiter";
 
@@ -207,7 +207,7 @@ export async function syncCallRailCalls(
           }).returning();
 
           if (newLead) {
-            emitNewLead(tenantId, newLead as unknown as Record<string, unknown>);
+            scheduleOrEmitNewLead(newLead.id, (newLead.visibleAfter as Date | null) ?? null);
           }
         }
       }
