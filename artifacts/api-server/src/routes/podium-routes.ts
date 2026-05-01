@@ -241,8 +241,37 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
 
   const timeline: TimelineEntry[] = [];
 
+  // Derive the lead's current spoke result from its hubStatus, then attribute
+  // the follow-up fields to the most recent spoke_with_customer attempt -
+  // the most likely action that drove the lead's current state. All other
+  // entries get null for these fields per the OpenAPI HistoryEntry contract.
+  let leadSpokeResult: "call_back" | "appointment_set" | "dead" | null = null;
+  if (lead.hubStatus === "call_back") leadSpokeResult = "call_back";
+  else if (lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked") leadSpokeResult = "appointment_set";
+  else if (lead.hubStatus === "dead") leadSpokeResult = "dead";
+
+  // callAttempts are ordered desc by attemptedAt, so the first matching
+  // entry is the most recent qualifying spoke action.
+  const drivingAttemptId = leadSpokeResult
+    ? callAttempts.find(a => a.callResult === "spoke_with_customer")?.id ?? null
+    : null;
+
   for (const ca of callAttempts) {
     const { id: caId, attemptedAt, ...caRest } = ca;
+    const isDriver = drivingAttemptId !== null && caId === drivingAttemptId;
+    let spokeResult: string | null = null;
+    let callbackAt: string | null = null;
+    let appointmentDate: string | null = null;
+    let appointmentTime: string | null = null;
+    if (isDriver && leadSpokeResult) {
+      spokeResult = leadSpokeResult;
+      if (leadSpokeResult === "call_back") {
+        callbackAt = lead.callbackAt ? lead.callbackAt.toISOString() : null;
+      } else if (leadSpokeResult === "appointment_set") {
+        appointmentDate = lead.appointmentDate ?? null;
+        appointmentTime = lead.appointmentTime ?? null;
+      }
+    }
     timeline.push({
       type: "pulse_action",
       source: "pulse",
@@ -250,6 +279,10 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
       id: caId,
       ...caRest,
       csrName: userMap[ca.userId] || "Unknown",
+      spokeResult,
+      callbackAt,
+      appointmentDate,
+      appointmentTime,
     });
   }
 

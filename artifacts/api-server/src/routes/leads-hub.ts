@@ -663,7 +663,13 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
   const leadId = parseInt(String(req.params.leadId));
-  const [lead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+  const [lead] = await db.select({
+    id: leadsTable.id,
+    hubStatus: leadsTable.hubStatus,
+    callbackAt: leadsTable.callbackAt,
+    appointmentDate: leadsTable.appointmentDate,
+    appointmentTime: leadsTable.appointmentTime,
+  }).from(leadsTable)
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
@@ -693,10 +699,42 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
     userMap = Object.fromEntries(users.map(u => [u.id, u.name]));
   }
 
-  const history = attempts.map(a => ({
-    ...a,
-    csrName: userMap[a.userId] || "Unknown",
-  }));
+  let leadSpokeResult: "call_back" | "appointment_set" | "dead" | null = null;
+  if (lead.hubStatus === "call_back") leadSpokeResult = "call_back";
+  else if (lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked") leadSpokeResult = "appointment_set";
+  else if (lead.hubStatus === "dead") leadSpokeResult = "dead";
+
+  // attempts are sorted desc by attemptedAt, so the first spoke_with_customer
+  // attempt is the most recent one and is the best candidate for the action
+  // that drove the lead's current callback / appointment / dead state.
+  const drivingAttemptId = leadSpokeResult
+    ? attempts.find(a => a.callResult === "spoke_with_customer")?.id ?? null
+    : null;
+
+  const history = attempts.map(a => {
+    const isDriver = drivingAttemptId !== null && a.id === drivingAttemptId;
+    let spokeResult: string | null = null;
+    let callbackAt: string | null = null;
+    let appointmentDate: string | null = null;
+    let appointmentTime: string | null = null;
+    if (isDriver && leadSpokeResult) {
+      spokeResult = leadSpokeResult;
+      if (leadSpokeResult === "call_back") {
+        callbackAt = lead.callbackAt ? lead.callbackAt.toISOString() : null;
+      } else if (leadSpokeResult === "appointment_set") {
+        appointmentDate = lead.appointmentDate ?? null;
+        appointmentTime = lead.appointmentTime ?? null;
+      }
+    }
+    return {
+      ...a,
+      csrName: userMap[a.userId] || "Unknown",
+      spokeResult,
+      callbackAt,
+      appointmentDate,
+      appointmentTime,
+    };
+  });
 
   res.json({ history });
 });
