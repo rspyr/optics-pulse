@@ -47,7 +47,7 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   app.use(express.json());
   // Stub session — the real route reads req.session.userRole / tenantId.
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    (req as Request & { session: { userRole?: string; tenantId?: number | null } }).session = {
+    (req as unknown as { session: { userRole?: string; tenantId?: number | null } }).session = {
       userRole: role,
       tenantId,
     };

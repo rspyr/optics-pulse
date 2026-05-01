@@ -423,9 +423,10 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       const lastName = nameParts.slice(1).join(" ") || "";
 
       const normalizedIntakeSource = await normalizeSource(tenantId, callRailSource || "callrail");
-      const billingAddress = customerCity || customerState
-        ? normalizeAddress([customerCity, customerState].filter(Boolean).join(", "))
-        : null;
+      // The leads table has no billingAddress column — that field lives on
+      // attribution_events (populated by the GHL/CRM webhook path above; the
+      // CallRail event insert in this handler does not carry one). Deliberately
+      // omitted from the leads insert here.
 
       const [newLead] = await db.insert(leadsTable).values({
         tenantId,
@@ -435,7 +436,6 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
         source: normalizedIntakeSource,
         originalSource: normalizedIntakeSource,
         matchedGclid: gclid,
-        billingAddress,
         leadType: "CallRail",
         interestType: null,
         hubStatus: "day_1",

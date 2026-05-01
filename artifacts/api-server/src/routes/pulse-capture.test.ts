@@ -87,7 +87,7 @@ describe("pulse.js capture surface", () => {
       <button type="submit">Submit</button>
     `;
     document.body.appendChild(form);
-    form.addEventListener("submit", (ev) => {
+    form.addEventListener("submit", (ev: Event) => {
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();

@@ -157,8 +157,18 @@ router.get("/ingestion-mode/status", async (req, res) => {
     seenHosts.add(host);
     dedupedHeartbeats.push(h);
   }
-  const domains = dedupedHeartbeats
-    .map(h => {
+  interface DomainEntry {
+    domain: string;
+    status: DomainStatus;
+    reason: string;
+    lastHeartbeat: Date | null;
+    firstPageUrl: string | null;
+    lastEventAt: Date | null;
+    eventCount24h: number;
+    eventCount7d: number;
+  }
+  const domains: DomainEntry[] = dedupedHeartbeats
+    .map((h): DomainEntry => {
       const host = (h.domain || "").toLowerCase();
       const stats = eventsByHost.get(host) || { last: null as Date | null, count24h: 0, count7d: 0 };
       const heartbeatHealthy = new Date(h.lastSeenAt) > twentyFourHoursAgo;

@@ -146,7 +146,9 @@ async function setupApp(role: string = "super_admin", tenantId: number | null = 
   app = express();
   app.use(express.json());
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    (req as Request & { session: Record<string, unknown> }).session = {
+    // Stub session — bypass the express-session typing because the real route
+    // only reads req.session.userId / userRole / tenantId.
+    (req as unknown as { session: Record<string, unknown> }).session = {
       userId: 1,
       userRole: role,
       tenantId,

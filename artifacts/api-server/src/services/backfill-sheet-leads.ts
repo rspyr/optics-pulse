@@ -278,6 +278,10 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
     // Insert lead + paired attribution event atomically. If the event insert
     // fails, the lead insert is rolled back so we never produce orphan rows.
     let lead: typeof leadsTable.$inferSelect | undefined;
+    // Capture the row date in a local non-null binding so the inner transaction
+    // callback retains the narrowing from the `if (!row.rowDate)` check above
+    // (control-flow narrowing is lost across awaits / inner closures).
+    const rowDate: Date = row.rowDate;
     try {
       lead = await db.transaction(async (tx) => {
         const [insertedLead] = await tx.insert(leadsTable).values({
@@ -304,9 +308,9 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
           preBooked: isPreBooked,
           contactPreferences: [],
           // Preserve the real submission timestamp from the sheet.
-          createdAt: row.rowDate,
-          updatedAt: row.rowDate,
-          assignedAt: row.rowDate,
+          createdAt: rowDate,
+          updatedAt: rowDate,
+          assignedAt: rowDate,
         }).returning();
 
         if (!insertedLead) throw new Error("Lead insert returned no row");
@@ -324,7 +328,7 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
           formType: "sheet-backfill",
           formFields: { _backfillRow: row.cells },
           resolvedLeadSource: normalizedSource,
-          submittedAt: row.rowDate,
+          submittedAt: rowDate,
           matchLevel,
           matchConfidence,
           createdLeadId: insertedLead.id,
