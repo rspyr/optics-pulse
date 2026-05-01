@@ -1400,15 +1400,28 @@ router.get("/leads-hub/stats", async (req, res) => {
 
   const filteredLeads = includePreBooked ? leads : leads.filter(l => !l.preBooked);
   const totalLeads = filteredLeads.length;
-  const appointments = filteredLeads.filter(l => l.hubStatus === "appt_set" || l.hubStatus === "appt_booked").length;
+  // A pre-booked lead is by definition a booking, so when the toggle is on we count
+  // every pre-booked lead in the window as an appointment in addition to leads whose
+  // current hub_status is appt_set/appt_booked. Otherwise pre-booked leads that have
+  // since progressed (sold, no-show, cancelled, etc.) would inflate Total Leads
+  // without adding to the booking count, breaking the 1:1 the toggle promises.
+  const appointments = filteredLeads.filter(
+    l => l.hubStatus === "appt_set" || l.hubStatus === "appt_booked" || (includePreBooked && l.preBooked)
+  ).length;
   const bookingRate = totalLeads > 0 ? Math.round((appointments / totalLeads) * 100) : 0;
+
+  // Pre-booked leads created in the window. Used to keep the activity-based booking
+  // count and rate consistent with the toggle (Pulse mobile's HUD is unaffected — it
+  // calls getHudStats directly and never sets includePreBooked).
+  const preBookedInWindow = leads.filter(l => l.preBooked).length;
 
   // Activity-based stats (parity with Pulse mobile getHudStats):
   // count leads booked *during* the window (by updated_at), regardless of when created.
   // This is what drives spiff payouts and matches CSR-facing numbers.
-  // Pulse's getHudStats hard-codes preBooked=false for both the booked count and the
-  // contacted denominator, so we mirror that exactly regardless of the includePreBooked
-  // toggle to keep the dashboard headline numbers reconciled with Pulse.
+  // The DB query always excludes pre-booked (matching Pulse) so spiff calculations
+  // below stay correct; when the dashboard toggle is on we add pre-booked leads from
+  // the createdAt window on top of the result so the headline booking count moves 1:1
+  // with the lead count.
   const bookedActivityConds: any[] = [
     eq(leadsTable.tenantId, tenantId),
     inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"]),
@@ -1423,7 +1436,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     preBooked: leadsTable.preBooked,
   }).from(leadsTable).where(and(...bookedActivityConds));
 
-  const bookedInWindow = bookedActivityRows.length;
+  const bookedInWindow = bookedActivityRows.length + (includePreBooked ? preBookedInWindow : 0);
 
   // Spiff dollars always exclude pre-booked (matches Pulse + computeSpiffCommission contract).
   const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
@@ -1447,8 +1460,9 @@ router.get("/leads-hub/stats", async (req, res) => {
 
   // Activity-based booking rate: booked-in-window / contacted-in-window
   // (mirrors getHudStats: contacted = leads with hub_status != day_1, updated in window,
-  // pre-booked excluded). We hard-code preBooked=false here for the same Pulse-parity
-  // reason as the booked count above — toggle does not apply to the headline rate.
+  // pre-booked excluded). When the dashboard toggle is on we add pre-booked leads to
+  // both numerator and denominator so the rate stays internally consistent with the
+  // adjusted bookedInWindow above. Pulse mobile's HUD is unaffected.
   const contactedActivityConds: any[] = [
     eq(leadsTable.tenantId, tenantId),
     sql`${leadsTable.hubStatus} NOT IN ('day_1')`,
@@ -1459,8 +1473,9 @@ router.get("/leads-hub/stats", async (req, res) => {
   if (funnelId) contactedActivityConds.push(eq(leadsTable.funnelId, funnelId));
   const [contactedRow] = await db.select({ count: count() })
     .from(leadsTable).where(and(...contactedActivityConds));
-  const activityBookingRate = contactedRow.count > 0
-    ? Math.round((bookedInWindow / contactedRow.count) * 100)
+  const contactedDenominator = contactedRow.count + (includePreBooked ? preBookedInWindow : 0);
+  const activityBookingRate = contactedDenominator > 0
+    ? Math.round((bookedInWindow / contactedDenominator) * 100)
     : 0;
 
   const bySource: Record<string, { total: number; appointments: number }> = {};
@@ -1472,17 +1487,23 @@ router.get("/leads-hub/stats", async (req, res) => {
   const preBookedLeadIds = new Set<number>(leads.filter(l => l.preBooked).map(l => l.id));
 
   const isAppt = (status: string) => status === "appt_set" || status === "appt_booked";
+  // Mirror the top-level `appointments` rule in the per-source / per-funnel
+  // breakdowns: when the toggle is on, every pre-booked lead counts as a booking
+  // regardless of its current hub_status. Per-CSR booking attribution is left to
+  // isAppt() only — CSRs don't earn credit for pre-booked leads.
+  const countsAsBooking = (l: { hubStatus: string; preBooked: boolean }) =>
+    isAppt(l.hubStatus) || (includePreBooked && l.preBooked);
 
   for (const l of filteredLeads) {
 
     if (!bySource[l.source]) bySource[l.source] = { total: 0, appointments: 0 };
     bySource[l.source].total++;
-    if (isAppt(l.hubStatus)) bySource[l.source].appointments++;
+    if (countsAsBooking(l)) bySource[l.source].appointments++;
 
     if (l.funnelId) {
       if (!byFunnel[l.funnelId]) byFunnel[l.funnelId] = { total: 0, appointments: 0 };
       byFunnel[l.funnelId].total++;
-      if (isAppt(l.hubStatus)) byFunnel[l.funnelId].appointments++;
+      if (countsAsBooking(l)) byFunnel[l.funnelId].appointments++;
       leadFunnelMap[l.id] = l.funnelId;
       if (!l.preBooked) {
         byFunnelNonPB[l.funnelId] = (byFunnelNonPB[l.funnelId] || 0) + 1;
