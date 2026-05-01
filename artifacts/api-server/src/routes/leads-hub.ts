@@ -384,6 +384,34 @@ router.post("/leads-hub/action", async (req, res) => {
 
   const outcome = apptBookedOutcome ? `appt_${apptBookedOutcome}` : (callResult || textResult || vmResult || actionType);
 
+  // Derive per-attempt outcome detail so the history editor can pre-fill
+  // the originally-chosen values when this attempt is re-opened. Only the
+  // attempt that drove a callback / appointment / dead state carries
+  // these fields; everything else stays null.
+  const appointmentDate = req.body.appointmentDate as string | undefined;
+  const appointmentTime = req.body.appointmentTime as string | undefined;
+  let attemptSpokeResult: string | null = null;
+  let attemptCallbackAt: Date | null = null;
+  let attemptApptDate: string | null = null;
+  let attemptApptTime: string | null = null;
+  if (callResult === "spoke_with_customer") {
+    if (req.body.appointmentSet) {
+      attemptSpokeResult = "appointment_set";
+      attemptApptDate = appointmentDate || null;
+      attemptApptTime = appointmentTime || null;
+    } else if (deadReason) {
+      attemptSpokeResult = "dead";
+    } else if (callbackAt) {
+      attemptSpokeResult = "call_back";
+      attemptCallbackAt = new Date(callbackAt);
+    }
+  } else if (textResult === "yes" && callbackAt) {
+    attemptSpokeResult = "call_back";
+    attemptCallbackAt = new Date(callbackAt);
+  } else if (textResult === "dead") {
+    attemptSpokeResult = "dead";
+  }
+
   await db.insert(callAttemptsTable).values({
     leadId,
     userId,
@@ -396,6 +424,10 @@ router.post("/leads-hub/action", async (req, res) => {
     textResult: textResult || null,
     deadReason: deadReason || null,
     notes: apptBookedOutcome === "canceled" ? (req.body.cancelReason || "appointment_canceled") : (notes || null),
+    spokeResult: attemptSpokeResult,
+    callbackAt: attemptCallbackAt,
+    appointmentDate: attemptApptDate,
+    appointmentTime: attemptApptTime,
   });
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -617,6 +649,49 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   if (notes !== undefined) updateFields.notes = notes || null;
   if (outcome) updateFields.outcome = outcome;
 
+  // Re-derive the per-attempt outcome detail from the effective post-edit
+  // state so re-opening the row pre-fills what the operator just chose.
+  // If the new state isn't a spoke-driving outcome, clear all four
+  // fields so stale callback/appointment data from a prior edit doesn't
+  // linger on the row.
+  const effectiveActionType = actionType !== undefined ? actionType : attempt.actionType;
+  const effectiveCallResult = callResult !== undefined ? callResult : attempt.callResult;
+  const effectiveTextResult = textResult !== undefined ? textResult : attempt.textResult;
+  const effectiveDeadReason = deadReason !== undefined ? deadReason : attempt.deadReason;
+  const appointmentDate = req.body.appointmentDate as string | undefined;
+  const appointmentTime = req.body.appointmentTime as string | undefined;
+
+  let nextSpokeResult: string | null = null;
+  let nextCallbackAt: Date | null = null;
+  let nextApptDate: string | null = null;
+  let nextApptTime: string | null = null;
+  if (effectiveActionType === "call" && effectiveCallResult === "spoke_with_customer") {
+    if (spokeResult === "appointment_set" || appointmentSet) {
+      nextSpokeResult = "appointment_set";
+      nextApptDate = appointmentDate ?? attempt.appointmentDate ?? null;
+      nextApptTime = appointmentTime ?? attempt.appointmentTime ?? null;
+    } else if (spokeResult === "dead" || effectiveDeadReason) {
+      nextSpokeResult = "dead";
+    } else if (spokeResult === "call_back" || callbackAt) {
+      nextSpokeResult = "call_back";
+      if (callbackAt !== undefined) {
+        nextCallbackAt = callbackAt ? new Date(callbackAt) : null;
+      } else {
+        nextCallbackAt = attempt.callbackAt ?? null;
+      }
+    }
+  } else if (effectiveActionType === "text" && effectiveTextResult === "yes" && (callbackAt || attempt.callbackAt)) {
+    nextSpokeResult = "call_back";
+    nextCallbackAt = callbackAt !== undefined ? (callbackAt ? new Date(callbackAt) : null) : (attempt.callbackAt ?? null);
+  } else if (effectiveTextResult === "dead") {
+    nextSpokeResult = "dead";
+  }
+
+  updateFields.spokeResult = nextSpokeResult;
+  updateFields.callbackAt = nextCallbackAt;
+  updateFields.appointmentDate = nextApptDate;
+  updateFields.appointmentTime = nextApptTime;
+
   const [updated] = await db.update(callAttemptsTable).set(updateFields).where(eq(callAttemptsTable.id, attemptId)).returning();
 
   const leadUpdates: Record<string, unknown> = { updatedAt: new Date() };
@@ -687,6 +762,10 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
     vmResult: callAttemptsTable.vmResult,
     textResult: callAttemptsTable.textResult,
     deadReason: callAttemptsTable.deadReason,
+    spokeResult: callAttemptsTable.spokeResult,
+    callbackAt: callAttemptsTable.callbackAt,
+    appointmentDate: callAttemptsTable.appointmentDate,
+    appointmentTime: callAttemptsTable.appointmentTime,
   }).from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))
     .orderBy(desc(callAttemptsTable.attemptedAt));
@@ -704,20 +783,22 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
   else if (lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked") leadSpokeResult = "appointment_set";
   else if (lead.hubStatus === "dead") leadSpokeResult = "dead";
 
-  // attempts are sorted desc by attemptedAt, so the first spoke_with_customer
-  // attempt is the most recent one and is the best candidate for the action
-  // that drove the lead's current callback / appointment / dead state.
-  const drivingAttemptId = leadSpokeResult
-    ? attempts.find(a => a.callResult === "spoke_with_customer")?.id ?? null
+  // Legacy fallback: attempts written before the per-attempt outcome
+  // columns existed have null spoke_result. For those, attribute the
+  // lead-row mirror to the most recent spoke_with_customer attempt so
+  // the editor still pre-fills sensibly. New attempts persist their
+  // own values directly on the row, so this fallback only fires for
+  // unmigrated history rows.
+  const legacyDriverId = leadSpokeResult
+    ? attempts.find(a => a.callResult === "spoke_with_customer" && a.spokeResult === null)?.id ?? null
     : null;
 
   const history = attempts.map(a => {
-    const isDriver = drivingAttemptId !== null && a.id === drivingAttemptId;
-    let spokeResult: string | null = null;
-    let callbackAt: string | null = null;
-    let appointmentDate: string | null = null;
-    let appointmentTime: string | null = null;
-    if (isDriver && leadSpokeResult) {
+    let spokeResult: string | null = a.spokeResult ?? null;
+    let callbackAt: string | null = a.callbackAt ? a.callbackAt.toISOString() : null;
+    let appointmentDate: string | null = a.appointmentDate ?? null;
+    let appointmentTime: string | null = a.appointmentTime ?? null;
+    if (spokeResult === null && legacyDriverId !== null && a.id === legacyDriverId && leadSpokeResult) {
       spokeResult = leadSpokeResult;
       if (leadSpokeResult === "call_back") {
         callbackAt = lead.callbackAt ? lead.callbackAt.toISOString() : null;
@@ -726,8 +807,9 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
         appointmentTime = lead.appointmentTime ?? null;
       }
     }
+    const { spokeResult: _sr, callbackAt: _cb, appointmentDate: _ad, appointmentTime: _at, ...rest } = a;
     return {
-      ...a,
+      ...rest,
       csrName: userMap[a.userId] || "Unknown",
       spokeResult,
       callbackAt,

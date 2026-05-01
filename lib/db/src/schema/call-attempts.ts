@@ -17,6 +17,11 @@ export const callAttemptsTable = pgTable("call_attempts", {
   vmResult: text("vm_result"),
   textResult: text("text_result"),
   deadReason: text("dead_reason"),
+
+  spokeResult: text("spoke_result"),
+  callbackAt: timestamp("callback_at"),
+  appointmentDate: text("appointment_date"),
+  appointmentTime: text("appointment_time"),
 });
 
 export type CallAttempt = typeof callAttemptsTable.$inferSelect;

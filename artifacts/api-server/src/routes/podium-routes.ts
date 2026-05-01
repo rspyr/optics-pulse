@@ -217,6 +217,10 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
       vmResult: callAttemptsTable.vmResult,
       textResult: callAttemptsTable.textResult,
       deadReason: callAttemptsTable.deadReason,
+      spokeResult: callAttemptsTable.spokeResult,
+      callbackAt: callAttemptsTable.callbackAt,
+      appointmentDate: callAttemptsTable.appointmentDate,
+      appointmentTime: callAttemptsTable.appointmentTime,
     }).from(callAttemptsTable)
       .where(eq(callAttemptsTable.leadId, leadId))
       .orderBy(desc(callAttemptsTable.attemptedAt)),
@@ -241,29 +245,27 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
 
   const timeline: TimelineEntry[] = [];
 
-  // Derive the lead's current spoke result from its hubStatus, then attribute
-  // the follow-up fields to the most recent spoke_with_customer attempt -
-  // the most likely action that drove the lead's current state. All other
-  // entries get null for these fields per the OpenAPI HistoryEntry contract.
+  // Read per-attempt outcome detail straight from the row. Only fall
+  // back to the lead-row mirror for legacy attempts written before the
+  // per-attempt columns existed (those still have null spoke_result),
+  // attributing the mirror to the most recent spoke_with_customer
+  // attempt as a best-effort guess.
   let leadSpokeResult: "call_back" | "appointment_set" | "dead" | null = null;
   if (lead.hubStatus === "call_back") leadSpokeResult = "call_back";
   else if (lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked") leadSpokeResult = "appointment_set";
   else if (lead.hubStatus === "dead") leadSpokeResult = "dead";
 
-  // callAttempts are ordered desc by attemptedAt, so the first matching
-  // entry is the most recent qualifying spoke action.
-  const drivingAttemptId = leadSpokeResult
-    ? callAttempts.find(a => a.callResult === "spoke_with_customer")?.id ?? null
+  const legacyDriverId = leadSpokeResult
+    ? callAttempts.find(a => a.callResult === "spoke_with_customer" && a.spokeResult === null)?.id ?? null
     : null;
 
   for (const ca of callAttempts) {
-    const { id: caId, attemptedAt, ...caRest } = ca;
-    const isDriver = drivingAttemptId !== null && caId === drivingAttemptId;
-    let spokeResult: string | null = null;
-    let callbackAt: string | null = null;
-    let appointmentDate: string | null = null;
-    let appointmentTime: string | null = null;
-    if (isDriver && leadSpokeResult) {
+    const { id: caId, attemptedAt, spokeResult: caSpoke, callbackAt: caCb, appointmentDate: caAd, appointmentTime: caAt, ...caRest } = ca;
+    let spokeResult: string | null = caSpoke ?? null;
+    let callbackAt: string | null = caCb ? caCb.toISOString() : null;
+    let appointmentDate: string | null = caAd ?? null;
+    let appointmentTime: string | null = caAt ?? null;
+    if (spokeResult === null && legacyDriverId !== null && caId === legacyDriverId && leadSpokeResult) {
       spokeResult = leadSpokeResult;
       if (leadSpokeResult === "call_back") {
         callbackAt = lead.callbackAt ? lead.callbackAt.toISOString() : null;

@@ -239,6 +239,13 @@
       "when": 1777020000000,
       "tag": "0042_attribution_event_unmatched_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1777030000000,
+      "tag": "0045_call_attempt_outcome_details",
+      "breakpoints": true
     }
   ]
 }

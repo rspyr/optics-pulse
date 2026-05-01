@@ -400,29 +400,29 @@ export const GetLeadHistoryResponse = zod.object({
           .string()
           .nullish()
           .describe(
-            "When the action was a `spoke_with_customer` call, captures the\nsub-outcome the operator selected (`call_back`,\n`appointment_set`, `dead`). Null on actions that did not branch\non a spoke result.\n",
+            "When the action was a `spoke_with_customer` call (or a\ntext\/voicemail equivalent), captures the sub-outcome the\noperator selected (`call_back`, `appointment_set`, `dead`).\nPersisted on `call_attempts.spoke_result` so the editor can\npre-fill it when reopening the action. Null on actions that\ndid not branch on a spoke result.\n",
           ),
         callbackAt: zod
           .date()
           .nullish()
           .describe(
-            "Scheduled callback timestamp when the action's spoke result\nwas `call_back`. Mirrors `leads.callback_at` so the editor can\npre-fill the field when reopening the action.\n",
+            "Scheduled callback timestamp when the action's spoke result\nwas `call_back`. Persisted on `call_attempts.callback_at`\n(the lead row's `callback_at` is also updated, but the\nper-attempt copy is what the editor reads back).\n",
           ),
         appointmentDate: zod
           .string()
           .nullish()
           .describe(
-            "ISO date (YYYY-MM-DD) of the appointment booked by this\naction. Mirrors `leads.appointment_date`. Null on actions\nthat did not book an appointment.\n",
+            "ISO date (YYYY-MM-DD) of the appointment booked by this\naction. Persisted on `call_attempts.appointment_date`. Null\non actions that did not book an appointment.\n",
           ),
         appointmentTime: zod
           .string()
           .nullish()
           .describe(
-            "Local time-of-day (HH:mm) of the appointment booked by this\naction. Mirrors `leads.appointment_time`. Null on actions\nthat did not book an appointment.\n",
+            "Local time-of-day (HH:mm) of the appointment booked by this\naction. Persisted on `call_attempts.appointment_time`. Null\non actions that did not book an appointment.\n",
           ),
       })
       .describe(
-        "A single action recorded against a lead in the leads-hub workflow.\nSourced from the `call_attempts` table (joined with the acting CSR's\ndisplay name); follow-up fields like `spokeResult`, `callbackAt`,\n`appointmentDate`, and `appointmentTime` are populated from the\nparent lead row when the action drove a callback or appointment\nbooking and are null otherwise.\n",
+        "A single action recorded against a lead in the leads-hub workflow.\nSourced from the `call_attempts` table (joined with the acting CSR's\ndisplay name). Follow-up fields like `spokeResult`, `callbackAt`,\n`appointmentDate`, and `appointmentTime` are persisted directly on\nthe call attempt row so re-opening a past attempt for editing\npre-fills the originally-chosen values. For legacy attempts written\nbefore these columns existed, the server falls back to attributing\nthe parent lead row's mirror to the most recent\n`spoke_with_customer` attempt; everything else is null.\n",
       ),
   ),
 });

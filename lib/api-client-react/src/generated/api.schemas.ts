@@ -94,10 +94,13 @@ export interface LeadListResponse {
 /**
  * A single action recorded against a lead in the leads-hub workflow.
 Sourced from the `call_attempts` table (joined with the acting CSR's
-display name); follow-up fields like `spokeResult`, `callbackAt`,
-`appointmentDate`, and `appointmentTime` are populated from the
-parent lead row when the action drove a callback or appointment
-booking and are null otherwise.
+display name). Follow-up fields like `spokeResult`, `callbackAt`,
+`appointmentDate`, and `appointmentTime` are persisted directly on
+the call attempt row so re-opening a past attempt for editing
+pre-fills the originally-chosen values. For legacy attempts written
+before these columns existed, the server falls back to attributing
+the parent lead row's mirror to the most recent
+`spoke_with_customer` attempt; everything else is null.
 
  */
 export interface HistoryEntry {
@@ -129,25 +132,28 @@ UI can re-render legacy rows that only set `method`.
   deadReason?: string | null;
   /** Display name of the CSR who logged the action. */
   csrName: string;
-  /** When the action was a `spoke_with_customer` call, captures the
-sub-outcome the operator selected (`call_back`,
-`appointment_set`, `dead`). Null on actions that did not branch
-on a spoke result.
+  /** When the action was a `spoke_with_customer` call (or a
+text/voicemail equivalent), captures the sub-outcome the
+operator selected (`call_back`, `appointment_set`, `dead`).
+Persisted on `call_attempts.spoke_result` so the editor can
+pre-fill it when reopening the action. Null on actions that
+did not branch on a spoke result.
  */
   spokeResult?: string | null;
   /** Scheduled callback timestamp when the action's spoke result
-was `call_back`. Mirrors `leads.callback_at` so the editor can
-pre-fill the field when reopening the action.
+was `call_back`. Persisted on `call_attempts.callback_at`
+(the lead row's `callback_at` is also updated, but the
+per-attempt copy is what the editor reads back).
  */
   callbackAt?: string | null;
   /** ISO date (YYYY-MM-DD) of the appointment booked by this
-action. Mirrors `leads.appointment_date`. Null on actions
-that did not book an appointment.
+action. Persisted on `call_attempts.appointment_date`. Null
+on actions that did not book an appointment.
  */
   appointmentDate?: string | null;
   /** Local time-of-day (HH:mm) of the appointment booked by this
-action. Mirrors `leads.appointment_time`. Null on actions
-that did not book an appointment.
+action. Persisted on `call_attempts.appointment_time`. Null
+on actions that did not book an appointment.
  */
   appointmentTime?: string | null;
 }
