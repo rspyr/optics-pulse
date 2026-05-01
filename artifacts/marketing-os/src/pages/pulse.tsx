@@ -238,6 +238,10 @@ interface HistoryEntry {
   csrName: string;
   method: string;
   outcome: string;
+  spokeResult?: string | null;
+  callbackAt?: string | null;
+  appointmentDate?: string | null;
+  appointmentTime?: string | null;
 }
 
 interface CsrOption {

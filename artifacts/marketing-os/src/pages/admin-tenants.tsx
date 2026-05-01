@@ -295,7 +295,7 @@ export default function AdminTenants() {
         continue;
       }
       const val = form[key];
-      if (!val) continue;
+      if (!val || typeof val !== "string") continue;
       if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
       config[key] = val;
     }

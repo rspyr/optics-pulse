@@ -52,7 +52,7 @@ export default function Leaderboards() {
 
   const tab = METRIC_TABS.find(t => t.key === activeMetric)!;
 
-  const serverAnonymized = (data as Record<string, unknown> | undefined)?.forceAnonymized === true;
+  const serverAnonymized = (data as unknown as Record<string, unknown> | undefined)?.forceAnonymized === true;
   const effectiveAnonymized = serverAnonymized || anonymized;
 
   const getDisplayName = (entry: LeaderboardEntry, index: number) => {
