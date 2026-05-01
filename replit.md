@@ -53,6 +53,16 @@ The frontend employs React, Vite, TailwindCSS v4, Wouter, and TanStack React Que
 - **Data Security:** Sensitive configurations and API credentials are encrypted, with a `sanitizeTenant` function to mask secret fields.
 - **Funnel-Aware Tracking:** Global funnel types with tenant associations for tracking and webhook ingestion.
 
+## Development & CI
+
+**Typecheck (CI gate):** A `typecheck` validation command is registered with Replit's validation system and runs `pnpm -r run typecheck` from a clean checkout. It is executed automatically when a task is marked complete; a failing typecheck blocks the merge back to the main app. To run it locally before pushing, use:
+
+```bash
+pnpm run typecheck
+```
+
+This first builds the shared `lib/*` project references (`tsc --build`) and then runs the per-artifact `typecheck` script in `artifacts/*` and `scripts/`. Keep the workspace green — any new type error introduced will fail the gate.
+
 ## External Dependencies
 
 - **Google Sheets API:** Integrated via Replit Connectors for lead ingestion.
