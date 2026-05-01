@@ -20,7 +20,7 @@ import {
   Pause, Play
 } from "lucide-react";
 import { isUnknownSource } from "@workspace/api-zod";
-import type { HistoryEntry } from "@workspace/api-client-react";
+import { useGetPodiumTimeline, type TimelineEntry } from "@workspace/api-client-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -825,25 +825,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
   );
 }
 
-interface TimelineEntry {
-  type: "pulse_action" | "podium_text" | "podium_call";
-  source: string;
-  timestamp: string;
-  id: number;
-  direction?: string;
-  body?: string;
-  channelType?: string;
-  senderName?: string;
-  deliveryStatus?: string;
-  podiumDeepLink?: string;
-  podiumConversationUid?: string;
-  messageItems?: unknown[];
-  [key: string]: unknown;
-}
-
 function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false, leadHubStatus }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean; leadHubStatus?: string }) {
-  const [unifiedTimeline, setUnifiedTimeline] = useState<TimelineEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string; apptBookedOutcome: string; spokeResult: string; callbackAt: string; appointmentDate: string; appointmentTime: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", apptBookedOutcome: "", spokeResult: "", callbackAt: "", appointmentDate: "", appointmentTime: "" });
@@ -859,18 +841,9 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     });
   };
 
-  const fetchHistory = useCallback(() => {
-    setLoading(true);
-    fetch(`${API_BASE}/podium/timeline/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        setUnifiedTimeline(data.timeline || []);
-      })
-      .catch(() => setUnifiedTimeline([]))
-      .finally(() => setLoading(false));
-  }, [leadId, tenantId]);
-
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  const { data: timelineData, isLoading: loading, refetch: refetchTimeline } = useGetPodiumTimeline(leadId, { tenantId });
+  const unifiedTimeline = useMemo(() => timelineData?.timeline ?? [], [timelineData]);
+  const fetchHistory = useCallback(() => { refetchTimeline(); }, [refetchTimeline]);
 
   const { onPodiumMessage } = useLeadNotification();
   useEffect(() => {
@@ -881,7 +854,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     });
   }, [leadId, fetchHistory, onPodiumMessage]);
 
-  const startEdit = (entry: HistoryEntry) => {
+  const startEdit = (entry: TimelineEntry) => {
     setEditingId(entry.id);
     const dr = entry.deadReason || "";
     const isExistingCustom = dr && !DEAD_REASONS.some(d => d.value === dr && d.value !== "custom");
@@ -906,7 +879,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     });
   };
 
-  const saveEdit = async (entry: HistoryEntry) => {
+  const saveEdit = async (entry: TimelineEntry) => {
     setEditSaving(true);
     try {
       const resolvedDeadReason = (() => {
@@ -1006,7 +979,6 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   };
 
   const renderPulseAction = (entry: TimelineEntry) => {
-    const histEntry = entry as unknown as HistoryEntry;
     if (editingId === entry.id) {
       return (
         <div className="space-y-2 py-1">
@@ -1137,7 +1109,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           />
           <div className="flex items-center gap-1.5">
             <button
-              onClick={() => saveEdit(histEntry)}
+              onClick={() => saveEdit(entry)}
               disabled={editSaving}
               className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium hover:bg-amber-500/30 disabled:opacity-50 transition-colors"
             >
@@ -1161,9 +1133,9 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           </span>
           <span className="text-[10px] text-white/50">{entry.csrName as string}</span>
           <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
-          {canEdit && (isAdminRole || (entry as unknown as HistoryEntry).userId === currentUserId) && (
+          {canEdit && (isAdminRole || entry.userId === currentUserId) && (
             <button
-              onClick={e => { e.stopPropagation(); startEdit(histEntry); }}
+              onClick={e => { e.stopPropagation(); startEdit(entry); }}
               className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
               title="Edit action"
             >
@@ -1171,8 +1143,8 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
             </button>
           )}
         </div>
-        {(entry as unknown as HistoryEntry).deadReason && <p className="text-[10px] text-red-400/60 mt-0.5">Reason: {((entry as unknown as HistoryEntry).deadReason || "").replace(/_/g, " ")}</p>}
-        {(entry as unknown as HistoryEntry).notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{(entry as unknown as HistoryEntry).notes}</p>}
+        {entry.deadReason && <p className="text-[10px] text-red-400/60 mt-0.5">Reason: {(entry.deadReason || "").replace(/_/g, " ")}</p>}
+        {entry.notes && <p className="text-[10px] text-white/25 mt-0.5 italic">{entry.notes}</p>}
       </>
     );
   };

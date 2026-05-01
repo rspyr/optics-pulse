@@ -162,6 +162,141 @@ export interface LeadHistoryResponse {
   history: HistoryEntry[];
 }
 
+/**
+ * Discriminator. `pulse_action` is a native Pulse
+call/text/voicemail attempt; `podium_text` is a Podium SMS
+or form message; `podium_call` is a Podium-tracked phone
+call.
+
+ */
+export type TimelineEntryType =
+  (typeof TimelineEntryType)[keyof typeof TimelineEntryType];
+
+export const TimelineEntryType = {
+  pulse_action: "pulse_action",
+  podium_text: "podium_text",
+  podium_call: "podium_call",
+} as const;
+
+/**
+ * Origin system that produced the entry. `pulse_action` rows
+always have source `pulse`; `podium_text` and `podium_call`
+rows always have source `podium`.
+
+ */
+export type TimelineEntrySource =
+  (typeof TimelineEntrySource)[keyof typeof TimelineEntrySource];
+
+export const TimelineEntrySource = {
+  pulse: "pulse",
+  podium: "podium",
+} as const;
+
+/**
+ * A single entry in the unified Pulse + Podium timeline for a
+lead. Discriminated by `type`: `pulse_action` entries are
+sourced from `call_attempts` and carry the same fields as
+`HistoryEntry`; `podium_text` and `podium_call` entries are
+sourced from `podium_messages` and carry Podium-specific fields
+(direction, body, channelType, …). Variant-specific fields are
+omitted on entries from other variants.
+
+ */
+export interface TimelineEntry {
+  /** Discriminator. `pulse_action` is a native Pulse
+call/text/voicemail attempt; `podium_text` is a Podium SMS
+or form message; `podium_call` is a Podium-tracked phone
+call.
+ */
+  type: TimelineEntryType;
+  /** Origin system that produced the entry. `pulse_action` rows
+always have source `pulse`; `podium_text` and `podium_call`
+rows always have source `podium`.
+ */
+  source: TimelineEntrySource;
+  /** Unified sort timestamp. For pulse actions this is the
+attempt's `attemptedAt`; for Podium entries it is
+`podiumCreatedAt` if available, otherwise the local
+`createdAt`.
+ */
+  timestamp: string;
+  /** Identifier of the underlying row. `call_attempts.id` for
+pulse actions; `podium_messages.id` for Podium entries.
+Not globally unique across variants.
+ */
+  id: number;
+  /** Pulse-action only. Mirrors `HistoryEntry.leadId`. */
+  leadId?: number;
+  /** Pulse-action only. Mirrors `HistoryEntry.userId`. */
+  userId?: number;
+  /** Pulse-action only. Mirrors `HistoryEntry.method`. */
+  method?: string;
+  /** Pulse-action only. Mirrors `HistoryEntry.outcome`. */
+  outcome?: string;
+  /** Pulse-action only. Mirrors `HistoryEntry.platform`. */
+  platform?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.notes`. */
+  notes?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.actionType`. */
+  actionType?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.callResult`. */
+  callResult?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.vmResult`. */
+  vmResult?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.textResult`. */
+  textResult?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.deadReason`. */
+  deadReason?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.csrName`. */
+  csrName?: string;
+  /** Pulse-action only. Mirrors `HistoryEntry.spokeResult`. */
+  spokeResult?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.callbackAt`. */
+  callbackAt?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.appointmentDate`. */
+  appointmentDate?: string | null;
+  /** Pulse-action only. Mirrors `HistoryEntry.appointmentTime`. */
+  appointmentTime?: string | null;
+  /** Podium-only. `inbound` or `outbound` direction of the
+message or call.
+ */
+  direction?: string;
+  /** Podium-only. Message body for texts; transcript or notes
+for calls. May be null when Podium provided no body.
+ */
+  body?: string | null;
+  /** Podium-only. Normalised channel of the entry (`sms`,
+`form`, `call`, `phone_call`, `car_wars`, …). Drives which
+Podium variant the entry is rendered as.
+ */
+  channelType?: string;
+  /** Podium-only. Display name of the Podium sender. */
+  senderName?: string | null;
+  /** Podium-only. Podium-reported delivery status (e.g.
+`delivered`, `failed`).
+ */
+  deliveryStatus?: string | null;
+  /** Podium-only. Stable Podium message UID. */
+  podiumMessageUid?: string;
+  /** Podium-only. UID of the Podium conversation the entry
+belongs to. Used to build the Podium deep link.
+ */
+  podiumConversationUid?: string | null;
+  /** Podium-only. Pre-built URL into the Podium inbox for the
+conversation. Null when the conversation UID is missing.
+ */
+  podiumDeepLink?: string | null;
+  /** Podium-only. Raw Podium `items` payload (text, image, or
+other attachment descriptors). Forwarded as-is so the UI
+can render attachments without a second fetch.
+ */
+  messageItems?: unknown | null;
+}
+
+export interface PodiumTimelineResponse {
+  timeline: TimelineEntry[];
+}
+
 export type CampaignPlatform =
   (typeof CampaignPlatform)[keyof typeof CampaignPlatform];
 
@@ -1084,6 +1219,10 @@ export const ListLeadsStatus = {
   lost: "lost",
   cancelled: "cancelled",
 } as const;
+
+export type GetPodiumTimelineParams = {
+  tenantId?: number;
+};
 
 export type ListCampaignsParams = {
   tenantId?: number;

@@ -46,6 +46,7 @@ import type {
   GetDashboardOverviewParams,
   GetHudQueueParams,
   GetHudStatsParams,
+  GetPodiumTimelineParams,
   GetReconciliationStatusParams,
   GetSpendRevenueChartParams,
   GetTenantPerformanceParams,
@@ -67,6 +68,7 @@ import type {
   ListTrainingItemsParams,
   LoginInput,
   Logout200,
+  PodiumTimelineResponse,
   ReconciliationResult,
   ReconciliationStatusResponse,
   RunReconciliationBody,
@@ -1034,6 +1036,140 @@ export const useUpdateLead = <
 > => {
   return useMutation(getUpdateLeadMutationOptions(options));
 };
+
+/**
+ * Returns a chronological feed (newest first) that merges native
+Pulse call attempts with Podium-sourced messages and calls for a
+single lead. Each entry is discriminated by `type`
+(`pulse_action`, `podium_text`, `podium_call`); the entry's
+non-common fields are populated only for the matching variant.
+
+Pulse-action entries mirror the same call-attempt projection
+used by `/leads-hub/{leadId}/history` (`HistoryEntry`), with
+`attemptedAt` exposed as the unified `timestamp` field. Podium
+entries are read from the locally cached `podium_messages` rows
+after a best-effort sync with the Podium API; when the lead has
+no phone number or no connected Podium user, the Podium portion
+is empty.
+
+ * @summary Get the unified Pulse + Podium timeline for a lead
+ */
+export const getGetPodiumTimelineUrl = (
+  leadId: number,
+  params?: GetPodiumTimelineParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/podium/timeline/${leadId}?${stringifiedParams}`
+    : `/api/podium/timeline/${leadId}`;
+};
+
+export const getPodiumTimeline = async (
+  leadId: number,
+  params?: GetPodiumTimelineParams,
+  options?: RequestInit,
+): Promise<PodiumTimelineResponse> => {
+  return customFetch<PodiumTimelineResponse>(
+    getGetPodiumTimelineUrl(leadId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPodiumTimelineQueryKey = (
+  leadId: number,
+  params?: GetPodiumTimelineParams,
+) => {
+  return [
+    `/api/podium/timeline/${leadId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetPodiumTimelineQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPodiumTimeline>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetPodiumTimelineParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumTimeline>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPodiumTimelineQueryKey(leadId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPodiumTimeline>>
+  > = ({ signal }) =>
+    getPodiumTimeline(leadId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPodiumTimeline>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPodiumTimelineQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPodiumTimeline>>
+>;
+export type GetPodiumTimelineQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the unified Pulse + Podium timeline for a lead
+ */
+
+export function useGetPodiumTimeline<
+  TData = Awaited<ReturnType<typeof getPodiumTimeline>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetPodiumTimelineParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumTimeline>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPodiumTimelineQueryOptions(
+    leadId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Returns the chronological action history for a single lead in the

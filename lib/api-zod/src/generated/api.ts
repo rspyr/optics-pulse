@@ -344,6 +344,180 @@ export const UpdateLeadResponse = zod.object({
 });
 
 /**
+ * Returns a chronological feed (newest first) that merges native
+Pulse call attempts with Podium-sourced messages and calls for a
+single lead. Each entry is discriminated by `type`
+(`pulse_action`, `podium_text`, `podium_call`); the entry's
+non-common fields are populated only for the matching variant.
+
+Pulse-action entries mirror the same call-attempt projection
+used by `/leads-hub/{leadId}/history` (`HistoryEntry`), with
+`attemptedAt` exposed as the unified `timestamp` field. Podium
+entries are read from the locally cached `podium_messages` rows
+after a best-effort sync with the Podium API; when the lead has
+no phone number or no connected Podium user, the Podium portion
+is empty.
+
+ * @summary Get the unified Pulse + Podium timeline for a lead
+ */
+export const GetPodiumTimelineParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetPodiumTimelineQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetPodiumTimelineResponse = zod.object({
+  timeline: zod.array(
+    zod
+      .object({
+        type: zod
+          .enum(["pulse_action", "podium_text", "podium_call"])
+          .describe(
+            "Discriminator. `pulse_action` is a native Pulse\ncall\/text\/voicemail attempt; `podium_text` is a Podium SMS\nor form message; `podium_call` is a Podium-tracked phone\ncall.\n",
+          ),
+        source: zod
+          .enum(["pulse", "podium"])
+          .describe(
+            "Origin system that produced the entry. `pulse_action` rows\nalways have source `pulse`; `podium_text` and `podium_call`\nrows always have source `podium`.\n",
+          ),
+        timestamp: zod
+          .date()
+          .describe(
+            "Unified sort timestamp. For pulse actions this is the\nattempt's `attemptedAt`; for Podium entries it is\n`podiumCreatedAt` if available, otherwise the local\n`createdAt`.\n",
+          ),
+        id: zod
+          .number()
+          .describe(
+            "Identifier of the underlying row. `call_attempts.id` for\npulse actions; `podium_messages.id` for Podium entries.\nNot globally unique across variants.\n",
+          ),
+        leadId: zod
+          .number()
+          .optional()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.leadId`."),
+        userId: zod
+          .number()
+          .optional()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.userId`."),
+        method: zod
+          .string()
+          .optional()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.method`."),
+        outcome: zod
+          .string()
+          .optional()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.outcome`."),
+        platform: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.platform`."),
+        notes: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.notes`."),
+        actionType: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.actionType`."),
+        callResult: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.callResult`."),
+        vmResult: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.vmResult`."),
+        textResult: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.textResult`."),
+        deadReason: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.deadReason`."),
+        csrName: zod
+          .string()
+          .optional()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.csrName`."),
+        spokeResult: zod
+          .string()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.spokeResult`."),
+        callbackAt: zod
+          .date()
+          .nullish()
+          .describe("Pulse-action only. Mirrors `HistoryEntry.callbackAt`."),
+        appointmentDate: zod
+          .string()
+          .nullish()
+          .describe(
+            "Pulse-action only. Mirrors `HistoryEntry.appointmentDate`.",
+          ),
+        appointmentTime: zod
+          .string()
+          .nullish()
+          .describe(
+            "Pulse-action only. Mirrors `HistoryEntry.appointmentTime`.",
+          ),
+        direction: zod
+          .string()
+          .optional()
+          .describe(
+            "Podium-only. `inbound` or `outbound` direction of the\nmessage or call.\n",
+          ),
+        body: zod
+          .string()
+          .nullish()
+          .describe(
+            "Podium-only. Message body for texts; transcript or notes\nfor calls. May be null when Podium provided no body.\n",
+          ),
+        channelType: zod
+          .string()
+          .optional()
+          .describe(
+            "Podium-only. Normalised channel of the entry (`sms`,\n`form`, `call`, `phone_call`, `car_wars`, …). Drives which\nPodium variant the entry is rendered as.\n",
+          ),
+        senderName: zod
+          .string()
+          .nullish()
+          .describe("Podium-only. Display name of the Podium sender."),
+        deliveryStatus: zod
+          .string()
+          .nullish()
+          .describe(
+            "Podium-only. Podium-reported delivery status (e.g.\n`delivered`, `failed`).\n",
+          ),
+        podiumMessageUid: zod
+          .string()
+          .optional()
+          .describe("Podium-only. Stable Podium message UID."),
+        podiumConversationUid: zod
+          .string()
+          .nullish()
+          .describe(
+            "Podium-only. UID of the Podium conversation the entry\nbelongs to. Used to build the Podium deep link.\n",
+          ),
+        podiumDeepLink: zod
+          .string()
+          .nullish()
+          .describe(
+            "Podium-only. Pre-built URL into the Podium inbox for the\nconversation. Null when the conversation UID is missing.\n",
+          ),
+        messageItems: zod
+          .unknown()
+          .nullish()
+          .describe(
+            "Podium-only. Raw Podium `items` payload (text, image, or\nother attachment descriptors). Forwarded as-is so the UI\ncan render attachments without a second fetch.\n",
+          ),
+      })
+      .describe(
+        "A single entry in the unified Pulse + Podium timeline for a\nlead. Discriminated by `type`: `pulse_action` entries are\nsourced from `call_attempts` and carry the same fields as\n`HistoryEntry`; `podium_text` and `podium_call` entries are\nsourced from `podium_messages` and carry Podium-specific fields\n(direction, body, channelType, …). Variant-specific fields are\nomitted on entries from other variants.\n",
+      ),
+  ),
+});
+
+/**
  * Returns the chronological action history for a single lead in the
 leads-hub workflow. Each entry corresponds to a `call_attempts` row
 for the lead, joined with the acting CSR's display name. Entries
