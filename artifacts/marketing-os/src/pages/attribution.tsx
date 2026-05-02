@@ -601,8 +601,8 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
   const [knownSources, setKnownSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [savedSource, setSavedSource] = useState(false);
-  const [savedFunnel, setSavedFunnel] = useState(false);
+  const [savedSourceCount, setSavedSourceCount] = useState<number | null>(null);
+  const [savedFunnelCount, setSavedFunnelCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -631,20 +631,20 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
   }, [tenantId]);
 
   useEffect(() => {
-    if (savedSource) {
-      const t = setTimeout(() => setSavedSource(false), 2000);
+    if (savedSourceCount !== null) {
+      const t = setTimeout(() => setSavedSourceCount(null), 4000);
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [savedSource]);
+  }, [savedSourceCount]);
 
   useEffect(() => {
-    if (savedFunnel) {
-      const t = setTimeout(() => setSavedFunnel(false), 2000);
+    if (savedFunnelCount !== null) {
+      const t = setTimeout(() => setSavedFunnelCount(null), 4000);
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [savedFunnel]);
+  }, [savedFunnelCount]);
 
   const saveSourceAlias = async () => {
     if (!sourceAlias.trim()) return;
@@ -662,7 +662,9 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save source alias");
       } else {
-        setSavedSource(true);
+        const d = await res.json().catch(() => ({}));
+        const count = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        setSavedSourceCount(count);
         setCustomSourceMode(false);
         setKnownSources(prev => {
           const updated = [...new Set([...prev, sourceAlias.trim()])].sort();
@@ -697,7 +699,9 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save funnel alias");
       } else {
-        setSavedFunnel(true);
+        const d = await res.json().catch(() => ({}));
+        const count = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        setSavedFunnelCount(count);
         // Refetch the events list and the open detail panel so the new
         // canonical funnel name shows up immediately without a manual reload.
         await Promise.all([
@@ -770,8 +774,15 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
                 Save
               </Button>
             )}
-            {savedSource && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {savedSourceCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
           </div>
+          {savedSourceCount !== null && (
+            <p className="text-[10px] text-emerald-400 pl-0.5">
+              {savedSourceCount > 0
+                ? `Saved · Updated ${savedSourceCount} past event${savedSourceCount === 1 ? "" : "s"}`
+                : "Saved · No past events needed updating"}
+            </p>
+          )}
           {rawSource && sourceAlias && sourceAlias !== rawSource && sourceAlias !== "__custom__" && !customSourceMode && (
             <p className="text-[10px] text-muted-foreground pl-0.5">Maps &quot;{rawSource}&quot; → {sourceAlias}</p>
           )}
@@ -793,8 +804,15 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
                 Save
               </Button>
             )}
-            {savedFunnel && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {savedFunnelCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
           </div>
+          {savedFunnelCount !== null && (
+            <p className="text-[10px] text-emerald-400 pl-0.5">
+              {savedFunnelCount > 0
+                ? `Saved · Updated ${savedFunnelCount} past event${savedFunnelCount === 1 ? "" : "s"}`
+                : "Saved · No past events needed updating"}
+            </p>
+          )}
           {rawFunnel && funnelTypeId && (() => {
             const selected = funnelTypes.find(ft => String(ft.id) === funnelTypeId);
             return selected && selected.name !== rawFunnel ? (
