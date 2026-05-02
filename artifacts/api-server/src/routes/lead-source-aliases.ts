@@ -1,8 +1,35 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, leadSourceAliasesTable } from "@workspace/db";
+import { db, leadSourceAliasesTable, attributionEventsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { invalidateSourceCache, DEFAULT_SOURCE_ALIASES, normalizeSource } from "../services/source-normalizer";
 import { leadsTable } from "@workspace/db";
+
+// Re-resolve historical attribution events when a new source alias is saved.
+// Matches the same lower/trim rules normalizeSource() uses at ingest, so any
+// existing row whose raw utm_source / referrer or already-resolved value
+// matches the new alias key gets its resolved_lead_source flipped to the new
+// canonical name. Returns the number of rows updated.
+async function reResolveSourceForAlias(
+  tenantId: number,
+  aliasKey: string,
+  canonicalName: string,
+): Promise<number> {
+  const key = aliasKey.toLowerCase().trim();
+  if (!key) return 0;
+  const result = await db.update(attributionEventsTable)
+    .set({ resolvedLeadSource: canonicalName })
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      sql`(
+        LOWER(TRIM(COALESCE(${attributionEventsTable.utmSource}, ''))) = ${key}
+        OR LOWER(TRIM(COALESCE(${attributionEventsTable.referrer}, ''))) = ${key}
+        OR LOWER(TRIM(COALESCE(${attributionEventsTable.resolvedLeadSource}, ''))) = ${key}
+      )`,
+      sql`COALESCE(${attributionEventsTable.resolvedLeadSource}, '') <> ${canonicalName}`,
+    ))
+    .returning({ id: attributionEventsTable.id });
+  return result.length;
+}
 
 const router: IRouter = Router();
 
@@ -86,7 +113,8 @@ router.post("/lead-source-aliases", async (req, res) => {
   }).returning();
 
   invalidateSourceCache(tenantId);
-  res.json({ alias: row });
+  const updatedEventCount = await reResolveSourceForAlias(tenantId, trimmedAlias, trimmedCanonical);
+  res.json({ alias: row, updatedEventCount });
 });
 
 router.post("/lead-source-aliases/bulk", async (req, res) => {
@@ -104,6 +132,7 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
 
   const trimmedCanonical = canonicalName.trim();
   const results: { alias: string; status: string }[] = [];
+  const newlyCreatedAliases: string[] = [];
 
   for (const a of aliases) {
     const trimmedAlias = String(a).trim();
@@ -126,10 +155,15 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
       alias: trimmedAlias.toLowerCase(),
     });
     results.push({ alias: trimmedAlias, status: "created" });
+    newlyCreatedAliases.push(trimmedAlias);
   }
 
   invalidateSourceCache(tenantId);
-  res.json({ results });
+  let updatedEventCount = 0;
+  for (const a of newlyCreatedAliases) {
+    updatedEventCount += await reResolveSourceForAlias(tenantId, a, trimmedCanonical);
+  }
+  res.json({ results, updatedEventCount });
 });
 
 router.put("/lead-source-aliases/:id", async (req, res) => {

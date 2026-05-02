@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { useListAttributionEvents, useGetAttributionEvent } from "@workspace/api-client-react";
+import { useListAttributionEvents, useGetAttributionEvent, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -577,6 +578,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
 }
 
 function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+  const queryClient = useQueryClient();
   const resolvedSource = event.resolvedLeadSource ?? undefined;
   const resolvedFunnel = event.resolvedFunnel ?? undefined;
   const rawSource = event.utmSource || event.referrer || null;
@@ -666,6 +668,13 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
           const updated = [...new Set([...prev, sourceAlias.trim()])].sort();
           return updated;
         });
+        // Refetch the events list and the open detail panel so the new
+        // canonical source name shows up immediately without a manual reload.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
+        ]);
       }
     } catch { setError("Network error"); }
     setSaving(false);
@@ -689,6 +698,13 @@ function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event
         setError(d.error || "Failed to save funnel alias");
       } else {
         setSavedFunnel(true);
+        // Refetch the events list and the open detail panel so the new
+        // canonical funnel name shows up immediately without a manual reload.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
+        ]);
       }
     } catch { setError("Network error"); }
     setSaving(false);

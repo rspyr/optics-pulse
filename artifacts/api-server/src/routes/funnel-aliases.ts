@@ -1,8 +1,45 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable, attributionEventsTable } from "@workspace/db";
+import { eq, and, sql } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
 import { readRawSheetData } from "../services/integrations/google-sheets";
+
+// Re-resolve historical attribution events when a new funnel alias is saved.
+// Two cases must update:
+//   1. Rows whose stored resolved_funnel already equals the raw alias key
+//      (ingested before the alias existed and left as the raw form value).
+//   2. Rows whose resolved_funnel is null/empty (no prior alias match) but
+//      whose form_fields jsonb contains a value matching the alias key —
+//      these were saved with no canonical funnel and should adopt the new
+//      mapping just like normalizeFunnel() would on the next ingest.
+// Returns the number of rows updated.
+async function reResolveFunnelForAlias(
+  tenantId: number,
+  aliasKey: string,
+  canonicalFunnelName: string,
+): Promise<number> {
+  const key = aliasKey.toLowerCase().trim();
+  if (!key) return 0;
+  const result = await db.update(attributionEventsTable)
+    .set({ resolvedFunnel: canonicalFunnelName })
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      sql`COALESCE(${attributionEventsTable.resolvedFunnel}, '') <> ${canonicalFunnelName}`,
+      sql`(
+        LOWER(TRIM(COALESCE(${attributionEventsTable.resolvedFunnel}, ''))) = ${key}
+        OR (
+          (${attributionEventsTable.resolvedFunnel} IS NULL OR TRIM(${attributionEventsTable.resolvedFunnel}) = '')
+          AND ${attributionEventsTable.formFields} IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jsonb_each_text(${attributionEventsTable.formFields}) AS kv
+            WHERE LOWER(TRIM(kv.value)) = ${key}
+          )
+        )
+      )`,
+    ))
+    .returning({ id: attributionEventsTable.id });
+  return result.length;
+}
 
 const router: IRouter = Router();
 
@@ -98,7 +135,14 @@ router.post("/funnel-aliases", async (req, res) => {
   }).returning();
 
   invalidateFunnelCache(tenantId);
-  res.json({ alias: row });
+
+  const [funnelType] = await db.select({ name: funnelTypesTable.name })
+    .from(funnelTypesTable)
+    .where(eq(funnelTypesTable.id, funnelId));
+  const updatedEventCount = funnelType
+    ? await reResolveFunnelForAlias(tenantId, trimmedAlias, funnelType.name)
+    : 0;
+  res.json({ alias: row, updatedEventCount });
 });
 
 router.post("/funnel-aliases/bulk", async (req, res) => {
@@ -115,6 +159,7 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
   }
 
   const results: { alias: string; status: string }[] = [];
+  const newlyCreatedAliases: string[] = [];
 
   for (const a of aliases) {
     const trimmedAlias = String(a).trim().toLowerCase();
@@ -137,10 +182,23 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
       alias: trimmedAlias,
     });
     results.push({ alias: trimmedAlias, status: "created" });
+    newlyCreatedAliases.push(trimmedAlias);
   }
 
   invalidateFunnelCache(tenantId);
-  res.json({ results });
+
+  let updatedEventCount = 0;
+  if (newlyCreatedAliases.length > 0) {
+    const [funnelType] = await db.select({ name: funnelTypesTable.name })
+      .from(funnelTypesTable)
+      .where(eq(funnelTypesTable.id, Number(funnelTypeId)));
+    if (funnelType) {
+      for (const a of newlyCreatedAliases) {
+        updatedEventCount += await reResolveFunnelForAlias(tenantId, a, funnelType.name);
+      }
+    }
+  }
+  res.json({ results, updatedEventCount });
 });
 
 router.delete("/funnel-aliases/:id", async (req, res) => {
