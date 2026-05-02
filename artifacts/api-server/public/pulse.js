@@ -1,7 +1,7 @@
 (function() {
   "use strict";
 
-  var PULSE_VERSION = "2026.04.26";
+  var PULSE_VERSION = "2026.05.02";
 
   var CONFIG = {
     clientId: "",
@@ -333,7 +333,14 @@
 
   function shouldCaptureField(name, type) {
     if (!name) return false;
-    if (type === "password" || type === "hidden") return false;
+    // Note: hidden inputs ARE captured. Framer / Webflow / Unbounce / GHL
+    // pages routinely carry funnel-relevant metadata in hidden inputs
+    // (e.g. <input type="hidden" name="Service they need" value="BOGO Deal">),
+    // and stripping them blinds the funnel-detection pipeline. Honeypot
+    // decoys (company_url, _gotcha, …) are removed downstream by
+    // stripHoneypotKeys(); password-style fields are rejected here and
+    // also caught by isSensitiveField() below.
+    if (type === "password") return false;
     if (isSensitiveField(name)) return false;
     var lower = name.toLowerCase();
     for (var i = 0; i < CONFIG.excludeFields.length; i++) {
@@ -465,7 +472,11 @@
       for (var i = 0; i < inputs.length; i++) {
         var el = inputs[i];
         var type = (el.type || "").toLowerCase();
-        if (type === "hidden" || type === "submit" || type === "button") continue;
+        // Hidden inputs are kept here too — they often carry the only
+        // funnel/page-context value on Framer-style layouts where the
+        // visible form is honeypot-only. Submit/button controls have no
+        // submitted value and are skipped.
+        if (type === "submit" || type === "button") continue;
         var name = resolveRescueKey(el);
         if (!name) continue;
         if (isHoneypotName(name)) continue;
