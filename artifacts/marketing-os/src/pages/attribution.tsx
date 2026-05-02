@@ -601,8 +601,8 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
   const [knownSources, setKnownSources] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [savedSourceCount, setSavedSourceCount] = useState<number | null>(null);
-  const [savedFunnelCount, setSavedFunnelCount] = useState<number | null>(null);
+  const [savedSourceCount, setSavedSourceCount] = useState<{ events: number; leads: number } | null>(null);
+  const [savedFunnelCount, setSavedFunnelCount] = useState<{ events: number; leads: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -663,8 +663,9 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
         setError(d.error || "Failed to save source alias");
       } else {
         const d = await res.json().catch(() => ({}));
-        const count = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
-        setSavedSourceCount(count);
+        const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+        setSavedSourceCount({ events, leads });
         setCustomSourceMode(false);
         setKnownSources(prev => {
           const updated = [...new Set([...prev, sourceAlias.trim()])].sort();
@@ -700,8 +701,9 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
         setError(d.error || "Failed to save funnel alias");
       } else {
         const d = await res.json().catch(() => ({}));
-        const count = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
-        setSavedFunnelCount(count);
+        const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+        setSavedFunnelCount({ events, leads });
         // Refetch the events list and the open detail panel so the new
         // canonical funnel name shows up immediately without a manual reload.
         await Promise.all([
@@ -778,9 +780,14 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
           </div>
           {savedSourceCount !== null && (
             <p className="text-[10px] text-emerald-400 pl-0.5">
-              {savedSourceCount > 0
-                ? `Saved · Updated ${savedSourceCount} past event${savedSourceCount === 1 ? "" : "s"}`
-                : "Saved · No past events needed updating"}
+              {(() => {
+                const { events, leads } = savedSourceCount;
+                if (events === 0 && leads === 0) return "Saved · Nothing else needed updating";
+                const parts: string[] = [];
+                if (events > 0) parts.push(`${events} past event${events === 1 ? "" : "s"}`);
+                if (leads > 0) parts.push(`${leads} lead${leads === 1 ? "" : "s"}`);
+                return `Saved · Updated ${parts.join(" and ")}`;
+              })()}
             </p>
           )}
           {rawSource && sourceAlias && sourceAlias !== rawSource && sourceAlias !== "__custom__" && !customSourceMode && (
@@ -808,9 +815,14 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
           </div>
           {savedFunnelCount !== null && (
             <p className="text-[10px] text-emerald-400 pl-0.5">
-              {savedFunnelCount > 0
-                ? `Saved · Updated ${savedFunnelCount} past event${savedFunnelCount === 1 ? "" : "s"}`
-                : "Saved · No past events needed updating"}
+              {(() => {
+                const { events, leads } = savedFunnelCount;
+                if (events === 0 && leads === 0) return "Saved · Nothing else needed updating";
+                const parts: string[] = [];
+                if (events > 0) parts.push(`${events} past event${events === 1 ? "" : "s"}`);
+                if (leads > 0) parts.push(`${leads} lead${leads === 1 ? "" : "s"}`);
+                return `Saved · Updated ${parts.join(" and ")}`;
+              })()}
             </p>
           )}
           {rawFunnel && funnelTypeId && (() => {

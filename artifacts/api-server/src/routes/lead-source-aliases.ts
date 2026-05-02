@@ -31,6 +31,28 @@ async function reResolveSourceForAlias(
   return result.length;
 }
 
+// Propagate the new alias mapping to the denormalized `leads.source`
+// column so the Pulse Lead Hub (web + mobile) reflects the corrected
+// canonical name immediately, without waiting for the manual
+// /lead-source-aliases/backfill endpoint.
+async function reResolveSourceForLeads(
+  tenantId: number,
+  aliasKey: string,
+  canonicalName: string,
+): Promise<number> {
+  const key = aliasKey.toLowerCase().trim();
+  if (!key) return 0;
+  const result = await db.update(leadsTable)
+    .set({ source: canonicalName, updatedAt: new Date() })
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      sql`LOWER(TRIM(COALESCE(${leadsTable.source}, ''))) = ${key}`,
+      sql`COALESCE(${leadsTable.source}, '') <> ${canonicalName}`,
+    ))
+    .returning({ id: leadsTable.id });
+  return result.length;
+}
+
 const router: IRouter = Router();
 
 function requireManagerRole(req: Request, res: Response, next: NextFunction) {
@@ -99,7 +121,7 @@ router.post("/lead-source-aliases", async (req, res) => {
 
   if (existing.length > 0) {
     if (existing[0].canonicalName === trimmedCanonical) {
-      res.json({ alias: existing[0] });
+      res.json({ alias: existing[0], updatedEventCount: 0, updatedLeadCount: 0 });
       return;
     }
     res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped to "${existing[0].canonicalName}" — did you mean "${existing[0].canonicalName}"?` });
@@ -114,7 +136,8 @@ router.post("/lead-source-aliases", async (req, res) => {
 
   invalidateSourceCache(tenantId);
   const updatedEventCount = await reResolveSourceForAlias(tenantId, trimmedAlias, trimmedCanonical);
-  res.json({ alias: row, updatedEventCount });
+  const updatedLeadCount = await reResolveSourceForLeads(tenantId, trimmedAlias, trimmedCanonical);
+  res.json({ alias: row, updatedEventCount, updatedLeadCount });
 });
 
 router.post("/lead-source-aliases/bulk", async (req, res) => {
@@ -160,10 +183,12 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
 
   invalidateSourceCache(tenantId);
   let updatedEventCount = 0;
+  let updatedLeadCount = 0;
   for (const a of newlyCreatedAliases) {
     updatedEventCount += await reResolveSourceForAlias(tenantId, a, trimmedCanonical);
+    updatedLeadCount += await reResolveSourceForLeads(tenantId, a, trimmedCanonical);
   }
-  res.json({ results, updatedEventCount });
+  res.json({ results, updatedEventCount, updatedLeadCount });
 });
 
 router.put("/lead-source-aliases/:id", async (req, res) => {

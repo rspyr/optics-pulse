@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable, attributionEventsTable } from "@workspace/db";
+import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable, attributionEventsTable, leadsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
 import { readRawSheetData } from "../services/integrations/google-sheets";
@@ -38,6 +38,33 @@ async function reResolveFunnelForAlias(
       )`,
     ))
     .returning({ id: attributionEventsTable.id });
+  return result.length;
+}
+
+// Propagate the new alias mapping to the denormalized lead_type / funnel_id
+// columns on existing leads so the Pulse Lead Hub (web + mobile) reflects
+// the corrected funnel immediately. Matches leads whose current lead_type
+// equals the alias key (case-insensitive); funnel_id is also rewritten so
+// downstream funnel filters stay consistent. Tenant-scoped.
+async function reResolveFunnelForLeads(
+  tenantId: number,
+  aliasKey: string,
+  funnelTypeId: number,
+  canonicalFunnelName: string,
+): Promise<number> {
+  const key = aliasKey.toLowerCase().trim();
+  if (!key) return 0;
+  const result = await db.update(leadsTable)
+    .set({ leadType: canonicalFunnelName, funnelId: funnelTypeId, updatedAt: new Date() })
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      sql`LOWER(TRIM(COALESCE(${leadsTable.leadType}, ''))) = ${key}`,
+      sql`(
+        COALESCE(${leadsTable.leadType}, '') <> ${canonicalFunnelName}
+        OR ${leadsTable.funnelId} IS DISTINCT FROM ${funnelTypeId}
+      )`,
+    ))
+    .returning({ id: leadsTable.id });
   return result.length;
 }
 
@@ -128,7 +155,7 @@ router.post("/funnel-aliases", async (req, res) => {
     // operator's Save button doesn't error when nothing actually changes.
     // Different funnel type → 409 so we don't silently overwrite.
     if (existing[0].funnelTypeId === funnelId) {
-      res.json({ alias: existing[0], updatedEventCount: 0 });
+      res.json({ alias: existing[0], updatedEventCount: 0, updatedLeadCount: 0 });
       return;
     }
     res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped to a different funnel type` });
@@ -149,7 +176,10 @@ router.post("/funnel-aliases", async (req, res) => {
   const updatedEventCount = funnelType
     ? await reResolveFunnelForAlias(tenantId, trimmedAlias, funnelType.name)
     : 0;
-  res.json({ alias: row, updatedEventCount });
+  const updatedLeadCount = funnelType
+    ? await reResolveFunnelForLeads(tenantId, trimmedAlias, funnelId, funnelType.name)
+    : 0;
+  res.json({ alias: row, updatedEventCount, updatedLeadCount });
 });
 
 router.post("/funnel-aliases/bulk", async (req, res) => {
@@ -162,6 +192,17 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
   const { funnelTypeId, aliases } = req.body;
   if (!funnelTypeId || !Array.isArray(aliases) || aliases.length === 0) {
     res.status(400).json({ error: "funnelTypeId and aliases array are required" });
+    return;
+  }
+
+  const numericFunnelTypeId = Number(funnelTypeId);
+  const [tenantAssoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(
+      eq(tenantFunnelTypesTable.tenantId, tenantId),
+      eq(tenantFunnelTypesTable.funnelTypeId, numericFunnelTypeId),
+    ));
+  if (!tenantAssoc) {
+    res.status(400).json({ error: "Funnel type is not enabled for this tenant" });
     return;
   }
 
@@ -185,7 +226,7 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
 
     await db.insert(funnelAliasesTable).values({
       tenantId,
-      funnelTypeId: Number(funnelTypeId),
+      funnelTypeId: numericFunnelTypeId,
       alias: trimmedAlias,
     });
     results.push({ alias: trimmedAlias, status: "created" });
@@ -195,17 +236,19 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
   invalidateFunnelCache(tenantId);
 
   let updatedEventCount = 0;
+  let updatedLeadCount = 0;
   if (newlyCreatedAliases.length > 0) {
     const [funnelType] = await db.select({ name: funnelTypesTable.name })
       .from(funnelTypesTable)
-      .where(eq(funnelTypesTable.id, Number(funnelTypeId)));
+      .where(eq(funnelTypesTable.id, numericFunnelTypeId));
     if (funnelType) {
       for (const a of newlyCreatedAliases) {
         updatedEventCount += await reResolveFunnelForAlias(tenantId, a, funnelType.name);
+        updatedLeadCount += await reResolveFunnelForLeads(tenantId, a, numericFunnelTypeId, funnelType.name);
       }
     }
   }
-  res.json({ results, updatedEventCount });
+  res.json({ results, updatedEventCount, updatedLeadCount });
 });
 
 router.delete("/funnel-aliases/:id", async (req, res) => {
