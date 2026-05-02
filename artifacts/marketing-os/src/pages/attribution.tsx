@@ -577,7 +577,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
   const queryClient = useQueryClient();
   const resolvedSource = event.resolvedLeadSource ?? undefined;
   const resolvedFunnel = event.resolvedFunnel ?? undefined;
