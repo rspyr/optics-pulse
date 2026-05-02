@@ -3,6 +3,7 @@ import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googl
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
 import { readRawSheetData } from "../services/integrations/google-sheets";
+import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
 
 // Re-resolve historical attribution events when a new funnel alias is saved.
 // Two cases must update:
@@ -53,9 +54,9 @@ async function reResolveFunnelForLeads(
   canonicalFunnelName: string,
   changedByUserId: number | null,
   funnelAliasId: number | null,
-): Promise<number> {
+): Promise<number[]> {
   const key = aliasKey.toLowerCase().trim();
-  if (!key) return 0;
+  if (!key) return [];
   // Snapshot rows first so we can write per-lead audit entries with the
   // pre-change funnel name; otherwise we'd lose what was overwritten.
   const matched = await db.select({ id: leadsTable.id, oldLeadType: leadsTable.leadType })
@@ -68,7 +69,7 @@ async function reResolveFunnelForLeads(
         OR ${leadsTable.funnelId} IS DISTINCT FROM ${funnelTypeId}
       )`,
     ));
-  if (matched.length === 0) return 0;
+  if (matched.length === 0) return [];
   const ids = matched.map(r => r.id);
   // Wrap update + audit insert in one transaction so a failed audit
   // never leaves leads silently overwritten without a paper trail.
@@ -86,7 +87,7 @@ async function reResolveFunnelForLeads(
       funnelAliasId,
     })));
   });
-  return matched.length;
+  return ids;
 }
 
 const router: IRouter = Router();
@@ -197,10 +198,11 @@ router.post("/funnel-aliases", async (req, res) => {
   const updatedEventCount = funnelType
     ? await reResolveFunnelForAlias(tenantId, trimmedAlias, funnelType.name)
     : 0;
-  const updatedLeadCount = funnelType
+  const updatedLeadIds = funnelType
     ? await reResolveFunnelForLeads(tenantId, trimmedAlias, funnelId, funnelType.name, req.session.userId ?? null, row.id)
-    : 0;
-  res.json({ alias: row, updatedEventCount, updatedLeadCount });
+    : [];
+  const reroute = await reRouteLeadsAfterAttributionChange(tenantId, updatedLeadIds);
+  res.json({ alias: row, updatedEventCount, updatedLeadCount: updatedLeadIds.length, reroute });
 });
 
 router.post("/funnel-aliases/bulk", async (req, res) => {
@@ -257,7 +259,7 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
   invalidateFunnelCache(tenantId);
 
   let updatedEventCount = 0;
-  let updatedLeadCount = 0;
+  const allUpdatedLeadIds: number[] = [];
   if (newlyCreatedAliases.length > 0) {
     const [funnelType] = await db.select({ name: funnelTypesTable.name })
       .from(funnelTypesTable)
@@ -265,11 +267,13 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
     if (funnelType) {
       for (const a of newlyCreatedAliases) {
         updatedEventCount += await reResolveFunnelForAlias(tenantId, a.alias, funnelType.name);
-        updatedLeadCount += await reResolveFunnelForLeads(tenantId, a.alias, numericFunnelTypeId, funnelType.name, req.session.userId ?? null, a.id);
+        const ids = await reResolveFunnelForLeads(tenantId, a.alias, numericFunnelTypeId, funnelType.name, req.session.userId ?? null, a.id);
+        allUpdatedLeadIds.push(...ids);
       }
     }
   }
-  res.json({ results, updatedEventCount, updatedLeadCount });
+  const reroute = await reRouteLeadsAfterAttributionChange(tenantId, allUpdatedLeadIds);
+  res.json({ results, updatedEventCount, updatedLeadCount: allUpdatedLeadIds.length, reroute });
 });
 
 router.delete("/funnel-aliases/:id", async (req, res) => {

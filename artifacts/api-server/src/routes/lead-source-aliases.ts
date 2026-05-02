@@ -3,6 +3,7 @@ import { db, leadSourceAliasesTable, attributionEventsTable, leadAttributionCorr
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateSourceCache, DEFAULT_SOURCE_ALIASES, normalizeSource } from "../services/source-normalizer";
 import { leadsTable } from "@workspace/db";
+import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
 
 // Re-resolve historical attribution events when a new source alias is saved.
 // Matches the same lower/trim rules normalizeSource() uses at ingest, so any
@@ -41,9 +42,9 @@ async function reResolveSourceForLeads(
   canonicalName: string,
   changedByUserId: number | null,
   sourceAliasId: number | null,
-): Promise<number> {
+): Promise<number[]> {
   const key = aliasKey.toLowerCase().trim();
-  if (!key) return 0;
+  if (!key) return [];
   // Snapshot the matching leads (with their pre-change source value) so
   // we can both update them and write per-lead audit rows that capture
   // the actual prior value, not just the alias key.
@@ -54,7 +55,7 @@ async function reResolveSourceForLeads(
       sql`LOWER(TRIM(COALESCE(${leadsTable.source}, ''))) = ${key}`,
       sql`COALESCE(${leadsTable.source}, '') <> ${canonicalName}`,
     ));
-  if (matched.length === 0) return 0;
+  if (matched.length === 0) return [];
   const ids = matched.map(r => r.id);
   // Wrap update + audit insert in one transaction so a failed audit
   // never leaves leads silently overwritten without a paper trail.
@@ -72,7 +73,7 @@ async function reResolveSourceForLeads(
       sourceAliasId,
     })));
   });
-  return matched.length;
+  return ids;
 }
 
 const router: IRouter = Router();
@@ -158,8 +159,9 @@ router.post("/lead-source-aliases", async (req, res) => {
 
   invalidateSourceCache(tenantId);
   const updatedEventCount = await reResolveSourceForAlias(tenantId, trimmedAlias, trimmedCanonical);
-  const updatedLeadCount = await reResolveSourceForLeads(tenantId, trimmedAlias, trimmedCanonical, req.session.userId ?? null, row.id);
-  res.json({ alias: row, updatedEventCount, updatedLeadCount });
+  const updatedLeadIds = await reResolveSourceForLeads(tenantId, trimmedAlias, trimmedCanonical, req.session.userId ?? null, row.id);
+  const reroute = await reRouteLeadsAfterAttributionChange(tenantId, updatedLeadIds);
+  res.json({ alias: row, updatedEventCount, updatedLeadCount: updatedLeadIds.length, reroute });
 });
 
 router.post("/lead-source-aliases/bulk", async (req, res) => {
@@ -205,12 +207,14 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
 
   invalidateSourceCache(tenantId);
   let updatedEventCount = 0;
-  let updatedLeadCount = 0;
+  const allUpdatedLeadIds: number[] = [];
   for (const a of newlyCreatedAliases) {
     updatedEventCount += await reResolveSourceForAlias(tenantId, a.alias, trimmedCanonical);
-    updatedLeadCount += await reResolveSourceForLeads(tenantId, a.alias, trimmedCanonical, req.session.userId ?? null, a.id);
+    const ids = await reResolveSourceForLeads(tenantId, a.alias, trimmedCanonical, req.session.userId ?? null, a.id);
+    allUpdatedLeadIds.push(...ids);
   }
-  res.json({ results, updatedEventCount, updatedLeadCount });
+  const reroute = await reRouteLeadsAfterAttributionChange(tenantId, allUpdatedLeadIds);
+  res.json({ results, updatedEventCount, updatedLeadCount: allUpdatedLeadIds.length, reroute });
 });
 
 router.put("/lead-source-aliases/:id", async (req, res) => {
