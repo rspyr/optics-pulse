@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const insertCalls: Array<{ table: string; values: Record<string, unknown> }> = [];
 const updateCalls: Array<{ table: string; set: Record<string, unknown> }> = [];
+const selectWhereArgs: unknown[][] = [];
 let selectRowsQueue: Array<unknown[]> = [];
 let updateReturningQueue: Array<{ table: string; rows: unknown[] }> = [];
 
@@ -16,49 +17,59 @@ vi.mock("@workspace/db", () => {
       id: "id",
       tenantId: "tenantId",
       resolvedFunnel: "resolvedFunnel",
+      formFields: "formFields",
     },
     leadsTable: { __name: "leadsTable", id: "id", tenantId: "tenantId", leadType: "leadType", funnelId: "funnelId" },
+    leadAttributionCorrectionsTable: { __name: "leadAttributionCorrectionsTable" },
   };
-  return {
-    db: {
-      select: vi.fn().mockImplementation(() => {
-        const chain: Record<string, unknown> = {};
-        chain.from = vi.fn().mockReturnValue(chain);
-        chain.innerJoin = vi.fn().mockReturnValue(chain);
-        chain.where = vi.fn().mockImplementation(() => {
-          const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
-          return Promise.resolve(next);
-        });
-        return chain;
+  const db: Record<string, unknown> = {
+    select: vi.fn().mockImplementation(() => {
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn().mockReturnValue(chain);
+      chain.innerJoin = vi.fn().mockReturnValue(chain);
+      chain.where = vi.fn().mockImplementation((...args: unknown[]) => {
+        selectWhereArgs.push(args);
+        const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
+        return Promise.resolve(next);
+      });
+      chain.orderBy = vi.fn().mockImplementation(() => {
+        const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
+        return Promise.resolve(next);
+      });
+      return chain;
+    }),
+    insert: vi.fn().mockImplementation((table: { __name: string }) => ({
+      values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        insertCalls.push({ table: table.__name, values: vals });
+        return {
+          returning: vi.fn().mockResolvedValue([{ id: 99, ...vals }]),
+          then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+        };
       }),
-      insert: vi.fn().mockImplementation((table: { __name: string }) => ({
-        values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
-          insertCalls.push({ table: table.__name, values: vals });
-          return {
-            returning: vi.fn().mockResolvedValue([{ id: 99, ...vals }]),
-            then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
-          };
-        }),
-      })),
-      update: vi.fn().mockImplementation((table: { __name: string }) => ({
-        set: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
-          updateCalls.push({ table: table.__name, set: vals });
-          return {
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockImplementation(() => {
-                const idx = updateReturningQueue.findIndex(e => e.table === table.__name);
-                if (idx >= 0) {
-                  return Promise.resolve(updateReturningQueue.splice(idx, 1)[0].rows);
-                }
-                return Promise.resolve([]);
-              }),
+    })),
+    update: vi.fn().mockImplementation((table: { __name: string }) => ({
+      set: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        updateCalls.push({ table: table.__name, set: vals });
+        return {
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockImplementation(() => {
+              const idx = updateReturningQueue.findIndex(e => e.table === table.__name);
+              if (idx >= 0) {
+                return Promise.resolve(updateReturningQueue.splice(idx, 1)[0].rows);
+              }
+              return Promise.resolve([]);
             }),
-          };
-        }),
-      })),
-    },
-    ...tables,
+            then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+          }),
+        };
+      }),
+    })),
   };
+  // The lead-update + audit-insert is wrapped in db.transaction(); resolve
+  // by passing the same mocked db as the transaction handle so insert /
+  // update calls inside the callback flow into the same tracking arrays.
+  db.transaction = vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db, ...tables };
 });
 
 vi.mock("../services/funnel-normalizer", () => ({
@@ -69,9 +80,14 @@ vi.mock("../services/integrations/google-sheets", () => ({
   readRawSheetData: vi.fn(),
 }));
 
+vi.mock("../services/lead-rerouting", () => ({
+  reRouteLeadsAfterAttributionChange: vi.fn().mockResolvedValue({ attempted: 0, reassigned: 0, skippedTouched: 0, skippedTerminal: 0 }),
+}));
+
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((...args: unknown[]) => ({ __op: "eq", args })),
   and: vi.fn((...args: unknown[]) => ({ __op: "and", args })),
+  inArray: vi.fn((...args: unknown[]) => ({ __op: "inArray", args })),
   sql: Object.assign(
     (strings: TemplateStringsArray, ..._values: unknown[]) => ({ __sql: strings.join("?") }),
     {},
@@ -86,6 +102,7 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   vi.resetModules();
   insertCalls.length = 0;
   updateCalls.length = 0;
+  selectWhereArgs.length = 0;
   selectRowsQueue = [];
   updateReturningQueue = [];
   const mod = await import("./funnel-aliases");
@@ -150,8 +167,14 @@ describe("POST /funnel-aliases — re-resolve historical events and leads", () =
     selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]); // tenant association
     selectRowsQueue.push([]); // no existing alias row
     selectRowsQueue.push([{ name: "BOGO Free Smart Furnace" }]); // funnel type lookup
+    // snapshot select for matched leads (id + oldLeadType)
+    selectRowsQueue.push([
+      { id: 501, oldLeadType: "ac" },
+      { id: 502, oldLeadType: "ac" },
+      { id: 503, oldLeadType: "ac" },
+      { id: 504, oldLeadType: "ac" },
+    ]);
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 101 }, { id: 102 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 501 }, { id: 502 }, { id: 503 }, { id: 504 }] });
 
     const res = await postJson(app, "/funnel-aliases?tenantId=42", {
       funnelTypeId: 5,
@@ -168,6 +191,40 @@ describe("POST /funnel-aliases — re-resolve historical events and leads", () =
     expect(leadUpdate?.set.updatedAt).toBeInstanceOf(Date);
     expect(res.json.updatedEventCount).toBe(2);
     expect(res.json.updatedLeadCount).toBe(4);
+  });
+
+  it("widens lead matching via attribution_events.created_lead_id even when leads.lead_type does not equal the alias key", async () => {
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]); // tenant association
+    selectRowsQueue.push([]); // no existing alias row
+    selectRowsQueue.push([{ name: "BOGO Free Smart Furnace" }]); // funnel type lookup
+    // Snapshot returns a lead whose lead_type is something else entirely
+    // ("service") but is matched via the event linkage OR-branch.
+    selectRowsQueue.push([{ id: 777, oldLeadType: "service" }]);
+    updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 9001 }] });
+
+    const res = await postJson(app, "/funnel-aliases?tenantId=42", {
+      funnelTypeId: 5,
+      alias: "AC Breakdown Prevention",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.updatedLeadCount).toBe(1);
+    const leadUpdate = updateCalls.find(c => c.table === "leadsTable");
+    expect(leadUpdate?.set.leadType).toBe("BOGO Free Smart Furnace");
+    expect(leadUpdate?.set.funnelId).toBe(5);
+    // Audit row must capture the actual prior lead_type ("service"), not
+    // the alias key.
+    const auditInsert = insertCalls.find(c => c.table === "leadAttributionCorrectionsTable");
+    const auditRows = auditInsert!.values as unknown as Array<{ leadId: number; oldValue: string; field: string }>;
+    expect(auditRows[0]).toMatchObject({ leadId: 777, oldValue: "service", field: "funnel" });
+    // Guards against regressing back to direct-match-only matcher: the
+    // leads-snapshot WHERE-clause must reference attribution_events and
+    // form_fields (the OR-branch SQL).
+    const matchedLeadsWhere = selectWhereArgs.find(args => {
+      const j = JSON.stringify(args);
+      return j.includes("attribution_events") && j.includes("form_fields");
+    });
+    expect(matchedLeadsWhere).toBeDefined();
   });
 
   it("is a 200 no-op when the alias already maps to the same funnel type (no event or lead update)", async () => {
@@ -220,8 +277,8 @@ describe("POST /funnel-aliases — re-resolve historical events and leads", () =
     selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
     selectRowsQueue.push([]);
     selectRowsQueue.push([{ name: "BOGO Free Smart Furnace" }]);
+    selectRowsQueue.push([]); // empty snapshot
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 101 }] });
-    // no leadsTable rows enqueued → returning resolves to []
 
     const res = await postJson(app, "/funnel-aliases?tenantId=42", {
       funnelTypeId: 5,
@@ -244,11 +301,11 @@ describe("POST /funnel-aliases/bulk — re-resolve historical events and leads",
     selectRowsQueue.push([]); // existing check for alias 1
     selectRowsQueue.push([]); // existing check for alias 2
     selectRowsQueue.push([{ name: "BOGO Free Smart Furnace" }]); // funnel type lookup once
-    // Per-alias re-resolve queue
+    // Per-alias snapshot selects (1 row for alias 1, 3 rows for alias 2)
+    selectRowsQueue.push([{ id: 501, oldLeadType: "x" }]);
+    selectRowsQueue.push([{ id: 502, oldLeadType: "y" }, { id: 503, oldLeadType: "z" }, { id: 504, oldLeadType: "w" }]);
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 1 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 501 }] });
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 2 }, { id: 3 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 502 }, { id: 503 }, { id: 504 }] });
 
     const res = await postJson(app, "/funnel-aliases/bulk?tenantId=42", {
       funnelTypeId: 5,

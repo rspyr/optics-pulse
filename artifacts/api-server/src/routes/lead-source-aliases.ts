@@ -48,12 +48,34 @@ async function reResolveSourceForLeads(
   // Snapshot the matching leads (with their pre-change source value) so
   // we can both update them and write per-lead audit rows that capture
   // the actual prior value, not just the alias key.
+  //
+  // Match leads two ways:
+  //   1. Direct match on the denormalized leads.source column.
+  //   2. Linkage through attribution_events.created_lead_id where the
+  //      event's raw utm_source / referrer / resolved_lead_source matched
+  //      the alias key. This catches leads whose source column was
+  //      populated from a form field (e.g. "form") at ingest, even though
+  //      their attribution event came from facebook.com / a Meta UTM —
+  //      without this OR-branch, those leads silently keep the stale
+  //      "form" chip after a manager saves the alias.
   const matched = await db.select({ id: leadsTable.id, oldSource: leadsTable.source })
     .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
-      sql`LOWER(TRIM(COALESCE(${leadsTable.source}, ''))) = ${key}`,
       sql`COALESCE(${leadsTable.source}, '') <> ${canonicalName}`,
+      sql`(
+        LOWER(TRIM(COALESCE(${leadsTable.source}, ''))) = ${key}
+        OR ${leadsTable.id} IN (
+          SELECT ae.created_lead_id FROM attribution_events ae
+          WHERE ae.tenant_id = ${tenantId}
+            AND ae.created_lead_id IS NOT NULL
+            AND (
+              LOWER(TRIM(COALESCE(ae.utm_source, ''))) = ${key}
+              OR LOWER(TRIM(COALESCE(ae.referrer, ''))) = ${key}
+              OR LOWER(TRIM(COALESCE(ae.resolved_lead_source, ''))) = ${key}
+            )
+        )
+      )`,
     ));
   if (matched.length === 0) return [];
   const ids = matched.map(r => r.id);

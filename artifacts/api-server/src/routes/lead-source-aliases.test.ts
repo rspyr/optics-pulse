@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const insertCalls: Array<{ table: string; values: Record<string, unknown> }> = [];
 const updateCalls: Array<{ table: string; set: Record<string, unknown> }> = [];
+const selectWhereArgs: unknown[][] = [];
 let selectRowsQueue: Array<unknown[]> = [];
 let updateReturningQueue: Array<{ table: string; rows: unknown[] }> = [];
 
@@ -17,46 +18,55 @@ vi.mock("@workspace/db", () => {
       resolvedLeadSource: "resolvedLeadSource",
     },
     leadsTable: { __name: "leadsTable", id: "id", tenantId: "tenantId", source: "source" },
+    leadAttributionCorrectionsTable: { __name: "leadAttributionCorrectionsTable" },
   };
-  return {
-    db: {
-      select: vi.fn().mockImplementation(() => {
-        const chain: Record<string, unknown> = {};
-        chain.from = vi.fn().mockReturnValue(chain);
-        chain.where = vi.fn().mockImplementation(() => {
-          const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
-          return Promise.resolve(next);
-        });
-        return chain;
+  const db: Record<string, unknown> = {
+    select: vi.fn().mockImplementation(() => {
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn().mockReturnValue(chain);
+      chain.where = vi.fn().mockImplementation((...args: unknown[]) => {
+        selectWhereArgs.push(args);
+        const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
+        return Promise.resolve(next);
+      });
+      chain.orderBy = vi.fn().mockImplementation(() => {
+        const next = selectRowsQueue.length > 0 ? selectRowsQueue.shift() : [];
+        return Promise.resolve(next);
+      });
+      return chain;
+    }),
+    insert: vi.fn().mockImplementation((table: { __name: string }) => ({
+      values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        insertCalls.push({ table: table.__name, values: vals });
+        return {
+          returning: vi.fn().mockResolvedValue([{ id: 99, ...vals }]),
+          then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+        };
       }),
-      insert: vi.fn().mockImplementation((table: { __name: string }) => ({
-        values: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
-          insertCalls.push({ table: table.__name, values: vals });
-          return {
-            returning: vi.fn().mockResolvedValue([{ id: 99, ...vals }]),
-            then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
-          };
-        }),
-      })),
-      update: vi.fn().mockImplementation((table: { __name: string }) => ({
-        set: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
-          updateCalls.push({ table: table.__name, set: vals });
-          return {
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockImplementation(() => {
-                const idx = updateReturningQueue.findIndex(e => e.table === table.__name);
-                if (idx >= 0) {
-                  return Promise.resolve(updateReturningQueue.splice(idx, 1)[0].rows);
-                }
-                return Promise.resolve([]);
-              }),
+    })),
+    update: vi.fn().mockImplementation((table: { __name: string }) => ({
+      set: vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        updateCalls.push({ table: table.__name, set: vals });
+        return {
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockImplementation(() => {
+              const idx = updateReturningQueue.findIndex(e => e.table === table.__name);
+              if (idx >= 0) {
+                return Promise.resolve(updateReturningQueue.splice(idx, 1)[0].rows);
+              }
+              return Promise.resolve([]);
             }),
-          };
-        }),
-      })),
-    },
-    ...tables,
+            then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+          }),
+        };
+      }),
+    })),
   };
+  // The lead-update + audit-insert is wrapped in db.transaction(); resolve
+  // by passing the same mocked db as the transaction handle so insert /
+  // update calls inside the callback flow into the same tracking arrays.
+  db.transaction = vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db, ...tables };
 });
 
 vi.mock("../services/source-normalizer", () => ({
@@ -65,9 +75,14 @@ vi.mock("../services/source-normalizer", () => ({
   normalizeSource: vi.fn(),
 }));
 
+vi.mock("../services/lead-rerouting", () => ({
+  reRouteLeadsAfterAttributionChange: vi.fn().mockResolvedValue({ attempted: 0, reassigned: 0, skippedTouched: 0, skippedTerminal: 0 }),
+}));
+
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((...args: unknown[]) => ({ __op: "eq", args })),
   and: vi.fn((...args: unknown[]) => ({ __op: "and", args })),
+  inArray: vi.fn((...args: unknown[]) => ({ __op: "inArray", args })),
   sql: Object.assign(
     (strings: TemplateStringsArray, ..._values: unknown[]) => ({ __sql: strings.join("?") }),
     {},
@@ -82,6 +97,7 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   vi.resetModules();
   insertCalls.length = 0;
   updateCalls.length = 0;
+  selectWhereArgs.length = 0;
   selectRowsQueue = [];
   updateReturningQueue = [];
   const mod = await import("./lead-source-aliases");
@@ -144,8 +160,9 @@ describe("POST /lead-source-aliases — re-resolve historical events and leads",
 
   it("inserts the alias, re-resolves matching events, and propagates to leads.source", async () => {
     selectRowsQueue.push([]); // no existing alias row
+    // snapshot select for matched leads (id + oldSource)
+    selectRowsQueue.push([{ id: 501, oldSource: "fb" }, { id: 502, oldSource: "facebook" }]);
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 101 }, { id: 102 }, { id: 103 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 501 }, { id: 502 }] });
 
     const res = await postJson(app, "/lead-source-aliases?tenantId=42", {
       canonicalName: "Meta",
@@ -160,6 +177,43 @@ describe("POST /lead-source-aliases — re-resolve historical events and leads",
     expect(leadUpdate?.set.source).toBe("Meta");
     expect(res.json.updatedEventCount).toBe(3);
     expect(res.json.updatedLeadCount).toBe(2);
+    // Per-lead audit rows must be written with the prior raw value, not the alias key.
+    const auditInsert = insertCalls.find(c => c.table === "leadAttributionCorrectionsTable");
+    expect(auditInsert).toBeDefined();
+    const auditRows = auditInsert!.values as unknown as Array<{ leadId: number; oldValue: string; newValue: string; field: string }>;
+    expect(auditRows.map(r => r.leadId).sort()).toEqual([501, 502]);
+    expect(auditRows.every(r => r.field === "source" && r.newValue === "Meta")).toBe(true);
+    expect(auditRows.find(r => r.leadId === 501)?.oldValue).toBe("fb");
+  });
+
+  it("widens lead matching via attribution_events.created_lead_id even when leads.source does not equal the alias key", async () => {
+    selectRowsQueue.push([]); // no existing alias row
+    // Snapshot returns a lead whose denormalized source is "form" (i.e.
+    // would NOT match the alias key directly), but is matched via the
+    // event linkage OR-branch — the helper trusts the snapshot here.
+    selectRowsQueue.push([{ id: 777, oldSource: "form" }]);
+    updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 9001 }] });
+
+    const res = await postJson(app, "/lead-source-aliases?tenantId=42", {
+      canonicalName: "Meta",
+      alias: "https://facebook.com/",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.updatedLeadCount).toBe(1);
+    const leadUpdate = updateCalls.find(c => c.table === "leadsTable");
+    expect(leadUpdate?.set.source).toBe("Meta");
+    // Audit row must capture the actual prior value ("form"), not the alias key.
+    const auditInsert = insertCalls.find(c => c.table === "leadAttributionCorrectionsTable");
+    const auditRows = auditInsert!.values as unknown as Array<{ leadId: number; oldValue: string }>;
+    expect(auditRows[0]).toMatchObject({ leadId: 777, oldValue: "form" });
+    // And the leads-snapshot WHERE-clause must reference attribution_events
+    // so the SQL widening is actually in place — guards against regressing
+    // back to the direct-match-only matcher.
+    const matchedLeadsWhere = selectWhereArgs.find(args =>
+      JSON.stringify(args).includes("attribution_events"),
+    );
+    expect(matchedLeadsWhere).toBeDefined();
   });
 
   it("is a 200 no-op when the alias already maps to the same canonical (no event or lead update)", async () => {
@@ -192,8 +246,8 @@ describe("POST /lead-source-aliases — re-resolve historical events and leads",
 
   it("scopes the leads update by tenant so other tenants are untouched", async () => {
     selectRowsQueue.push([]); // no existing alias row
+    selectRowsQueue.push([{ id: 501, oldSource: "fb" }]); // snapshot
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 501 }] });
 
     await postJson(app, "/lead-source-aliases?tenantId=42", {
       canonicalName: "Meta",
@@ -202,23 +256,14 @@ describe("POST /lead-source-aliases — re-resolve historical events and leads",
 
     const leadUpdate = updateCalls.find(c => c.table === "leadsTable");
     expect(leadUpdate).toBeDefined();
-    // The where-clause must include an `eq` against the tenant column. The
-    // mocked `eq` records its args, so we walk the recorded `and(...)` args
-    // and assert one of them is an equality against `leadsTable.tenantId`
-    // with value 42. This guards against accidentally dropping the tenant
-    // filter and rewriting source on every tenant in the table.
-    // Because the test mock for `update().set().where()` doesn't capture
-    // the where args directly, this guarantee comes from the explicit
-    // `eq(leadsTable.tenantId, tenantId)` in the helper — covered here by
-    // ensuring the helper is called with our scoped tenant context.
     expect(leadUpdate?.set.source).toBe("Meta");
     expect(leadUpdate?.set.updatedAt).toBeInstanceOf(Date);
   });
 
-  it("returns updatedLeadCount even when no leads matched", async () => {
+  it("returns updatedLeadCount=0 even when no leads matched", async () => {
     selectRowsQueue.push([]);
+    selectRowsQueue.push([]); // empty snapshot
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 101 }] });
-    // no leadsTable rows enqueued → returning resolves to []
 
     const res = await postJson(app, "/lead-source-aliases?tenantId=42", {
       canonicalName: "Meta",
@@ -240,11 +285,13 @@ describe("POST /lead-source-aliases/bulk — re-resolve historical events and le
     // Two aliases, both new
     selectRowsQueue.push([]); // existing check for alias 1
     selectRowsQueue.push([]); // existing check for alias 2
-    // First alias: 1 event, 1 lead. Second alias: 2 events, 3 leads.
+    // Per-alias loop runs reResolveSourceForAlias (event update) then
+    // reResolveSourceForLeads (snapshot select). Order of selects after
+    // the two existing checks: snapshot for alias 1, snapshot for alias 2.
+    selectRowsQueue.push([{ id: 501, oldSource: "fb" }]);
+    selectRowsQueue.push([{ id: 502, oldSource: "x" }, { id: 503, oldSource: "y" }, { id: 504, oldSource: "z" }]);
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 1 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 501 }] });
     updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 2 }, { id: 3 }] });
-    updateReturningQueue.push({ table: "leadsTable", rows: [{ id: 502 }, { id: 503 }, { id: 504 }] });
 
     const res = await postJson(app, "/lead-source-aliases/bulk?tenantId=42", {
       canonicalName: "Meta",

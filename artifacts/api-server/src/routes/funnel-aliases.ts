@@ -59,14 +59,40 @@ async function reResolveFunnelForLeads(
   if (!key) return [];
   // Snapshot rows first so we can write per-lead audit entries with the
   // pre-change funnel name; otherwise we'd lose what was overwritten.
+  // Match leads two ways:
+  //   1. Direct match on the denormalized leads.lead_type column.
+  //   2. Linkage through attribution_events.created_lead_id where the
+  //      event's resolved_funnel matched the alias key, OR any value in
+  //      the event's form_fields jsonb matched the alias key (mirrors
+  //      the OR-branch in reResolveFunnelForAlias above). This catches
+  //      leads whose lead_type was populated from a different raw form
+  //      value at ingest, but whose attribution event would have matched
+  //      the alias if it had existed at the time.
   const matched = await db.select({ id: leadsTable.id, oldLeadType: leadsTable.leadType })
     .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
-      sql`LOWER(TRIM(COALESCE(${leadsTable.leadType}, ''))) = ${key}`,
       sql`(
         COALESCE(${leadsTable.leadType}, '') <> ${canonicalFunnelName}
         OR ${leadsTable.funnelId} IS DISTINCT FROM ${funnelTypeId}
+      )`,
+      sql`(
+        LOWER(TRIM(COALESCE(${leadsTable.leadType}, ''))) = ${key}
+        OR ${leadsTable.id} IN (
+          SELECT ae.created_lead_id FROM attribution_events ae
+          WHERE ae.tenant_id = ${tenantId}
+            AND ae.created_lead_id IS NOT NULL
+            AND (
+              LOWER(TRIM(COALESCE(ae.resolved_funnel, ''))) = ${key}
+              OR (
+                ae.form_fields IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM jsonb_each_text(ae.form_fields) AS kv
+                  WHERE LOWER(TRIM(kv.value)) = ${key}
+                )
+              )
+            )
+        )
       )`,
     ));
   if (matched.length === 0) return [];
