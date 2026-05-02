@@ -34,3 +34,4 @@ export * from "./sold-estimates";
 export * from "./ingestion-audit-log";
 export * from "./callrail-webhook-status";
 export * from "./lead-merges";
+export * from "./lead-attribution-corrections";

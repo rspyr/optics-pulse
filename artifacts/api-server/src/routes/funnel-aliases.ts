@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable, attributionEventsTable, leadsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { db, funnelAliasesTable, funnelTypesTable, tenantFunnelTypesTable, googleSheetConfigsTable, attributionEventsTable, leadsTable, leadAttributionCorrectionsTable } from "@workspace/db";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
 import { readRawSheetData } from "../services/integrations/google-sheets";
 
@@ -51,11 +51,15 @@ async function reResolveFunnelForLeads(
   aliasKey: string,
   funnelTypeId: number,
   canonicalFunnelName: string,
+  changedByUserId: number | null,
+  funnelAliasId: number | null,
 ): Promise<number> {
   const key = aliasKey.toLowerCase().trim();
   if (!key) return 0;
-  const result = await db.update(leadsTable)
-    .set({ leadType: canonicalFunnelName, funnelId: funnelTypeId, updatedAt: new Date() })
+  // Snapshot rows first so we can write per-lead audit entries with the
+  // pre-change funnel name; otherwise we'd lose what was overwritten.
+  const matched = await db.select({ id: leadsTable.id, oldLeadType: leadsTable.leadType })
+    .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
       sql`LOWER(TRIM(COALESCE(${leadsTable.leadType}, ''))) = ${key}`,
@@ -63,9 +67,26 @@ async function reResolveFunnelForLeads(
         COALESCE(${leadsTable.leadType}, '') <> ${canonicalFunnelName}
         OR ${leadsTable.funnelId} IS DISTINCT FROM ${funnelTypeId}
       )`,
-    ))
-    .returning({ id: leadsTable.id });
-  return result.length;
+    ));
+  if (matched.length === 0) return 0;
+  const ids = matched.map(r => r.id);
+  // Wrap update + audit insert in one transaction so a failed audit
+  // never leaves leads silently overwritten without a paper trail.
+  await db.transaction(async (tx) => {
+    await tx.update(leadsTable)
+      .set({ leadType: canonicalFunnelName, funnelId: funnelTypeId, updatedAt: new Date() })
+      .where(and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.id, ids)));
+    await tx.insert(leadAttributionCorrectionsTable).values(matched.map(m => ({
+      tenantId,
+      leadId: m.id,
+      field: "funnel",
+      oldValue: m.oldLeadType,
+      newValue: canonicalFunnelName,
+      changedByUserId,
+      funnelAliasId,
+    })));
+  });
+  return matched.length;
 }
 
 const router: IRouter = Router();
@@ -177,7 +198,7 @@ router.post("/funnel-aliases", async (req, res) => {
     ? await reResolveFunnelForAlias(tenantId, trimmedAlias, funnelType.name)
     : 0;
   const updatedLeadCount = funnelType
-    ? await reResolveFunnelForLeads(tenantId, trimmedAlias, funnelId, funnelType.name)
+    ? await reResolveFunnelForLeads(tenantId, trimmedAlias, funnelId, funnelType.name, req.session.userId ?? null, row.id)
     : 0;
   res.json({ alias: row, updatedEventCount, updatedLeadCount });
 });
@@ -207,7 +228,7 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
   }
 
   const results: { alias: string; status: string }[] = [];
-  const newlyCreatedAliases: string[] = [];
+  const newlyCreatedAliases: { alias: string; id: number }[] = [];
 
   for (const a of aliases) {
     const trimmedAlias = String(a).trim().toLowerCase();
@@ -224,13 +245,13 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
       continue;
     }
 
-    await db.insert(funnelAliasesTable).values({
+    const [inserted] = await db.insert(funnelAliasesTable).values({
       tenantId,
       funnelTypeId: numericFunnelTypeId,
       alias: trimmedAlias,
-    });
+    }).returning({ id: funnelAliasesTable.id });
     results.push({ alias: trimmedAlias, status: "created" });
-    newlyCreatedAliases.push(trimmedAlias);
+    newlyCreatedAliases.push({ alias: trimmedAlias, id: inserted.id });
   }
 
   invalidateFunnelCache(tenantId);
@@ -243,8 +264,8 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
       .where(eq(funnelTypesTable.id, numericFunnelTypeId));
     if (funnelType) {
       for (const a of newlyCreatedAliases) {
-        updatedEventCount += await reResolveFunnelForAlias(tenantId, a, funnelType.name);
-        updatedLeadCount += await reResolveFunnelForLeads(tenantId, a, numericFunnelTypeId, funnelType.name);
+        updatedEventCount += await reResolveFunnelForAlias(tenantId, a.alias, funnelType.name);
+        updatedLeadCount += await reResolveFunnelForLeads(tenantId, a.alias, numericFunnelTypeId, funnelType.name, req.session.userId ?? null, a.id);
       }
     }
   }

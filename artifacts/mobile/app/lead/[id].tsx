@@ -189,6 +189,53 @@ function formatPhone(phone: string): string {
   return phone;
 }
 
+interface CorrectionRecord {
+  id: number;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  changedAt: string;
+  changedByName: string | null;
+}
+
+function CorrectionHistory({ leadId, tenantQs }: { leadId: number; tenantQs: string }) {
+  const colors = useColors();
+  const { apiFetch } = useApi();
+  const [corrections, setCorrections] = useState<CorrectionRecord[]>([]);
+
+  useEffect(() => {
+    apiFetch(`/api/leads-hub/${leadId}/corrections${tenantQs}`)
+      .then((d: { corrections?: CorrectionRecord[] }) => setCorrections(d.corrections || []))
+      .catch(() => {});
+  }, [leadId, tenantQs, apiFetch]);
+
+  if (corrections.length === 0) return null;
+
+  return (
+    <View style={{ marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: colors.secondary, borderWidth: 1, borderColor: colors.border }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <Feather name="clock" size={12} color={colors.mutedForeground} />
+        <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_700Bold", letterSpacing: 1 }}>CORRECTION HISTORY</Text>
+      </View>
+      {corrections.map(c => (
+        <View key={c.id} style={{ marginBottom: 4 }}>
+          <Text style={{ fontSize: 11, color: colors.foreground, fontFamily: "Inter_500Medium" }}>
+            <Text style={{ color: colors.mutedForeground, textTransform: "uppercase" }}>{c.field}</Text>
+            {"  "}
+            <Text style={{ color: colors.mutedForeground, textDecorationLine: "line-through" }}>{c.oldValue || "—"}</Text>
+            {"  →  "}
+            <Text style={{ color: colors.foreground }}>{c.newValue || "—"}</Text>
+          </Text>
+          <Text style={{ fontSize: 10, color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>
+            {new Date(c.changedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+            {c.changedByName ? ` · by ${c.changedByName}` : ""}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function ContractBanner({ leadId }: { leadId: number }) {
   const colors = useColors();
   const { apiFetch } = useApi();
@@ -969,6 +1016,8 @@ export default function LeadDetailScreen() {
             {lead.hasSoldEstimate && (
               <ContractBanner leadId={lead.id} />
             )}
+
+            <CorrectionHistory leadId={lead.id} tenantQs={tenantQs} />
           </View>
 
           <Modal

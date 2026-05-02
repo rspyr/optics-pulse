@@ -3,6 +3,7 @@ import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
   tenantsTable, leadSourceAliasesTable, soldEstimatesTable, isUnknownSource,
+  leadAttributionCorrectionsTable,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
@@ -1357,6 +1358,33 @@ router.patch("/leads-hub/:leadId/source", async (req, res) => {
 
   emitLeadUpdated(tenantId, updated as unknown as Record<string, unknown>);
   res.json(updated);
+});
+
+router.get("/leads-hub/:leadId/corrections", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.json({ corrections: [] }); return; }
+  const leadId = parseInt(String(req.params.leadId));
+  if (!Number.isFinite(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const rows = await db.select({
+    id: leadAttributionCorrectionsTable.id,
+    field: leadAttributionCorrectionsTable.field,
+    oldValue: leadAttributionCorrectionsTable.oldValue,
+    newValue: leadAttributionCorrectionsTable.newValue,
+    changedAt: leadAttributionCorrectionsTable.changedAt,
+    changedByUserId: leadAttributionCorrectionsTable.changedByUserId,
+    changedByName: usersTable.name,
+  })
+    .from(leadAttributionCorrectionsTable)
+    .leftJoin(usersTable, eq(leadAttributionCorrectionsTable.changedByUserId, usersTable.id))
+    .where(and(
+      eq(leadAttributionCorrectionsTable.tenantId, tenantId),
+      eq(leadAttributionCorrectionsTable.leadId, leadId),
+    ))
+    .orderBy(desc(leadAttributionCorrectionsTable.changedAt))
+    .limit(20);
+
+  res.json({ corrections: rows });
 });
 
 router.get("/leads-hub/canonical-sources", async (req, res) => {

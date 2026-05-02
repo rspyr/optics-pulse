@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, leadSourceAliasesTable, attributionEventsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { db, leadSourceAliasesTable, attributionEventsTable, leadAttributionCorrectionsTable } from "@workspace/db";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateSourceCache, DEFAULT_SOURCE_ALIASES, normalizeSource } from "../services/source-normalizer";
 import { leadsTable } from "@workspace/db";
 
@@ -39,18 +39,40 @@ async function reResolveSourceForLeads(
   tenantId: number,
   aliasKey: string,
   canonicalName: string,
+  changedByUserId: number | null,
+  sourceAliasId: number | null,
 ): Promise<number> {
   const key = aliasKey.toLowerCase().trim();
   if (!key) return 0;
-  const result = await db.update(leadsTable)
-    .set({ source: canonicalName, updatedAt: new Date() })
+  // Snapshot the matching leads (with their pre-change source value) so
+  // we can both update them and write per-lead audit rows that capture
+  // the actual prior value, not just the alias key.
+  const matched = await db.select({ id: leadsTable.id, oldSource: leadsTable.source })
+    .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
       sql`LOWER(TRIM(COALESCE(${leadsTable.source}, ''))) = ${key}`,
       sql`COALESCE(${leadsTable.source}, '') <> ${canonicalName}`,
-    ))
-    .returning({ id: leadsTable.id });
-  return result.length;
+    ));
+  if (matched.length === 0) return 0;
+  const ids = matched.map(r => r.id);
+  // Wrap update + audit insert in one transaction so a failed audit
+  // never leaves leads silently overwritten without a paper trail.
+  await db.transaction(async (tx) => {
+    await tx.update(leadsTable)
+      .set({ source: canonicalName, updatedAt: new Date() })
+      .where(and(eq(leadsTable.tenantId, tenantId), inArray(leadsTable.id, ids)));
+    await tx.insert(leadAttributionCorrectionsTable).values(matched.map(m => ({
+      tenantId,
+      leadId: m.id,
+      field: "source",
+      oldValue: m.oldSource,
+      newValue: canonicalName,
+      changedByUserId,
+      sourceAliasId,
+    })));
+  });
+  return matched.length;
 }
 
 const router: IRouter = Router();
@@ -136,7 +158,7 @@ router.post("/lead-source-aliases", async (req, res) => {
 
   invalidateSourceCache(tenantId);
   const updatedEventCount = await reResolveSourceForAlias(tenantId, trimmedAlias, trimmedCanonical);
-  const updatedLeadCount = await reResolveSourceForLeads(tenantId, trimmedAlias, trimmedCanonical);
+  const updatedLeadCount = await reResolveSourceForLeads(tenantId, trimmedAlias, trimmedCanonical, req.session.userId ?? null, row.id);
   res.json({ alias: row, updatedEventCount, updatedLeadCount });
 });
 
@@ -155,7 +177,7 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
 
   const trimmedCanonical = canonicalName.trim();
   const results: { alias: string; status: string }[] = [];
-  const newlyCreatedAliases: string[] = [];
+  const newlyCreatedAliases: { alias: string; id: number }[] = [];
 
   for (const a of aliases) {
     const trimmedAlias = String(a).trim();
@@ -172,21 +194,21 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
       continue;
     }
 
-    await db.insert(leadSourceAliasesTable).values({
+    const [inserted] = await db.insert(leadSourceAliasesTable).values({
       tenantId,
       canonicalName: trimmedCanonical,
       alias: trimmedAlias.toLowerCase(),
-    });
+    }).returning({ id: leadSourceAliasesTable.id });
     results.push({ alias: trimmedAlias, status: "created" });
-    newlyCreatedAliases.push(trimmedAlias);
+    newlyCreatedAliases.push({ alias: trimmedAlias, id: inserted.id });
   }
 
   invalidateSourceCache(tenantId);
   let updatedEventCount = 0;
   let updatedLeadCount = 0;
   for (const a of newlyCreatedAliases) {
-    updatedEventCount += await reResolveSourceForAlias(tenantId, a, trimmedCanonical);
-    updatedLeadCount += await reResolveSourceForLeads(tenantId, a, trimmedCanonical);
+    updatedEventCount += await reResolveSourceForAlias(tenantId, a.alias, trimmedCanonical);
+    updatedLeadCount += await reResolveSourceForLeads(tenantId, a.alias, trimmedCanonical, req.session.userId ?? null, a.id);
   }
   res.json({ results, updatedEventCount, updatedLeadCount });
 });

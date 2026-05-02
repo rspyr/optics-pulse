@@ -2271,10 +2271,66 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
 
       <LeadMergeHistory leadId={lead.id} timezone={timezone} onOpenLeadById={onOpenLeadById} />
 
+      <LeadCorrectionHistory leadId={lead.id} tenantId={tenantId} timezone={timezone} />
+
       <PremiumCard className="p-4">
         <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} />
       </PremiumCard>
     </div>
+  );
+}
+
+type CorrectionRecord = {
+  id: number;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  changedAt: string;
+  changedByUserId: number | null;
+  changedByName: string | null;
+};
+function LeadCorrectionHistory({ leadId, tenantId, timezone }: { leadId: number; tenantId: number; timezone: string }) {
+  const [corrections, setCorrections] = useState<CorrectionRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const qs = tenantId ? `?tenantId=${tenantId}` : "";
+    fetch(`${API_BASE}/leads-hub/${leadId}/corrections${qs}`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : { corrections: [] }))
+      .then(d => { if (!cancelled) setCorrections(d.corrections || []); })
+      .catch(() => { if (!cancelled) setCorrections([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+  }, [leadId, tenantId]);
+
+  if (loading || corrections.length === 0) return null;
+
+  return (
+    <PremiumCard className="p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <History className="w-3.5 h-3.5 text-white/40" />
+        <span className="text-xs font-medium text-white/50 uppercase tracking-wider">Correction history</span>
+      </div>
+      <ul className="space-y-1.5">
+        {corrections.map(c => (
+          <li key={c.id} className="text-xs text-white/70 flex items-center gap-2 flex-wrap">
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/60 border border-white/10 uppercase">{c.field}</span>
+            <span className="font-mono text-white/40 line-through">{c.oldValue || "—"}</span>
+            <span className="text-white/30">→</span>
+            <span className="font-mono text-white/80">{c.newValue || "—"}</span>
+            <span className="text-white/30">·</span>
+            <span className="text-white/40">{formatDateTimeInTz(c.changedAt, timezone)}</span>
+            {c.changedByName && (
+              <>
+                <span className="text-white/30">·</span>
+                <span className="text-white/40">by {c.changedByName}</span>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </PremiumCard>
   );
 }
 
