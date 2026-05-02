@@ -156,7 +156,22 @@ describe("POST /funnel-aliases — re-resolve historical events", () => {
     expect(res.json.updatedEventCount).toBe(2);
   });
 
-  it("returns 409 when the alias is already mapped and does not update events", async () => {
+  it("is a 200 no-op when the alias already maps to the same funnel type (no event update)", async () => {
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
+    selectRowsQueue.push([{ id: 7, alias: "ac breakdown prevention", funnelTypeId: 5 }]);
+
+    const res = await postJson(app, "/funnel-aliases?tenantId=42", {
+      funnelTypeId: 5,
+      alias: "AC Breakdown Prevention",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.updatedEventCount).toBe(0);
+    expect(insertCalls.some(c => c.table === "funnelAliasesTable")).toBe(false);
+    expect(updateCalls.some(c => c.table === "attributionEventsTable")).toBe(false);
+  });
+
+  it("returns 409 when the alias is mapped to a different funnel type and does not update events", async () => {
     selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
     selectRowsQueue.push([{ id: 7, alias: "ac breakdown prevention", funnelTypeId: 9 }]);
 

@@ -124,7 +124,14 @@ router.post("/funnel-aliases", async (req, res) => {
     ));
 
   if (existing.length > 0) {
-    res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped` });
+    // Alias already maps to the same funnel type → 200 no-op so the
+    // operator's Save button doesn't error when nothing actually changes.
+    // Different funnel type → 409 so we don't silently overwrite.
+    if (existing[0].funnelTypeId === funnelId) {
+      res.json({ alias: existing[0], updatedEventCount: 0 });
+      return;
+    }
+    res.status(409).json({ error: `Alias "${trimmedAlias}" is already mapped to a different funnel type` });
     return;
   }
 
