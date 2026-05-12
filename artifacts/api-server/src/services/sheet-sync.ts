@@ -252,7 +252,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     const mappedFields = Object.values(mapping);
     const hasApptFieldsMapped = mappedFields.some(f => f === "appointmentDate" || f === "appointmentTime" || f === "addOns");
     const visibleAfter = hasApptFieldsMapped && !effectivePreBooked
-      ? new Date(Date.now() + 10 * 60 * 1000)
+      ? new Date(Date.now() + 3 * 60 * 1000)
       : null;
 
     const normalizedIntakeSource = await normalizeSource(config.tenantId, row.source || "Unknown");
@@ -309,7 +309,7 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
               outcome: "visibility_delay",
               platform: "native",
               actionType: "system",
-              notes: `System: Lead visibility delayed 10 minutes (auto-book window)`,
+              notes: `System: Lead visibility delayed 3 minutes (auto-book window)`,
             });
           }
         } else if (!result.assignedCsrId) {
