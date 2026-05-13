@@ -515,6 +515,8 @@ export default function Internal() {
                         {bf ? (
                           bf.status === "running" ? (
                             <span className="flex items-center gap-1 text-[11px] text-blue-400"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
+                          ) : bf.errorDetail?.partial ? (
+                            <span className="flex items-center gap-1 text-[11px] text-amber-400"><AlertTriangle className="w-3 h-3" /> Partial</span>
                           ) : bf.status === "completed" ? (
                             <span className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle className="w-3 h-3" /> Completed</span>
                           ) : bf.status === "error" ? (
@@ -547,8 +549,21 @@ export default function Internal() {
                             </div>
                           )}
                           {bf.errorDetail ? (
-                            <div className="rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1">
-                              <p className="text-red-300 font-medium">{bf.errorDetail.message}</p>
+                            <div
+                              className={
+                                bf.errorDetail.partial
+                                  ? "rounded border border-amber-400/30 bg-amber-500/[0.07] p-2 space-y-1"
+                                  : "rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1"
+                              }
+                            >
+                              <p className={`flex items-center gap-1.5 font-medium ${bf.errorDetail.partial ? "text-amber-300" : "text-red-300"}`}>
+                                {bf.errorDetail.partial ? (
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                ) : (
+                                  <XCircle className="w-3 h-3 shrink-0" />
+                                )}
+                                <span>{bf.errorDetail.message}</span>
+                              </p>
                               <p className="text-white/60">{bf.errorDetail.suggestedAction}</p>
                               {bf.errorDetail.raw && bf.errorDetail.raw !== bf.errorDetail.message && (
                                 <details className="text-[10px] text-white/40">
