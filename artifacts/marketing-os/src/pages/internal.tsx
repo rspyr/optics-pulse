@@ -32,7 +32,7 @@ export default function Internal() {
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
-    metaBackfillStatus?: { status: string; recordsProcessed: number; progress: string | null; startedAt: string | null; completedAt: string | null } | null;
+    backfillStatus?: Record<string, { status: string; recordsProcessed: number; progress: string | null; startedAt: string | null; completedAt: string | null }>;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -59,12 +59,14 @@ export default function Internal() {
   // for the long-running request to return. The route is synchronous, so
   // without the `backfillBusy` branch the operator who kicked off the
   // run would see no progress until the whole thing finished.
+  const anyBackfillRunning = syncStatus?.backfillStatus
+    ? Object.values(syncStatus.backfillStatus).some((b) => b?.status === "running")
+    : false;
   useEffect(() => {
-    const isRunning = syncStatus?.metaBackfillStatus?.status === "running";
-    if (!isRunning && !backfillBusy) return;
+    if (!anyBackfillRunning && !backfillBusy) return;
     const id = setInterval(() => { fetchSyncStatus(); }, 3000);
     return () => clearInterval(id);
-  }, [syncStatus?.metaBackfillStatus?.status, backfillBusy, fetchSyncStatus]);
+  }, [anyBackfillRunning, backfillBusy, fetchSyncStatus]);
 
   const triggerBackfill = () => {
     if (!syncTenantId) {
@@ -464,63 +466,73 @@ export default function Internal() {
                     <p className="text-red-400">{status!.errorCount} errors in recent history</p>
                   )}
                 </div>
-                {integ === "meta" && (
-                  <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-white/80">Historical backfill</span>
-                      {syncStatus?.metaBackfillStatus ? (
-                        syncStatus.metaBackfillStatus.status === "running" ? (
-                          <span className="flex items-center gap-1 text-[11px] text-blue-400"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
-                        ) : syncStatus.metaBackfillStatus.status === "completed" ? (
-                          <span className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle className="w-3 h-3" /> Completed</span>
-                        ) : syncStatus.metaBackfillStatus.status === "error" ? (
-                          <span className="flex items-center gap-1 text-[11px] text-red-400"><XCircle className="w-3 h-3" /> Error</span>
+                {(() => {
+                  const bf = syncStatus?.backfillStatus?.[integ];
+                  // Only Meta currently exposes a Run-backfill API endpoint.
+                  // Other integrations show the historical-backfill row when
+                  // a log row exists, but no manual trigger UI.
+                  const supportsManualBackfill = integ === "meta";
+                  if (!bf && !supportsManualBackfill) return null;
+                  return (
+                    <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-white/80">Historical backfill</span>
+                        {bf ? (
+                          bf.status === "running" ? (
+                            <span className="flex items-center gap-1 text-[11px] text-blue-400"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
+                          ) : bf.status === "completed" ? (
+                            <span className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle className="w-3 h-3" /> Completed</span>
+                          ) : bf.status === "error" ? (
+                            <span className="flex items-center gap-1 text-[11px] text-red-400"><XCircle className="w-3 h-3" /> Error</span>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground capitalize">{bf.status}</span>
+                          )
                         ) : (
-                          <span className="text-[11px] text-muted-foreground capitalize">{syncStatus.metaBackfillStatus.status}</span>
-                        )
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground">Never run</span>
+                          <span className="text-[11px] text-muted-foreground">Never run</span>
+                        )}
+                      </div>
+                      {bf && (
+                        <div className="space-y-1 text-[11px] text-muted-foreground">
+                          {bf.progress && (
+                            <p className="text-white/70 font-mono break-all">{bf.progress}</p>
+                          )}
+                          <p>{bf.recordsProcessed.toLocaleString()} rows</p>
+                          <p>
+                            Started: {bf.startedAt ? new Date(bf.startedAt).toLocaleString() : "—"}
+                          </p>
+                          <p>
+                            Completed: {bf.completedAt ? new Date(bf.completedAt).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                      )}
+                      {supportsManualBackfill && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <input
+                            type="number"
+                            min={31}
+                            max={1095}
+                            value={backfillDays}
+                            onChange={(e) => setBackfillDays(e.target.value)}
+                            className="w-20 bg-background/50 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="365"
+                          />
+                          <span className="text-[11px] text-muted-foreground">days (max 1095)</span>
+                          <button
+                            onClick={triggerBackfill}
+                            disabled={backfillBusy || !syncTenantId || bf?.status === "running"}
+                            className="ml-auto text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
+                            title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
+                          >
+                            {backfillBusy || bf?.status === "running"
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <RefreshCw className="w-3 h-3" />}
+                            Run backfill
+                          </button>
+                        </div>
                       )}
                     </div>
-                    {syncStatus?.metaBackfillStatus && (
-                      <div className="space-y-1 text-[11px] text-muted-foreground">
-                        {syncStatus.metaBackfillStatus.progress && (
-                          <p className="text-white/70 font-mono break-all">{syncStatus.metaBackfillStatus.progress}</p>
-                        )}
-                        <p>{syncStatus.metaBackfillStatus.recordsProcessed.toLocaleString()} ad-day rows</p>
-                        <p>
-                          Started: {syncStatus.metaBackfillStatus.startedAt ? new Date(syncStatus.metaBackfillStatus.startedAt).toLocaleString() : "—"}
-                        </p>
-                        <p>
-                          Completed: {syncStatus.metaBackfillStatus.completedAt ? new Date(syncStatus.metaBackfillStatus.completedAt).toLocaleString() : "—"}
-                        </p>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2 pt-1">
-                      <input
-                        type="number"
-                        min={31}
-                        max={1095}
-                        value={backfillDays}
-                        onChange={(e) => setBackfillDays(e.target.value)}
-                        className="w-20 bg-background/50 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        placeholder="365"
-                      />
-                      <span className="text-[11px] text-muted-foreground">days (max 1095)</span>
-                      <button
-                        onClick={triggerBackfill}
-                        disabled={backfillBusy || !syncTenantId || syncStatus?.metaBackfillStatus?.status === "running"}
-                        className="ml-auto text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
-                        title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
-                      >
-                        {backfillBusy || syncStatus?.metaBackfillStatus?.status === "running"
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : <RefreshCw className="w-3 h-3" />}
-                        Run backfill
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
                 <button
                   onClick={() => triggerSync(integ)}
                   disabled={syncLoading || (!syncTenantId && (!data?.tenants || data.tenants.length === 0))}
