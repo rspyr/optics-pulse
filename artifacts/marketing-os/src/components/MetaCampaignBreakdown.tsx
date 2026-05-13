@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useGetMetaCampaignSummary, useGetMetaCampaignBreakdown } from "@workspace/api-client-react";
 import { PremiumCard } from "@/components/ui-helpers";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { ChevronRight, ImageOff, Loader2, ArrowUp, ArrowDown } from "lucide-react";
+import { ChevronRight, ImageOff, Loader2, ArrowUp, ArrowDown, ExternalLink } from "lucide-react";
 
 type Props = {
   startDate: string;
@@ -294,8 +294,9 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
       const bv = (b[sortKey] as number) ?? 0;
       return (av - bv) * sign;
     });
+    const adAccountId = data.adAccountId ?? null;
     return sorted.map(set => {
-      const ads = hideInactive ? set.ads.filter(ad => isActiveStatus(ad.status)) : set.ads;
+      const ads = (hideInactive ? set.ads.filter(ad => isActiveStatus(ad.status)) : set.ads).map(ad => ({ ...ad, adAccountId }));
       const sortedAds = [...ads].sort((a, b) => {
         const av = (a[sortKey] as number) ?? 0;
         const bv = (b[sortKey] as number) ?? 0;
@@ -432,7 +433,13 @@ type AdCreativeFields = {
   creativeThumbnailUrl?: string | null;
   creativeTitle?: string | null;
   creativeBody?: string | null;
+  adAccountId?: string | null;
 };
+
+function buildAdsManagerUrl(adAccountId: string, adExternalId: string): string {
+  const act = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
+  return `https://business.facebook.com/adsmanager/manage/ads?act=${encodeURIComponent(act)}&selected_ad_ids=${encodeURIComponent(adExternalId)}`;
+}
 
 function CreativeThumbnail({ ad }: { ad: AdCreativeFields }) {
   const [errored, setErrored] = useState(false);
@@ -483,6 +490,19 @@ function CreativeThumbnail({ ad }: { ad: AdCreativeFields }) {
         ) : !hasDetails ? (
           <div className="text-xs text-muted-foreground italic">No creative details available yet. They’ll appear after the next Meta sync.</div>
         ) : null}
+        {ad.adAccountId && (
+          <a
+            href={buildAdsManagerUrl(ad.adAccountId, ad.externalId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-flex items-center gap-1 text-xs text-white/80 hover:text-white underline-offset-2 hover:underline"
+            data-testid={`ad-creative-open-ads-manager-${ad.externalId}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="w-3 h-3" aria-hidden />
+            Open in Ads Manager
+          </a>
+        )}
       </HoverCardContent>
     </HoverCard>
   );
