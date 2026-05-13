@@ -126,7 +126,15 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
   const config = getTenantConfig(tenant);
   if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
-    return { synced: 0, error: "ServiceTitan not configured (need Client ID, Client Secret, and App Key)" };
+    const missing = [
+      !config?.serviceTitanClientId && "Client ID",
+      !config?.serviceTitanClientSecret && "Client Secret",
+      !config?.serviceTitanAppKey && "App Key",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "service_titan", "jobs", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
   }
 
   const syncLog = await logSync(tenantId, "service_titan", "jobs", new Date());
@@ -537,7 +545,15 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
 
   const config = getTenantConfig(tenant);
   if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
-    return { synced: 0, error: "ServiceTitan not configured" };
+    const missing = [
+      !config?.serviceTitanClientId && "Client ID",
+      !config?.serviceTitanClientSecret && "Client Secret",
+      !config?.serviceTitanAppKey && "App Key",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "service_titan", "invoices", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
   }
 
   const [lastSuccessfulSync] = await db.select({ completedAt: integrationSyncLogsTable.completedAt })
@@ -654,7 +670,15 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
 
   const config = getTenantConfig(tenant);
   if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
-    return { synced: 0, error: "ServiceTitan not configured" };
+    const missing = [
+      !config?.serviceTitanClientId && "Client ID",
+      !config?.serviceTitanClientSecret && "Client Secret",
+      !config?.serviceTitanAppKey && "App Key",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "service_titan", "estimates", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
   }
 
   const [lastSuccessfulSync] = await db.select({ completedAt: integrationSyncLogsTable.completedAt })
