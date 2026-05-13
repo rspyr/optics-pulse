@@ -3,6 +3,9 @@ import {
   MetaAPIService,
   MetaTokenInvalidError,
   MetaApiError,
+  updateMetaAdSetBudget,
+  sendCAPIEvents,
+  buildCAPILeadEvent,
 } from "./meta";
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -238,5 +241,207 @@ describe("MetaAPIService — budget cache behavior", () => {
 
     // 1 GET (cache populate) + 1 POST (update) + 1 GET (cache miss after invalidation)
     expect(fetchCount).toBeGreaterThan(before + 1);
+  });
+});
+
+describe("MetaAPIService.updateAdSetDailyBudget", () => {
+  it("converts dollars to cents and POSTs the correct body shape", async () => {
+    const captured: { url?: string; method?: string; body?: unknown; contentType?: string } = {};
+    setFetch(async (url, init) => {
+      const i = init as RequestInit | undefined;
+      captured.url = String(url);
+      captured.method = i?.method;
+      captured.contentType = (i?.headers as Record<string, string> | undefined)?.["Content-Type"];
+      captured.body = i?.body ? JSON.parse(String(i.body)) : undefined;
+      return mockResponse(200, {});
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_42" });
+    await runWithTimers(svc.updateAdSetDailyBudget("as_777", 12.34));
+
+    expect(captured.method).toBe("POST");
+    expect(captured.contentType).toBe("application/json");
+    expect(captured.url).toContain("/as_777");
+    expect(captured.url).toContain("access_token=tok");
+    // 12.34 * 100 = 1234 cents (integer)
+    expect(captured.body).toEqual({ daily_budget: 1234 });
+  });
+
+  it("rounds fractional cents to the nearest integer", async () => {
+    let bodySeen: unknown;
+    setFetch(async (_url, init) => {
+      const i = init as RequestInit | undefined;
+      bodySeen = i?.body ? JSON.parse(String(i.body)) : undefined;
+      return mockResponse(200, {});
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    // 9.999 * 100 = 999.9 → rounds to 1000
+    await runWithTimers(svc.updateAdSetDailyBudget("as_x", 9.999));
+    expect(bodySeen).toEqual({ daily_budget: 1000 });
+  });
+
+  it("invalidates the budget cache after a successful update", async () => {
+    const acct = `act_${Date.now()}_upd`;
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: acct });
+
+    let getCount = 0;
+    setFetch(async (_url, init) => {
+      const method = (init as RequestInit | undefined)?.method;
+      if (method === "POST") return mockResponse(200, {});
+      getCount++;
+      return mockResponse(200, {
+        data: [{ id: "as_1", name: "A", effective_status: "ACTIVE", daily_budget: "100" }],
+      });
+    });
+
+    await runWithTimers(svc.getAdAccountDailyBudget());
+    expect(getCount).toBe(1);
+    // Cached: another get within TTL would be skipped
+    await runWithTimers(svc.getAdAccountDailyBudget());
+    expect(getCount).toBe(1);
+
+    // Update should clear the cache for this account
+    await runWithTimers(svc.updateAdSetDailyBudget("as_1", 5));
+    await runWithTimers(svc.getAdAccountDailyBudget());
+    expect(getCount).toBe(2); // re-fetched after invalidation
+  });
+});
+
+describe("updateMetaAdSetBudget (function wrapper)", () => {
+  it("delegates to MetaAPIService.updateAdSetDailyBudget with cents conversion", async () => {
+    const captured: { url?: string; body?: unknown; method?: string } = {};
+    setFetch(async (url, init) => {
+      const i = init as RequestInit | undefined;
+      captured.url = String(url);
+      captured.method = i?.method;
+      captured.body = i?.body ? JSON.parse(String(i.body)) : undefined;
+      return mockResponse(200, {});
+    });
+
+    await runWithTimers(
+      updateMetaAdSetBudget(
+        { accessToken: "tok2", adAccountId: "act_55" },
+        "as_555",
+        25,
+      ),
+    );
+
+    expect(captured.method).toBe("POST");
+    expect(captured.url).toContain("/as_555");
+    expect(captured.body).toEqual({ daily_budget: 2500 });
+  });
+});
+
+describe("sendCAPIEvents", () => {
+  it("short-circuits with no network call when pixelId is missing", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return mockResponse(200, {});
+    });
+
+    const result = await sendCAPIEvents(
+      { accessToken: "tok", adAccountId: "act_1" }, // no pixelId
+      [buildCAPILeadEvent("hash_em", "hash_ph", 100)],
+    );
+
+    expect(calls).toBe(0);
+    expect(result).toEqual({ eventsReceived: 0, messages: [] });
+  });
+
+  it("short-circuits with no network call when events array is empty", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return mockResponse(200, {});
+    });
+
+    const result = await sendCAPIEvents(
+      { accessToken: "tok", adAccountId: "act_1", pixelId: "px_999" },
+      [],
+    );
+
+    expect(calls).toBe(0);
+    expect(result).toEqual({ eventsReceived: 0, messages: [] });
+  });
+
+  it("POSTs to /<pixelId>/events with { data: events } and returns mapped envelope", async () => {
+    const captured: { url?: string; method?: string; body?: unknown } = {};
+    setFetch(async (url, init) => {
+      const i = init as RequestInit | undefined;
+      captured.url = String(url);
+      captured.method = i?.method;
+      captured.body = i?.body ? JSON.parse(String(i.body)) : undefined;
+      return mockResponse(200, { events_received: 2, messages: ["ok"] });
+    });
+
+    const ev1 = buildCAPILeadEvent("em_hash", "ph_hash", 250);
+    const ev2 = buildCAPILeadEvent("em2", null, 100);
+    const result = await sendCAPIEvents(
+      { accessToken: "captok", adAccountId: "act_1", pixelId: "px_123" },
+      [ev1, ev2],
+    );
+
+    expect(captured.method).toBe("POST");
+    expect(captured.url).toContain("/px_123/events");
+    expect(captured.url).toContain("access_token=captok");
+    expect(captured.body).toEqual({ data: [ev1, ev2] });
+    expect(result).toEqual({ eventsReceived: 2, messages: ["ok"] });
+  });
+
+  it("returns an error envelope (does not throw) when the API call fails", async () => {
+    setFetch(async () =>
+      mockResponse(400, { error: { message: "Invalid pixel", code: 100 } }),
+    );
+
+    const result = await runWithTimers(
+      sendCAPIEvents(
+        { accessToken: "tok", adAccountId: "act_1", pixelId: "px_bad" },
+        [buildCAPILeadEvent("em", "ph", 50)],
+      ),
+    );
+
+    expect(result.eventsReceived).toBe(0);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatch(/Invalid pixel|400/i);
+  });
+});
+
+describe("buildCAPILeadEvent", () => {
+  it("builds an event with hashed em/ph, event_time in seconds, and custom_data", () => {
+    const at = new Date("2026-01-15T12:00:00.000Z");
+    const ev = buildCAPILeadEvent("HASHED_EMAIL", "HASHED_PHONE", 350, at);
+
+    expect(ev.event_name).toBe("Lead");
+    expect(ev.action_source).toBe("system_generated");
+    // Seconds, not milliseconds
+    expect(ev.event_time).toBe(Math.floor(at.getTime() / 1000));
+    expect(ev.user_data).toEqual({ em: ["HASHED_EMAIL"], ph: ["HASHED_PHONE"] });
+    expect(ev.custom_data).toEqual({
+      value: 350,
+      currency: "USD",
+      content_name: "HVAC Service Lead",
+    });
+  });
+
+  it("omits em when hashedEmail is null and ph when hashedPhone is null", () => {
+    const evNoEmail = buildCAPILeadEvent(null, "PH", 10);
+    expect(evNoEmail.user_data).toEqual({ ph: ["PH"] });
+    expect(evNoEmail.user_data.em).toBeUndefined();
+
+    const evNoPhone = buildCAPILeadEvent("EM", null, 10);
+    expect(evNoPhone.user_data).toEqual({ em: ["EM"] });
+    expect(evNoPhone.user_data.ph).toBeUndefined();
+
+    const evNeither = buildCAPILeadEvent(null, null, 10);
+    expect(evNeither.user_data).toEqual({});
+  });
+
+  it("defaults event_time to now (in seconds) when no Date is provided", () => {
+    const fixed = new Date("2026-05-01T00:00:00.000Z");
+    vi.setSystemTime(fixed);
+    const ev = buildCAPILeadEvent("EM", "PH", 1);
+    expect(ev.event_time).toBe(Math.floor(fixed.getTime() / 1000));
   });
 });
