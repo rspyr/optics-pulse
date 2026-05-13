@@ -448,6 +448,7 @@ export default function Internal() {
             const status = syncStatus?.statusByIntegration?.[integ];
             const label = integ === "service_titan" ? "ServiceTitan" : integ === "google_ads" ? "Google Ads" : "Meta";
             const color = integ === "service_titan" ? "text-blue-400" : integ === "google_ads" ? "text-yellow-400" : "text-purple-400";
+            const backfillPartial = syncStatus?.backfillStatus?.[integ]?.errorDetail?.partial === true;
             return (
               <div key={integ} className="p-4 bg-white/[0.03] rounded-lg border border-white/5">
                 <div className="flex items-center justify-between mb-2">
@@ -456,6 +457,13 @@ export default function Internal() {
                     <span className="flex items-center gap-1 text-xs text-blue-400"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing</span>
                   ) : status?.state === "paused" ? (
                     <span className="flex items-center gap-1 text-xs text-amber-400"><Clock className="w-3.5 h-3.5" /> Paused</span>
+                  ) : status?.state === "healthy" && backfillPartial ? (
+                    <span
+                      className="flex items-center gap-1 text-xs text-amber-400"
+                      title="Latest backfill finished with partial data — see Historical backfill below"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" /> Partial
+                    </span>
                   ) : status?.state === "healthy" ? (
                     <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Healthy</span>
                   ) : status?.state === "error" ? (
