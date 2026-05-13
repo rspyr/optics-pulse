@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, savedQuestionsTable, tenantsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { processQuestionStream, generateSuggestions, type ConversationTurn } from "../services/chat-analytics";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -170,20 +171,31 @@ router.delete("/chat/saved-questions/:id", async (req, res) => {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
-
-  const tenantId = await resolveTenantId(req, req.query.tenantId as string | undefined);
-  if (!tenantId) {
-    res.status(400).json({ error: "Tenant context required" });
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Invalid id" });
     return;
   }
 
-  await db.delete(savedQuestionsTable).where(
-    and(
-      eq(savedQuestionsTable.id, id),
-      eq(savedQuestionsTable.userId, userId),
-      eq(savedQuestionsTable.tenantId, tenantId),
-    ),
-  );
+  const [existing] = await db.select({ tenantId: savedQuestionsTable.tenantId, userId: savedQuestionsTable.userId })
+    .from(savedQuestionsTable)
+    .where(eq(savedQuestionsTable.id, id))
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "Saved question not found" });
+    return;
+  }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Saved question not found",
+  });
+  if (!access.ok) return;
+
+  if (existing.userId !== userId) {
+    res.status(404).json({ error: "Saved question not found" });
+    return;
+  }
+
+  await db.delete(savedQuestionsTable).where(eq(savedQuestionsTable.id, id));
 
   res.json({ success: true });
 });

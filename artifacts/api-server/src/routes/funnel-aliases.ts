@@ -4,6 +4,7 @@ import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateFunnelCache } from "../services/funnel-normalizer";
 import { readRawSheetData } from "../services/integrations/google-sheets";
 import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 // Re-resolve historical attribution events when a new funnel alias is saved.
 // Two cases must update:
@@ -303,23 +304,21 @@ router.post("/funnel-aliases/bulk", async (req, res) => {
 });
 
 router.delete("/funnel-aliases/:id", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) {
-    res.status(400).json({ error: "No tenant context" });
-    return;
-  }
-
   const id = Number(req.params.id);
-  const [deleted] = await db.delete(funnelAliasesTable)
-    .where(and(eq(funnelAliasesTable.id, id), eq(funnelAliasesTable.tenantId, tenantId)))
-    .returning();
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!deleted) {
-    res.status(404).json({ error: "Alias not found" });
-    return;
-  }
+  const [existing] = await db.select().from(funnelAliasesTable)
+    .where(eq(funnelAliasesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Alias not found" }); return; }
 
-  invalidateFunnelCache(tenantId);
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Alias not found",
+  });
+  if (!access.ok) return;
+
+  await db.delete(funnelAliasesTable).where(eq(funnelAliasesTable.id, id));
+
+  invalidateFunnelCache(existing.tenantId);
   res.json({ success: true });
 });
 

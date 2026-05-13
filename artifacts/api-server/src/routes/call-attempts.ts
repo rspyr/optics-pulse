@@ -1,25 +1,22 @@
-import { Router, type IRouter, type Request } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
 import { eq, desc, and, lte, gte } from "drizzle-orm";
 import { analyzeContactPattern, logAttemptWithFollowup } from "../services/lead-scoring";
 import { cancelAutoPass } from "../services/auto-pass-scheduler";
-import type { SessionData } from "express-session";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
-async function verifyLeadTenantAccess(leadId: number, session: SessionData): Promise<boolean> {
-  const role = session.userRole;
-  if (role === "super_admin" || role === "agency_user") return true;
-
-  const tenantId = session.tenantId;
-  if (!tenantId) return false;
-
+// Detail/write endpoints scoped to a `:leadId` from the URL must load
+// the lead's tenantId first and then defer to the central helper so
+// tenant-scoped roles cannot reach across tenants by guessing leadIds.
+async function assertLeadAccess(leadId: number, req: Request, res: Response): Promise<boolean> {
   const [lead] = await db.select({ tenantId: leadsTable.tenantId })
     .from(leadsTable)
     .where(eq(leadsTable.id, leadId))
     .limit(1);
-
-  return lead?.tenantId === tenantId;
+  const access = assertResourceTenantAccess(req, res, lead?.tenantId ?? null);
+  return access.ok;
 }
 
 const VALID_METHODS = ["call", "text", "email", "voicemail", "transfer", "voicemail_drop"] as const;
@@ -35,10 +32,7 @@ router.get("/call-attempts/:leadId", async (req: Request, res): Promise<void> =>
   const leadId = parseInt(String(req.params.leadId));
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
 
-  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
+  if (!(await assertLeadAccess(leadId, req, res))) return;
 
   const attempts = await db.select().from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))
@@ -65,10 +59,7 @@ router.post("/call-attempts", async (req: Request, res): Promise<void> => {
     return;
   }
 
-  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
+  if (!(await assertLeadAccess(leadId, req, res))) return;
 
   await logAttemptWithFollowup(db, {
     leadId,
@@ -105,10 +96,7 @@ router.get("/call-attempts/:leadId/suggest", async (req: Request, res): Promise<
   const leadId = parseInt(String(req.params.leadId));
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
 
-  if (!(await verifyLeadTenantAccess(leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
+  if (!(await assertLeadAccess(leadId, req, res))) return;
 
   const attempts = await db.select().from(callAttemptsTable)
     .where(eq(callAttemptsTable.leadId, leadId))
@@ -167,10 +155,7 @@ router.patch("/scheduled-followups/:id/complete", async (req: Request, res): Pro
     .where(eq(scheduledFollowupsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Followup not found" }); return; }
 
-  if (!(await verifyLeadTenantAccess(existing.leadId, req.session))) {
-    res.status(403).json({ error: "Access denied" });
-    return;
-  }
+  if (!(await assertLeadAccess(existing.leadId, req, res))) return;
 
   const [updated] = await db.update(scheduledFollowupsTable)
     .set({ completed: true, completedAt: new Date() })

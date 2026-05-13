@@ -13,6 +13,7 @@ import { normalizeSource } from "../services/source-normalizer";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim, isStickyTerminalAtRest } from "../services/auto-pass-scheduler";
 import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -305,8 +306,13 @@ router.post("/leads-hub/:id/claim", async (req, res) => {
   if (!leadId || isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
 
   const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, assignedCsrId: leadsTable.assignedCsrId })
-    .from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+    .from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const claimAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!claimAccess.ok) return;
 
   const role = (req.session as any)?.userRole as string | undefined;
   const isAdmin = role && ["super_admin", "agency_user", "client_admin"].includes(role);
@@ -336,8 +342,13 @@ router.post("/leads-hub/:id/release-claim", async (req, res) => {
   if (!leadId || isNaN(leadId)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
 
   const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId })
-    .from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+    .from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const releaseAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!releaseAccess.ok) return;
 
   releaseClaim(leadId, userId);
   console.log(`[claim] Lead ${leadId} claim released by CSR ${userId}`);
@@ -354,8 +365,13 @@ router.post("/leads-hub/action", async (req, res) => {
   const { leadId, actionType, callResult, vmResult, textResult, deadReason, notes, callbackAt } = req.body;
   if (!leadId || !actionType) { res.status(400).json({ error: "leadId and actionType are required" }); return; }
 
-  const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, Number(leadId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const actionAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!actionAccess.ok) return;
 
   const role = (req.session as any)?.userRole as string | undefined;
   const isAdmin = role && ["super_admin", "agency_user", "client_admin"].includes(role);
@@ -598,8 +614,13 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   const [attempt] = await db.select().from(callAttemptsTable).where(eq(callAttemptsTable.id, attemptId));
   if (!attempt) { res.status(404).json({ error: "Action not found" }); return; }
 
-  const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, attempt.leadId), eq(leadsTable.tenantId, tenantId)));
-  if (!lead) { res.status(403).json({ error: "Access denied" }); return; }
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, attempt.leadId));
+  if (!lead) { res.status(404).json({ error: "Action not found" }); return; }
+
+  const editAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Action not found",
+  });
+  if (!editAccess.ok) return;
 
   const isAdminRole = ["super_admin", "agency_user", "client_admin"].includes(role);
   if (!isAdminRole && attempt.userId !== userId) {
@@ -735,19 +756,23 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
 });
 
 router.get("/leads-hub/:leadId/history", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
-
   const leadId = parseInt(String(req.params.leadId));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
   const [lead] = await db.select({
     id: leadsTable.id,
+    tenantId: leadsTable.tenantId,
     hubStatus: leadsTable.hubStatus,
     callbackAt: leadsTable.callbackAt,
     appointmentDate: leadsTable.appointmentDate,
     appointmentTime: leadsTable.appointmentTime,
-  }).from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  }).from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const historyAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!historyAccess.ok) return;
 
   const attempts = await db.select({
     id: callAttemptsTable.id,
@@ -833,11 +858,16 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
   const { targetCsrId } = req.body;
   if (!targetCsrId) { res.status(400).json({ error: "targetCsrId is required" }); return; }
 
-  const [lead] = await db.select().from(leadsTable).where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
+  const transferAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!transferAccess.ok) return;
+
   const [targetUser] = await db.select({ id: usersTable.id, name: usersTable.name })
-    .from(usersTable).where(and(eq(usersTable.id, targetCsrId), eq(usersTable.tenantId, tenantId)));
+    .from(usersTable).where(and(eq(usersTable.id, targetCsrId), eq(usersTable.tenantId, lead.tenantId)));
   if (!targetUser) { res.status(404).json({ error: "Target CSR not found" }); return; }
 
   await db.insert(callAttemptsTable).values({
@@ -1305,11 +1335,16 @@ router.post("/leads-hub/assign-round-robin", async (req, res) => {
   const { leadId, funnelTypeId } = req.body;
   if (!leadId) { res.status(400).json({ error: "leadId is required" }); return; }
 
-  const [lead] = await db.select({ id: leadsTable.id }).from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId }).from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  const result = await assignLeadRoundRobin(tenantId, leadId, funnelTypeId || null);
+  const rrAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!rrAccess.ok) return;
+
+  const result = await assignLeadRoundRobin(lead.tenantId, leadId, funnelTypeId || null);
   if (result.assignedCsrId) {
     const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
     const autoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
@@ -1338,9 +1373,14 @@ router.patch("/leads-hub/:leadId/source", async (req, res) => {
   }
   const source = rawSource;
 
-  const [lead] = await db.select({ id: leadsTable.id, originalSource: leadsTable.originalSource }).from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId, originalSource: leadsTable.originalSource }).from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const sourceAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!sourceAccess.ok) return;
 
   const role = (req.session as any)?.userRole as string | undefined;
   const isClientRole = role === "client_user" || role === "client_admin";
@@ -1349,7 +1389,7 @@ router.patch("/leads-hub/:leadId/source", async (req, res) => {
     return;
   }
 
-  const normalizedSource = await normalizeSource(tenantId, source);
+  const normalizedSource = await normalizeSource(lead.tenantId, source);
 
   const [updated] = await db.update(leadsTable)
     .set({ source: normalizedSource, updatedAt: new Date() })
@@ -1361,10 +1401,18 @@ router.patch("/leads-hub/:leadId/source", async (req, res) => {
 });
 
 router.get("/leads-hub/:leadId/corrections", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.json({ corrections: [] }); return; }
   const leadId = parseInt(String(req.params.leadId));
   if (!Number.isFinite(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const [lead] = await db.select({ tenantId: leadsTable.tenantId }).from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
+  if (!lead) { res.json({ corrections: [] }); return; }
+
+  const corrAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!corrAccess.ok) return;
+  const tenantId = lead.tenantId;
 
   const rows = await db.select({
     id: leadAttributionCorrectionsTable.id,
@@ -1769,17 +1817,19 @@ router.get("/leads-hub/:leadId/contract", async (req, res) => {
   const leadId = parseInt(req.params.leadId, 10);
   if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
 
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.json({ estimates: [] }); return; }
-
-  const [lead] = await db.select({ id: leadsTable.id })
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId })
     .from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)))
+    .where(eq(leadsTable.id, leadId))
     .limit(1);
   if (!lead) { res.json({ estimates: [] }); return; }
 
+  const contractAccess = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!contractAccess.ok) return;
+
   const estimates = await db.select().from(soldEstimatesTable)
-    .where(and(eq(soldEstimatesTable.leadId, leadId), eq(soldEstimatesTable.tenantId, tenantId)))
+    .where(and(eq(soldEstimatesTable.leadId, leadId), eq(soldEstimatesTable.tenantId, lead.tenantId)))
     .orderBy(desc(soldEstimatesTable.soldOn));
 
   res.json({ estimates });

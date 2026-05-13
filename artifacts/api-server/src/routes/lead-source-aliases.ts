@@ -4,6 +4,7 @@ import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateSourceCache, DEFAULT_SOURCE_ALIASES, normalizeSource } from "../services/source-normalizer";
 import { leadsTable } from "@workspace/db";
 import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 // Re-resolve historical attribution events when a new source alias is saved.
 // Matches the same lower/trim rules normalizeSource() uses at ingest, so any
@@ -240,13 +241,19 @@ router.post("/lead-source-aliases/bulk", async (req, res) => {
 });
 
 router.put("/lead-source-aliases/:id", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) {
-    res.status(400).json({ error: "No tenant context" });
-    return;
-  }
-
   const id = Number(req.params.id);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [existingRow] = await db.select().from(leadSourceAliasesTable)
+    .where(eq(leadSourceAliasesTable.id, id));
+  if (!existingRow) { res.status(404).json({ error: "Alias not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, existingRow.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Alias not found",
+  });
+  if (!access.ok) return;
+  const tenantId = existingRow.tenantId;
+
   const { canonicalName, alias } = req.body;
 
   const updates: Record<string, string> = {};
@@ -275,36 +282,30 @@ router.put("/lead-source-aliases/:id", async (req, res) => {
 
   const [updated] = await db.update(leadSourceAliasesTable)
     .set(updates)
-    .where(and(eq(leadSourceAliasesTable.id, id), eq(leadSourceAliasesTable.tenantId, tenantId)))
+    .where(eq(leadSourceAliasesTable.id, id))
     .returning();
-
-  if (!updated) {
-    res.status(404).json({ error: "Alias not found" });
-    return;
-  }
 
   invalidateSourceCache(tenantId);
   res.json({ alias: updated });
 });
 
 router.delete("/lead-source-aliases/:id", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) {
-    res.status(400).json({ error: "No tenant context" });
-    return;
-  }
-
   const id = Number(req.params.id);
-  const [deleted] = await db.delete(leadSourceAliasesTable)
-    .where(and(eq(leadSourceAliasesTable.id, id), eq(leadSourceAliasesTable.tenantId, tenantId)))
-    .returning();
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!deleted) {
-    res.status(404).json({ error: "Alias not found" });
-    return;
-  }
+  const [existing] = await db.select().from(leadSourceAliasesTable)
+    .where(eq(leadSourceAliasesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Alias not found" }); return; }
 
-  invalidateSourceCache(tenantId);
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Alias not found",
+  });
+  if (!access.ok) return;
+
+  await db.delete(leadSourceAliasesTable)
+    .where(eq(leadSourceAliasesTable.id, id));
+
+  invalidateSourceCache(existing.tenantId);
   res.json({ success: true });
 });
 

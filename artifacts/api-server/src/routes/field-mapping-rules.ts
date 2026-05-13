@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { db, fieldMappingRulesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -158,23 +159,22 @@ router.post("/field-mapping-rules", async (req, res) => {
 });
 
 router.delete("/field-mapping-rules/:id", async (req, res) => {
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) {
-    res.status(400).json({ error: "No tenant context" });
-    return;
-  }
-
   const id = Number(req.params.id);
-  const [deleted] = await db.delete(fieldMappingRulesTable)
-    .where(and(eq(fieldMappingRulesTable.id, id), eq(fieldMappingRulesTable.tenantId, tenantId)))
-    .returning();
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!deleted) {
-    res.status(404).json({ error: "Rule not found" });
-    return;
-  }
+  const [existing] = await db.select().from(fieldMappingRulesTable)
+    .where(eq(fieldMappingRulesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Rule not found" }); return; }
 
-  invalidateRuleCache(tenantId, deleted.pageUrlPattern);
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Rule not found",
+  });
+  if (!access.ok) return;
+
+  await db.delete(fieldMappingRulesTable)
+    .where(eq(fieldMappingRulesTable.id, id));
+
+  invalidateRuleCache(existing.tenantId, existing.pageUrlPattern);
   res.json({ success: true });
 });
 

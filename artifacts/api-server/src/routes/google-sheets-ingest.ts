@@ -11,6 +11,7 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -68,6 +69,11 @@ router.post("/sheet-configs/:configId/analyze-mapping", requireRole("super_admin
     res.status(404).json({ error: "Sheet config not found" });
     return;
   }
+
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   try {
     const { headers, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
@@ -173,14 +179,18 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
   const configId = parseInt(String(req.params.configId));
   const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
 
+  const [precheck] = await db.select({ tenantId: googleSheetConfigsTable.tenantId })
+    .from(googleSheetConfigsTable).where(eq(googleSheetConfigsTable.id, configId));
+  if (!precheck) { res.status(404).json({ error: "Sheet config not found" }); return; }
+  const precheckAccess = assertResourceTenantAccess(req, res, precheck.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!precheckAccess.ok) return;
+
   if (mapping === null && headers === null) {
-    const clearResult = await db.update(googleSheetConfigsTable)
+    await db.update(googleSheetConfigsTable)
       .set({ columnMapping: null, mappingHeaders: null, syncRowWatermark: null, funnelColumn: null, funnelValueMap: null, updatedAt: new Date() })
       .where(eq(googleSheetConfigsTable.id, configId));
-    if (!clearResult.rowCount || clearResult.rowCount === 0) {
-      res.status(404).json({ error: "Sheet config not found" });
-      return;
-    }
     res.json({ success: true, cleared: true });
     return;
   }
@@ -221,6 +231,7 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
     return;
   }
 
+  // Tenant scope was already enforced via the precheck above.
   let watermark: number | null = null;
   try {
     const { rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
@@ -239,7 +250,7 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
     }
   }
 
-  const result = await db.update(googleSheetConfigsTable)
+  await db.update(googleSheetConfigsTable)
     .set({
       columnMapping: mapping,
       mappingHeaders: headers,
@@ -250,11 +261,6 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
       updatedAt: new Date(),
     })
     .where(eq(googleSheetConfigsTable.id, configId));
-
-  if (!result.rowCount || result.rowCount === 0) {
-    res.status(404).json({ error: "Sheet config not found" });
-    return;
-  }
 
   res.json({ success: true, funnelColumn });
 });
@@ -270,14 +276,10 @@ router.get("/sheet-configs/:configId/mapping-status", requireRole("super_admin",
     return;
   }
 
-  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
-  if (role === "client_admin") {
-    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== config.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   const hasMapping = !!config.columnMapping && !!config.mappingHeaders;
   let headersChanged = false;
@@ -314,14 +316,10 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
     return;
   }
 
-  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
-  if (role === "client_admin" || role === "client_user") {
-    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== config.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   if (!config.columnMapping || !config.mappingHeaders) {
     res.status(400).json({
@@ -538,14 +536,10 @@ router.get("/sheet-configs/:configId/preview", requireRole("super_admin", "agenc
     return;
   }
 
-  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
-  if (role === "client_admin" || role === "client_user") {
-    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== config.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   try {
     const { headers: rawHeaders, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
@@ -587,17 +581,15 @@ router.post("/sheet-configs/:configId/backfill-notes", requireRole("super_admin"
   const [config] = await db.select().from(googleSheetConfigsTable)
     .where(eq(googleSheetConfigsTable.id, configId));
 
-  if (!config?.columnMapping || !config?.mappingHeaders) {
-    res.status(400).json({ error: "No sheet mapping configured" }); return;
-  }
+  if (!config) { res.status(404).json({ error: "Sheet config not found" }); return; }
 
-  const role = (req.session as unknown as Record<string, unknown>).userRole as string;
-  if (role === "client_admin") {
-    const sessionTenantId = (req.session as unknown as Record<string, unknown>).tenantId as number | undefined;
-    if (sessionTenantId !== config.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
+
+  if (!config.columnMapping || !config.mappingHeaders) {
+    res.status(400).json({ error: "No sheet mapping configured" }); return;
   }
 
   try {
@@ -653,15 +645,22 @@ router.post("/sheet-configs/:configId/backfill-notes", requireRole("super_admin"
 router.post("/sheet-configs/:configId/toggle-sync-pause", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const configId = parseInt(String(req.params.configId));
 
+  const [existing] = await db.select({ tenantId: googleSheetConfigsTable.tenantId })
+    .from(googleSheetConfigsTable).where(eq(googleSheetConfigsTable.id, configId));
+  if (!existing) {
+    res.status(404).json({ error: "Sheet config not found" });
+    return;
+  }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
+
   const [updated] = await db.update(googleSheetConfigsTable)
     .set({ syncPaused: sql`NOT ${googleSheetConfigsTable.syncPaused}`, updatedAt: new Date() })
     .where(eq(googleSheetConfigsTable.id, configId))
     .returning({ syncPaused: googleSheetConfigsTable.syncPaused });
-
-  if (!updated) {
-    res.status(404).json({ error: "Sheet config not found" });
-    return;
-  }
 
   res.json({ syncPaused: updated.syncPaused });
 });

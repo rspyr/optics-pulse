@@ -4,6 +4,7 @@ import { eq, and, or, desc, inArray } from "drizzle-orm";
 import { getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -107,13 +108,18 @@ router.get("/podium/conversations/:leadId", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
-
   const leadId = parseInt(String(req.params.leadId));
-  const [lead] = await db.select().from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!access.ok) return;
+  const tenantId = lead.tenantId;
+
   if (!lead.phone) { res.json({ messages: [] }); return; }
 
   const podiumUserId = await resolvePodiumUserId(userId, tenantId);
@@ -135,18 +141,21 @@ router.post("/podium/messages", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
-
   const { leadId, body: messageBody } = req.body;
   if (!leadId || !messageBody) {
     res.status(400).json({ error: "leadId and body are required" });
     return;
   }
 
-  const [lead] = await db.select().from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, Number(leadId)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!access.ok) return;
+  const tenantId = lead.tenantId;
+
   if (!lead.phone) { res.status(400).json({ error: "Lead has no phone number" }); return; }
 
   const podiumUserId = await resolvePodiumUserId(userId, tenantId);
@@ -189,13 +198,17 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
-
   const leadId = parseInt(String(req.params.leadId));
-  const [lead] = await db.select().from(leadsTable)
-    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!access.ok) return;
+  const tenantId = lead.tenantId;
 
   const podiumUserId = lead.phone ? await resolvePodiumUserId(userId, tenantId) : null;
   const podiumSyncPromise = podiumUserId && lead.phone

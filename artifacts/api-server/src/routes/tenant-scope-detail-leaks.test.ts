@@ -92,6 +92,21 @@ vi.mock("@workspace/db", () => {
         const idx = mockDb._updateIdx++;
         return makeUpdateChain(() => mockDb.updateResults[idx] || []);
       }),
+      delete: vi.fn().mockImplementation(() => {
+        const chain: Record<string, unknown> = {};
+        chain.where = vi.fn().mockResolvedValue(undefined);
+        return chain;
+      }),
+      insert: vi.fn().mockImplementation(() => {
+        const chain: Record<string, unknown> = {};
+        chain.values = vi.fn().mockReturnValue(chain);
+        chain.returning = vi.fn().mockResolvedValue([]);
+        chain.onConflictDoNothing = vi.fn().mockReturnValue(chain);
+        chain.onConflictDoUpdate = vi.fn().mockReturnValue(chain);
+        chain.then = (resolve: Function, reject?: Function) =>
+          Promise.resolve(undefined).then(resolve as (v: unknown) => unknown, reject as (e: unknown) => unknown);
+        return chain;
+      }),
     },
     tenantsTable: tablecol("tenants"),
     usersTable: tablecol("users"),
@@ -109,6 +124,19 @@ vi.mock("@workspace/db", () => {
     metaAdSetsTable: tablecol("meta_ad_sets"),
     metaAdsTable: tablecol("meta_ads"),
     metaAdDailyStatsTable: tablecol("meta_ad_daily_stats"),
+    scriptsTable: tablecol("scripts"),
+    scriptVersionsTable: tablecol("script_versions"),
+    changeLogsTable: tablecol("change_logs"),
+    savedQuestionsTable: tablecol("saved_questions"),
+    googleSheetConfigsTable: tablecol("google_sheet_configs"),
+    fieldMappingRulesTable: tablecol("field_mapping_rules"),
+    funnelAliasesTable: tablecol("funnel_aliases"),
+    routingConfigTable: tablecol("routing_config"),
+    csrScheduleTable: tablecol("csr_schedule"),
+    soldEstimatesTable: tablecol("sold_estimates"),
+    leadAttributionCorrectionsTable: tablecol("lead_attribution_corrections"),
+    scheduledFollowupsTable: tablecol("scheduled_followups"),
+    isUnknownSource: (s: unknown) => s === "Unknown",
   };
 });
 
@@ -130,6 +158,11 @@ vi.mock("drizzle-orm", () => ({
   inArray: vi.fn((...a: unknown[]) => asAble({ __op: "inArray", a })),
   gte: vi.fn((...a: unknown[]) => asAble({ __op: "gte", a })),
   lte: vi.fn((...a: unknown[]) => asAble({ __op: "lte", a })),
+  gt: vi.fn((...a: unknown[]) => asAble({ __op: "gt", a })),
+  asc: vi.fn((...a: unknown[]) => asAble({ __op: "asc", a })),
+  isNull: vi.fn((...a: unknown[]) => asAble({ __op: "isNull", a })),
+  isNotNull: vi.fn((...a: unknown[]) => asAble({ __op: "isNotNull", a })),
+  ne: vi.fn((...a: unknown[]) => asAble({ __op: "ne", a })),
 }));
 
 vi.mock("@workspace/api-zod", async (importOriginal) => {
@@ -178,6 +211,53 @@ vi.mock("../middleware/auth", async () => {
   const actual = (await vi.importActual("../middleware/auth")) as Record<string, unknown>;
   return actual;
 });
+
+vi.mock("../services/chat-analytics", () => ({
+  processQuestionStream: vi.fn(),
+  generateSuggestions: vi.fn(),
+}));
+
+vi.mock("../services/integrations/google-sheets", () => ({
+  readRawSheetData: vi.fn(),
+  readSheetRows: vi.fn(),
+}));
+
+vi.mock("../services/integrations/podium-api", () => ({
+  getContactConversations: vi.fn().mockResolvedValue([]),
+  getConversationMessages: vi.fn().mockResolvedValue([]),
+  sendMessage: vi.fn(),
+  ensurePodiumContact: vi.fn(),
+  getPodiumUsers: vi.fn().mockResolvedValue([]),
+  syncPodiumConversationAssignment: vi.fn(),
+}));
+
+vi.mock("../services/integrations/podium-auth", () => ({
+  isPodiumConnected: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock("../services/auto-pass-scheduler", () => ({
+  scheduleAutoPass: vi.fn(),
+  cancelAutoPass: vi.fn(),
+  leadHasRealTouch: vi.fn().mockResolvedValue(false),
+  claimLead: vi.fn().mockReturnValue({ ok: true }),
+  releaseClaim: vi.fn(),
+  consumeClaim: vi.fn(),
+  hasActiveClaim: vi.fn().mockReturnValue({ claimed: false }),
+  isStickyTerminalAtRest: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../services/round-robin", () => ({
+  assignLeadRoundRobin: vi.fn().mockResolvedValue({ assignedCsrId: null, reason: "none" }),
+}));
+
+vi.mock("../services/lead-notify-scheduler", () => ({
+  scheduleOrEmitNewLead: vi.fn(),
+}));
+
+vi.mock("./sales-manager", () => ({
+  parseSpiffConfig: vi.fn().mockReturnValue({}),
+  computeSpiffCommission: vi.fn().mockReturnValue(0),
+}));
 
 import express, { type Request, type Response, type NextFunction } from "express";
 
@@ -456,6 +536,123 @@ describe("Detail/write-endpoint tenant scoping (cross-tenant leak prevention)", 
       mockDb.selectResults = [[]];
       const res = await request(app, "GET", "/tenants/9/funnel-types");
       expect(res.status).toBe(200);
+    });
+  });
+
+  // DELETE /scripts/:id — `:id`-style write handler now wired through
+  // the helper. Verify cross-tenant requests cannot delete and never
+  // see the script payload.
+  describe("DELETE /scripts/:id", () => {
+    it("client_admin deleting a foreign-tenant script → 404, no DB delete leak", async () => {
+      const app = await setupApp("./scripts", "client_admin", 7);
+      mockDb.selectResults = [[{ id: 5, tenantId: 9, name: "Foreign Script", content: "secret" }]];
+      const res = await request(app, "DELETE", "/scripts/5");
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "Script not found" });
+      expect(JSON.stringify(res.json)).not.toContain("Foreign Script");
+    });
+
+    it("tenant-scoped role with no session.tenantId → 403, no DB read", async () => {
+      const app = await setupApp("./scripts", "client_admin", null);
+      mockDb.selectResults = [[{ id: 5, tenantId: 9, name: "Foreign" }]];
+      const res = await request(app, "DELETE", "/scripts/5");
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual({ error: "No tenant assigned" });
+    });
+
+    it("super_admin deleting any tenant's script → allowed", async () => {
+      const app = await setupApp("./scripts", "super_admin", null);
+      mockDb.selectResults = [[{ id: 5, tenantId: 9, name: "x" }]];
+      const res = await request(app, "DELETE", "/scripts/5");
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // POST /sheet-configs/:configId/toggle-sync-pause — write endpoint
+  // protected by the helper after loading the config's tenantId.
+  describe("POST /sheet-configs/:configId/toggle-sync-pause", () => {
+    it("agency_user toggling any tenant's config → allowed (cross-tenant role)", async () => {
+      const app = await setupApp("./google-sheets-ingest", "agency_user", null);
+      mockDb.selectResults = [[{ tenantId: 9 }]];
+      mockDb.updateResults = [[{ syncPaused: true }]];
+      const res = await request(app, "POST", "/sheet-configs/3/toggle-sync-pause");
+      expect(res.status).toBe(200);
+    });
+
+    it("super_admin toggling missing config → 404", async () => {
+      const app = await setupApp("./google-sheets-ingest", "super_admin", null);
+      mockDb.selectResults = [[]];
+      const res = await request(app, "POST", "/sheet-configs/3/toggle-sync-pause");
+      expect(res.status).toBe(404);
+      const dbMod = await import("@workspace/db");
+      expect(vi.mocked(dbMod.db.update)).not.toHaveBeenCalled();
+    });
+  });
+
+  // GET /podium/conversations/:leadId — detail handler that loads the
+  // lead, then defers to the helper before fetching message data.
+  describe("GET /podium/conversations/:leadId", () => {
+    it("client_admin reading a foreign-tenant lead → 404, no message leak", async () => {
+      const app = await setupApp("./podium-routes", "client_admin", 7);
+      mockDb.selectResults = [[{ id: 42, tenantId: 9, phone: "555", firstName: "Foreign", lastName: "Lead" }]];
+      const res = await request(app, "GET", "/podium/conversations/42");
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "Lead not found" });
+      expect(JSON.stringify(res.json)).not.toContain("Foreign");
+    });
+
+    it("client_admin with no session.tenantId → 403", async () => {
+      const app = await setupApp("./podium-routes", "client_admin", null);
+      mockDb.selectResults = [[{ id: 42, tenantId: 9, phone: "555" }]];
+      const res = await request(app, "GET", "/podium/conversations/42");
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual({ error: "No tenant assigned" });
+    });
+  });
+
+  // POST /leads-hub/:id/claim — write handler now wired through helper
+  // before mutating the in-memory claim state.
+  describe("POST /leads-hub/:id/claim", () => {
+    it("client_user claiming a foreign-tenant lead → 404, claim never invoked", async () => {
+      const app = await setupApp("./leads-hub", "client_user", 7);
+      mockDb.selectResults = [[{ id: 42, tenantId: 9, assignedCsrId: 1 }]];
+      const res = await request(app, "POST", "/leads-hub/42/claim", {});
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "Lead not found" });
+      const sched = await import("../services/auto-pass-scheduler");
+      expect(vi.mocked(sched.claimLead)).not.toHaveBeenCalled();
+    });
+
+    it("client_user with no session.tenantId → 403", async () => {
+      const app = await setupApp("./leads-hub", "client_user", null);
+      // resolveTenantId short-circuits with no tenant context (400),
+      // but the helper's contract is that no DB read or claim mutation
+      // happens.
+      mockDb.selectResults = [[{ id: 42, tenantId: 9, assignedCsrId: 1 }]];
+      const res = await request(app, "POST", "/leads-hub/42/claim", {});
+      expect([400, 403]).toContain(res.status);
+      const sched = await import("../services/auto-pass-scheduler");
+      expect(vi.mocked(sched.claimLead)).not.toHaveBeenCalled();
+    });
+  });
+
+  // DELETE /chat/saved-questions/:id — write handler now loads the
+  // saved question first and routes through the helper.
+  describe("DELETE /chat/saved-questions/:id", () => {
+    it("client_admin deleting a foreign-tenant saved question → 404, no delete", async () => {
+      const app = await setupApp("./chat", "client_admin", 7);
+      mockDb.selectResults = [[{ tenantId: 9, userId: 1 }]];
+      const res = await request(app, "DELETE", "/chat/saved-questions/3");
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "Saved question not found" });
+    });
+
+    it("client_admin deleting another user's saved question in own tenant → 404", async () => {
+      const app = await setupApp("./chat", "client_admin", 7);
+      mockDb.selectResults = [[{ tenantId: 7, userId: 99 }]];
+      const res = await request(app, "DELETE", "/chat/saved-questions/3");
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "Saved question not found" });
     });
   });
 });

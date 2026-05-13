@@ -3,6 +3,7 @@ import { db, googleSheetConfigsTable, funnelTypesTable, tenantFunnelTypesTable }
 import { eq, and, inArray } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { readRawSheetData } from "../services/integrations/google-sheets";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -85,6 +86,11 @@ router.put("/sheet-configs/:id", requireRole("super_admin", "agency_user"), asyn
     return;
   }
 
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
+
   if (defaultFunnelTypeId) {
     const [assoc] = await db.select().from(tenantFunnelTypesTable)
       .where(and(eq(tenantFunnelTypesTable.tenantId, existing.tenantId), eq(tenantFunnelTypesTable.funnelTypeId, defaultFunnelTypeId)));
@@ -125,14 +131,19 @@ router.put("/sheet-configs/:id", requireRole("super_admin", "agency_user"), asyn
 
 router.delete("/sheet-configs/:id", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id));
-  const [deleted] = await db.delete(googleSheetConfigsTable)
-    .where(eq(googleSheetConfigsTable.id, id))
-    .returning();
 
-  if (!deleted) {
+  const [existing] = await db.select().from(googleSheetConfigsTable).where(eq(googleSheetConfigsTable.id, id));
+  if (!existing) {
     res.status(404).json({ error: "Sheet config not found" });
     return;
   }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
+
+  await db.delete(googleSheetConfigsTable).where(eq(googleSheetConfigsTable.id, id));
 
   res.json({ success: true });
 });
@@ -154,6 +165,11 @@ router.post("/sheet-configs/:configId/funnel-value-map", requireRole("super_admi
     res.status(404).json({ error: "Sheet config not found" });
     return;
   }
+
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   const funnelTypeIds = [...new Set(Object.values(funnelValueMap))];
   if (funnelTypeIds.length > 0) {
@@ -191,6 +207,11 @@ router.get("/sheet-configs/:configId/column-values/:headerName", requireRole("su
     res.status(404).json({ error: "Sheet config not found" });
     return;
   }
+
+  const access = assertResourceTenantAccess(req, res, config.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Sheet config not found",
+  });
+  if (!access.ok) return;
 
   try {
     const { headers, rawRows } = await readRawSheetData(config.googleSheetId, config.googleSheetTab);

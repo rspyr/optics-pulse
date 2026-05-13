@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, scriptsTable, scriptVersionsTable, changeLogsTable } from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -85,24 +86,32 @@ router.get("/scripts", async (req, res) => {
 
 router.get("/scripts/:id", async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const [script] = await db.select().from(scriptsTable)
-    .where(and(eq(scriptsTable.id, id), eq(scriptsTable.tenantId, tenantId)));
-
+    .where(eq(scriptsTable.id, id));
   if (!script) { res.status(404).json({ error: "Script not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, script.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Script not found",
+  });
+  if (!access.ok) return;
+
   res.json(script);
 });
 
 router.get("/scripts/:id/versions", async (req, res) => {
   const id = parseInt(req.params.id);
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const [script] = await db.select().from(scriptsTable)
-    .where(and(eq(scriptsTable.id, id), eq(scriptsTable.tenantId, tenantId)));
+    .where(eq(scriptsTable.id, id));
   if (!script) { res.status(404).json({ error: "Script not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, script.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Script not found",
+  });
+  if (!access.ok) return;
 
   const versions = await db.select().from(scriptVersionsTable)
     .where(eq(scriptVersionsTable.scriptId, id))
@@ -152,13 +161,16 @@ router.post("/scripts", requireRole("super_admin", "agency_user", "client_admin"
 
 router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
   const id = parseInt(String(req.params.id));
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [existing] = await db.select().from(scriptsTable)
-    .where(and(eq(scriptsTable.id, id), eq(scriptsTable.tenantId, tenantId)));
-
+  const [existing] = await db.select().from(scriptsTable).where(eq(scriptsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Script not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Script not found",
+  });
+  if (!access.ok) return;
+  const tenantId = existing.tenantId;
 
   const { name, sourceFilter, stageFilter, dispositionFilter, content, isActive } = req.body;
 
@@ -213,12 +225,16 @@ router.put("/scripts/:id", requireRole("super_admin", "agency_user", "client_adm
 router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
   const id = parseInt(String(req.params.id));
   const versionId = parseInt(String(req.params.versionId));
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  if (isNaN(id) || isNaN(versionId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [existing] = await db.select().from(scriptsTable)
-    .where(and(eq(scriptsTable.id, id), eq(scriptsTable.tenantId, tenantId)));
+  const [existing] = await db.select().from(scriptsTable).where(eq(scriptsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Script not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Script not found",
+  });
+  if (!access.ok) return;
+  const tenantId = existing.tenantId;
 
   const [targetVersion] = await db.select().from(scriptVersionsTable)
     .where(and(eq(scriptVersionsTable.id, versionId), eq(scriptVersionsTable.scriptId, id)));
@@ -259,12 +275,16 @@ router.put("/scripts/:id/revert/:versionId", requireRole("super_admin", "agency_
 
 router.delete("/scripts/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
   const id = parseInt(String(req.params.id));
-  const tenantId = resolveTenantId(req);
-  if (!tenantId) { res.status(400).json({ error: "No tenant" }); return; }
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [script] = await db.select().from(scriptsTable)
-    .where(and(eq(scriptsTable.id, id), eq(scriptsTable.tenantId, tenantId)));
+  const [script] = await db.select().from(scriptsTable).where(eq(scriptsTable.id, id));
   if (!script) { res.status(404).json({ error: "Script not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, script.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Script not found",
+  });
+  if (!access.ok) return;
+  const tenantId = script.tenantId;
 
   await db.delete(scriptVersionsTable).where(eq(scriptVersionsTable.scriptId, id));
   await db.delete(scriptsTable).where(eq(scriptsTable.id, id));
