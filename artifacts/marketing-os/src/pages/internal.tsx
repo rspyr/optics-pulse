@@ -25,10 +25,10 @@ export default function Internal() {
   const [roasFilter, setRoasFilter] = useState<string>("");
   const [drilldownTenant, setDrilldownTenant] = useState<{ id: number; name: string } | null>(null);
 
-  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
+  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -353,6 +353,13 @@ export default function Internal() {
                     <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Error</span>
                   ) : status?.state === "no_credentials" ? (
                     <span className="flex items-center gap-1 text-xs text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> No credentials</span>
+                  ) : status?.state === "needs_reconnect" ? (
+                    <span
+                      className="flex items-center gap-1 text-xs text-red-400"
+                      title={status.reconnectReason || "Upstream token expired or revoked — reconnect required"}
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" /> Reconnect required
+                    </span>
                   ) : (
                     <span className="text-xs text-muted-foreground">Never synced</span>
                   )}
