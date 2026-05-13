@@ -391,3 +391,82 @@ describe("GET /attribution/events/:id — unmatchedReason contract", () => {
     expect(vi.mocked(trackerMod.computeUnmatchedReason)).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /attribution/events/:id — tenant scoping", () => {
+  beforeEach(() => {
+    mockDb.resetCounters();
+    vi.clearAllMocks();
+  });
+
+  // Helper: did the route apply a tenant filter via
+  // eq(attributionEventsTable.tenantId, ...) when building the where
+  // clause? The drizzle-orm mock records every eq() invocation, so we
+  // can introspect it directly.
+  async function tenantEqCalls(): Promise<unknown[][]> {
+    const drizzle = await import("drizzle-orm");
+    return vi
+      .mocked(drizzle.eq)
+      .mock.calls.filter((c) => c[0] === "attribution_events.tenantId");
+  }
+
+  it("lets super_admin fetch any event without applying a tenant filter", async () => {
+    await setupApp("super_admin", null);
+    mockDb.selectResults = [[makeBaseEvent({ id: 301, tenantId: 5 })]];
+
+    const res = await getJson(app, "/attribution/events/301");
+
+    expect(res.status).toBe(200);
+    expect((res.json.event as Record<string, unknown>).id).toBe(301);
+    // The detail handler itself must not have scoped by tenantId. (The
+    // followup jobs/leads queries in the same handler do scope to
+    // event.tenantId, which is fine — that's not a session-derived
+    // restriction.)
+    const tenantScopes = (await tenantEqCalls()).filter(
+      (c) => c[1] !== 5, // session was null; only event-derived scopes use 5
+    );
+    expect(tenantScopes).toEqual([]);
+  });
+
+  it("lets agency_user fetch any event without applying a tenant filter", async () => {
+    await setupApp("agency_user", null);
+    mockDb.selectResults = [[makeBaseEvent({ id: 302, tenantId: 5 })]];
+
+    const res = await getJson(app, "/attribution/events/302");
+
+    expect(res.status).toBe(200);
+    expect((res.json.event as Record<string, unknown>).id).toBe(302);
+    const tenantScopes = (await tenantEqCalls()).filter((c) => c[1] !== 5);
+    expect(tenantScopes).toEqual([]);
+  });
+
+  it("returns 403 for a tenant-scoped role with no tenantId on the session", async () => {
+    await setupApp("tenant_user", null);
+
+    const res = await getJson(app, "/attribution/events/303");
+
+    expect(res.status).toBe(403);
+    expect(res.json).toEqual({ error: "No tenant assigned" });
+    // Must short-circuit before issuing the select — db.select is the
+    // signal that the handler proceeded past the 403 guard.
+    const dbMod = await import("@workspace/db");
+    expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+  });
+
+  it("scopes the query by session tenantId for a tenant-scoped role and returns 404 for a cross-tenant event", async () => {
+    await setupApp("tenant_user", 7);
+    // Simulate the scoped query missing — caller's tenantId (7) does
+    // not match the event's tenantId (5), so the WHERE filters it out.
+    mockDb.selectResults = [[]];
+
+    const res = await getJson(app, "/attribution/events/304");
+
+    expect(res.status).toBe(404);
+    expect(res.json).toEqual({ error: "Event not found" });
+    // Confirm the scoping condition was actually built into the query.
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toContainEqual([
+      "attribution_events.tenantId",
+      7,
+    ]);
+  });
+});
