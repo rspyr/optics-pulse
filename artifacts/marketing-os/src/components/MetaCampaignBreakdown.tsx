@@ -38,34 +38,37 @@ function isActiveStatus(status: string | null | undefined): boolean {
 
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const { data: campaigns, isLoading } = useGetMetaCampaignSummary({ startDate, endDate });
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>(() => loadExpandedCampaigns());
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [hideInactive, setHideInactive] = useState(false);
   const [search, setSearch] = useState("");
 
-  // Reset sort/filter state when the date range changes.
-  useEffect(() => {
-    setSortKey("spend");
-    setSortDir("desc");
-    setHideInactive(false);
-    setSearch("");
-    setExpanded({});
-  }, [startDate, endDate]);
-
-  // Date-range change resets sort/filter prefs for ALL campaigns, even ones
-  // that aren't currently expanded. We clear localStorage at the parent level
-  // so collapsed campaigns don't restore stale prefs the next time they're
-  // opened. Skip the very first run so freshly-loaded prefs aren't wiped.
+  // Date-range change resets sort/filter, search, and expansion state for
+  // ALL campaigns, even ones that aren't currently expanded. We clear
+  // localStorage at the parent level so collapsed campaigns don't restore
+  // stale prefs/expansions the next time they're opened. Skip the very
+  // first run so freshly-loaded expansion state isn't wiped on initial
+  // mount.
   const isFirstRangeEffect = useRef(true);
   useEffect(() => {
     if (isFirstRangeEffect.current) {
       isFirstRangeEffect.current = false;
       return;
     }
+    setSortKey("spend");
+    setSortDir("desc");
+    setHideInactive(false);
+    setSearch("");
     setExpanded({});
     clearAllCampaignPrefs();
+    clearAllCampaignExpansions();
   }, [startDate, endDate]);
+
+  // Persist expanded-campaign set so it survives reloads.
+  useEffect(() => {
+    saveExpandedCampaigns(expanded);
+  }, [expanded]);
 
   const toggle = (id: number) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -265,9 +268,100 @@ const DEFAULT_PREFS: CampaignViewPrefs = {
 };
 
 const PREFS_STORAGE_PREFIX = "marketing-os:meta-campaign-prefs:v1:";
+const EXPANDED_CAMPAIGNS_STORAGE_KEY = "marketing-os:meta-campaign-expanded:v1";
+const EXPANDED_SETS_STORAGE_PREFIX = "marketing-os:meta-campaign-expanded-sets:v1:";
 
 function prefsStorageKey(campaignId: number): string {
   return `${PREFS_STORAGE_PREFIX}${campaignId}`;
+}
+
+function expandedSetsStorageKey(campaignId: number): string {
+  return `${EXPANDED_SETS_STORAGE_PREFIX}${campaignId}`;
+}
+
+function loadExpandedCampaigns(): Record<number, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(EXPANDED_CAMPAIGNS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return {};
+    const out: Record<number, boolean> = {};
+    for (const id of parsed) {
+      if (typeof id === "number" && Number.isFinite(id)) out[id] = true;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveExpandedCampaigns(expanded: Record<number, boolean>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const ids = Object.entries(expanded)
+      .filter(([, v]) => v)
+      .map(([k]) => Number(k))
+      .filter(n => Number.isFinite(n));
+    if (ids.length === 0) {
+      window.localStorage.removeItem(EXPANDED_CAMPAIGNS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(EXPANDED_CAMPAIGNS_STORAGE_KEY, JSON.stringify(ids));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function loadExpandedSets(campaignId: number): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(expandedSetsStorageKey(campaignId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return {};
+    const out: Record<string, boolean> = {};
+    for (const id of parsed) {
+      if (typeof id === "string") out[id] = true;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveExpandedSets(campaignId: number, expandedSets: Record<string, boolean>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const ids = Object.entries(expandedSets).filter(([, v]) => v).map(([k]) => k);
+    if (ids.length === 0) {
+      window.localStorage.removeItem(expandedSetsStorageKey(campaignId));
+    } else {
+      window.localStorage.setItem(expandedSetsStorageKey(campaignId), JSON.stringify(ids));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function clearAllCampaignExpansions(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const storage = window.localStorage;
+    storage.removeItem(EXPANDED_CAMPAIGNS_STORAGE_KEY);
+    const toRemove: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key && key.startsWith(EXPANDED_SETS_STORAGE_PREFIX)) {
+        toRemove.push(key);
+      }
+    }
+    for (const key of toRemove) {
+      storage.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function isSortKey(v: unknown): v is SortKey {
@@ -324,7 +418,7 @@ function clearAllCampaignPrefs(): void {
 
 function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: number; startDate: string; endDate: string }) {
   const { data, isLoading } = useGetMetaCampaignBreakdown(campaignId, { startDate, endDate });
-  const [expandedSets, setExpandedSets] = useState<Record<string, boolean>>({});
+  const [expandedSets, setExpandedSets] = useState<Record<string, boolean>>(() => loadExpandedSets(campaignId));
   const initialPrefs = useMemo(() => loadCampaignPrefs(campaignId), [campaignId]);
   const [sortKey, setSortKey] = useState<SortKey>(initialPrefs.sortKey);
   const [sortDir, setSortDir] = useState<SortDir>(initialPrefs.sortDir);
@@ -351,6 +445,11 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
   useEffect(() => {
     saveCampaignPrefs(campaignId, { sortKey, sortDir, hideInactive });
   }, [campaignId, sortKey, sortDir, hideInactive]);
+
+  // Persist expanded ad-set IDs per campaign.
+  useEffect(() => {
+    saveExpandedSets(campaignId, expandedSets);
+  }, [campaignId, expandedSets]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
