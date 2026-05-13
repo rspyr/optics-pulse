@@ -342,11 +342,17 @@ export class MetaAPIService {
     const all: MetaInsightRow[] = [];
     let nextPath: string | null = `/${this.adAccountId}/insights`;
     let nextParams: Record<string, string> | undefined = params;
+    let lastCursor: string | null = null;
     let safety = 0;
     while (nextPath && safety++ < 200) {
       const resp: MetaInsightsResponse = await this.request<MetaInsightsResponse>(nextPath, nextParams ? { params: nextParams } : undefined);
       if (Array.isArray(resp.data)) all.push(...resp.data);
-      nextPath = resp.paging?.next || null;
+      const next = resp.paging?.next || null;
+      const cursor = resp.paging?.cursors?.after || null;
+      // Guard against stuck cursors
+      if (next && cursor && cursor === lastCursor) break;
+      lastCursor = cursor;
+      nextPath = next;
       nextParams = undefined;
     }
     return all;

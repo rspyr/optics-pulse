@@ -408,6 +408,156 @@ describe("sendCAPIEvents", () => {
   });
 });
 
+describe("MetaAPIService — insights pagination", () => {
+  it("fetchAdDailyInsights aggregates rows across multi-page paging.next responses in order", async () => {
+    const pages = [
+      {
+        data: [
+          { ad_id: "a1", date_start: "2026-01-01", date_stop: "2026-01-01", impressions: "10" },
+          { ad_id: "a2", date_start: "2026-01-01", date_stop: "2026-01-01", impressions: "20" },
+        ],
+        paging: { next: "https://graph.facebook.com/v19.0/act_1/insights?after=p2", cursors: { after: "p1" } },
+      },
+      {
+        data: [
+          { ad_id: "a3", date_start: "2026-01-02", date_stop: "2026-01-02", impressions: "30" },
+          { ad_id: "a4", date_start: "2026-01-02", date_stop: "2026-01-02", impressions: "40" },
+        ],
+        paging: { next: "https://graph.facebook.com/v19.0/act_1/insights?after=p3", cursors: { after: "p2" } },
+      },
+      {
+        data: [
+          { ad_id: "a5", date_start: "2026-01-03", date_stop: "2026-01-03", impressions: "50" },
+        ],
+        paging: { cursors: { after: "p3" } }, // no next → loop ends
+      },
+    ];
+
+    let call = 0;
+    setFetch(async () => {
+      const body = pages[call] || { data: [] };
+      call++;
+      return mockResponse(200, body);
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchAdDailyInsights("2026-01-01", "2026-01-03"));
+
+    expect(call).toBe(3);
+    expect(rows).toHaveLength(5);
+    expect(rows.map((r) => r.ad_id)).toEqual(["a1", "a2", "a3", "a4", "a5"]);
+  });
+
+  it("fetchAdDailyInsights breaks out of the loop when paging.cursors.after repeats (stuck cursor)", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      // Always return next + the same cursor "stuck" → second iteration should break
+      return mockResponse(200, {
+        data: [{ ad_id: `row_${call}`, date_start: "2026-01-01", date_stop: "2026-01-01" }],
+        paging: {
+          next: "https://graph.facebook.com/v19.0/act_1/insights?after=stuck",
+          cursors: { after: "stuck" },
+        },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchAdDailyInsights("2026-01-01", "2026-01-01"));
+
+    // First call sets lastCursor=stuck; second call sees cursor===lastCursor and breaks before a third fetch.
+    expect(call).toBe(2);
+    expect(rows.map((r) => r.ad_id)).toEqual(["row_1", "row_2"]);
+  });
+
+  it("fetchAdDailyInsights respects the 200-page safety cap when next never terminates", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      // Always return paging.next with NO cursor so the stuck-cursor guard never triggers.
+      // The only thing that should stop the loop is the safety cap.
+      return mockResponse(200, {
+        data: [{ ad_id: `row_${call}`, date_start: "2026-01-01", date_stop: "2026-01-01" }],
+        paging: { next: `https://graph.facebook.com/v19.0/act_1/insights?after=p${call}` },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchAdDailyInsights("2026-01-01", "2026-01-01"));
+
+    expect(call).toBe(200);
+    expect(rows).toHaveLength(200);
+  });
+
+  it("fetchCampaignDailyInsights aggregates rows across multi-page responses in order", async () => {
+    const pages = [
+      {
+        data: [
+          { campaign_id: "c1", campaign_name: "C1", date_start: "2026-01-01", date_stop: "2026-01-01" },
+        ],
+        paging: { next: "https://graph.facebook.com/v19.0/act_1/insights?after=cp2" },
+      },
+      {
+        data: [
+          { campaign_id: "c2", campaign_name: "C2", date_start: "2026-01-02", date_stop: "2026-01-02" },
+          { campaign_id: "c3", campaign_name: "C3", date_start: "2026-01-03", date_stop: "2026-01-03" },
+        ],
+      },
+    ];
+
+    let call = 0;
+    setFetch(async () => {
+      const body = pages[call] || { data: [] };
+      call++;
+      return mockResponse(200, body);
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchCampaignDailyInsights("2026-01-01", "2026-01-03"));
+
+    expect(call).toBe(2);
+    expect(rows.map((r) => r.campaign_id)).toEqual(["c1", "c2", "c3"]);
+  });
+
+  it("fetchCampaignDailyInsights breaks out of the loop when paging.cursors.after repeats (stuck cursor)", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      return mockResponse(200, {
+        data: [{ campaign_id: `c_${call}`, date_start: "2026-01-01", date_stop: "2026-01-01" }],
+        paging: {
+          next: "https://graph.facebook.com/v19.0/act_1/insights?after=stuck",
+          cursors: { after: "stuck" },
+        },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchCampaignDailyInsights("2026-01-01", "2026-01-01"));
+
+    // First call sets lastCursor=stuck; second call sees cursor===lastCursor and breaks before a third fetch.
+    expect(call).toBe(2);
+    expect(rows.map((r) => r.campaign_id)).toEqual(["c_1", "c_2"]);
+  });
+
+  it("fetchCampaignDailyInsights respects the 200-page safety cap", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      return mockResponse(200, {
+        data: [{ campaign_id: `c_${call}`, date_start: "2026-01-01", date_stop: "2026-01-01" }],
+        paging: { next: `https://graph.facebook.com/v19.0/act_1/insights?after=p${call}` },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(svc.fetchCampaignDailyInsights("2026-01-01", "2026-01-01"));
+
+    expect(call).toBe(200);
+    expect(rows).toHaveLength(200);
+  });
+});
+
 describe("buildCAPILeadEvent", () => {
   it("builds an event with hashed em/ph, event_time in seconds, and custom_data", () => {
     const at = new Date("2026-01-15T12:00:00.000Z");
