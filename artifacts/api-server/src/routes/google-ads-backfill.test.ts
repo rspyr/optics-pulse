@@ -414,16 +414,18 @@ describe("POST /integrations/google_ads/backfill — partial failure mid-chunk",
     expect(res.body.success).toBe(false);
     expect(String(res.body.error)).toMatch(/quota exceeded/i);
 
-    // The inner catch wrote a 'partial: …' progress message to the open log row
-    // BEFORE the outer catch finalized it as error. Both updates land on the
-    // same integration_sync_logs row (id=1).
+    // The inner catch wrote a partial-failure progress row to the open log
+    // row BEFORE the outer catch finalized it as error. Task #395: this
+    // now lands as structured columns (`partial: true`, `errorCode: …`)
+    // plus the raw inner message in `errorMessage`, instead of stuffing
+    // a `partial: <msg>` string into errorMessage.
     const partialUpdate = state.updateCalls.find(
       (u) => u.table === "integration_sync_logs"
-        && typeof u.set.errorMessage === "string"
-        && (u.set.errorMessage as string).startsWith("partial:"),
+        && u.set.partial === true,
     );
     expect(partialUpdate).toBeDefined();
     expect(String(partialUpdate!.set.errorMessage)).toMatch(/quota exceeded/i);
+    expect(partialUpdate!.set.errorCode).toBe("rate_limit");
     expect(partialUpdate!.set.recordsProcessed).toBe(1);
 
     // Final outer-catch update flips the row to 'error'.

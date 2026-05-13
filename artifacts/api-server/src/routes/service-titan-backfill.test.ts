@@ -444,14 +444,16 @@ describe("POST /integrations/service_titan/backfill — partial failure mid-chun
     expect(res.body.success).toBe(false);
     expect(String(res.body.error)).toMatch(/servicetitan api 500/i);
 
-    // Inner catch wrote the 'partial: …' progress string with the running count.
+    // Inner catch recorded the partial-failure with the running count.
+    // Task #395: stored as structured columns (`partial: true`,
+    // `errorCode: …`) instead of a `partial: <msg>` string in errorMessage.
     const partialUpdate = state.updateCalls.find(
       (u) => u.table === "integration_sync_logs"
-        && typeof u.set.errorMessage === "string"
-        && (u.set.errorMessage as string).startsWith("partial:"),
+        && u.set.partial === true,
     );
     expect(partialUpdate).toBeDefined();
     expect(String(partialUpdate!.set.errorMessage)).toMatch(/servicetitan api 500/i);
+    expect(partialUpdate!.set.errorCode).toBe("upstream_server_error");
     expect(partialUpdate!.set.recordsProcessed).toBe(1);
 
     // Outer catch finalized the log as 'error'.

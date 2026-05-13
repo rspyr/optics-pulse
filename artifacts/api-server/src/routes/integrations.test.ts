@@ -148,6 +148,13 @@ interface SyncLogRow {
   status: string;
   recordsProcessed: number;
   errorMessage: string | null;
+  // Task #395: structured progress + error metadata.
+  progressCurrentChunk: number | null;
+  progressTotalChunks: number | null;
+  progressWindowStart: string | null;
+  progressWindowEnd: string | null;
+  errorCode: string | null;
+  partial: boolean;
   startedAt: Date | null;
   completedAt: Date | null;
   createdAt: Date | null;
@@ -162,6 +169,12 @@ function log(overrides: Partial<SyncLogRow>): SyncLogRow {
     status: "completed",
     recordsProcessed: 0,
     errorMessage: null,
+    progressCurrentChunk: null,
+    progressTotalChunks: null,
+    progressWindowStart: null,
+    progressWindowEnd: null,
+    errorCode: null,
+    partial: false,
     startedAt: null,
     completedAt: null,
     createdAt: new Date("2026-05-01T00:00:00Z"),
@@ -318,6 +331,81 @@ describe("GET /integrations/sync-status — backfillStatus map", () => {
     // And specifically NOT equal to a sibling's entry — guards against a
     // future refactor accidentally aliasing the wrong integration.
     expect(res.body.metaBackfillStatus).not.toEqual(backfillStatus.google_ads);
+  });
+
+  it("builds progressDetail from structured columns when the writer populates them (Task #395)", async () => {
+    // The new contract: backfill writers populate progress_current_chunk /
+    // progress_total_chunks / progress_window_start / progress_window_end
+    // directly. The route reads from those columns and returns a typed
+    // progressDetail without regex-parsing errorMessage.
+    const startedAt = new Date("2026-05-12T09:00:00Z");
+    queueSyncStatusSelects({
+      dataSyncLogs: [
+        log({
+          id: 51, integration: "google_ads", syncType: "backfill",
+          status: "running", recordsProcessed: 1234,
+          // errorMessage stays null while running — the chunk window
+          // lives in the structured columns.
+          errorMessage: null,
+          progressCurrentChunk: 3,
+          progressTotalChunks: 10,
+          progressWindowStart: "2025-04-01",
+          progressWindowEnd: "2025-04-30",
+          startedAt, completedAt: null,
+        }),
+      ],
+      runningLogs: [],
+    });
+
+    const res = await getJson("/integrations/sync-status");
+    expect(res.status).toBe(200);
+
+    const ga = (res.body.backfillStatus as Record<string, Record<string, unknown>>).google_ads;
+    expect(ga).toBeDefined();
+    expect(ga.status).toBe("running");
+    const progressDetail = ga.progressDetail as Record<string, unknown>;
+    expect(progressDetail).toBeDefined();
+    expect(progressDetail.kind).toBe("chunk");
+    expect(progressDetail.currentChunk).toBe(3);
+    expect(progressDetail.totalChunks).toBe(10);
+    expect(progressDetail.windowStart).toBe("2025-04-01");
+    expect(progressDetail.windowEnd).toBe("2025-04-30");
+    // (3-1)/10 = 20%
+    expect(progressDetail.percent).toBe(20);
+    // The progress string is synthesized from the structured columns for
+    // back-compat with older clients that read the string.
+    expect(String(ga.progress)).toMatch(/chunk 3\/10/);
+    expect(String(ga.progress)).toMatch(/2025-04-01/);
+  });
+
+  it("builds errorDetail from the structured errorCode + partial flag (Task #395)", async () => {
+    queueSyncStatusSelects({
+      dataSyncLogs: [
+        log({
+          id: 52, integration: "meta", syncType: "backfill",
+          // Partial-failure mid-run: outer status hasn't flipped yet, but
+          // the inner catch already stored partial=true + a classified code.
+          status: "running", recordsProcessed: 50,
+          errorMessage: "Google Ads API quota exceeded",
+          errorCode: "rate_limit",
+          partial: true,
+          startedAt: new Date("2026-05-12T09:00:00Z"),
+          completedAt: null,
+        }),
+      ],
+      runningLogs: [],
+    });
+
+    const res = await getJson("/integrations/sync-status");
+    expect(res.status).toBe(200);
+
+    const meta = (res.body.backfillStatus as Record<string, Record<string, unknown>>).meta;
+    expect(meta).toBeDefined();
+    const errorDetail = meta.errorDetail as Record<string, unknown>;
+    expect(errorDetail).toBeDefined();
+    expect(errorDetail.code).toBe("rate_limit");
+    expect(errorDetail.partial).toBe(true);
+    expect(String(errorDetail.message)).toMatch(/^Partial backfill:/i);
   });
 
   it("metaBackfillStatus back-compat alias is null when meta has no backfill row", async () => {

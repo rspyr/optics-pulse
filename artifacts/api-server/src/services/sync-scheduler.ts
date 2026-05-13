@@ -7,6 +7,7 @@ import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/goog
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
 import { runReconciliation } from "./reconciliation";
+import { classifyBackfillError } from "./backfill-status-format";
 import crypto from "crypto";
 
 function hashStJobId(stJobId: string): string {
@@ -58,14 +59,77 @@ async function logSync(tenantId: number, integration: string, syncType: string, 
 }
 
 async function completeSyncLog(logId: number, status: string, recordsProcessed: number, errorMessage?: string) {
+  // On terminal status, classify the error message into a stable error_code
+  // so consumers (Settings panel) don't have to regex-parse the text. Empty
+  // / null messages yield a null code. The classifier is shared with the
+  // route's fallback path so legacy rows still display the same friendly
+  // copy.
+  const code = status === "error" ? classifyBackfillError(errorMessage)?.code ?? null : null;
   await db.update(integrationSyncLogsTable)
-    .set({ status, recordsProcessed, completedAt: new Date(), errorMessage: errorMessage || null })
+    .set({
+      status,
+      recordsProcessed,
+      completedAt: new Date(),
+      errorMessage: errorMessage || null,
+      errorCode: code,
+      // Clear in-flight progress columns so a finished row doesn't keep
+      // showing the last chunk window in the UI.
+      progressCurrentChunk: null,
+      progressTotalChunks: null,
+      progressWindowStart: null,
+      progressWindowEnd: null,
+    })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
-async function updateSyncLogProgress(logId: number, recordsProcessed: number, message?: string) {
+/**
+ * Record in-flight chunk progress for a backfill run. Writes to dedicated
+ * columns instead of stuffing a `chunk N/M: …` string into `errorMessage`
+ * (Task #395). `errorMessage` is cleared so any prior partial-failure text
+ * doesn't linger across chunk boundaries.
+ */
+async function updateSyncLogChunkProgress(
+  logId: number,
+  recordsProcessed: number,
+  currentChunk: number,
+  totalChunks: number,
+  windowStart: string,
+  windowEnd: string,
+) {
   await db.update(integrationSyncLogsTable)
-    .set({ recordsProcessed, errorMessage: message ?? null })
+    .set({
+      recordsProcessed,
+      progressCurrentChunk: currentChunk,
+      progressTotalChunks: totalChunks,
+      progressWindowStart: windowStart,
+      progressWindowEnd: windowEnd,
+      errorMessage: null,
+      errorCode: null,
+      partial: false,
+    })
+    .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+/**
+ * Record a partial-failure mid-run: a later chunk threw, but some rows
+ * already landed. Writes the inner upstream message into `errorMessage`
+ * (no `partial:` prefix anymore — `partial` is now a real boolean column)
+ * along with a classified `errorCode` so the Settings UI gets a stable,
+ * typed contract.
+ */
+async function updateSyncLogPartialFailure(
+  logId: number,
+  recordsProcessed: number,
+  innerMessage: string,
+) {
+  const code = classifyBackfillError(innerMessage)?.code ?? "unknown";
+  await db.update(integrationSyncLogsTable)
+    .set({
+      recordsProcessed,
+      errorMessage: innerMessage,
+      errorCode: code,
+      partial: true,
+    })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -1090,10 +1154,13 @@ export async function backfillMetaCampaigns(
     try {
       for (let i = 0; i < chunks.length; i++) {
         const { since, until } = chunks[i];
-        await updateSyncLogProgress(
+        await updateSyncLogChunkProgress(
           syncLog.id,
           totalSynced,
-          `chunk ${i + 1}/${chunks.length}: ${since} → ${until}`,
+          i + 1,
+          chunks.length,
+          since,
+          until,
         );
         const insights = await svc.fetchAdDailyInsights(since, until);
         const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
@@ -1105,7 +1172,7 @@ export async function backfillMetaCampaigns(
       // progress on the log first so operators don't lose visibility into
       // how far the backfill got before failing.
       const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
       throw innerErr;
     }
 
@@ -1211,10 +1278,13 @@ export async function backfillGoogleAdsCampaigns(
     try {
       for (let i = 0; i < chunks.length; i++) {
         const { since, until } = chunks[i];
-        await updateSyncLogProgress(
+        await updateSyncLogChunkProgress(
           syncLog.id,
           totalSynced,
-          `chunk ${i + 1}/${chunks.length}: ${since} → ${until}`,
+          i + 1,
+          chunks.length,
+          since,
+          until,
         );
 
         const rows = await fetchCampaignPerformance(gaConfig, since, until);
@@ -1263,7 +1333,7 @@ export async function backfillGoogleAdsCampaigns(
       }
     } catch (innerErr) {
       const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
       throw innerErr;
     }
 
@@ -1423,16 +1493,19 @@ export async function backfillServiceTitanJobs(
     try {
       for (let i = 0; i < chunks.length; i++) {
         const { since, before } = chunks[i];
-        await updateSyncLogProgress(
+        await updateSyncLogChunkProgress(
           syncLog.id,
           totalSynced,
-          `chunk ${i + 1}/${chunks.length}: ${since.slice(0, 10)} → ${before.slice(0, 10)}`,
+          i + 1,
+          chunks.length,
+          since.slice(0, 10),
+          before.slice(0, 10),
         );
         await fetchCompletedJobs(stConfig, since, processJobBatch, before);
       }
     } catch (innerErr) {
       const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
       throw innerErr;
     }
 

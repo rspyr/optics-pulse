@@ -330,19 +330,83 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       (l) => l.integration === integ && l.syncType === "backfill",
     );
     if (log) {
-      const progressDetail = parseBackfillProgress(log.errorMessage);
-      // Surface a friendly error when the run is in `error` status, or
-      // when the message itself looks like a failure (partial: … written
-      // by the inner catch before the outer status flips).
-      const looksLikeError =
-        log.status === "error"
-        || (progressDetail?.kind === "partial");
-      const errorDetail = looksLikeError ? classifyBackfillError(log.errorMessage) : null;
+      // Prefer structured columns (Task #395) populated directly by the
+      // backfill writers. Fall back to the regex parser only for legacy
+      // rows that pre-date the schema change and still carry chunk /
+      // partial state inside `errorMessage`.
+      let progressDetail: BackfillProgressDetail | null = null;
+      if (log.progressCurrentChunk != null && log.progressTotalChunks != null) {
+        const current = log.progressCurrentChunk;
+        const total = log.progressTotalChunks;
+        const percent = total > 0
+          ? Math.max(0, Math.min(100, Math.round(((current - 1) / total) * 100)))
+          : null;
+        progressDetail = {
+          raw: `chunk ${current}/${total}: ${log.progressWindowStart ?? ""} → ${log.progressWindowEnd ?? ""}`,
+          kind: "chunk",
+          currentChunk: current,
+          totalChunks: total,
+          windowStart: log.progressWindowStart ?? null,
+          windowEnd: log.progressWindowEnd ?? null,
+          percent,
+          partialReason: null,
+        };
+      } else {
+        // Legacy fallback for old rows.
+        const parsed = parseBackfillProgress(log.errorMessage);
+        progressDetail = parsed && parsed.kind === "chunk" ? parsed : null;
+      }
+
+      // Build a friendly error from structured columns when present, else
+      // classify the raw message (legacy rows).
+      let errorDetail: BackfillErrorDetail | null = null;
+      const isPartial = log.partial === true;
+      const looksLikeError = log.status === "error" || isPartial;
+      if (looksLikeError) {
+        if (log.errorCode) {
+          // Structured path: the writer already classified this. Reuse the
+          // classifier on the raw message to fetch the matching friendly
+          // copy + suggested action so we don't duplicate the rule table
+          // here. If classification disagrees with the stored code (e.g.
+          // a future writer sets a code we don't have a rule for) we fall
+          // back to a minimal detail keyed off the stored code.
+          const classified = classifyBackfillError(log.errorMessage);
+          if (classified && classified.code === log.errorCode) {
+            errorDetail = { ...classified, partial: isPartial,
+              message: isPartial && !classified.partial
+                ? `Partial backfill: ${classified.message}`
+                : classified.message };
+          } else {
+            errorDetail = {
+              raw: log.errorMessage ?? "",
+              code: log.errorCode as BackfillErrorDetail["code"],
+              message: isPartial
+                ? "Partial backfill: the upstream API returned an error."
+                : "The upstream API returned an error.",
+              suggestedAction: "Check the recent sync activity for the raw error and retry.",
+              partial: isPartial,
+            };
+          }
+        } else {
+          errorDetail = classifyBackfillError(log.errorMessage);
+          if (errorDetail && isPartial && !errorDetail.partial) {
+            errorDetail = { ...errorDetail, partial: true, message: `Partial backfill: ${errorDetail.message}` };
+          }
+        }
+      }
+
+      // `progress` (string) is preserved for back-compat with older clients.
+      // Synthesize it from structured columns when available so the wire
+      // shape doesn't change for callers that still read the string.
+      const progressString = progressDetail?.kind === "chunk"
+        ? progressDetail.raw
+        : log.errorMessage;
+
       backfillStatus[integ] = {
         status: log.status,
         recordsProcessed: log.recordsProcessed,
-        progress: log.errorMessage,
-        progressDetail: progressDetail && progressDetail.kind === "chunk" ? progressDetail : null,
+        progress: progressString,
+        progressDetail,
         errorDetail,
         startedAt: log.startedAt?.toISOString() ?? null,
         completedAt: log.completedAt?.toISOString() ?? null,
