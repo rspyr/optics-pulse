@@ -48,7 +48,9 @@ import type {
   GetHudStatsParams,
   GetMetaCampaignBreakdownParams,
   GetMetaCampaignSummaryParams,
+  GetPodiumConversationParams,
   GetPodiumTimelineParams,
+  GetPodiumUsersParams,
   GetReconciliationStatusParams,
   GetSpendRevenueChartParams,
   GetTenantPerformanceParams,
@@ -60,6 +62,8 @@ import type {
   LeadHistoryResponse,
   LeadListResponse,
   LeaderboardResponse,
+  LinkPodiumUserInput,
+  LinkPodiumUserParams,
   ListAllTrainingPurchasesParams,
   ListAttributionEventsParams,
   ListAutomationAlertsParams,
@@ -72,11 +76,17 @@ import type {
   Logout200,
   MetaCampaignBreakdownResponse,
   MetaCampaignSummaryRow,
+  PodiumConversationResponse,
   PodiumTimelineResponse,
+  PodiumUsersResponse,
   ReconciliationResult,
   ReconciliationStatusResponse,
   RunReconciliationBody,
+  SendPodiumMessageInput,
+  SendPodiumMessageParams,
+  SendPodiumMessageResponse,
   SpendRevenueChartResponse,
+  SuccessResponse,
   Tenant,
   TenantPerformanceRow,
   TrackerSubmitPayload,
@@ -1039,6 +1049,458 @@ export const useUpdateLead = <
   TContext
 > => {
   return useMutation(getUpdateLeadMutationOptions(options));
+};
+
+/**
+ * Returns the cached Podium messages for a single lead, filtered to
+text-style channels (call rows are excluded — those are exposed via
+`/podium/timeline/{leadId}` instead). Each request first attempts a
+best-effort sync with the Podium API for the lead's phone number,
+then returns the resulting `podium_messages` rows ordered newest
+first along with the conversation UID and a deep link into the
+Podium inbox. When the lead has no phone number the response
+carries an empty `messages` array; when no Podium-connected user
+is available for the tenant the response also sets
+`notConnected: true`.
+
+ * @summary Get the Podium SMS/text conversation for a lead
+ */
+export const getGetPodiumConversationUrl = (
+  leadId: number,
+  params?: GetPodiumConversationParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/podium/conversations/${leadId}?${stringifiedParams}`
+    : `/api/podium/conversations/${leadId}`;
+};
+
+export const getPodiumConversation = async (
+  leadId: number,
+  params?: GetPodiumConversationParams,
+  options?: RequestInit,
+): Promise<PodiumConversationResponse> => {
+  return customFetch<PodiumConversationResponse>(
+    getGetPodiumConversationUrl(leadId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPodiumConversationQueryKey = (
+  leadId: number,
+  params?: GetPodiumConversationParams,
+) => {
+  return [
+    `/api/podium/conversations/${leadId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetPodiumConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPodiumConversation>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetPodiumConversationParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPodiumConversationQueryKey(leadId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPodiumConversation>>
+  > = ({ signal }) =>
+    getPodiumConversation(leadId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPodiumConversation>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPodiumConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPodiumConversation>>
+>;
+export type GetPodiumConversationQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the Podium SMS/text conversation for a lead
+ */
+
+export function useGetPodiumConversation<
+  TData = Awaited<ReturnType<typeof getPodiumConversation>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetPodiumConversationParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumConversation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPodiumConversationQueryOptions(
+    leadId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Sends an outbound SMS/text to the lead's phone number through the
+Podium API using the tenant's connected Podium user, persists the
+sent message into `podium_messages`, and broadcasts a
+`podium-message` socket event to the tenant. Fails when the lead
+has no phone number or the tenant has no Podium-connected user.
+
+ * @summary Send an outbound text to a lead via Podium
+ */
+export const getSendPodiumMessageUrl = (params?: SendPodiumMessageParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/podium/messages?${stringifiedParams}`
+    : `/api/podium/messages`;
+};
+
+export const sendPodiumMessage = async (
+  sendPodiumMessageInput: SendPodiumMessageInput,
+  params?: SendPodiumMessageParams,
+  options?: RequestInit,
+): Promise<SendPodiumMessageResponse> => {
+  return customFetch<SendPodiumMessageResponse>(
+    getSendPodiumMessageUrl(params),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(sendPodiumMessageInput),
+    },
+  );
+};
+
+export const getSendPodiumMessageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendPodiumMessage>>,
+    TError,
+    {
+      data: BodyType<SendPodiumMessageInput>;
+      params?: SendPodiumMessageParams;
+    },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendPodiumMessage>>,
+  TError,
+  { data: BodyType<SendPodiumMessageInput>; params?: SendPodiumMessageParams },
+  TContext
+> => {
+  const mutationKey = ["sendPodiumMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendPodiumMessage>>,
+    { data: BodyType<SendPodiumMessageInput>; params?: SendPodiumMessageParams }
+  > = (props) => {
+    const { data, params } = props ?? {};
+
+    return sendPodiumMessage(data, params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendPodiumMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendPodiumMessage>>
+>;
+export type SendPodiumMessageMutationBody = BodyType<SendPodiumMessageInput>;
+export type SendPodiumMessageMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send an outbound text to a lead via Podium
+ */
+export const useSendPodiumMessage = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendPodiumMessage>>,
+    TError,
+    {
+      data: BodyType<SendPodiumMessageInput>;
+      params?: SendPodiumMessageParams;
+    },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendPodiumMessage>>,
+  TError,
+  { data: BodyType<SendPodiumMessageInput>; params?: SendPodiumMessageParams },
+  TContext
+> => {
+  return useMutation(getSendPodiumMessageMutationOptions(options));
+};
+
+/**
+ * Returns the Podium organisation's users (as fetched live from the
+Podium API using the tenant's connected user) joined with the
+tenant's active internal team members. Each Podium user entry is
+enriched with the linked internal user, if any, so the Settings
+UI can render a single mapping table. When the tenant has no
+Podium-connected user the `podiumUsers` array is empty and
+`notConnected` is `true`.
+
+ * @summary List Podium users alongside the tenant's team members
+ */
+export const getGetPodiumUsersUrl = (params?: GetPodiumUsersParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/podium/users?${stringifiedParams}`
+    : `/api/podium/users`;
+};
+
+export const getPodiumUsers = async (
+  params?: GetPodiumUsersParams,
+  options?: RequestInit,
+): Promise<PodiumUsersResponse> => {
+  return customFetch<PodiumUsersResponse>(getGetPodiumUsersUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPodiumUsersQueryKey = (params?: GetPodiumUsersParams) => {
+  return [`/api/podium/users`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetPodiumUsersQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPodiumUsers>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetPodiumUsersParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumUsers>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPodiumUsersQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPodiumUsers>>> = ({
+    signal,
+  }) => getPodiumUsers(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPodiumUsers>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPodiumUsersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPodiumUsers>>
+>;
+export type GetPodiumUsersQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List Podium users alongside the tenant's team members
+ */
+
+export function useGetPodiumUsers<
+  TData = Awaited<ReturnType<typeof getPodiumUsers>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetPodiumUsersParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPodiumUsers>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPodiumUsersQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Sets (or clears, when `podiumUserUid` is `null`) the
+`podium_user_uid` for an internal user in the current tenant.
+Restricted to managers (`super_admin`, `agency_user`,
+`client_admin`). Returns 409 if the requested Podium UID is
+already linked to a different team member in the tenant.
+
+ * @summary Link or unlink a Podium user to an internal team member
+ */
+export const getLinkPodiumUserUrl = (params?: LinkPodiumUserParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/podium/users/link?${stringifiedParams}`
+    : `/api/podium/users/link`;
+};
+
+export const linkPodiumUser = async (
+  linkPodiumUserInput: LinkPodiumUserInput,
+  params?: LinkPodiumUserParams,
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getLinkPodiumUserUrl(params), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(linkPodiumUserInput),
+  });
+};
+
+export const getLinkPodiumUserMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof linkPodiumUser>>,
+    TError,
+    { data: BodyType<LinkPodiumUserInput>; params?: LinkPodiumUserParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof linkPodiumUser>>,
+  TError,
+  { data: BodyType<LinkPodiumUserInput>; params?: LinkPodiumUserParams },
+  TContext
+> => {
+  const mutationKey = ["linkPodiumUser"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof linkPodiumUser>>,
+    { data: BodyType<LinkPodiumUserInput>; params?: LinkPodiumUserParams }
+  > = (props) => {
+    const { data, params } = props ?? {};
+
+    return linkPodiumUser(data, params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type LinkPodiumUserMutationResult = NonNullable<
+  Awaited<ReturnType<typeof linkPodiumUser>>
+>;
+export type LinkPodiumUserMutationBody = BodyType<LinkPodiumUserInput>;
+export type LinkPodiumUserMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Link or unlink a Podium user to an internal team member
+ */
+export const useLinkPodiumUser = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof linkPodiumUser>>,
+    TError,
+    { data: BodyType<LinkPodiumUserInput>; params?: LinkPodiumUserParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof linkPodiumUser>>,
+  TError,
+  { data: BodyType<LinkPodiumUserInput>; params?: LinkPodiumUserParams },
+  TContext
+> => {
+  return useMutation(getLinkPodiumUserMutationOptions(options));
 };
 
 /**

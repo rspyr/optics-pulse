@@ -273,6 +273,126 @@ paths:
               schema:
                 $ref: "#/components/schemas/Lead"
 
+  /podium/conversations/{leadId}:
+    get:
+      operationId: getPodiumConversation
+      tags: [podium]
+      summary: Get the Podium SMS/text conversation for a lead
+      description: |
+        Returns the cached Podium messages for a single lead, filtered to
+        text-style channels (call rows are excluded — those are exposed via
+        `/podium/timeline/{leadId}` instead). Each request first attempts a
+        best-effort sync with the Podium API for the lead's phone number,
+        then returns the resulting `podium_messages` rows ordered newest
+        first along with the conversation UID and a deep link into the
+        Podium inbox. When the lead has no phone number the response
+        carries an empty `messages` array; when no Podium-connected user
+        is available for the tenant the response also sets
+        `notConnected: true`.
+      parameters:
+        - name: leadId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cached Podium messages plus conversation metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PodiumConversationResponse"
+
+  /podium/messages:
+    post:
+      operationId: sendPodiumMessage
+      tags: [podium]
+      summary: Send an outbound text to a lead via Podium
+      description: |
+        Sends an outbound SMS/text to the lead's phone number through the
+        Podium API using the tenant's connected Podium user, persists the
+        sent message into `podium_messages`, and broadcasts a
+        `podium-message` socket event to the tenant. Fails when the lead
+        has no phone number or the tenant has no Podium-connected user.
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendPodiumMessageInput"
+      responses:
+        "200":
+          description: The persisted outbound message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendPodiumMessageResponse"
+
+  /podium/users:
+    get:
+      operationId: getPodiumUsers
+      tags: [podium]
+      summary: List Podium users alongside the tenant's team members
+      description: |
+        Returns the Podium organisation's users (as fetched live from the
+        Podium API using the tenant's connected user) joined with the
+        tenant's active internal team members. Each Podium user entry is
+        enriched with the linked internal user, if any, so the Settings
+        UI can render a single mapping table. When the tenant has no
+        Podium-connected user the `podiumUsers` array is empty and
+        `notConnected` is `true`.
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Podium users, internal team members and link state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PodiumUsersResponse"
+
+  /podium/users/link:
+    post:
+      operationId: linkPodiumUser
+      tags: [podium]
+      summary: Link or unlink a Podium user to an internal team member
+      description: |
+        Sets (or clears, when `podiumUserUid` is `null`) the
+        `podium_user_uid` for an internal user in the current tenant.
+        Restricted to managers (`super_admin`, `agency_user`,
+        `client_admin`). Returns 409 if the requested Podium UID is
+        already linked to a different team member in the tenant.
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkPodiumUserInput"
+      responses:
+        "200":
+          description: Link succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
   /podium/timeline/{leadId}:
     get:
       operationId: getPodiumTimeline
@@ -1723,6 +1843,185 @@ components:
           items:
             $ref: "#/components/schemas/TimelineEntry"
       required: [timeline]
+
+    PodiumMessage:
+      type: object
+      description: |
+        A single cached Podium message row (`podium_messages`). Mirrors the
+        columns the route handlers project: only the fields actually
+        returned to the operator UI are exposed here.
+      properties:
+        id:
+          type: integer
+        tenantId:
+          type: integer
+        leadId:
+          type: integer
+          nullable: true
+        podiumConversationUid:
+          type: string
+        podiumMessageUid:
+          type: string
+        direction:
+          type: string
+          description: "`inbound` or `outbound`."
+        body:
+          type: string
+          nullable: true
+        channelType:
+          type: string
+          description: |
+            Normalised channel (`sms`, `form`, `call`, `phone_call`,
+            `car_wars`, …). The conversations endpoint filters call-type
+            rows out; the message returned by `POST /podium/messages` is
+            always `sms`.
+        senderName:
+          type: string
+          nullable: true
+        deliveryStatus:
+          type: string
+          nullable: true
+        messageItems:
+          nullable: true
+          description: Raw Podium `items` payload, forwarded as-is.
+        podiumCreatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - tenantId
+        - podiumConversationUid
+        - podiumMessageUid
+        - direction
+        - channelType
+        - createdAt
+
+    PodiumConversationResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/PodiumMessage"
+        conversationUid:
+          type: string
+          nullable: true
+          description: |
+            UID of the most recent text-style Podium conversation for this
+            lead, or null when no messages have been cached yet.
+        podiumDeepLink:
+          type: string
+          nullable: true
+          description: |
+            Pre-built URL into the Podium inbox for `conversationUid`.
+            Null when `conversationUid` is null.
+        notConnected:
+          type: boolean
+          description: |
+            True when no Podium-connected user could be resolved for the
+            tenant; in that case `messages` is empty.
+      required: [messages]
+
+    SendPodiumMessageInput:
+      type: object
+      properties:
+        leadId:
+          type: integer
+        body:
+          type: string
+          description: Outbound text body. Must be non-empty.
+        tenantId:
+          type: integer
+          description: |
+            Optional tenant override; only honoured for `super_admin` and
+            `agency_user` roles. Falls back to the session tenant
+            otherwise.
+      required: [leadId, body]
+
+    SendPodiumMessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          $ref: "#/components/schemas/PodiumMessage"
+      required: [success, message]
+
+    PodiumUserListEntry:
+      type: object
+      description: |
+        A Podium user fetched live from the Podium API, enriched with the
+        internal team member it is linked to (if any).
+      properties:
+        uid:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        internalUserId:
+          type: integer
+          nullable: true
+        internalUserName:
+          type: string
+          nullable: true
+      required: [uid, internalUserId, internalUserName]
+
+    PodiumTeamMemberEntry:
+      type: object
+      description: An active internal user in the tenant.
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        podiumUserUid:
+          type: string
+          nullable: true
+      required: [id, name, email, podiumUserUid]
+
+    PodiumUsersResponse:
+      type: object
+      properties:
+        podiumUsers:
+          type: array
+          items:
+            $ref: "#/components/schemas/PodiumUserListEntry"
+        teamMembers:
+          type: array
+          items:
+            $ref: "#/components/schemas/PodiumTeamMemberEntry"
+        notConnected:
+          type: boolean
+      required: [podiumUsers, teamMembers, notConnected]
+
+    LinkPodiumUserInput:
+      type: object
+      properties:
+        internalUserId:
+          type: integer
+        podiumUserUid:
+          type: string
+          nullable: true
+          description: Pass `null` to unlink the team member.
+      required: [internalUserId, podiumUserUid]
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required: [success]
 
     Campaign:
       type: object

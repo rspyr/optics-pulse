@@ -5,6 +5,7 @@ import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, 
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
+import { useGetPodiumUsers, useLinkPodiumUser } from "@workspace/api-client-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -84,45 +85,29 @@ function PushNotificationCard() {
 }
 
 function PodiumUserLinking({ tenantId }: { tenantId: number }) {
-  const [podiumUsers, setPodiumUsers] = useState<PodiumUserEntry[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMemberEntry[]>([]);
-  const [loading, setLoading] = useState(false);
   const [linkingId, setLinkingId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  const fetchData = useCallback(() => {
-    setLoading(true);
-    fetch(`${API}/api/podium/users?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        setPodiumUsers(d.podiumUsers || []);
-        setTeamMembers(d.teamMembers || []);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [tenantId]);
+  const { data: usersData, isFetching: loading, refetch } = useGetPodiumUsers({ tenantId });
+  useEffect(() => { if (expanded) refetch(); }, [expanded, refetch]);
+  const podiumUsers: PodiumUserEntry[] = (usersData?.podiumUsers ?? []) as PodiumUserEntry[];
+  const teamMembers: TeamMemberEntry[] = (usersData?.teamMembers ?? []) as TeamMemberEntry[];
 
-  useEffect(() => { if (expanded) fetchData(); }, [expanded, fetchData]);
+  const linkMutation = useLinkPodiumUser();
 
   const handleLink = async (internalUserId: number, podiumUserUid: string | null) => {
     setLinkingId(internalUserId);
     try {
-      const res = await fetch(`${API}/api/podium/users/link?tenantId=${tenantId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ internalUserId, podiumUserUid }),
+      await linkMutation.mutateAsync({
+        data: { internalUserId, podiumUserUid },
+        params: { tenantId },
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setFeedback({ type: "success", msg: podiumUserUid ? "Linked successfully" : "Unlinked" });
-        fetchData();
-      } else {
-        setFeedback({ type: "error", msg: data.error || "Failed to link" });
-      }
-    } catch {
-      setFeedback({ type: "error", msg: "Connection error" });
+      setFeedback({ type: "success", msg: podiumUserUid ? "Linked successfully" : "Unlinked" });
+      refetch();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Connection error";
+      setFeedback({ type: "error", msg });
     } finally {
       setLinkingId(null);
       setTimeout(() => setFeedback(null), 3000);

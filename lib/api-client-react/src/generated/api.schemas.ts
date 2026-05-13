@@ -297,6 +297,107 @@ export interface PodiumTimelineResponse {
   timeline: TimelineEntry[];
 }
 
+/**
+ * A single cached Podium message row (`podium_messages`). Mirrors the
+columns the route handlers project: only the fields actually
+returned to the operator UI are exposed here.
+
+ */
+export interface PodiumMessage {
+  id: number;
+  tenantId: number;
+  leadId?: number | null;
+  podiumConversationUid: string;
+  podiumMessageUid: string;
+  /** `inbound` or `outbound`. */
+  direction: string;
+  body?: string | null;
+  /** Normalised channel (`sms`, `form`, `call`, `phone_call`,
+`car_wars`, …). The conversations endpoint filters call-type
+rows out; the message returned by `POST /podium/messages` is
+always `sms`.
+ */
+  channelType: string;
+  senderName?: string | null;
+  deliveryStatus?: string | null;
+  /** Raw Podium `items` payload, forwarded as-is. */
+  messageItems?: unknown | null;
+  podiumCreatedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PodiumConversationResponse {
+  messages: PodiumMessage[];
+  /** UID of the most recent text-style Podium conversation for this
+lead, or null when no messages have been cached yet.
+ */
+  conversationUid?: string | null;
+  /** Pre-built URL into the Podium inbox for `conversationUid`.
+Null when `conversationUid` is null.
+ */
+  podiumDeepLink?: string | null;
+  /** True when no Podium-connected user could be resolved for the
+tenant; in that case `messages` is empty.
+ */
+  notConnected?: boolean;
+}
+
+export interface SendPodiumMessageInput {
+  leadId: number;
+  /** Outbound text body. Must be non-empty. */
+  body: string;
+  /** Optional tenant override; only honoured for `super_admin` and
+`agency_user` roles. Falls back to the session tenant
+otherwise.
+ */
+  tenantId?: number;
+}
+
+export interface SendPodiumMessageResponse {
+  success: boolean;
+  message: PodiumMessage;
+}
+
+/**
+ * A Podium user fetched live from the Podium API, enriched with the
+internal team member it is linked to (if any).
+
+ */
+export interface PodiumUserListEntry {
+  uid: string;
+  email?: string;
+  name?: string;
+  role?: string;
+  internalUserId: number | null;
+  internalUserName: string | null;
+}
+
+/**
+ * An active internal user in the tenant.
+ */
+export interface PodiumTeamMemberEntry {
+  id: number;
+  name: string | null;
+  email: string | null;
+  podiumUserUid: string | null;
+}
+
+export interface PodiumUsersResponse {
+  podiumUsers: PodiumUserListEntry[];
+  teamMembers: PodiumTeamMemberEntry[];
+  notConnected: boolean;
+}
+
+export interface LinkPodiumUserInput {
+  internalUserId: number;
+  /** Pass `null` to unlink the team member. */
+  podiumUserUid: string | null;
+}
+
+export interface SuccessResponse {
+  success: boolean;
+}
+
 export type CampaignPlatform =
   (typeof CampaignPlatform)[keyof typeof CampaignPlatform];
 
@@ -1270,6 +1371,22 @@ export const ListLeadsStatus = {
   lost: "lost",
   cancelled: "cancelled",
 } as const;
+
+export type GetPodiumConversationParams = {
+  tenantId?: number;
+};
+
+export type SendPodiumMessageParams = {
+  tenantId?: number;
+};
+
+export type GetPodiumUsersParams = {
+  tenantId?: number;
+};
+
+export type LinkPodiumUserParams = {
+  tenantId?: number;
+};
 
 export type GetPodiumTimelineParams = {
   tenantId?: number;

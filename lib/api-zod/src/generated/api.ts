@@ -344,6 +344,199 @@ export const UpdateLeadResponse = zod.object({
 });
 
 /**
+ * Returns the cached Podium messages for a single lead, filtered to
+text-style channels (call rows are excluded — those are exposed via
+`/podium/timeline/{leadId}` instead). Each request first attempts a
+best-effort sync with the Podium API for the lead's phone number,
+then returns the resulting `podium_messages` rows ordered newest
+first along with the conversation UID and a deep link into the
+Podium inbox. When the lead has no phone number the response
+carries an empty `messages` array; when no Podium-connected user
+is available for the tenant the response also sets
+`notConnected: true`.
+
+ * @summary Get the Podium SMS/text conversation for a lead
+ */
+export const GetPodiumConversationParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetPodiumConversationQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetPodiumConversationResponse = zod.object({
+  messages: zod.array(
+    zod
+      .object({
+        id: zod.number(),
+        tenantId: zod.number(),
+        leadId: zod.number().nullish(),
+        podiumConversationUid: zod.string(),
+        podiumMessageUid: zod.string(),
+        direction: zod.string().describe("`inbound` or `outbound`."),
+        body: zod.string().nullish(),
+        channelType: zod
+          .string()
+          .describe(
+            "Normalised channel (`sms`, `form`, `call`, `phone_call`,\n`car_wars`, …). The conversations endpoint filters call-type\nrows out; the message returned by `POST \/podium\/messages` is\nalways `sms`.\n",
+          ),
+        senderName: zod.string().nullish(),
+        deliveryStatus: zod.string().nullish(),
+        messageItems: zod
+          .unknown()
+          .nullish()
+          .describe("Raw Podium `items` payload, forwarded as-is."),
+        podiumCreatedAt: zod.date().nullish(),
+        createdAt: zod.date(),
+      })
+      .describe(
+        "A single cached Podium message row (`podium_messages`). Mirrors the\ncolumns the route handlers project: only the fields actually\nreturned to the operator UI are exposed here.\n",
+      ),
+  ),
+  conversationUid: zod
+    .string()
+    .nullish()
+    .describe(
+      "UID of the most recent text-style Podium conversation for this\nlead, or null when no messages have been cached yet.\n",
+    ),
+  podiumDeepLink: zod
+    .string()
+    .nullish()
+    .describe(
+      "Pre-built URL into the Podium inbox for `conversationUid`.\nNull when `conversationUid` is null.\n",
+    ),
+  notConnected: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when no Podium-connected user could be resolved for the\ntenant; in that case `messages` is empty.\n",
+    ),
+});
+
+/**
+ * Sends an outbound SMS/text to the lead's phone number through the
+Podium API using the tenant's connected Podium user, persists the
+sent message into `podium_messages`, and broadcasts a
+`podium-message` socket event to the tenant. Fails when the lead
+has no phone number or the tenant has no Podium-connected user.
+
+ * @summary Send an outbound text to a lead via Podium
+ */
+export const SendPodiumMessageQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const SendPodiumMessageBody = zod.object({
+  leadId: zod.number(),
+  body: zod.string().describe("Outbound text body. Must be non-empty."),
+  tenantId: zod
+    .number()
+    .optional()
+    .describe(
+      "Optional tenant override; only honoured for `super_admin` and\n`agency_user` roles. Falls back to the session tenant\notherwise.\n",
+    ),
+});
+
+export const SendPodiumMessageResponse = zod.object({
+  success: zod.boolean(),
+  message: zod
+    .object({
+      id: zod.number(),
+      tenantId: zod.number(),
+      leadId: zod.number().nullish(),
+      podiumConversationUid: zod.string(),
+      podiumMessageUid: zod.string(),
+      direction: zod.string().describe("`inbound` or `outbound`."),
+      body: zod.string().nullish(),
+      channelType: zod
+        .string()
+        .describe(
+          "Normalised channel (`sms`, `form`, `call`, `phone_call`,\n`car_wars`, …). The conversations endpoint filters call-type\nrows out; the message returned by `POST \/podium\/messages` is\nalways `sms`.\n",
+        ),
+      senderName: zod.string().nullish(),
+      deliveryStatus: zod.string().nullish(),
+      messageItems: zod
+        .unknown()
+        .nullish()
+        .describe("Raw Podium `items` payload, forwarded as-is."),
+      podiumCreatedAt: zod.date().nullish(),
+      createdAt: zod.date(),
+    })
+    .describe(
+      "A single cached Podium message row (`podium_messages`). Mirrors the\ncolumns the route handlers project: only the fields actually\nreturned to the operator UI are exposed here.\n",
+    ),
+});
+
+/**
+ * Returns the Podium organisation's users (as fetched live from the
+Podium API using the tenant's connected user) joined with the
+tenant's active internal team members. Each Podium user entry is
+enriched with the linked internal user, if any, so the Settings
+UI can render a single mapping table. When the tenant has no
+Podium-connected user the `podiumUsers` array is empty and
+`notConnected` is `true`.
+
+ * @summary List Podium users alongside the tenant's team members
+ */
+export const GetPodiumUsersQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetPodiumUsersResponse = zod.object({
+  podiumUsers: zod.array(
+    zod
+      .object({
+        uid: zod.string(),
+        email: zod.string().optional(),
+        name: zod.string().optional(),
+        role: zod.string().optional(),
+        internalUserId: zod.number().nullable(),
+        internalUserName: zod.string().nullable(),
+      })
+      .describe(
+        "A Podium user fetched live from the Podium API, enriched with the\ninternal team member it is linked to (if any).\n",
+      ),
+  ),
+  teamMembers: zod.array(
+    zod
+      .object({
+        id: zod.number(),
+        name: zod.string().nullable(),
+        email: zod.string().nullable(),
+        podiumUserUid: zod.string().nullable(),
+      })
+      .describe("An active internal user in the tenant."),
+  ),
+  notConnected: zod.boolean(),
+});
+
+/**
+ * Sets (or clears, when `podiumUserUid` is `null`) the
+`podium_user_uid` for an internal user in the current tenant.
+Restricted to managers (`super_admin`, `agency_user`,
+`client_admin`). Returns 409 if the requested Podium UID is
+already linked to a different team member in the tenant.
+
+ * @summary Link or unlink a Podium user to an internal team member
+ */
+export const LinkPodiumUserQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const LinkPodiumUserBody = zod.object({
+  internalUserId: zod.number(),
+  podiumUserUid: zod
+    .string()
+    .nullable()
+    .describe("Pass `null` to unlink the team member."),
+});
+
+export const LinkPodiumUserResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
  * Returns a chronological feed (newest first) that merges native
 Pulse call attempts with Podium-sourced messages and calls for a
 single lead. Each entry is discriminated by `type`

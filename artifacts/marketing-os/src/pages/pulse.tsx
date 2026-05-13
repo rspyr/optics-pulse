@@ -20,7 +20,7 @@ import {
   Pause, Play
 } from "lucide-react";
 import { isUnknownSource } from "@workspace/api-zod";
-import { useGetPodiumTimeline, type TimelineEntry } from "@workspace/api-client-react";
+import { useGetPodiumTimeline, useGetPodiumConversation, useSendPodiumMessage, type TimelineEntry, type PodiumMessage } from "@workspace/api-client-react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -1299,22 +1299,11 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   );
 }
 
-interface PodiumMsg {
-  id: number;
-  direction: string;
-  body: string | null;
-  senderName: string | null;
-  deliveryStatus: string | null;
-  channelType: string;
-  podiumCreatedAt: string | null;
-  createdAt: string;
-}
+type PodiumMsg = PodiumMessage;
 
 function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenantId: number; timezone: string }) {
   const [messages, setMessages] = useState<PodiumMsg[]>([]);
-  const [loading, setLoading] = useState(true);
   const [messageText, setMessageText] = useState("");
-  const [sending, setSending] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [conversationUid, setConversationUid] = useState<string | null>(null);
@@ -1331,20 +1320,17 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
     ta.style.overflowY = ta.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [messageText]);
 
-  const fetchMessages = useCallback(() => {
-    fetch(`${API_BASE}/podium/conversations/${leadId}?tenantId=${tenantId}`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        const msgs = (d.messages || []) as PodiumMsg[];
-        msgs.sort((a: PodiumMsg, b: PodiumMsg) => new Date(a.podiumCreatedAt || a.createdAt).getTime() - new Date(b.podiumCreatedAt || b.createdAt).getTime());
-        setMessages(msgs);
-        if (d.conversationUid) setConversationUid(d.conversationUid);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [leadId, tenantId]);
+  const { data: conversationData, isLoading: loading, refetch: refetchConversation } = useGetPodiumConversation(leadId, { tenantId });
 
-  useEffect(() => { fetchMessages(); }, [fetchMessages]);
+  useEffect(() => {
+    if (!conversationData) return;
+    const msgs = [...(conversationData.messages ?? [])];
+    msgs.sort((a, b) => new Date(a.podiumCreatedAt || a.createdAt).getTime() - new Date(b.podiumCreatedAt || b.createdAt).getTime());
+    setMessages(msgs);
+    if (conversationData.conversationUid) setConversationUid(conversationData.conversationUid);
+  }, [conversationData]);
+
+  const fetchMessages = useCallback(() => { refetchConversation(); }, [refetchConversation]);
 
   useEffect(() => {
     const socket = socketIOClient({ path: "/api/socket.io", withCredentials: true, transports: ["websocket", "polling"] });
@@ -1364,21 +1350,19 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
     if (expanded) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, expanded]);
 
+  const sendMessageMutation = useSendPodiumMessage();
+  const sending = sendMessageMutation.isPending;
+
   const handleSend = async () => {
     if (!messageText.trim() || sending) return;
-    setSending(true);
     try {
-      const res = await fetch(`${API_BASE}/podium/messages?tenantId=${tenantId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ leadId, body: messageText.trim() }),
+      await sendMessageMutation.mutateAsync({
+        data: { leadId, body: messageText.trim() },
+        params: { tenantId },
       });
-      if (res.ok) {
-        setMessageText("");
-        fetchMessages();
-      }
-    } catch {} finally { setSending(false); }
+      setMessageText("");
+      fetchMessages();
+    } catch {}
   };
 
   return (
