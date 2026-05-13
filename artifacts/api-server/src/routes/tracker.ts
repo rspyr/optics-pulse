@@ -98,6 +98,32 @@ function extractAddressFromFields(fields: Record<string, unknown>): string | nul
 // internal (e.g. `_custom`) and are excluded.
 export const FIELD_NAMES_CAP = 30;
 
+// The `formFields` API contract reserves keys prefixed with `_` (e.g.
+// `_custom`, `_consent`, `_source`) for internal bookkeeping. A customer
+// form whose <input name> happens to start with `_` would otherwise
+// silently overwrite our bookkeeping value when the submission is stored
+// — and would also slip past extractFieldNamesForOperator /
+// extractFieldEntriesForOperator (which already filter `_*` out), making
+// the colliding field invisible to operators. We strip such keys at
+// ingest so the reserved-key promise is enforced at write time.
+//
+// Returns the cleaned field map plus the list of dropped keys so the
+// caller can log a single warning for visibility without leaking values.
+export function stripReservedFieldKeys(
+  fields: Record<string, unknown>,
+): { cleaned: Record<string, unknown>; dropped: string[] } {
+  const cleaned: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (k.startsWith("_")) {
+      dropped.push(k);
+      continue;
+    }
+    cleaned[k] = v;
+  }
+  return { cleaned, dropped };
+}
+
 export function extractFieldNamesForOperator(fields: Record<string, unknown> | null | undefined): string[] {
   if (!fields || typeof fields !== "object") return [];
   return Object.keys(fields)
@@ -253,7 +279,21 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     const tenantId = tenant.id;
     const attribution = (body.attribution || {}) as Record<string, unknown>;
     const form = (body.form || {}) as Record<string, unknown>;
-    const fields = (body.fields || {}) as Record<string, unknown>;
+    const rawFields = (body.fields || {}) as Record<string, unknown>;
+    // Enforce the reserved-key promise from the formFields contract:
+    // customer-provided field names that start with `_` would otherwise
+    // clobber our internal bookkeeping (e.g. `_custom`) when stored, and
+    // would also be invisible to operator-facing helpers that filter `_*`.
+    // Strip them at ingest so the rest of the pipeline can trust the keys.
+    const { cleaned: fields, dropped: droppedReservedKeys } = stripReservedFieldKeys(rawFields);
+    if (droppedReservedKeys.length > 0) {
+      console.warn(
+        "[Tracker Submit] dropped reserved underscore-prefixed field keys from",
+        clientId,
+        "—",
+        droppedReservedKeys.join(", "),
+      );
+    }
     const custom = (body.custom || {}) as Record<string, unknown>;
 
     const gclid = (attribution.gclid as string) || null;

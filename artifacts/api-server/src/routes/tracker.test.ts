@@ -5,6 +5,7 @@ import {
   extractFieldNamesForOperator,
   extractFieldEntriesForOperator,
   computeUnmatchedReason,
+  stripReservedFieldKeys,
   FIELD_NAMES_CAP,
 } from "./tracker";
 
@@ -216,6 +217,31 @@ describe("extractFieldEntriesForOperator", () => {
   it("returns null when there are no operator-visible keys", () => {
     expect(extractFieldEntriesForOperator({})).toBeNull();
     expect(extractFieldEntriesForOperator({ _custom: { x: 1 } })).toBeNull();
+  });
+});
+
+// Task #290 — the formFields contract reserves underscore-prefixed keys
+// (e.g. `_custom`, `_consent`, `_source`) for internal bookkeeping. A
+// customer form whose <input name> happens to start with `_` would
+// otherwise silently overwrite our bookkeeping value when stored. The
+// guard runs at /collect/submit ingest, before the cleaned map is spread
+// into the stored formFields blob alongside `_custom`.
+describe("stripReservedFieldKeys", () => {
+  it("drops keys that start with `_` so a customer field cannot clobber `_custom`", () => {
+    const { cleaned, dropped } = stripReservedFieldKeys({
+      phone: "555-1234",
+      email: "a@b.com",
+      _custom: "attacker-supplied",
+      _source: "fake_homepage",
+    });
+    expect(cleaned).toEqual({ phone: "555-1234", email: "a@b.com" });
+    expect(dropped.sort()).toEqual(["_custom", "_source"]);
+  });
+
+  it("leaves non-reserved keys untouched and reports no drops", () => {
+    const { cleaned, dropped } = stripReservedFieldKeys({ phone: "x", field_3: "y" });
+    expect(cleaned).toEqual({ phone: "x", field_3: "y" });
+    expect(dropped).toEqual([]);
   });
 });
 
