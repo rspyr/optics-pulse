@@ -18,10 +18,18 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
 
   let result: { synced: number; error?: string };
 
-  const pausedIntegrations = ["service_titan", "podium", "callrail", "ghl"];
-  if (pausedIntegrations.includes(integration)) {
+  const unsupportedIntegrations = ["podium", "callrail", "ghl"];
+  if (unsupportedIntegrations.includes(integration)) {
     res.json({ success: false, synced: 0, error: `${integration} integration is currently paused` });
     return;
+  }
+
+  if (integration === "service_titan") {
+    const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+    if (tenant?.stSyncPaused) {
+      res.json({ success: false, synced: 0, error: "service_titan sync is paused for this tenant" });
+      return;
+    }
   }
 
   switch (integration) {
@@ -31,6 +39,9 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
     case "meta":
       result = await syncMetaCampaigns(tenantId);
       break;
+    case "service_titan":
+      res.status(400).json({ success: false, error: "service_titan manual sync is not yet supported" });
+      return;
     default:
       res.status(400).json({ success: false, error: `Unknown integration: ${integration}` });
       return;
@@ -93,19 +104,22 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
   ]);
 
   const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
+  const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
   if (tenantId) {
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-    if (tenant?.apiConfig && typeof tenant.apiConfig === "string") {
-      try {
-        const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
-        configuredMap.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret);
-        configuredMap.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
-        configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
-      } catch { /* decryption failed */ }
+    if (tenant) {
+      pausedMap.service_titan = tenant.stSyncPaused === true;
+      if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
+        try {
+          const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
+          configuredMap.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret);
+          configuredMap.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
+          configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
+        } catch { /* decryption failed */ }
+      }
     }
   }
 
-  const PAUSED_INTEGRATIONS = new Set(["service_titan", "podium", "callrail", "ghl"]);
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
 
   const integrations = ["service_titan", "google_ads", "meta"] as const;
@@ -140,7 +154,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     let state: IntegrationState = "never";
     if (isRunning) {
       state = "running";
-    } else if (PAUSED_INTEGRATIONS.has(integ)) {
+    } else if (pausedMap[integ]) {
       state = "paused";
     } else if (tenantId && !configuredMap[integ]) {
       state = "no_credentials";
