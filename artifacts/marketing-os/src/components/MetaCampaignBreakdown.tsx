@@ -39,27 +39,31 @@ function isActiveStatus(status: string | null | undefined): boolean {
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const { data: campaigns, isLoading } = useGetMetaCampaignSummary({ startDate, endDate });
   const [expanded, setExpanded] = useState<Record<number, boolean>>(() => loadExpandedCampaigns());
-  const [sortKey, setSortKey] = useState<SortKey>("spend");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [hideInactive, setHideInactive] = useState(false);
+  const initialTablePrefs = useMemo(() => loadTablePrefs(), []);
+  const [sortKey, setSortKey] = useState<SortKey>(initialTablePrefs.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(initialTablePrefs.sortDir);
+  const [hideInactive, setHideInactive] = useState(initialTablePrefs.hideInactive);
   const [search, setSearch] = useState("");
 
   // Date-range change resets sort/filter, search, and expansion state for
   // ALL campaigns, even ones that aren't currently expanded. We clear
   // localStorage at the parent level so collapsed campaigns don't restore
   // stale prefs/expansions the next time they're opened. Skip the very
-  // first run so freshly-loaded expansion state isn't wiped on initial
-  // mount.
+  // first run so freshly-loaded prefs/expansion state aren't wiped on
+  // initial mount. The persist effects below will then save the post-reset
+  // defaults, which is fine — the user's last active selection is what we
+  // restore on the next page load. The search query is transient and
+  // always resets on date-range change.
   const isFirstRangeEffect = useRef(true);
   useEffect(() => {
+    setSearch("");
     if (isFirstRangeEffect.current) {
       isFirstRangeEffect.current = false;
       return;
     }
-    setSortKey("spend");
-    setSortDir("desc");
-    setHideInactive(false);
-    setSearch("");
+    setSortKey(DEFAULT_PREFS.sortKey);
+    setSortDir(DEFAULT_PREFS.sortDir);
+    setHideInactive(DEFAULT_PREFS.hideInactive);
     setExpanded({});
     clearAllCampaignPrefs();
     clearAllCampaignExpansions();
@@ -69,6 +73,11 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   useEffect(() => {
     saveExpandedCampaigns(expanded);
   }, [expanded]);
+
+  // Persist the table-level sort/hide choice so it survives page reloads.
+  useEffect(() => {
+    saveTablePrefs({ sortKey, sortDir, hideInactive });
+  }, [sortKey, sortDir, hideInactive]);
 
   const toggle = (id: number) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -270,6 +279,7 @@ const DEFAULT_PREFS: CampaignViewPrefs = {
 const PREFS_STORAGE_PREFIX = "marketing-os:meta-campaign-prefs:v1:";
 const EXPANDED_CAMPAIGNS_STORAGE_KEY = "marketing-os:meta-campaign-expanded:v1";
 const EXPANDED_SETS_STORAGE_PREFIX = "marketing-os:meta-campaign-expanded-sets:v1:";
+const TABLE_PREFS_STORAGE_KEY = "marketing-os:meta-campaign-table-prefs:v1";
 
 function prefsStorageKey(campaignId: number): string {
   return `${PREFS_STORAGE_PREFIX}${campaignId}`;
@@ -361,6 +371,31 @@ function clearAllCampaignExpansions(): void {
     }
   } catch {
     // ignore
+  }
+}
+
+function loadTablePrefs(): CampaignViewPrefs {
+  if (typeof window === "undefined") return DEFAULT_PREFS;
+  try {
+    const raw = window.localStorage.getItem(TABLE_PREFS_STORAGE_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw) as Partial<CampaignViewPrefs>;
+    return {
+      sortKey: isSortKey(parsed.sortKey) ? parsed.sortKey : DEFAULT_PREFS.sortKey,
+      sortDir: isSortDir(parsed.sortDir) ? parsed.sortDir : DEFAULT_PREFS.sortDir,
+      hideInactive: typeof parsed.hideInactive === "boolean" ? parsed.hideInactive : DEFAULT_PREFS.hideInactive,
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+function saveTablePrefs(prefs: CampaignViewPrefs): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TABLE_PREFS_STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    // Storage unavailable (private mode, quota, etc.) — silently ignore.
   }
 }
 
