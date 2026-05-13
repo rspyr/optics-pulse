@@ -558,6 +558,99 @@ describe("MetaAPIService — insights pagination", () => {
   });
 });
 
+describe("MetaAPIService — listing pagination guards", () => {
+  it("listAdAccounts aggregates rows across multi-page paging.next responses in order", async () => {
+    const pages = [
+      {
+        data: [
+          { id: "act_1", account_id: "1", name: "Account 1", currency: "USD" },
+          { id: "act_2", account_id: "2", name: "Account 2", currency: "USD" },
+        ],
+        paging: { next: "https://graph.facebook.com/v19.0/me/adaccounts?after=p2", cursors: { after: "p1" } },
+      },
+      {
+        data: [
+          { id: "act_3", account_id: "3", name: "Account 3", currency: "USD" },
+        ],
+        paging: { cursors: { after: "p2" } },
+      },
+    ];
+    let call = 0;
+    setFetch(async () => {
+      const body = pages[call] || { data: [] };
+      call++;
+      return mockResponse(200, body);
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const accts = await runWithTimers(svc.listAdAccounts());
+
+    expect(call).toBe(2);
+    expect(accts.map((a) => a.id)).toEqual(["act_1", "act_2", "act_3"]);
+  });
+
+  it("listAdAccounts breaks out of the loop when paging.cursors.after repeats (stuck cursor)", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      return mockResponse(200, {
+        data: [{ id: `act_${call}`, account_id: String(call), name: `A${call}`, currency: "USD" }],
+        paging: {
+          next: "https://graph.facebook.com/v19.0/me/adaccounts?after=stuck",
+          cursors: { after: "stuck" },
+        },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const accts = await runWithTimers(svc.listAdAccounts());
+
+    // First call sets lastCursor=stuck; second call sees cursor===lastCursor and breaks before a third fetch.
+    expect(call).toBe(2);
+    expect(accts.map((a) => a.id)).toEqual(["act_1", "act_2"]);
+  });
+
+  it("fetchAdSets breaks out of the loop when paging.cursors.after repeats (stuck cursor)", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      return mockResponse(200, {
+        data: [{ id: `as_${call}`, name: `Set ${call}` }],
+        paging: {
+          next: "https://graph.facebook.com/v19.0/act_1/adsets?after=stuck",
+          cursors: { after: "stuck" },
+        },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const sets = await runWithTimers(svc.fetchAdSets());
+
+    expect(call).toBe(2);
+    expect(sets.map((s) => s.id)).toEqual(["as_1", "as_2"]);
+  });
+
+  it("fetchAds breaks out of the loop when paging.cursors.after repeats (stuck cursor)", async () => {
+    let call = 0;
+    setFetch(async () => {
+      call++;
+      return mockResponse(200, {
+        data: [{ id: `ad_${call}`, name: `Ad ${call}` }],
+        paging: {
+          next: "https://graph.facebook.com/v19.0/act_1/ads?after=stuck",
+          cursors: { after: "stuck" },
+        },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const ads = await runWithTimers(svc.fetchAds());
+
+    expect(call).toBe(2);
+    expect(ads.map((a) => a.id)).toEqual(["ad_1", "ad_2"]);
+  });
+});
+
 describe("buildCAPILeadEvent", () => {
   it("builds an event with hashed em/ph, event_time in seconds, and custom_data", () => {
     const at = new Date("2026-01-15T12:00:00.000Z");

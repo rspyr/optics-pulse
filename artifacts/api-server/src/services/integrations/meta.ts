@@ -283,15 +283,21 @@ export class MetaAPIService {
 
   /** List ad accounts the access_token has access to. */
   async listAdAccounts(): Promise<MetaAdAccountInfo[]> {
-    interface Resp { data: MetaAdAccountInfo[]; paging?: { next?: string } }
+    interface Resp { data: MetaAdAccountInfo[]; paging?: { next?: string; cursors?: { after?: string } } }
     const all: MetaAdAccountInfo[] = [];
     let nextPath: string | null = "/me/adaccounts";
     let nextParams: Record<string, string> | undefined = { fields: "id,account_id,name,currency", limit: "200" };
+    let lastCursor: string | null = null;
     let safety = 0;
     while (nextPath && safety++ < 50) {
       const resp: Resp = await this.request<Resp>(nextPath, nextParams ? { params: nextParams } : undefined);
       if (Array.isArray(resp.data)) all.push(...resp.data);
-      nextPath = resp.paging?.next || null;
+      const next = resp.paging?.next || null;
+      const cursor = resp.paging?.cursors?.after || null;
+      // Guard against stuck cursors
+      if (next && cursor && cursor === lastCursor) break;
+      lastCursor = cursor;
+      nextPath = next;
       nextParams = undefined; // next URL already has all params
     }
     return all;
@@ -361,15 +367,21 @@ export class MetaAPIService {
   async fetchAdSets(): Promise<Array<{ id: string; name: string; campaign_id?: string; effective_status?: string; daily_budget?: string }>> {
     if (!this.adAccountId) return [];
     interface Row { id: string; name: string; campaign_id?: string; effective_status?: string; daily_budget?: string }
-    interface Resp { data: Row[]; paging?: { next?: string } }
+    interface Resp { data: Row[]; paging?: { next?: string; cursors?: { after?: string } } }
     const all: Row[] = [];
     let nextPath: string | null = `/${this.adAccountId}/adsets`;
     let nextParams: Record<string, string> | undefined = { fields: "id,name,campaign_id,effective_status,daily_budget", limit: "200" };
+    let lastCursor: string | null = null;
     let safety = 0;
     while (nextPath && safety++ < 50) {
       const resp: Resp = await this.request<Resp>(nextPath, nextParams ? { params: nextParams } : undefined);
       if (Array.isArray(resp.data)) all.push(...resp.data);
-      nextPath = resp.paging?.next || null;
+      const next = resp.paging?.next || null;
+      const cursor = resp.paging?.cursors?.after || null;
+      // Guard against stuck cursors
+      if (next && cursor && cursor === lastCursor) break;
+      lastCursor = cursor;
+      nextPath = next;
       nextParams = undefined;
     }
     return all;
@@ -389,15 +401,21 @@ export class MetaAPIService {
   async fetchAds(): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }>> {
     if (!this.adAccountId) return [];
     interface Row { id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }
-    interface Resp { data: Row[]; paging?: { next?: string } }
+    interface Resp { data: Row[]; paging?: { next?: string; cursors?: { after?: string } } }
     const all: Row[] = [];
     let nextPath: string | null = `/${this.adAccountId}/ads`;
     let nextParams: Record<string, string> | undefined = { fields: "id,name,adset_id,campaign_id,effective_status,creative{id,thumbnail_url,title,body}", limit: "200" };
+    let lastCursor: string | null = null;
     let safety = 0;
     while (nextPath && safety++ < 50) {
       const resp: Resp = await this.request<Resp>(nextPath, nextParams ? { params: nextParams } : undefined);
       if (Array.isArray(resp.data)) all.push(...resp.data);
-      nextPath = resp.paging?.next || null;
+      const next = resp.paging?.next || null;
+      const cursor = resp.paging?.cursors?.after || null;
+      // Guard against stuck cursors
+      if (next && cursor && cursor === lastCursor) break;
+      lastCursor = cursor;
+      nextPath = next;
       nextParams = undefined;
     }
     return all;
