@@ -744,15 +744,19 @@ describe("UnmatchedFieldsPanel", () => {
     expect(screen.queryByRole("button", { name: "Cancel undo for field_4" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel undo for field_3" })).toBeInTheDocument();
 
-    // Clicking field_4's Undo arms only field_4 — it does NOT confirm field_3.
+    // Clicking field_4's Undo arms only field_4 — it does NOT confirm field_3
+    // (and the outside-click disarm logic disarms field_3, since clicking
+    // field_4 is "outside" field_3's row — a stray confirm of field_3 must
+    // not be triggered by interacting with another row).
     await user.click(undo4);
     const deleteCallsAfter = fetchMock.mock.calls.filter(([, init]) => (init?.method || "").toUpperCase() === "DELETE");
     expect(deleteCallsAfter.length).toBe(0);
     expect(undo4).toHaveTextContent(/Click again to confirm/);
     expect(screen.getByRole("button", { name: "Cancel undo for field_4" })).toBeInTheDocument();
-    // field_3 is still armed (not yet confirmed).
-    expect(undo3).toHaveTextContent(/Click again to confirm/);
-    // Both mappings are still present.
+    // field_3 is now disarmed (the click on field_4 was outside field_3's row).
+    expect(undo3).toHaveTextContent(/^Undo$/);
+    expect(screen.queryByRole("button", { name: "Cancel undo for field_3" })).not.toBeInTheDocument();
+    // Both mappings are still present — no DELETE was fired for either.
     expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
     expect(screen.getByText(/mapped → email/)).toBeInTheDocument();
   });
@@ -909,6 +913,84 @@ describe("UnmatchedFieldsPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("clicking outside the row disarms the pending Undo confirmation", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 654 } }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    // Render an unrelated element OUTSIDE the panel so we can simulate a
+    // click somewhere else on the page (e.g. global header, another tab).
+    render(
+      <div>
+        <button type="button">outside-target</button>
+        <UnmatchedFieldsPanel evt={makeEvent()} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    await user.click(undoBtn);
+    expect(undoBtn).toHaveTextContent(/Click again to confirm/);
+    expect(screen.getByRole("button", { name: "Cancel undo for field_3" })).toBeInTheDocument();
+
+    // Click on something outside the row — confirmation should disarm.
+    await user.click(screen.getByRole("button", { name: "outside-target" }));
+
+    expect(undoBtn).toHaveTextContent(/^Undo$/);
+    expect(screen.queryByRole("button", { name: "Cancel undo for field_3" })).not.toBeInTheDocument();
+    // Mapping is still saved, no DELETE was issued.
+    expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
+    const deleteCalls = fetchMock.mock.calls.filter(([, init]) => (init?.method || "").toUpperCase() === "DELETE");
+    expect(deleteCalls.length).toBe(0);
+  });
+
+  it("clicking inside the same row (Cancel button) still disarms via its own handler, not outside-click", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      if (method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ rule: { id: 655 } }) } as Response;
+      }
+      return { ok: false, status: 500, json: async () => ({}) } as Response;
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    const undoBtn = await screen.findByRole("button", { name: "Undo mapping for field_3" });
+    await user.click(undoBtn);
+    // Clicking the in-row Cancel button must not be misinterpreted as an
+    // outside click — Cancel still works as before.
+    await user.click(screen.getByRole("button", { name: "Cancel undo for field_3" }));
+    expect(undoBtn).toHaveTextContent(/^Undo$/);
+    expect(screen.getByText(/mapped → phone/)).toBeInTheDocument();
   });
 
   it("a fresh click within the idle window resets the auto-cancel timer", async () => {

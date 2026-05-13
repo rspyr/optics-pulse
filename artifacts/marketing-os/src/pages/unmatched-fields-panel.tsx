@@ -1201,6 +1201,7 @@ function SavedFieldRow({
   // when several Undo buttons sit next to each other (e.g. after
   // "Save all suggested" lands several mappings in adjacent rows).
   const [confirming, setConfirming] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
 
   // If the operator arms the confirmation but never follows through, auto-
   // disarm after a short idle window so a stray click later doesn't delete
@@ -1212,6 +1213,26 @@ function SavedFieldRow({
       setConfirming(false);
     }, UNDO_CONFIRMATION_TIMEOUT_MS);
     return () => clearTimeout(timer);
+  }, [confirming]);
+
+  // Disarm when the operator clicks anywhere outside the row (a different
+  // row, a tab elsewhere in the app, the global header, etc). Without this
+  // the red confirmation stays armed until the idle timeout, leaving a wide
+  // window where a stray click on the (still-relabeled) Undo button fires
+  // the DELETE. Clicks inside this row — including on Cancel or the Undo
+  // button itself — fall through to their own handlers untouched.
+  useEffect(() => {
+    if (!confirming) return;
+    if (typeof document === "undefined") return;
+    const handlePointerDown = (event: MouseEvent | PointerEvent) => {
+      const row = rowRef.current;
+      if (!row) return;
+      const target = event.target as Node | null;
+      if (target && row.contains(target)) return;
+      setConfirming(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [confirming]);
 
   const handleUndoClick = () => {
@@ -1246,7 +1267,7 @@ function SavedFieldRow({
   const changeDisabled = isSaving || isUndoing || disabled || confirming;
 
   return (
-    <div className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
+    <div ref={rowRef} className="flex items-center gap-2 bg-white/[0.02] border border-white/10 rounded-md px-2.5 py-1.5">
       <div className="flex-1 min-w-0">
         <code className="block text-[11px] text-white/80 truncate" title={name}>{name}</code>
         {formattedValue !== null && (
