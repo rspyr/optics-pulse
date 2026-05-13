@@ -1,7 +1,7 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useGetMetaCampaignSummary, useGetMetaCampaignBreakdown } from "@workspace/api-client-react";
 import { PremiumCard } from "@/components/ui-helpers";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2, ArrowUp, ArrowDown } from "lucide-react";
 
 type Props = {
   startDate: string;
@@ -24,6 +24,15 @@ function formatMoney(amount: number, currency: string | null | undefined): strin
 
 function formatInt(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
+}
+
+type SortKey = "spend" | "clicks" | "conversions" | "cpl";
+type SortDir = "asc" | "desc";
+
+function isActiveStatus(status: string | null | undefined): boolean {
+  if (!status) return true;
+  const s = status.toUpperCase();
+  return s !== "PAUSED" && s !== "INACTIVE" && s !== "ARCHIVED" && s !== "DELETED";
 }
 
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
@@ -129,9 +138,72 @@ function CampaignRow({ campaign, expanded, onToggle, startDate, endDate }: Campa
   );
 }
 
+type SortHeaderProps = {
+  label: string;
+  columnKey: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+};
+
+function SortHeader({ label, columnKey, sortKey, sortDir, onSort }: SortHeaderProps) {
+  const active = columnKey === sortKey;
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onSort(columnKey); }}
+      className={`inline-flex items-center gap-1 hover:text-white ${active ? "text-white" : ""}`}
+      data-testid={`sort-${columnKey}`}
+    >
+      <span>{label}</span>
+      {active && (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+    </button>
+  );
+}
+
 function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: number; startDate: string; endDate: string }) {
   const { data, isLoading } = useGetMetaCampaignBreakdown(campaignId, { startDate, endDate });
   const [expandedSets, setExpandedSets] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<SortKey>("spend");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [hideInactive, setHideInactive] = useState(false);
+
+  // Reset sort/filter state when the date range changes (per-campaign).
+  useEffect(() => {
+    setSortKey("spend");
+    setSortDir("desc");
+    setHideInactive(false);
+    setExpandedSets({});
+  }, [startDate, endDate]);
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir(prev => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const sortedSets = useMemo(() => {
+    if (!data) return [];
+    const filtered = hideInactive ? data.adSets.filter(s => isActiveStatus(s.status)) : data.adSets;
+    const sign = sortDir === "asc" ? 1 : -1;
+    const sorted = [...filtered].sort((a, b) => {
+      const av = (a[sortKey] as number) ?? 0;
+      const bv = (b[sortKey] as number) ?? 0;
+      return (av - bv) * sign;
+    });
+    return sorted.map(set => {
+      const ads = hideInactive ? set.ads.filter(ad => isActiveStatus(ad.status)) : set.ads;
+      const sortedAds = [...ads].sort((a, b) => {
+        const av = (a[sortKey] as number) ?? 0;
+        const bv = (b[sortKey] as number) ?? 0;
+        return (av - bv) * sign;
+      });
+      return { ...set, ads: sortedAds };
+    });
+  }, [data, sortKey, sortDir, hideInactive]);
 
   if (isLoading && !data) {
     return (
@@ -157,7 +229,36 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
 
   return (
     <>
-      {data.adSets.map(set => {
+      <tr className="bg-white/[0.02] border-b border-white/5">
+        <td colSpan={6} className="py-2 pl-12 pr-4">
+          <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
+            <div className="flex items-center gap-3">
+              <span className="uppercase tracking-wider">Sort:</span>
+              <SortHeader label="Spend" columnKey="spend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortHeader label="Clicks" columnKey="clicks" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortHeader label="Conversions" columnKey="conversions" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortHeader label="CPL" columnKey="cpl" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hideInactive}
+                onChange={(e) => setHideInactive(e.target.checked)}
+                data-testid={`hide-inactive-${campaignId}`}
+                className="accent-white"
+              />
+              <span>Hide paused/inactive</span>
+            </label>
+          </div>
+        </td>
+      </tr>
+      {sortedSets.length === 0 ? (
+        <tr>
+          <td colSpan={6} className="py-4 pl-12 text-muted-foreground italic text-xs">
+            No ad sets match the current filter.
+          </td>
+        </tr>
+      ) : sortedSets.map(set => {
         const open = !!expandedSets[set.externalId];
         return (
           <Fragment key={set.externalId}>
@@ -188,7 +289,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
             {open && set.ads.length === 0 && (
               <tr key={`set-${set.externalId}-empty`}>
                 <td colSpan={6} className="py-2 pl-16 text-muted-foreground italic text-xs">
-                  No ads with stats in this date range.
+                  {hideInactive ? "No active ads with stats in this date range." : "No ads with stats in this date range."}
                 </td>
               </tr>
             )}
