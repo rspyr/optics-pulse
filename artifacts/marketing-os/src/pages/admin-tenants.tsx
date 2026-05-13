@@ -156,8 +156,7 @@ export default function AdminTenants() {
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [metaOAuthStatus, setMetaOAuthStatus] = useState<{ connected: boolean; hasAppId: boolean; hasAppSecret: boolean; hasAccessToken: boolean } | null>(null);
-  const [googleOAuthStatus, setGoogleOAuthStatus] = useState<{ connected: boolean; hasClientId: boolean; hasClientSecret: boolean; hasRefreshToken: boolean } | null>(null);
+  const [loadedConfig, setLoadedConfig] = useState<Record<string, string>>({});
   const [togglingStSync, setTogglingStSync] = useState<number | null>(null);
 
   const handleToggleStSync = async (tenantId: number, currentlyPaused: boolean) => {
@@ -391,18 +390,23 @@ export default function AdminTenants() {
     setClearedFields(new Set());
     setShowIntegrationConfig(false);
     setEditTab("integrations");
-    setMetaOAuthStatus(null);
-    setGoogleOAuthStatus(null);
-    const tid = t.id as number;
-    fetch(`${API_BASE}/api/oauth/meta/status?tenantId=${tid}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setMetaOAuthStatus(data); })
-      .catch(() => { /* ignore */ });
-    fetch(`${API_BASE}/api/oauth/google-ads/status?tenantId=${tid}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setGoogleOAuthStatus(data); })
-      .catch(() => { /* ignore */ });
+    setLoadedConfig(lc as Record<string, string>);
   };
+
+  // Server-truth: was this field non-empty when the tenant was loaded?
+  // loadableConfig returns "••••XXXX" for masked secrets and the raw value otherwise — both truthy.
+  const isSaved = (field: string): boolean => {
+    const v = loadedConfig[field];
+    return typeof v === "string" && v.length > 0;
+  };
+  const hasUserEntered = (field: SecretField): boolean => {
+    const v = form[field];
+    if (typeof v !== "string" || v.length === 0) return false;
+    if (clearedFields.has(field)) return false;
+    return !v.startsWith("••••") && !v.startsWith("****");
+  };
+  const fieldReady = (field: SecretField): boolean =>
+    hasUserEntered(field) || (isSaved(field) && !clearedFields.has(field));
 
   const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
 
@@ -426,9 +430,22 @@ export default function AdminTenants() {
   const SecretInput = ({ field, label, placeholder = "Enter to update" }: { field: SecretField; label: string; placeholder?: string }) => {
     const hasValue = form[field] && (form[field].startsWith("••••") || form[field].startsWith("****"));
     const isCleared = clearedFields.has(field);
+    const saved = isSaved(field);
+    const entered = hasUserEntered(field);
     return (
       <div>
-        <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">{label}</label>
+        <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1.5">
+          <span>{label}</span>
+          {entered && !isCleared ? (
+            <span className="text-[10px] font-normal normal-case text-blue-300/80 bg-blue-500/10 px-1.5 rounded">new</span>
+          ) : isCleared ? (
+            <span className="text-[10px] font-normal normal-case text-red-300/80 bg-red-500/10 px-1.5 rounded">cleared</span>
+          ) : saved ? (
+            <span className="text-[10px] font-normal normal-case text-emerald-300/80 bg-emerald-500/10 px-1.5 rounded">saved</span>
+          ) : (
+            <span className="text-[10px] font-normal normal-case text-muted-foreground/60">not set</span>
+          )}
+        </label>
         <div className="relative">
           <input type={secretInputType(field)} value={form[field] || ""} onFocus={() => handleSecretFocus(field)} onChange={(e) => { trackFieldChange(field); setClearedFields(prev => { const s = new Set(prev); s.delete(field); return s; }); setForm(f => ({ ...f, [field]: e.target.value })); }} placeholder={isCleared ? "Cleared — save to apply" : placeholder} className={inputClass + " w-full" + (isCleared ? " border-red-500/50" : "")} />
           {(hasValue || isCleared) && !isCleared && (
@@ -468,17 +485,25 @@ export default function AdminTenants() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-xs font-medium text-yellow-400 uppercase tracking-wider">Google Ads</h4>
-              {editId && (
-                <button
-                  type="button"
-                  onClick={() => handleConnectGoogleAds(editId)}
-                  disabled={googleAdsConnecting || !(form.googleAdsClientId || googleOAuthStatus?.hasClientId)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
-                >
-                  {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                  {googleOAuthStatus?.connected || form.googleAdsRefreshToken ? "Reconnect" : "Connect Google Ads"}
-                </button>
-              )}
+              {editId && (() => {
+                const gaReady = fieldReady("googleAdsClientId") && fieldReady("googleAdsClientSecret");
+                const gaConnected = isSaved("googleAdsRefreshToken");
+                const missing: string[] = [];
+                if (!fieldReady("googleAdsClientId")) missing.push("OAuth Client ID");
+                if (!fieldReady("googleAdsClientSecret")) missing.push("OAuth Client Secret");
+                return (
+                  <button
+                    type="button"
+                    onClick={() => handleConnectGoogleAds(editId)}
+                    disabled={googleAdsConnecting || !gaReady}
+                    title={gaReady ? "" : `Save ${missing.join(" and ")} first, then click to authorize`}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+                  >
+                    {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
+                    {gaConnected ? "Reconnect Google Ads" : "Connect Google Ads"}
+                  </button>
+                );
+              })()}
             </div>
             {googleAdsOAuthMessage && (
               <div className={`mb-3 p-3 rounded-lg text-xs ${googleAdsOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
@@ -507,17 +532,25 @@ export default function AdminTenants() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider">Meta (Facebook/Instagram)</h4>
-              {editId && (
-                <button
-                  type="button"
-                  onClick={() => handleConnectMeta(editId)}
-                  disabled={metaConnecting || !(form.metaAppId || metaOAuthStatus?.hasAppId) || !(form.metaAppSecret || metaOAuthStatus?.hasAppSecret)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
-                >
-                  {metaConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                  {metaOAuthStatus?.connected || form.metaAccessToken ? "Reconnect" : "Connect Meta"}
-                </button>
-              )}
+              {editId && (() => {
+                const metaReady = fieldReady("metaAppId") && fieldReady("metaAppSecret");
+                const metaConnected = isSaved("metaAccessToken");
+                const missing: string[] = [];
+                if (!fieldReady("metaAppId")) missing.push("App ID");
+                if (!fieldReady("metaAppSecret")) missing.push("App Secret");
+                return (
+                  <button
+                    type="button"
+                    onClick={() => handleConnectMeta(editId)}
+                    disabled={metaConnecting || !metaReady}
+                    title={metaReady ? "" : `Save ${missing.join(" and ")} first, then click to authorize`}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+                  >
+                    {metaConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
+                    {metaConnected ? "Reconnect Meta" : "Connect Meta"}
+                  </button>
+                );
+              })()}
             </div>
             {metaOAuthMessage && (
               <div className={`mb-3 p-3 rounded-lg text-xs ${metaOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
