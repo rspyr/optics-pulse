@@ -32,7 +32,30 @@ export default function Internal() {
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
-    backfillStatus?: Record<string, { status: string; recordsProcessed: number; progress: string | null; startedAt: string | null; completedAt: string | null }>;
+    backfillStatus?: Record<string, {
+      status: string;
+      recordsProcessed: number;
+      progress: string | null;
+      progressDetail?: {
+        raw: string;
+        kind: "chunk" | "partial" | "other";
+        currentChunk: number | null;
+        totalChunks: number | null;
+        windowStart: string | null;
+        windowEnd: string | null;
+        percent: number | null;
+        partialReason: string | null;
+      } | null;
+      errorDetail?: {
+        raw: string;
+        code: string;
+        message: string;
+        suggestedAction: string;
+        partial: boolean;
+      } | null;
+      startedAt: string | null;
+      completedAt: string | null;
+    }>;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -504,9 +527,40 @@ export default function Internal() {
                         )}
                       </div>
                       {bf && (
-                        <div className="space-y-1 text-[11px] text-muted-foreground">
-                          {bf.progress && (
-                            <p className="text-white/70 font-mono break-all">{bf.progress}</p>
+                        <div className="space-y-1.5 text-[11px] text-muted-foreground">
+                          {bf.progressDetail && bf.progressDetail.kind === "chunk" && bf.status === "running" && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-white/80">
+                                  Chunk {bf.progressDetail.currentChunk}/{bf.progressDetail.totalChunks}
+                                </span>
+                                <span className="text-white/50">
+                                  {bf.progressDetail.windowStart} → {bf.progressDetail.windowEnd}
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full bg-white/5 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-400/70 transition-all"
+                                  style={{ width: `${bf.progressDetail.percent ?? 0}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {bf.errorDetail ? (
+                            <div className="rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1">
+                              <p className="text-red-300 font-medium">{bf.errorDetail.message}</p>
+                              <p className="text-white/60">{bf.errorDetail.suggestedAction}</p>
+                              {bf.errorDetail.raw && bf.errorDetail.raw !== bf.errorDetail.message && (
+                                <details className="text-[10px] text-white/40">
+                                  <summary className="cursor-pointer hover:text-white/60">Technical details</summary>
+                                  <p className="font-mono break-all mt-1">{bf.errorDetail.raw}</p>
+                                </details>
+                              )}
+                            </div>
+                          ) : (
+                            !bf.progressDetail && bf.progress && (
+                              <p className="text-white/70 font-mono break-all">{bf.progress}</p>
+                            )
                           )}
                           <p>{bf.recordsProcessed.toLocaleString()} rows</p>
                           <p>

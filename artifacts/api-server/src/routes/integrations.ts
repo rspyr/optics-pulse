@@ -4,6 +4,7 @@ import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } fro
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
+import { parseBackfillProgress, classifyBackfillError, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
 const router: IRouter = Router();
 
@@ -312,6 +313,15 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     status: string;
     recordsProcessed: number;
     progress: string | null;
+    /** Structured chunk progress when the writer most recently stashed a
+     *  `chunk N/M: …` string. Null when the message can't be parsed (e.g.
+     *  the run finished or only an error message is present). */
+    progressDetail: BackfillProgressDetail | null;
+    /** Friendly classification of the most recent error message. Set when
+     *  the row is in `error` status OR when the writer stashed a
+     *  `partial: …` mid-run failure but the outer status hasn't flipped
+     *  yet. Null on healthy / completed runs. */
+    errorDetail: BackfillErrorDetail | null;
     startedAt: string | null;
     completedAt: string | null;
   }> = {};
@@ -320,10 +330,20 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       (l) => l.integration === integ && l.syncType === "backfill",
     );
     if (log) {
+      const progressDetail = parseBackfillProgress(log.errorMessage);
+      // Surface a friendly error when the run is in `error` status, or
+      // when the message itself looks like a failure (partial: … written
+      // by the inner catch before the outer status flips).
+      const looksLikeError =
+        log.status === "error"
+        || (progressDetail?.kind === "partial");
+      const errorDetail = looksLikeError ? classifyBackfillError(log.errorMessage) : null;
       backfillStatus[integ] = {
         status: log.status,
         recordsProcessed: log.recordsProcessed,
         progress: log.errorMessage,
+        progressDetail: progressDetail && progressDetail.kind === "chunk" ? progressDetail : null,
+        errorDetail,
         startedAt: log.startedAt?.toISOString() ?? null,
         completedAt: log.completedAt?.toISOString() ?? null,
       };
