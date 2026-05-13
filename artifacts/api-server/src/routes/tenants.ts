@@ -3,6 +3,7 @@ import { db, tenantsTable, usersTable, leadSourceAliasesTable, callrailWebhookSt
 import { eq, sql, and } from "drizzle-orm";
 import { CreateTenantBody, GetTenantParams, UpdateTenantBody } from "@workspace/api-zod";
 import { requireRole } from "../middleware/auth";
+import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
 
@@ -132,6 +133,12 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
 
 router.get("/tenants/:tenantId", async (req, res) => {
   const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
+  // Path-resolved resource: super_admin / agency_user may read any
+  // tenant, but a tenant-scoped role may only read its own. The
+  // resource's "tenantId" is the requested id itself (a tenant row's
+  // tenantId is its own id).
+  const access = assertResourceTenantAccess(req, res, tenantId);
+  if (!access.ok) return;
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) {
     res.status(404).json({ error: "Tenant not found" });
@@ -144,15 +151,17 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   const role = req.session.userRole;
   const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
 
-  if (role === "client_admin") {
-    if (req.session.tenantId !== tenantId) {
-      res.status(403).json({ error: "Cannot modify another tenant" });
-      return;
-    }
-  } else if (role !== "super_admin" && role !== "agency_user") {
+  // Only super_admin / agency_user / client_admin may PATCH a tenant.
+  // For client_admin the helper enforces same-tenant access; everyone
+  // else (e.g. tenant_user, client_user) is rejected here.
+  if (role !== "super_admin" && role !== "agency_user" && role !== "client_admin") {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
+  const access = assertResourceTenantAccess(req, res, tenantId, {
+    deniedMessage: "Cannot modify another tenant",
+  });
+  if (!access.ok) return;
 
   const body = UpdateTenantBody.parse(req.body);
   const updateData: Partial<typeof tenantsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
@@ -236,11 +245,10 @@ router.patch("/tenants/:tenantId", async (req, res) => {
 
 router.get("/tenants/:tenantId/callrail-status", async (req, res) => {
   const { tenantId } = GetTenantParams.parse({ tenantId: req.params.tenantId });
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user" && req.session.tenantId !== tenantId) {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
+  const access = assertResourceTenantAccess(req, res, tenantId, {
+    deniedMessage: "Forbidden",
+  });
+  if (!access.ok) return;
   try {
     const [status] = await db.select().from(callrailWebhookStatusTable)
       .where(eq(callrailWebhookStatusTable.tenantId, tenantId));

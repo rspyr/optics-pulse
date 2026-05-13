@@ -10,7 +10,7 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, inArray, SQL, sql } from "drizzle-orm";
 import { ListCampaignsQueryParams } from "@workspace/api-zod";
-import { resolveListTenantScope } from "../lib/tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -184,15 +184,13 @@ router.get("/campaigns/:campaignId/breakdown", async (req, res) => {
 
   // Tenant authorization: super_admin / agency_user may access any campaign;
   // every other role must match the campaign's tenant. enforceTenantScope
-  // does not validate path-resolved resources like :campaignId.
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user") {
-    const sessionTenantId = req.session.tenantId;
-    if (!sessionTenantId || sessionTenantId !== campaign.tenantId) {
-      res.status(404).json({ error: "Campaign not found" });
-      return;
-    }
-  }
+  // does not validate path-resolved resources like :campaignId. Use 404 on
+  // mismatch to keep the response indistinguishable from "does not exist".
+  const access = assertResourceTenantAccess(req, res, campaign.tenantId, {
+    notFoundOnMismatch: true,
+    notFoundMessage: "Campaign not found",
+  });
+  if (!access.ok) return;
 
   if (campaign.platform !== "meta") {
     res.status(404).json({ error: "Campaign not found" });

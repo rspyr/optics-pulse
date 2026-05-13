@@ -8,7 +8,7 @@ import { getSmartQueue } from "../services/lead-scoring";
 import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";
 import type { ComparisonBaseline } from "../services/coordinator-stats";
 import { parseFilterQuery } from "../services/parse-filter";
-import { resolveListTenantScope } from "../lib/tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -594,13 +594,8 @@ router.get("/leads/:leadId", async (req, res) => {
       .from(leadMergesTable)
       .where(eq(leadMergesTable.duplicateLeadId, leadId));
     if (merge) {
-      const role = req.session.userRole;
-      if (role !== "super_admin" && role !== "agency_user") {
-        if (merge.tenantId !== req.session.tenantId) {
-          res.status(403).json({ error: "Access denied" });
-          return;
-        }
-      }
+      const access = assertResourceTenantAccess(req, res, merge.tenantId);
+      if (!access.ok) return;
       res.status(410).json({
         error: "Lead was merged",
         mergedInto: {
@@ -615,13 +610,8 @@ router.get("/leads/:leadId", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user") {
-    if (lead.tenantId !== req.session.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, lead.tenantId);
+  if (!access.ok) return;
   res.json(lead);
 });
 
@@ -648,13 +638,8 @@ router.get("/leads/:leadId/merges", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user") {
-    if (tenantId !== req.session.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, tenantId);
+  if (!access.ok) return;
 
   const [duplicates, mergedIntoRows] = await Promise.all([
     db
@@ -693,13 +678,8 @@ router.patch("/leads/:leadId", async (req, res) => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user") {
-    if (existingLead.tenantId !== req.session.tenantId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-  }
+  const access = assertResourceTenantAccess(req, res, existingLead.tenantId);
+  if (!access.ok) return;
   const body = UpdateLeadBody.parse(req.body);
   const updateData: Partial<typeof leadsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
   if (body.status) {

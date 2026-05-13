@@ -3,7 +3,7 @@ import { db, funnelTypesTable, tenantFunnelTypesTable, tenantsTable } from "@wor
 import { eq, and, desc, inArray } from "drizzle-orm";
 
 import { requireRole } from "../middleware/auth";
-import { resolveListTenantScope } from "../lib/tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -100,6 +100,15 @@ router.delete("/tenants/:id/funnel-types/:funnelTypeId", requireRole("super_admi
 
 router.get("/tenants/:id/funnel-types", async (req, res) => {
   const tenantId = parseInt(String(req.params.id));
+  if (Number.isNaN(tenantId)) {
+    res.status(400).json({ error: "Invalid tenant id" });
+    return;
+  }
+  // Path-resolved resource: tenant-scoped roles may only read their
+  // own tenant's funnel-type associations. enforceTenantScope does
+  // not guard the `:id` param here.
+  const access = assertResourceTenantAccess(req, res, tenantId);
+  if (!access.ok) return;
   const associations = await db.select({
     funnelTypeId: tenantFunnelTypesTable.funnelTypeId,
   })

@@ -5,7 +5,7 @@ import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
 import { hashValue, hashPhone } from "../lib/phone-utils";
-import { resolveListTenantScope, NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess, NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 import { extractFieldNamesForOperator, computeUnmatchedReason, extractPiiFromFields } from "./tracker";
 
 const router: IRouter = Router();

@@ -67,3 +67,62 @@ export function resolveListTenantScope(
   }
   return { ok: true, tenantId: userTenantId };
 }
+
+/**
+ * Result of asserting that the caller may access a path-resolved
+ * resource (e.g. `GET /resource/:id`, `PATCH /resource/:id`,
+ * `DELETE /resource/:id`).
+ *
+ * `ok: false` means this helper has already written a 4xx response to
+ * `res` and the caller MUST early-return without further work.
+ */
+export type ResourceTenantAccess = { ok: true } | { ok: false };
+
+/**
+ * Companion to `resolveListTenantScope` for **detail** and **write**
+ * handlers. `enforceTenantScope` middleware only inspects
+ * query/body/param `tenantId` — it cannot stop a tenant_user from
+ * passing any `:id` and accessing a resource owned by another tenant.
+ *
+ * Each detail/write handler must:
+ *   1. Load the resource (or just its `tenantId` column) from the DB
+ *   2. Pass `resource.tenantId` to this helper before reading or
+ *      mutating the resource further.
+ *
+ * Behavior:
+ * - super_admin / agency_user: always allowed (cross-tenant access).
+ * - any other role with no `session.tenantId`: 403 "No tenant assigned".
+ * - any other role whose `session.tenantId` does not match
+ *   `resourceTenantId`: responds with `notFoundOnMismatch ? 404 : 403`
+ *   so the handler does not leak resource existence to attackers.
+ *   The default is 403 "Access denied" to match the existing pattern
+ *   on `/leads/:leadId` and `/attribution/events/:id`. Pass
+ *   `notFoundOnMismatch: true` for endpoints (like
+ *   `/campaigns/:campaignId/breakdown`) that already prefer 404 to
+ *   keep responses indistinguishable from "resource does not exist".
+ */
+export function assertResourceTenantAccess(
+  req: Request,
+  res: Response,
+  resourceTenantId: number | null | undefined,
+  options?: { notFoundOnMismatch?: boolean; notFoundMessage?: string; deniedMessage?: string },
+): ResourceTenantAccess {
+  const role = req.session.userRole;
+  if (role === "super_admin" || role === "agency_user") {
+    return { ok: true };
+  }
+  const userTenantId = req.session.tenantId ?? null;
+  if (!userTenantId) {
+    res.status(403).json({ error: "No tenant assigned" });
+    return { ok: false };
+  }
+  if (resourceTenantId == null || resourceTenantId !== userTenantId) {
+    if (options?.notFoundOnMismatch) {
+      res.status(404).json({ error: options?.notFoundMessage ?? "Not found" });
+    } else {
+      res.status(403).json({ error: options?.deniedMessage ?? "Access denied" });
+    }
+    return { ok: false };
+  }
+  return { ok: true };
+}
