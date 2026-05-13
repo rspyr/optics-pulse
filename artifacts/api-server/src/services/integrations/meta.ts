@@ -113,6 +113,7 @@ export function sumConversionActions(actions: MetaAction[] | undefined | null): 
   return total;
 }
 
+export interface MetaVideoAction { action_type: string; value: string }
 interface MetaInsightRow {
   ad_id?: string;
   ad_name?: string;
@@ -126,6 +127,11 @@ interface MetaInsightRow {
   spend?: string;
   cpm?: string;
   actions?: MetaAction[];
+  video_play_actions?: MetaAction[];
+  video_p25_watched_actions?: MetaAction[];
+  video_p50_watched_actions?: MetaAction[];
+  video_p75_watched_actions?: MetaAction[];
+  video_p100_watched_actions?: MetaAction[];
 }
 
 interface MetaInsightsResponse {
@@ -295,7 +301,7 @@ export class MetaAPIService {
   async fetchAdDailyInsights(since: string, until: string): Promise<MetaInsightRow[]> {
     if (!this.adAccountId) throw new Error("MetaAPIService: adAccountId required for insights");
     const params: Record<string, string> = {
-      fields: "ad_id,ad_name,adset_id,campaign_id,campaign_name,impressions,clicks,spend,cpm,actions,date_start,date_stop",
+      fields: "ad_id,ad_name,adset_id,campaign_id,campaign_name,impressions,clicks,spend,cpm,actions,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions,date_start,date_stop",
       time_range: JSON.stringify({ since, until }),
       level: "ad",
       time_increment: "1",

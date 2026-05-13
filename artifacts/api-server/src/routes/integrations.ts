@@ -105,22 +105,33 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
 
   const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
   const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
+  const reconnectMap: Record<string, { needs: boolean; reason: string | null }> = {
+    service_titan: { needs: false, reason: null },
+    google_ads: { needs: false, reason: null },
+    meta: { needs: false, reason: null },
+  };
   if (tenantId) {
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     if (tenant) {
       pausedMap.service_titan = tenant.stSyncPaused === true;
+      reconnectMap.meta = {
+        needs: tenant.metaNeedsReconnect === true,
+        reason: tenant.metaReconnectReason ?? null,
+      };
       if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
         try {
           const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
           configuredMap.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret && config.serviceTitanAppKey);
           configuredMap.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
-          configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId) && !tenant.metaNeedsReconnect;
+          // "configured" = credentials saved. "needs_reconnect" is reported as a
+          // separate, distinct state below — never collapsed into no_credentials.
+          configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
         } catch { /* decryption failed */ }
       }
     }
   }
 
-  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "never";
+  type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
 
   const integrations = ["service_titan", "google_ads", "meta"] as const;
   const statusByIntegration: Record<string, {
@@ -130,6 +141,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     errorCount: number;
     latestRunAt: string | null;
     state: IntegrationState;
+    needsReconnect: boolean;
+    reconnectReason: string | null;
     syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }>;
   }> = {};
 
@@ -158,6 +171,11 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       state = "paused";
     } else if (tenantId && !configuredMap[integ]) {
       state = "no_credentials";
+    } else if (tenantId && reconnectMap[integ]?.needs) {
+      // Distinct from no_credentials: credentials exist but the upstream
+      // OAuth/API token has expired or been revoked, so we surface a
+      // reconnect-required signal that the UI can show as its own badge.
+      state = "needs_reconnect";
     } else if (latest?.status === "error") {
       state = "error";
     } else if (latest?.status === "completed") {
@@ -171,6 +189,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       errorCount: integLogs.filter((l) => l.status === "error").length,
       latestRunAt: latest?.completedAt?.toISOString() || null,
       state,
+      needsReconnect: reconnectMap[integ]?.needs ?? false,
+      reconnectReason: reconnectMap[integ]?.reason ?? null,
       syncTypes,
     };
   }

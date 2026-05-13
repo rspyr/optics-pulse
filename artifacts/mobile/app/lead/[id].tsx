@@ -1254,7 +1254,7 @@ export default function LeadDetailScreen() {
                   value={callbackDate}
                   mode="date"
                   minimumDate={new Date()}
-                  onChange={(_, date) => {
+                  onChange={(_: unknown, date?: Date) => {
                     setShowDatePicker(false);
                     if (date) {
                       const updated = new Date(callbackDate);
@@ -1268,7 +1268,7 @@ export default function LeadDetailScreen() {
                 <DateTimePicker
                   value={callbackDate}
                   mode="time"
-                  onChange={(_, date) => {
+                  onChange={(_: unknown, date?: Date) => {
                     setShowTimePicker(false);
                     if (date) {
                       const updated = new Date(callbackDate);
@@ -1700,7 +1700,7 @@ export default function LeadDetailScreen() {
                                         value={editForm.editCallbackDate}
                                         mode="date"
                                         minimumDate={new Date()}
-                                        onChange={(_, date) => {
+                                        onChange={(_: unknown, date?: Date) => {
                                           setShowEditDatePicker(false);
                                           if (date) {
                                             const updated = new Date(editForm.editCallbackDate);
@@ -1714,7 +1714,7 @@ export default function LeadDetailScreen() {
                                       <DateTimePicker
                                         value={editForm.editCallbackDate}
                                         mode="time"
-                                        onChange={(_, date) => {
+                                        onChange={(_: unknown, date?: Date) => {
                                           setShowEditTimePicker(false);
                                           if (date) {
                                             const updated = new Date(editForm.editCallbackDate);
@@ -1752,7 +1752,7 @@ export default function LeadDetailScreen() {
                                         value={editForm.editApptDate}
                                         mode="date"
                                         minimumDate={new Date()}
-                                        onChange={(_, date) => {
+                                        onChange={(_: unknown, date?: Date) => {
                                           setShowEditApptDatePicker(false);
                                           if (date) {
                                             const updated = new Date(editForm.editApptDate);
@@ -1766,7 +1766,7 @@ export default function LeadDetailScreen() {
                                       <DateTimePicker
                                         value={editForm.editApptTime}
                                         mode="time"
-                                        onChange={(_, date) => {
+                                        onChange={(_: unknown, date?: Date) => {
                                           setShowEditApptTimePicker(false);
                                           if (date) {
                                             setEditForm(f => ({ ...f, editApptTime: date }));

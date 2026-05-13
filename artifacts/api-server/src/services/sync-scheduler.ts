@@ -524,12 +524,14 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
         .where(and(eq(metaAdAccountsTable.tenantId, tenantId), eq(metaAdAccountsTable.accountId, accountIdNoPrefix)))
         .limit(1);
       currency = acct?.currency;
-    } catch {}
+    } catch (currencyErr) {
+      console.warn(`[Sync] Meta tenant ${tenantId}: could not read account currency, falling back to null`, currencyErr);
+    }
 
     // Fetch ad-set + ad metadata so we can persist names/statuses/budgets.
     const [adSets, ads, insights] = await Promise.all([
-      svc.fetchAdSets().catch((e) => { throw e; }),
-      svc.fetchAds().catch((e) => { throw e; }),
+      svc.fetchAdSets(),
+      svc.fetchAds(),
       svc.fetchAdDailyInsights(startDate, endDate),
     ]);
 
@@ -614,6 +616,15 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       const clicks = parseIntField(row.clicks);
       const actions: MetaAction[] = row.actions || [];
       const conversions = sumConversionActions(actions);
+      // Persist all action-style breakdowns (standard + video) in a single jsonb
+      // payload keyed by Meta's response field name. Lets dashboards compute
+      // ThruPlay rate, completion rate, etc. without another API call.
+      const actionsPayload: Record<string, MetaAction[]> = { actions };
+      if (row.video_play_actions) actionsPayload.video_play_actions = row.video_play_actions;
+      if (row.video_p25_watched_actions) actionsPayload.video_p25_watched_actions = row.video_p25_watched_actions;
+      if (row.video_p50_watched_actions) actionsPayload.video_p50_watched_actions = row.video_p50_watched_actions;
+      if (row.video_p75_watched_actions) actionsPayload.video_p75_watched_actions = row.video_p75_watched_actions;
+      if (row.video_p100_watched_actions) actionsPayload.video_p100_watched_actions = row.video_p100_watched_actions;
 
       adDailyRows.push({
         tenantId,
@@ -627,7 +638,7 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
         clicks,
         conversions,
         currency: currency ?? null,
-        actionsJson: actions,
+        actionsJson: actionsPayload,
       });
 
       const bucketKey = `${row.campaign_id}|${date}`;
@@ -753,7 +764,11 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
     try { await emitSyncFailureNotification(tenantId, "meta", message); } catch {}
     return { synced: 0, error: message };
   } finally {
-    try { await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`); } catch {}
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Sync] Meta tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
   }
 }
 

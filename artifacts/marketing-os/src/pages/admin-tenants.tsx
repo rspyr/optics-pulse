@@ -1319,7 +1319,11 @@ function MetaAdAccountPicker({ tenantId, apiBase, currentAdAccountId, onChange }
   const [data, setData] = useState<MetaAdAccountResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
 
   const load = async (refresh = false) => {
     setLoading(true);
@@ -1363,6 +1367,30 @@ function MetaAdAccountPicker({ tenantId, apiBase, currentAdAccountId, onChange }
     }
   };
 
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch(`${apiBase}/api/integrations/sync/meta`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        setSyncMessage({ type: "error", text: json.error || `HTTP ${res.status}` });
+      } else {
+        setSyncMessage({ type: "success", text: `Synced ${json.synced} ad-day rows` });
+        await load(false);
+      }
+    } catch (e) {
+      setSyncMessage({ type: "error", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const accounts = data?.accounts || [];
   const selectedNoPrefix = (data?.selectedAdAccountId || currentAdAccountId || "").replace(/^act_/, "");
 
@@ -1372,20 +1400,35 @@ function MetaAdAccountPicker({ tenantId, apiBase, currentAdAccountId, onChange }
         <label className="text-xs text-muted-foreground uppercase tracking-wider">Ad Account</label>
         <div className="flex items-center gap-2">
           {data?.needsReconnect && (
-            <span className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-400 text-[10px] font-medium border border-red-500/30">
+            <span
+              className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-400 text-[10px] font-medium border border-red-500/30"
+              title="Meta access token has expired or been revoked. Click Reconnect Meta above. Nightly sync skips this tenant until you reconnect."
+            >
               Reconnect required
             </span>
           )}
           <button
             type="button"
             onClick={() => load(true)}
-            disabled={loading || busy}
+            disabled={loading || busy || syncing}
             className="text-[11px] text-purple-400 hover:text-purple-300 disabled:opacity-50"
           >
             {loading ? "Refreshing…" : "Refresh from Meta"}
           </button>
+          <button
+            type="button"
+            onClick={handleSyncNow}
+            disabled={syncing || loading || busy || data?.needsReconnect || !selectedNoPrefix}
+            title={data?.needsReconnect ? "Reconnect Meta first" : !selectedNoPrefix ? "Pick an ad account first" : "Run a one-off Meta sync now (also runs nightly at 1 AM ET)"}
+            className="text-[11px] text-emerald-400 hover:text-emerald-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {syncing ? "Syncing…" : "Sync now"}
+          </button>
         </div>
       </div>
+      {syncMessage && (
+        <div className={`text-xs ${syncMessage.type === "success" ? "text-emerald-400" : "text-red-400"}`}>{syncMessage.text}</div>
+      )}
       {accounts.length === 0 ? (
         <div className="text-xs text-muted-foreground italic">
           {loading ? "Loading…" : "No ad accounts discovered yet. Connect Meta, then click \"Refresh from Meta\"."}
