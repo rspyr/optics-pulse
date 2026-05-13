@@ -39,6 +39,17 @@ function isActiveStatus(status: string | null | undefined): boolean {
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const { data: campaigns, isLoading } = useGetMetaCampaignSummary({ startDate, endDate });
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [sortKey, setSortKey] = useState<SortKey>("spend");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [hideInactive, setHideInactive] = useState(false);
+
+  // Reset sort/filter state when the date range changes.
+  useEffect(() => {
+    setSortKey("spend");
+    setSortDir("desc");
+    setHideInactive(false);
+    setExpanded({});
+  }, [startDate, endDate]);
 
   // Date-range change resets sort/filter prefs for ALL campaigns, even ones
   // that aren't currently expanded. We clear localStorage at the parent level
@@ -56,13 +67,47 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
 
   const toggle = (id: number) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir(prev => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const sortedCampaigns = useMemo(() => {
+    if (!campaigns) return [];
+    const filtered = hideInactive ? campaigns.filter(c => isActiveStatus(c.status)) : campaigns;
+    const sign = sortDir === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const av = (a[sortKey] as number) ?? 0;
+      const bv = (b[sortKey] as number) ?? 0;
+      return (av - bv) * sign;
+    });
+  }, [campaigns, sortKey, sortDir, hideInactive]);
+
   return (
     <PremiumCard className="p-6" transition={{ delay: 0.6 }}>
-      <div className="mb-4">
-        <h3 className="font-display text-xl text-white">Meta Campaign Performance</h3>
-        <p className="text-muted-foreground text-sm">
-          Click a campaign to expand its ad sets, then expand an ad set to see individual ads.
-        </p>
+      <div className="mb-4 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="font-display text-xl text-white">Meta Campaign Performance</h3>
+          <p className="text-muted-foreground text-sm">
+            Click a campaign to expand its ad sets, then expand an ad set to see individual ads.
+          </p>
+        </div>
+        {campaigns && campaigns.length > 0 && (
+          <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={hideInactive}
+              onChange={(e) => setHideInactive(e.target.checked)}
+              data-testid="hide-inactive-campaigns"
+              className="accent-white"
+            />
+            <span>Hide paused/inactive</span>
+          </label>
+        )}
       </div>
 
       {isLoading && !campaigns ? (
@@ -80,14 +125,28 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
               <tr className="text-left text-muted-foreground border-b border-white/10">
                 <th className="py-2 pr-4 font-medium w-8"></th>
                 <th className="py-2 pr-4 font-medium">Campaign</th>
-                <th className="py-2 pr-4 font-medium text-right">Spend</th>
-                <th className="py-2 pr-4 font-medium text-right">Clicks</th>
-                <th className="py-2 pr-4 font-medium text-right">Conversions</th>
-                <th className="py-2 pr-4 font-medium text-right">CPL</th>
+                <th className="py-2 pr-4 font-medium text-right">
+                  <SortHeader label="Spend" columnKey="spend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} testIdPrefix="sort-campaign" />
+                </th>
+                <th className="py-2 pr-4 font-medium text-right">
+                  <SortHeader label="Clicks" columnKey="clicks" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} testIdPrefix="sort-campaign" />
+                </th>
+                <th className="py-2 pr-4 font-medium text-right">
+                  <SortHeader label="Conversions" columnKey="conversions" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} testIdPrefix="sort-campaign" />
+                </th>
+                <th className="py-2 pr-4 font-medium text-right">
+                  <SortHeader label="CPL" columnKey="cpl" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} testIdPrefix="sort-campaign" />
+                </th>
               </tr>
             </thead>
             <tbody>
-              {campaigns.map(c => (
+              {sortedCampaigns.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-muted-foreground italic text-xs">
+                    No campaigns match the current filter.
+                  </td>
+                </tr>
+              ) : sortedCampaigns.map(c => (
                 <CampaignRow
                   key={c.campaignId}
                   campaign={c}
@@ -159,16 +218,17 @@ type SortHeaderProps = {
   sortKey: SortKey;
   sortDir: SortDir;
   onSort: (key: SortKey) => void;
+  testIdPrefix?: string;
 };
 
-function SortHeader({ label, columnKey, sortKey, sortDir, onSort }: SortHeaderProps) {
+function SortHeader({ label, columnKey, sortKey, sortDir, onSort, testIdPrefix = "sort" }: SortHeaderProps) {
   const active = columnKey === sortKey;
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onSort(columnKey); }}
       className={`inline-flex items-center gap-1 hover:text-white ${active ? "text-white" : ""}`}
-      data-testid={`sort-${columnKey}`}
+      data-testid={`${testIdPrefix}-${columnKey}`}
     >
       <span>{label}</span>
       {active && (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
