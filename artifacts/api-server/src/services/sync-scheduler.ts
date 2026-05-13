@@ -577,6 +577,9 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
         name: a.name || "",
         effectiveStatus: a.effective_status ?? null,
         creativeId: a.creative?.id ?? null,
+        creativeThumbnailUrl: a.creative?.thumbnail_url ?? null,
+        creativeTitle: a.creative?.title ?? null,
+        creativeBody: a.creative?.body ?? null,
       }));
       // Chunk to avoid PG bind-parameter limit (8 cols × 8000 = 64000 < 65535)
       for (let i = 0; i < adRows.length; i += 1000) {
@@ -590,6 +593,9 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
               name: sql`excluded.name`,
               effectiveStatus: sql`excluded.effective_status`,
               creativeId: sql`excluded.creative_id`,
+              creativeThumbnailUrl: sql`excluded.creative_thumbnail_url`,
+              creativeTitle: sql`excluded.creative_title`,
+              creativeBody: sql`excluded.creative_body`,
               updatedAt: sql`now()`,
             },
           });

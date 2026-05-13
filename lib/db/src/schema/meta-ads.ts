@@ -38,6 +38,9 @@ export const metaAdsTable = pgTable("meta_ads", {
   name: text("name").notNull().default(""),
   effectiveStatus: text("effective_status"),
   creativeId: text("creative_id"),
+  creativeThumbnailUrl: text("creative_thumbnail_url"),
+  creativeTitle: text("creative_title"),
+  creativeBody: text("creative_body"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => ({
   tenantExternalUq: uniqueIndex("meta_ads_tenant_external_uq").on(t.tenantId, t.externalId),

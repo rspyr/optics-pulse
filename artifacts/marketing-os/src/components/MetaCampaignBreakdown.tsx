@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useGetMetaCampaignSummary, useGetMetaCampaignBreakdown } from "@workspace/api-client-react";
 import { PremiumCard } from "@/components/ui-helpers";
-import { ChevronRight, Loader2, ArrowUp, ArrowDown } from "lucide-react";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { ChevronRight, ImageOff, Loader2, ArrowUp, ArrowDown } from "lucide-react";
 
 type Props = {
   startDate: string;
@@ -301,10 +302,15 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
               >
                 <td className="py-2 pr-4 pl-6"></td>
                 <td className="py-2 pr-4 pl-10 text-white/70">
-                  <div className="text-xs">{ad.name || ad.externalId}</div>
-                  {ad.status && (
-                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{ad.status}</div>
-                  )}
+                  <div className="flex items-start gap-3">
+                    <CreativeThumbnail ad={ad} />
+                    <div className="min-w-0">
+                      <div className="text-xs truncate">{ad.name || ad.externalId}</div>
+                      {ad.status && (
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{ad.status}</div>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td className="py-2 pr-4 text-right text-white/70 text-xs">{formatMoney(ad.spend, currency)}</td>
                 <td className="py-2 pr-4 text-right text-white/70 text-xs">{formatInt(ad.clicks)}</td>
@@ -318,5 +324,67 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
         );
       })}
     </>
+  );
+}
+
+type AdCreativeFields = {
+  externalId: string;
+  name?: string | null;
+  creativeThumbnailUrl?: string | null;
+  creativeTitle?: string | null;
+  creativeBody?: string | null;
+};
+
+function CreativeThumbnail({ ad }: { ad: AdCreativeFields }) {
+  const [errored, setErrored] = useState(false);
+  const hasThumb = !!ad.creativeThumbnailUrl && !errored;
+  const hasDetails = !!(ad.creativeTitle || ad.creativeBody);
+
+  return (
+    <HoverCard openDelay={120} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className="shrink-0 w-10 h-10 rounded-md overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer focus:outline-none focus:ring-1 focus:ring-white/40"
+          aria-label={`Preview creative for ${ad.name || ad.externalId}`}
+          data-testid={`ad-creative-thumb-${ad.externalId}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {hasThumb ? (
+            <img
+              src={ad.creativeThumbnailUrl as string}
+              alt=""
+              loading="lazy"
+              className="w-full h-full object-cover"
+              onError={() => setErrored(true)}
+            />
+          ) : (
+            <ImageOff className="w-4 h-4 text-muted-foreground" aria-hidden />
+          )}
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent
+        side="right"
+        align="start"
+        className="w-72 bg-neutral-900 border-white/10 text-white"
+        data-testid={`ad-creative-popover-${ad.externalId}`}
+      >
+        {hasThumb && (
+          <img
+            src={ad.creativeThumbnailUrl as string}
+            alt=""
+            className="w-full h-32 object-cover rounded mb-3"
+          />
+        )}
+        {ad.creativeTitle && (
+          <div className="text-sm font-semibold leading-snug mb-1">{ad.creativeTitle}</div>
+        )}
+        {ad.creativeBody ? (
+          <div className="text-xs text-white/70 whitespace-pre-line line-clamp-6">{ad.creativeBody}</div>
+        ) : !hasDetails ? (
+          <div className="text-xs text-muted-foreground italic">No creative details available yet. They’ll appear after the next Meta sync.</div>
+        ) : null}
+      </HoverCardContent>
+    </HoverCard>
   );
 }

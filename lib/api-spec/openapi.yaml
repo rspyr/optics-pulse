@@ -1824,6 +1824,15 @@ components:
         creativeId:
           type: string
           nullable: true
+        creativeThumbnailUrl:
+          type: string
+          nullable: true
+        creativeTitle:
+          type: string
+          nullable: true
+        creativeBody:
+          type: string
+          nullable: true
         spend:
           type: number
         impressions:

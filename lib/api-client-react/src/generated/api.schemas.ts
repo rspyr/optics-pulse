@@ -352,6 +352,9 @@ export interface MetaAdRow {
   name: string;
   status?: string | null;
   creativeId?: string | null;
+  creativeThumbnailUrl?: string | null;
+  creativeTitle?: string | null;
+  creativeBody?: string | null;
   spend: number;
   impressions: number;
   clicks: number;

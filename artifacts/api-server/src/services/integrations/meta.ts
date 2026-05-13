@@ -369,13 +369,13 @@ export class MetaAPIService {
     return all;
   }
 
-  async fetchAds(): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string } }>> {
+  async fetchAds(): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }>> {
     if (!this.adAccountId) return [];
-    interface Row { id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string } }
+    interface Row { id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }
     interface Resp { data: Row[]; paging?: { next?: string } }
     const all: Row[] = [];
     let nextPath: string | null = `/${this.adAccountId}/ads`;
-    let nextParams: Record<string, string> | undefined = { fields: "id,name,adset_id,campaign_id,effective_status,creative{id}", limit: "200" };
+    let nextParams: Record<string, string> | undefined = { fields: "id,name,adset_id,campaign_id,effective_status,creative{id,thumbnail_url,title,body}", limit: "200" };
     let safety = 0;
     while (nextPath && safety++ < 50) {
       const resp: Resp = await this.request<Resp>(nextPath, nextParams ? { params: nextParams } : undefined);
