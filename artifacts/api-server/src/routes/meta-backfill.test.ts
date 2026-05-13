@@ -317,6 +317,75 @@ describe("POST /integrations/meta/backfill — early exits", () => {
   });
 });
 
+describe("POST /integrations/meta/backfill — expired token mid-run", () => {
+  it("flags tenant for reconnect, finalizes sync log as error, and returns 502 when fetchAdDailyInsights throws MetaTokenInvalidError partway through", async () => {
+    const { MetaTokenInvalidError } = await import("../services/integrations/meta");
+
+    // Same select-ordering as the success test:
+    //   1. tenants
+    //   2. meta_ad_accounts (currency lookup)
+    //   3. campaigns lookup for the first chunk's row (will INSERT)
+    state.selectQueue.push([tenantWithMeta()]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.selectQueue.push([]);
+
+    // Advisory lock acquired.
+    state.executeQueue.push({ rows: [{ got: true }] });
+
+    // Insert into campaigns returns the new campaign id used by the rollup.
+    state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+    // 31-day window → 2 chunks. First chunk delivers data, second blows up
+    // with an expired-token error halfway through the run.
+    fetchAdDailyInsightsMock.mockResolvedValueOnce([
+      {
+        ad_id: "ad_1", ad_name: "Ad 1", adset_id: "as_1",
+        campaign_id: "c1", campaign_name: "Campaign One",
+        date_start: "2025-06-01", date_stop: "2025-06-01",
+        spend: "1.00", impressions: "10", clicks: "1",
+        actions: [{ action_type: "lead", value: "1" }],
+      },
+    ]);
+    const tokenErr = new MetaTokenInvalidError(
+      "Meta access token expired (OAuthException 190/463)",
+      190,
+      463,
+    );
+    fetchAdDailyInsightsMock.mockRejectedValueOnce(tokenErr);
+
+    const res = await postJson("/integrations/meta/backfill", { tenantId: 7, days: 31 });
+
+    // Route maps backfill errors that aren't 'already running'/'not found'/
+    // 'not configured|needs reconnect' to 502.
+    expect(res.status).toBe(502);
+    expect(res.body.success).toBe(false);
+    expect(String(res.body.error)).toMatch(/access token expired/i);
+
+    // Tenant row was flipped so the UI shows a reconnect prompt.
+    const tenantUpdate = state.updateCalls.find(
+      (u) => u.table === "tenants" && u.set.metaNeedsReconnect === true,
+    );
+    expect(tenantUpdate).toBeDefined();
+    expect(tenantUpdate!.set.metaNeedsReconnect).toBe(true);
+    expect(String(tenantUpdate!.set.metaReconnectReason)).toMatch(/access token expired/i);
+
+    // The sync log opened with sync_type='backfill' was finalized as 'error'
+    // carrying the token message.
+    const opened = state.insertCalls.find((c) => c.table === "integration_sync_logs");
+    expect(opened).toBeDefined();
+    expect((opened!.values[0] as Record<string, unknown>).syncType).toBe("backfill");
+
+    const errLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "error",
+    );
+    expect(errLog).toBeDefined();
+    expect(String(errLog!.set.errorMessage)).toMatch(/access token expired/i);
+
+    // Second chunk was actually attempted (so the catch ran on a real call).
+    expect(fetchAdDailyInsightsMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("POST /integrations/meta/backfill — successful run", () => {
   it("writes meta_ad_daily_stats + campaign_daily_stats and a 'completed' backfill sync log", async () => {
     // Order of db.select() calls inside backfillMetaCampaigns:
