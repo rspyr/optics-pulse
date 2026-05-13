@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { socketState, socketFactory, toastMock } = vi.hoisted(() => {
@@ -164,6 +164,90 @@ describe("VerifyTracker integration — unmatched panel renders on new-attributi
     ).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Map field_3 to" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Map field_7 to" })).toBeInTheDocument();
+  });
+
+  // Task #391 — events whose payload includes droppedReservedFieldKeys must
+  // surface an amber "fields dropped" badge on the matching live feed row,
+  // listing the reserved keys that Pulse stripped before storing the lead.
+  it("renders the dropped-fields badge on the row for events with droppedReservedFieldKeys, and omits it otherwise", async () => {
+    const user = userEvent.setup();
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/verify-tracker")) {
+        return { ok: true, status: 200, json: async () => makeVerifyResult() } as Response;
+      }
+      if (url.includes("/api/field-mapping-rules/suggestions")) {
+        return { ok: true, status: 200, json: async () => ({ suggestions: {} }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<VerifyTracker />);
+    await user.type(screen.getByPlaceholderText(/your-landing-page/i), "https://example.com/contact");
+    await user.click(screen.getByRole("button", { name: /^Verify$/ }));
+    await screen.findByText(/Live attribution feed/i);
+
+    const handler = socketState.handlers.get("new-attribution-event")!;
+    socketState.handlers.get("connect")!();
+
+    // Event WITH droppedReservedFieldKeys — badge should appear with the keys listed.
+    handler({
+      id: 9401,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "native",
+      formId: "ac-form",
+      formName: "AC",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:00.000Z",
+      receivedAt: "2026-04-26T01:00:01.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+      droppedReservedFieldKeys: ["_consent", "_custom"],
+    });
+    await waitFor(() => expect(screen.getByText(/Event #9401/)).toBeInTheDocument());
+
+    const droppedRow = screen.getByText(/Event #9401/).closest("[data-form-type]") as HTMLElement;
+    expect(droppedRow).toBeTruthy();
+    const badge = within(droppedRow).getByTestId("live-event-dropped-fields-badge");
+    expect(badge).toHaveTextContent(/_consent/);
+    expect(badge).toHaveTextContent(/_custom/);
+
+    // Event WITHOUT droppedReservedFieldKeys — no badge on that row.
+    handler({
+      id: 9402,
+      tenantId: 42,
+      matchLevel: "diamond",
+      matchConfidence: 1,
+      resolvedLeadSource: "google",
+      resolvedFunnel: "ac",
+      formType: "native",
+      formId: "ac-form",
+      formName: "AC",
+      pageUrl: "https://example.com/contact",
+      landingPage: "https://example.com/contact",
+      hasPhone: true, hasEmail: true,
+      gclid: null, utmSource: null, utmMedium: null, utmCampaign: null,
+      submittedAt: "2026-04-26T01:00:02.000Z",
+      receivedAt: "2026-04-26T01:00:03.000Z",
+      fieldNames: ["phone", "email"],
+      unmatchedReason: null,
+    });
+    await waitFor(() => expect(screen.getByText(/Event #9402/)).toBeInTheDocument());
+
+    const cleanRow = screen.getByText(/Event #9402/).closest("[data-form-type]") as HTMLElement;
+    expect(cleanRow).toBeTruthy();
+    expect(within(cleanRow).queryByTestId("live-event-dropped-fields-badge")).not.toBeInTheDocument();
+
+    // Sanity: only one badge in the whole feed.
+    expect(screen.getAllByTestId("live-event-dropped-fields-badge")).toHaveLength(1);
   });
 
   it("does NOT render UnmatchedFieldsPanel for matched (non-unmatched) events", async () => {
