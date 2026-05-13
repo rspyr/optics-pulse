@@ -257,6 +257,114 @@ describe("GET /attribution/events/:id — unmatchedReason contract", () => {
     expect(vi.mocked(trackerMod.computeUnmatchedReason)).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves matchedJob via gclid lookup when event.gclid is present", async () => {
+    const job = {
+      id: 901,
+      customerName: "Acme HVAC",
+      stJobId: "ST-1",
+      matchLevel: "diamond",
+      matchedGclid: "gclid-abc",
+      revenue: 12500,
+      leadId: null,
+      ociUploadedAt: null,
+      enhancedConversionUploadedAt: null,
+      capiUploadedAt: null,
+    };
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 201, gclid: "gclid-abc" })],
+      [job],
+    ];
+
+    const res = await getJson(app, "/attribution/events/201");
+
+    expect(res.status).toBe(200);
+    expect(res.json.matchedJob).toEqual(job);
+    expect(res.json.matchedLead).toBeNull();
+  });
+
+  it("resolves matchedJob + matchedLead via hashedPhone → golden job", async () => {
+    const lead = { id: 71, phone: "555-1234", firstName: "Ann", lastName: "Bee" };
+    const job = {
+      id: 902,
+      customerName: "Bee Plumbing",
+      stJobId: "ST-2",
+      matchLevel: "golden",
+      matchedGclid: null,
+      revenue: 4200,
+      leadId: 71,
+      ociUploadedAt: null,
+      enhancedConversionUploadedAt: null,
+      capiUploadedAt: null,
+    };
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 202, hashedPhone: "hp:555-1234" })],
+      [lead],
+      [job],
+    ];
+
+    const res = await getJson(app, "/attribution/events/202");
+
+    expect(res.status).toBe(200);
+    expect(res.json.matchedJob).toEqual(job);
+    expect(res.json.matchedLead).toEqual({ id: 71, firstName: "Ann", lastName: "Bee" });
+  });
+
+  it("resolves matchedJob + matchedLead via hashedEmail → silver job", async () => {
+    const lead = { id: 82, email: "foo@bar.com", firstName: "Cee", lastName: "Dee" };
+    const job = {
+      id: 903,
+      customerName: "Cee Roofing",
+      stJobId: "ST-3",
+      matchLevel: "silver",
+      matchedGclid: null,
+      revenue: 7800,
+      leadId: 82,
+      ociUploadedAt: null,
+      enhancedConversionUploadedAt: null,
+      capiUploadedAt: null,
+    };
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 203, hashedEmail: "h:foo@bar.com" })],
+      [lead],
+      [job],
+    ];
+
+    const res = await getJson(app, "/attribution/events/203");
+
+    expect(res.status).toBe(200);
+    expect(res.json.matchedJob).toEqual(job);
+    expect(res.json.matchedLead).toEqual({ id: 82, firstName: "Cee", lastName: "Dee" });
+  });
+
+  it("resolves matchedJob via normalized billing address → bronze job", async () => {
+    const job = {
+      id: 904,
+      customerName: "Dee Electric",
+      stJobId: "ST-4",
+      matchLevel: "bronze",
+      matchedGclid: null,
+      revenue: 3300,
+      leadId: null,
+      ociUploadedAt: null,
+      enhancedConversionUploadedAt: null,
+      capiUploadedAt: null,
+      serviceAddress: "123 main st",
+    };
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 204, billingAddress: "123 Main Street." })],
+      [job],
+    ];
+
+    const res = await getJson(app, "/attribution/events/204");
+
+    expect(res.status).toBe(200);
+    const matched = res.json.matchedJob as Record<string, unknown>;
+    expect(matched).not.toBeNull();
+    expect(matched.id).toBe(904);
+    expect(matched.matchLevel).toBe("bronze");
+    expect(res.json.matchedLead).toBeNull();
+  });
+
   it("returns unmatchedReason: null on matched rows regardless of any stored value", async () => {
     mockDb.selectResults = [
       [
