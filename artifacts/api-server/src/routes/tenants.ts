@@ -20,6 +20,7 @@ const SECRET_FIELDS = new Set([
   "serviceTitanClientSecret",
   "serviceTitanAppKey",
   "metaAccessToken",
+  "metaAppSecret",
   "ghlApiKey",
   "podiumApiToken",
 ]);

@@ -156,6 +156,8 @@ export default function AdminTenants() {
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [metaOAuthStatus, setMetaOAuthStatus] = useState<{ connected: boolean; hasAppId: boolean; hasAppSecret: boolean; hasAccessToken: boolean } | null>(null);
+  const [googleOAuthStatus, setGoogleOAuthStatus] = useState<{ connected: boolean; hasClientId: boolean; hasClientSecret: boolean; hasRefreshToken: boolean } | null>(null);
   const [togglingStSync, setTogglingStSync] = useState<number | null>(null);
 
   const handleToggleStSync = async (tenantId: number, currentlyPaused: boolean) => {
@@ -389,6 +391,17 @@ export default function AdminTenants() {
     setClearedFields(new Set());
     setShowIntegrationConfig(false);
     setEditTab("integrations");
+    setMetaOAuthStatus(null);
+    setGoogleOAuthStatus(null);
+    const tid = t.id as number;
+    fetch(`${API_BASE}/api/oauth/meta/status?tenantId=${tid}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setMetaOAuthStatus(data); })
+      .catch(() => { /* ignore */ });
+    fetch(`${API_BASE}/api/oauth/google-ads/status?tenantId=${tid}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setGoogleOAuthStatus(data); })
+      .catch(() => { /* ignore */ });
   };
 
   const inputClass = "bg-background/50 border border-white/10 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50";
@@ -459,11 +472,11 @@ export default function AdminTenants() {
                 <button
                   type="button"
                   onClick={() => handleConnectGoogleAds(editId)}
-                  disabled={googleAdsConnecting || !form.googleAdsClientId}
+                  disabled={googleAdsConnecting || !(form.googleAdsClientId || googleOAuthStatus?.hasClientId)}
                   className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
                 >
                   {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                  {form.googleAdsRefreshToken && !form.googleAdsRefreshToken.startsWith("••••") ? "Reconnect" : form.googleAdsRefreshToken ? "Reconnect" : "Connect Google Ads"}
+                  {googleOAuthStatus?.connected || form.googleAdsRefreshToken ? "Reconnect" : "Connect Google Ads"}
                 </button>
               )}
             </div>
@@ -498,11 +511,11 @@ export default function AdminTenants() {
                 <button
                   type="button"
                   onClick={() => handleConnectMeta(editId)}
-                  disabled={metaConnecting || !form.metaAppId}
+                  disabled={metaConnecting || !(form.metaAppId || metaOAuthStatus?.hasAppId) || !(form.metaAppSecret || metaOAuthStatus?.hasAppSecret)}
                   className="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
                 >
                   {metaConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                  {form.metaAccessToken && !form.metaAccessToken.startsWith("••••") ? "Reconnect" : form.metaAccessToken ? "Reconnect" : "Connect Meta"}
+                  {metaOAuthStatus?.connected || form.metaAccessToken ? "Reconnect" : "Connect Meta"}
                 </button>
               )}
             </div>
