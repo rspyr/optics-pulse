@@ -183,7 +183,7 @@ router.get("/campaigns/:campaignId/breakdown", async (req, res) => {
   }
 
   if (campaign.platform !== "meta") {
-    res.status(400).json({ error: "Breakdown is only available for Meta campaigns" });
+    res.status(404).json({ error: "Campaign not found" });
     return;
   }
 
