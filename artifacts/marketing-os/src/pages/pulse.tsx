@@ -1352,6 +1352,16 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
 
   const sendMessageMutation = useSendPodiumMessage();
   const sending = sendMessageMutation.isPending;
+  const sendError = sendMessageMutation.error;
+  const sendErrorMessage = useMemo(() => {
+    if (!sendError) return null;
+    const data = (sendError as { data?: unknown }).data;
+    if (data && typeof data === "object") {
+      const errField = (data as Record<string, unknown>).error;
+      if (typeof errField === "string" && errField.trim()) return errField;
+    }
+    return sendError.message || "Failed to send message";
+  }, [sendError]);
 
   const handleSend = async () => {
     if (!messageText.trim() || sending) return;
@@ -1439,6 +1449,9 @@ function PodiumChatPanel({ leadId, tenantId, timezone }: { leadId: number; tenan
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
+          {sendErrorMessage && (
+            <p className="mt-2 text-xs text-red-400" role="alert">{sendErrorMessage}</p>
+          )}
         </div>
       )}
     </PremiumCard>
