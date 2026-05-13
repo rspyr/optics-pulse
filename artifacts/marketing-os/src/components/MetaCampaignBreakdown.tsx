@@ -42,12 +42,14 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [hideInactive, setHideInactive] = useState(false);
+  const [search, setSearch] = useState("");
 
   // Reset sort/filter state when the date range changes.
   useEffect(() => {
     setSortKey("spend");
     setSortDir("desc");
     setHideInactive(false);
+    setSearch("");
     setExpanded({});
   }, [startDate, endDate]);
 
@@ -78,14 +80,18 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
 
   const sortedCampaigns = useMemo(() => {
     if (!campaigns) return [];
-    const filtered = hideInactive ? campaigns.filter(c => isActiveStatus(c.status)) : campaigns;
+    let filtered = hideInactive ? campaigns.filter(c => isActiveStatus(c.status)) : campaigns;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter(c => (c.name || "").toLowerCase().includes(q));
+    }
     const sign = sortDir === "asc" ? 1 : -1;
     return [...filtered].sort((a, b) => {
       const av = (a[sortKey] as number) ?? 0;
       const bv = (b[sortKey] as number) ?? 0;
       return (av - bv) * sign;
     });
-  }, [campaigns, sortKey, sortDir, hideInactive]);
+  }, [campaigns, sortKey, sortDir, hideInactive, search]);
 
   return (
     <PremiumCard className="p-6" transition={{ delay: 0.6 }}>
@@ -97,16 +103,26 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
           </p>
         </div>
         {campaigns && campaigns.length > 0 && (
-          <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground">
+          <div className="flex items-center gap-4 flex-wrap">
             <input
-              type="checkbox"
-              checked={hideInactive}
-              onChange={(e) => setHideInactive(e.target.checked)}
-              data-testid="hide-inactive-campaigns"
-              className="accent-white"
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search campaigns..."
+              data-testid="search-campaigns"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white placeholder:text-muted-foreground focus:outline-none focus:border-white/30 w-48"
             />
-            <span>Hide paused/inactive</span>
-          </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={hideInactive}
+                onChange={(e) => setHideInactive(e.target.checked)}
+                data-testid="hide-inactive-campaigns"
+                className="accent-white"
+              />
+              <span>Hide paused/inactive</span>
+            </label>
+          </div>
         )}
       </div>
 
