@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { MetaAPIService, MetaTokenInvalidError } from "../services/integrations/meta";
+import { backfillMetaCampaigns } from "../services/sync-scheduler";
 
 const router: IRouter = Router();
 
@@ -125,6 +126,45 @@ router.post("/integrations/meta/ad-accounts/select", requireRole("super_admin", 
     .where(eq(tenantsTable.id, tenantId));
 
   res.json({ success: true, selectedAdAccountId: `act_${accountId}` });
+});
+
+/**
+ * One-shot historical Meta backfill. Pulls per-ad insights for the trailing
+ * `days` window (default 365, max 1095 ≈ 3 years) in 30-day chunks and writes
+ * into `meta_ad_daily_stats` + `campaign_daily_stats` via the same ON CONFLICT
+ * upsert path as the nightly sync. Honors the per-tenant Meta advisory lock,
+ * so it cannot overlap with the scheduled 30-day refresh — operators get a
+ * `409 sync_in_progress` if the scheduler is mid-run. Progress + completion
+ * land in `integration_sync_logs` with sync_type=`backfill`.
+ */
+router.post("/integrations/meta/backfill", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+  const daysRaw = req.query.days ?? req.body?.days ?? 365;
+  const days = Number(daysRaw);
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+  if (!Number.isFinite(days) || days <= 30) {
+    res.status(400).json({ error: "days must be a number > 30 (the nightly sync already covers the last 30 days)" });
+    return;
+  }
+  if (days > 1095) {
+    res.status(400).json({ error: "days cannot exceed 1095 (Meta's insights retention is ~37 months)" });
+    return;
+  }
+
+  const result = await backfillMetaCampaigns(tenantId, days);
+  if (result.error) {
+    const status = /already running/i.test(result.error) ? 409
+      : /not found/i.test(result.error) ? 404
+      : /not configured|needs reconnect/i.test(result.error) ? 400
+      : 502;
+    res.status(status).json({ success: false, ...result });
+    return;
+  }
+  res.json({ success: true, ...result });
 });
 
 export default router;

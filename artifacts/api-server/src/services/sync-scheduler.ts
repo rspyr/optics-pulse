@@ -63,6 +63,12 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
+async function updateSyncLogProgress(logId: number, recordsProcessed: number, message?: string) {
+  await db.update(integrationSyncLogsTable)
+    .set({ recordsProcessed, errorMessage: message ?? null })
+    .where(eq(integrationSyncLogsTable.id, logId));
+}
+
 export async function matchJobsToLeads(tenantId: number): Promise<{ matched: number }> {
   const unmatchedJobs = await db.select({
     id: jobsTable.id,
@@ -590,166 +596,16 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       }
     }
 
-    // Aggregate per-ad rows → per-campaign-per-day for backwards-compatible
-    // dashboards on `campaign_daily_stats`. Keep raw per-ad rows in
-    // `meta_ad_daily_stats`.
-    interface CampaignDayBucket {
-      campaignId: string;
-      campaignName: string;
-      date: string;
-      spend: number;
-      impressions: number;
-      clicks: number;
-      conversions: number;
-      actionsTotals: Map<string, number>;
-    }
-    const campaignBuckets = new Map<string, CampaignDayBucket>();
-    const adDailyRows: Array<typeof metaAdDailyStatsTable.$inferInsert> = [];
-
-    for (const row of insights) {
-      const adId = row.ad_id;
-      if (!adId) continue;
-
-      const date = row.date_start;
-      const spend = parseNumericField(row.spend);
-      const impressions = parseIntField(row.impressions);
-      const clicks = parseIntField(row.clicks);
-      const actions: MetaAction[] = row.actions || [];
-      const conversions = sumConversionActions(actions);
-      // Persist all action-style breakdowns (standard + video) in a single jsonb
-      // payload keyed by Meta's response field name. Lets dashboards compute
-      // ThruPlay rate, completion rate, etc. without another API call.
-      const actionsPayload: Record<string, MetaAction[]> = { actions };
-      if (row.video_play_actions) actionsPayload.video_play_actions = row.video_play_actions;
-      if (row.video_p25_watched_actions) actionsPayload.video_p25_watched_actions = row.video_p25_watched_actions;
-      if (row.video_p50_watched_actions) actionsPayload.video_p50_watched_actions = row.video_p50_watched_actions;
-      if (row.video_p75_watched_actions) actionsPayload.video_p75_watched_actions = row.video_p75_watched_actions;
-      if (row.video_p100_watched_actions) actionsPayload.video_p100_watched_actions = row.video_p100_watched_actions;
-
-      adDailyRows.push({
-        tenantId,
-        adAccountId: accountIdNoPrefix,
-        adExternalId: adId,
-        campaignExternalId: row.campaign_id,
-        adSetExternalId: row.adset_id ?? null,
-        date,
-        spend,
-        impressions,
-        clicks,
-        conversions,
-        currency: currency ?? null,
-        actionsJson: actionsPayload,
-      });
-
-      const bucketKey = `${row.campaign_id}|${date}`;
-      let bucket = campaignBuckets.get(bucketKey);
-      if (!bucket) {
-        bucket = {
-          campaignId: row.campaign_id,
-          campaignName: row.campaign_name || row.campaign_id,
-          date,
-          spend: 0, impressions: 0, clicks: 0, conversions: 0,
-          actionsTotals: new Map(),
-        };
-        campaignBuckets.set(bucketKey, bucket);
-      }
-      bucket.spend += spend;
-      bucket.impressions += impressions;
-      bucket.clicks += clicks;
-      bucket.conversions += conversions;
-      for (const a of actions) {
-        bucket.actionsTotals.set(a.action_type, (bucket.actionsTotals.get(a.action_type) || 0) + parseIntField(a.value));
-      }
-    }
-
-    // Batched upsert: per-ad daily stats (12 cols × 5000 = 60000 < 65535)
-    for (let i = 0; i < adDailyRows.length; i += 1000) {
-      const chunk = adDailyRows.slice(i, i + 1000);
-      if (chunk.length === 0) continue;
-      await db.insert(metaAdDailyStatsTable).values(chunk)
-        .onConflictDoUpdate({
-          target: [metaAdDailyStatsTable.tenantId, metaAdDailyStatsTable.adExternalId, metaAdDailyStatsTable.date],
-          set: {
-            adAccountId: sql`excluded.ad_account_id`,
-            campaignExternalId: sql`excluded.campaign_external_id`,
-            adSetExternalId: sql`excluded.ad_set_external_id`,
-            spend: sql`excluded.spend`,
-            impressions: sql`excluded.impressions`,
-            clicks: sql`excluded.clicks`,
-            conversions: sql`excluded.conversions`,
-            currency: sql`excluded.currency`,
-            actionsJson: sql`excluded.actions_json`,
-          },
-        });
-    }
-    const perAdSynced = adDailyRows.length;
-
-    // Upsert campaigns: bulk insert with ON CONFLICT requires a unique
-    // constraint on (tenant_id, platform, external_id). The legacy
-    // `campaigns` table doesn't have one, so for the (typically small)
-    // number of distinct campaigns per tenant we keep a per-campaign
-    // upsert here — bounded by campaign count, not ad-day rows.
-    const campaignIdByExternal = new Map<string, number>();
-    const distinctCampaigns = new Map<string, string>();
-    for (const b of campaignBuckets.values()) distinctCampaigns.set(b.campaignId, b.campaignName);
-
-    for (const [extId, name] of distinctCampaigns.entries()) {
-      let [campaign] = await db.select().from(campaignsTable)
-        .where(and(
-          eq(campaignsTable.tenantId, tenantId),
-          eq(campaignsTable.platform, "meta"),
-          eq(campaignsTable.externalId, extId),
-        )).limit(1);
-      if (!campaign) {
-        [campaign] = await db.insert(campaignsTable).values({
-          tenantId, platform: "meta", externalId: extId, name,
-          status: "active", currency: currency ?? null, metaAdAccountId: accountIdNoPrefix,
-        }).returning();
-      } else if (campaign.name !== name || campaign.currency !== (currency ?? null) || campaign.metaAdAccountId !== accountIdNoPrefix) {
-        await db.update(campaignsTable)
-          .set({ name, currency: currency ?? null, metaAdAccountId: accountIdNoPrefix })
-          .where(eq(campaignsTable.id, campaign.id));
-      }
-      campaignIdByExternal.set(extId, campaign.id);
-    }
-
-    // Batched upsert: campaign_daily_stats
-    const statRows: Array<typeof campaignDailyStatsTable.$inferInsert> = [];
-    for (const bucket of campaignBuckets.values()) {
-      const campaignId = campaignIdByExternal.get(bucket.campaignId);
-      if (!campaignId) continue;
-      const actionsObj: Record<string, number> = {};
-      for (const [k, v] of bucket.actionsTotals.entries()) actionsObj[k] = v;
-      statRows.push({
-        campaignId, date: bucket.date,
-        spend: bucket.spend, impressions: bucket.impressions,
-        clicks: bucket.clicks, conversions: bucket.conversions,
-        actionsJson: actionsObj, currency: currency ?? null,
-      });
-    }
-    for (let i = 0; i < statRows.length; i += 1000) {
-      const chunk = statRows.slice(i, i + 1000);
-      if (chunk.length === 0) continue;
-      await db.insert(campaignDailyStatsTable).values(chunk)
-        .onConflictDoUpdate({
-          target: [campaignDailyStatsTable.campaignId, campaignDailyStatsTable.date],
-          set: {
-            spend: sql`excluded.spend`,
-            impressions: sql`excluded.impressions`,
-            clicks: sql`excluded.clicks`,
-            conversions: sql`excluded.conversions`,
-            actionsJson: sql`excluded.actions_json`,
-            currency: sql`excluded.currency`,
-          },
-        });
-    }
+    const { perAdSynced, campaignDayCount } = await upsertMetaInsightRows(
+      tenantId, accountIdNoPrefix, currency, insights,
+    );
 
     await db.update(tenantsTable)
       .set({ metaLastSyncedAt: new Date(), metaNeedsReconnect: false, metaReconnectReason: null, updatedAt: new Date() })
       .where(eq(tenantsTable.id, tenantId));
 
     await completeSyncLog(syncLog.id, "completed", perAdSynced);
-    console.log(`[Sync] Meta tenant ${tenantId}: ${perAdSynced} ad-day rows, ${campaignBuckets.size} campaign-day rollups`);
+    console.log(`[Sync] Meta tenant ${tenantId}: ${perAdSynced} ad-day rows, ${campaignDayCount} campaign-day rollups`);
     return { synced: perAdSynced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -768,6 +624,324 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`);
     } catch (unlockErr) {
       console.error(`[Sync] Meta tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+  }
+}
+
+interface MetaInsightLikeRow {
+  ad_id?: string;
+  adset_id?: string;
+  campaign_id: string;
+  campaign_name?: string;
+  date_start: string;
+  spend?: string;
+  impressions?: string;
+  clicks?: string;
+  actions?: MetaAction[];
+  video_play_actions?: MetaAction[];
+  video_p25_watched_actions?: MetaAction[];
+  video_p50_watched_actions?: MetaAction[];
+  video_p75_watched_actions?: MetaAction[];
+  video_p100_watched_actions?: MetaAction[];
+}
+
+/**
+ * Bucket per-ad insights into per-ad-day rows + per-campaign-day rollups, then
+ * upsert both into `meta_ad_daily_stats` and `campaign_daily_stats` using the
+ * same ON CONFLICT batched path as the nightly sync. Shared by the nightly
+ * 30-day sync (`syncMetaCampaigns`) and the historical backfill
+ * (`backfillMetaCampaigns`).
+ *
+ * Both callers MUST hold the per-tenant Meta advisory lock before calling
+ * this — concurrent writers would race on the unique-index upserts.
+ */
+async function upsertMetaInsightRows(
+  tenantId: number,
+  accountIdNoPrefix: string,
+  currency: string | undefined,
+  insights: MetaInsightLikeRow[],
+): Promise<{ perAdSynced: number; campaignDayCount: number }> {
+  interface CampaignDayBucket {
+    campaignId: string;
+    campaignName: string;
+    date: string;
+    spend: number;
+    impressions: number;
+    clicks: number;
+    conversions: number;
+    actionsTotals: Map<string, number>;
+  }
+  const campaignBuckets = new Map<string, CampaignDayBucket>();
+  const adDailyRows: Array<typeof metaAdDailyStatsTable.$inferInsert> = [];
+
+  for (const row of insights) {
+    const adId = row.ad_id;
+    if (!adId) continue;
+
+    const date = row.date_start;
+    const spend = parseNumericField(row.spend);
+    const impressions = parseIntField(row.impressions);
+    const clicks = parseIntField(row.clicks);
+    const actions: MetaAction[] = row.actions || [];
+    const conversions = sumConversionActions(actions);
+    const actionsPayload: Record<string, MetaAction[]> = { actions };
+    if (row.video_play_actions) actionsPayload.video_play_actions = row.video_play_actions;
+    if (row.video_p25_watched_actions) actionsPayload.video_p25_watched_actions = row.video_p25_watched_actions;
+    if (row.video_p50_watched_actions) actionsPayload.video_p50_watched_actions = row.video_p50_watched_actions;
+    if (row.video_p75_watched_actions) actionsPayload.video_p75_watched_actions = row.video_p75_watched_actions;
+    if (row.video_p100_watched_actions) actionsPayload.video_p100_watched_actions = row.video_p100_watched_actions;
+
+    adDailyRows.push({
+      tenantId,
+      adAccountId: accountIdNoPrefix,
+      adExternalId: adId,
+      campaignExternalId: row.campaign_id,
+      adSetExternalId: row.adset_id ?? null,
+      date,
+      spend,
+      impressions,
+      clicks,
+      conversions,
+      currency: currency ?? null,
+      actionsJson: actionsPayload,
+    });
+
+    const bucketKey = `${row.campaign_id}|${date}`;
+    let bucket = campaignBuckets.get(bucketKey);
+    if (!bucket) {
+      bucket = {
+        campaignId: row.campaign_id,
+        campaignName: row.campaign_name || row.campaign_id,
+        date,
+        spend: 0, impressions: 0, clicks: 0, conversions: 0,
+        actionsTotals: new Map(),
+      };
+      campaignBuckets.set(bucketKey, bucket);
+    }
+    bucket.spend += spend;
+    bucket.impressions += impressions;
+    bucket.clicks += clicks;
+    bucket.conversions += conversions;
+    for (const a of actions) {
+      bucket.actionsTotals.set(a.action_type, (bucket.actionsTotals.get(a.action_type) || 0) + parseIntField(a.value));
+    }
+  }
+
+  for (let i = 0; i < adDailyRows.length; i += 1000) {
+    const chunk = adDailyRows.slice(i, i + 1000);
+    if (chunk.length === 0) continue;
+    await db.insert(metaAdDailyStatsTable).values(chunk)
+      .onConflictDoUpdate({
+        target: [metaAdDailyStatsTable.tenantId, metaAdDailyStatsTable.adExternalId, metaAdDailyStatsTable.date],
+        set: {
+          adAccountId: sql`excluded.ad_account_id`,
+          campaignExternalId: sql`excluded.campaign_external_id`,
+          adSetExternalId: sql`excluded.ad_set_external_id`,
+          spend: sql`excluded.spend`,
+          impressions: sql`excluded.impressions`,
+          clicks: sql`excluded.clicks`,
+          conversions: sql`excluded.conversions`,
+          currency: sql`excluded.currency`,
+          actionsJson: sql`excluded.actions_json`,
+        },
+      });
+  }
+
+  const campaignIdByExternal = new Map<string, number>();
+  const distinctCampaigns = new Map<string, string>();
+  for (const b of campaignBuckets.values()) distinctCampaigns.set(b.campaignId, b.campaignName);
+
+  for (const [extId, name] of distinctCampaigns.entries()) {
+    let [campaign] = await db.select().from(campaignsTable)
+      .where(and(
+        eq(campaignsTable.tenantId, tenantId),
+        eq(campaignsTable.platform, "meta"),
+        eq(campaignsTable.externalId, extId),
+      )).limit(1);
+    if (!campaign) {
+      [campaign] = await db.insert(campaignsTable).values({
+        tenantId, platform: "meta", externalId: extId, name,
+        status: "active", currency: currency ?? null, metaAdAccountId: accountIdNoPrefix,
+      }).returning();
+    } else if (campaign.name !== name || campaign.currency !== (currency ?? null) || campaign.metaAdAccountId !== accountIdNoPrefix) {
+      await db.update(campaignsTable)
+        .set({ name, currency: currency ?? null, metaAdAccountId: accountIdNoPrefix })
+        .where(eq(campaignsTable.id, campaign.id));
+    }
+    campaignIdByExternal.set(extId, campaign.id);
+  }
+
+  const statRows: Array<typeof campaignDailyStatsTable.$inferInsert> = [];
+  for (const bucket of campaignBuckets.values()) {
+    const campaignId = campaignIdByExternal.get(bucket.campaignId);
+    if (!campaignId) continue;
+    const actionsObj: Record<string, number> = {};
+    for (const [k, v] of bucket.actionsTotals.entries()) actionsObj[k] = v;
+    statRows.push({
+      campaignId, date: bucket.date,
+      spend: bucket.spend, impressions: bucket.impressions,
+      clicks: bucket.clicks, conversions: bucket.conversions,
+      actionsJson: actionsObj, currency: currency ?? null,
+    });
+  }
+  for (let i = 0; i < statRows.length; i += 1000) {
+    const chunk = statRows.slice(i, i + 1000);
+    if (chunk.length === 0) continue;
+    await db.insert(campaignDailyStatsTable).values(chunk)
+      .onConflictDoUpdate({
+        target: [campaignDailyStatsTable.campaignId, campaignDailyStatsTable.date],
+        set: {
+          spend: sql`excluded.spend`,
+          impressions: sql`excluded.impressions`,
+          clicks: sql`excluded.clicks`,
+          conversions: sql`excluded.conversions`,
+          actionsJson: sql`excluded.actions_json`,
+          currency: sql`excluded.currency`,
+        },
+      });
+  }
+
+  return { perAdSynced: adDailyRows.length, campaignDayCount: campaignBuckets.size };
+}
+
+/**
+ * One-shot historical backfill of Meta per-ad insights for the trailing
+ * `days` window (default 365, capped at 1095 ≈ 3 years to stay inside Meta's
+ * insights retention). Iterates the range in 30-day chunks so each Graph API
+ * call stays well under per-request row limits, and reuses the same
+ * ON CONFLICT upsert path as the nightly sync via `upsertMetaInsightRows`.
+ *
+ * Honors the same per-tenant advisory lock as `syncMetaCampaigns` so the
+ * nightly scheduler can never race against an in-flight backfill.
+ *
+ * Surfaces progress in `integration_sync_logs` with sync_type=`backfill`:
+ *   - `recordsProcessed` counts ad-day rows written so far
+ *   - `errorMessage` carries a human-readable progress string
+ *     (e.g. "chunk 3/12: 2024-09-01 → 2024-09-30") while running and
+ *     is cleared to NULL on completion.
+ */
+export async function backfillMetaCampaigns(
+  tenantId: number,
+  days: number,
+): Promise<{ synced: number; chunks: number; error?: string }> {
+  const requestedDays = Number.isFinite(days) ? Math.floor(days) : 0;
+  if (requestedDays <= 30) {
+    return { synced: 0, chunks: 0, error: "days must be > 30 (use the nightly sync for the rolling 30-day window)" };
+  }
+  const totalDays = Math.min(requestedDays, 1095);
+
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, chunks: 0, error: "Tenant not found" };
+
+  if (tenant.metaNeedsReconnect) {
+    const errorMessage = `Meta needs reconnect: ${tenant.metaReconnectReason || "access token expired"}`;
+    const skippedLog = await logSync(tenantId, "meta", "backfill", new Date());
+    await completeSyncLog(skippedLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
+  const config = getTenantConfig(tenant);
+  if (!config?.metaAccessToken || !config?.metaAdAccountId) {
+    const missing = [
+      !config?.metaAccessToken && "Access Token (run Meta OAuth)",
+      !config?.metaAdAccountId && "Ad Account selection",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `Meta not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "meta", "backfill", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
+  const syncLog = await logSync(tenantId, "meta", "backfill", new Date());
+  const adAccountId = config.metaAdAccountId.startsWith("act_") ? config.metaAdAccountId : `act_${config.metaAdAccountId}`;
+  const accountIdNoPrefix = adAccountId.replace(/^act_/, "");
+
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x4d455441}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another Meta sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
+  try {
+    const svc = new MetaAPIService({
+      accessToken: config.metaAccessToken,
+      adAccountId,
+      pixelId: config.metaPixelId,
+    });
+
+    let currency: string | undefined;
+    try {
+      const { metaAdAccountsTable } = await import("@workspace/db");
+      const [acct] = await db.select().from(metaAdAccountsTable)
+        .where(and(eq(metaAdAccountsTable.tenantId, tenantId), eq(metaAdAccountsTable.accountId, accountIdNoPrefix)))
+        .limit(1);
+      currency = acct?.currency;
+    } catch (currencyErr) {
+      console.warn(`[Backfill] Meta tenant ${tenantId}: could not read account currency`, currencyErr);
+    }
+
+    // Iterate from oldest → newest in 30-day chunks. Going forward in time
+    // means each upsert overwrites with progressively more-recent attribution
+    // back-fills from Meta, matching the nightly sync's "last write wins"
+    // semantics on (tenant, ad, date).
+    const CHUNK_DAYS = 30;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const oldest = new Date(today.getTime() - totalDays * 86400000);
+
+    const chunks: Array<{ since: string; until: string }> = [];
+    for (let cursor = new Date(oldest); cursor < today; cursor = new Date(cursor.getTime() + CHUNK_DAYS * 86400000)) {
+      const since = cursor.toISOString().split("T")[0];
+      const untilDate = new Date(Math.min(cursor.getTime() + (CHUNK_DAYS - 1) * 86400000, today.getTime() - 86400000));
+      const until = untilDate.toISOString().split("T")[0];
+      chunks.push({ since, until });
+    }
+
+    let totalSynced = 0;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const { since, until } = chunks[i];
+        await updateSyncLogProgress(
+          syncLog.id,
+          totalSynced,
+          `chunk ${i + 1}/${chunks.length}: ${since} → ${until}`,
+        );
+        const insights = await svc.fetchAdDailyInsights(since, until);
+        const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
+        totalSynced += perAdSynced;
+        console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows`);
+      }
+    } catch (innerErr) {
+      // Re-throw so the outer catch handles error-state, but stash partial
+      // progress on the log first so operators don't lose visibility into
+      // how far the backfill got before failing.
+      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      throw innerErr;
+    }
+
+    await completeSyncLog(syncLog.id, "completed", totalSynced);
+    console.log(`[Backfill] Meta tenant ${tenantId}: backfilled ${totalSynced} ad-day rows across ${chunks.length} chunks (${totalDays} days)`);
+    return { synced: totalSynced, chunks: chunks.length };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof MetaTokenInvalidError) {
+      await db.update(tenantsTable)
+        .set({ metaNeedsReconnect: true, metaReconnectReason: message, updatedAt: new Date() })
+        .where(eq(tenantsTable.id, tenantId));
+      console.error(`[Backfill] Meta tenant ${tenantId} token expired — flagged for reconnect`);
+    }
+    await completeSyncLog(syncLog.id, "error", 0, message);
+    console.error(`[Backfill] Meta error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "meta", message); } catch {}
+    return { synced: 0, chunks: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Backfill] Meta tenant ${tenantId}: failed to release advisory lock`, unlockErr);
     }
   }
 }
