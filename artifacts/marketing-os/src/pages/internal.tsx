@@ -32,10 +32,13 @@ export default function Internal() {
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
+    metaBackfillStatus?: { status: string; recordsProcessed: number; progress: string | null; startedAt: string | null; completedAt: string | null } | null;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncTenantId, setSyncTenantId] = useState<number | null>(null);
+  const [backfillDays, setBackfillDays] = useState<string>("365");
+  const [backfillBusy, setBackfillBusy] = useState(false);
 
   const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -48,6 +51,78 @@ export default function Internal() {
   }, [API_BASE, syncTenantId]);
 
   useEffect(() => { fetchSyncStatus(); }, [fetchSyncStatus]);
+
+  // Poll the sync-status endpoint while a backfill is in flight so the
+  // chunk-progress string and ad-day row count update live. We poll when
+  // EITHER (a) the most recent status snapshot says 'running', OR (b) we
+  // just fired the POST and are waiting for the first row to appear /
+  // for the long-running request to return. The route is synchronous, so
+  // without the `backfillBusy` branch the operator who kicked off the
+  // run would see no progress until the whole thing finished.
+  useEffect(() => {
+    const isRunning = syncStatus?.metaBackfillStatus?.status === "running";
+    if (!isRunning && !backfillBusy) return;
+    const id = setInterval(() => { fetchSyncStatus(); }, 3000);
+    return () => clearInterval(id);
+  }, [syncStatus?.metaBackfillStatus?.status, backfillBusy, fetchSyncStatus]);
+
+  const triggerBackfill = () => {
+    if (!syncTenantId) {
+      toast({ title: "Pick a tenant first", description: "Backfill runs against a single tenant — choose one from the selector above.", variant: "destructive" });
+      return;
+    }
+    const days = Number(backfillDays);
+    if (!Number.isFinite(days) || days <= 30 || days > 1095) {
+      toast({ title: "Invalid days value", description: "Days must be a number between 31 and 1095.", variant: "destructive" });
+      return;
+    }
+    setBackfillBusy(true);
+    toast({
+      title: "Meta backfill started",
+      description: `Pulling the last ${days} days in 30-day chunks. Progress will update live below.`,
+    });
+
+    // Fire-and-forget: the route runs synchronously to completion (can take
+    // many minutes for long windows), so awaiting it would block all
+    // progress updates. We instead let the polling effect refresh the
+    // status row that the backfill writer creates immediately on entry,
+    // and surface the final outcome from the POST resolution.
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/integrations/meta/backfill?tenantId=${syncTenantId}&days=${days}`, {
+          method: "POST",
+          credentials: "include",
+        });
+        let body: { success?: boolean; synced?: number; chunks?: number; error?: string } = {};
+        try { body = await res.json(); } catch { /* non-JSON */ }
+        if (!res.ok || body.success === false) {
+          toast({
+            title: "Meta backfill failed",
+            description: body.error || `HTTP ${res.status}`,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Meta backfill complete",
+            description: `Synced ${body.synced ?? 0} ad-day rows across ${body.chunks ?? 0} chunks.`,
+          });
+        }
+      } catch (err) {
+        toast({
+          title: "Meta backfill failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setBackfillBusy(false);
+        fetchSyncStatus();
+      }
+    })();
+
+    // Kick the first poll right away so the just-created 'running' row
+    // shows up without waiting a full poll interval.
+    setTimeout(() => { fetchSyncStatus(); }, 500);
+  };
 
   const triggerSync = async (integration: string) => {
     const targetTenantId = syncTenantId || data?.tenants?.[0]?.tenantId;
@@ -389,6 +464,63 @@ export default function Internal() {
                     <p className="text-red-400">{status!.errorCount} errors in recent history</p>
                   )}
                 </div>
+                {integ === "meta" && (
+                  <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-white/80">Historical backfill</span>
+                      {syncStatus?.metaBackfillStatus ? (
+                        syncStatus.metaBackfillStatus.status === "running" ? (
+                          <span className="flex items-center gap-1 text-[11px] text-blue-400"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
+                        ) : syncStatus.metaBackfillStatus.status === "completed" ? (
+                          <span className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle className="w-3 h-3" /> Completed</span>
+                        ) : syncStatus.metaBackfillStatus.status === "error" ? (
+                          <span className="flex items-center gap-1 text-[11px] text-red-400"><XCircle className="w-3 h-3" /> Error</span>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground capitalize">{syncStatus.metaBackfillStatus.status}</span>
+                        )
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">Never run</span>
+                      )}
+                    </div>
+                    {syncStatus?.metaBackfillStatus && (
+                      <div className="space-y-1 text-[11px] text-muted-foreground">
+                        {syncStatus.metaBackfillStatus.progress && (
+                          <p className="text-white/70 font-mono break-all">{syncStatus.metaBackfillStatus.progress}</p>
+                        )}
+                        <p>{syncStatus.metaBackfillStatus.recordsProcessed.toLocaleString()} ad-day rows</p>
+                        <p>
+                          Started: {syncStatus.metaBackfillStatus.startedAt ? new Date(syncStatus.metaBackfillStatus.startedAt).toLocaleString() : "—"}
+                        </p>
+                        <p>
+                          Completed: {syncStatus.metaBackfillStatus.completedAt ? new Date(syncStatus.metaBackfillStatus.completedAt).toLocaleString() : "—"}
+                        </p>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="number"
+                        min={31}
+                        max={1095}
+                        value={backfillDays}
+                        onChange={(e) => setBackfillDays(e.target.value)}
+                        className="w-20 bg-background/50 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        placeholder="365"
+                      />
+                      <span className="text-[11px] text-muted-foreground">days (max 1095)</span>
+                      <button
+                        onClick={triggerBackfill}
+                        disabled={backfillBusy || !syncTenantId || syncStatus?.metaBackfillStatus?.status === "running"}
+                        className="ml-auto text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
+                        title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
+                      >
+                        {backfillBusy || syncStatus?.metaBackfillStatus?.status === "running"
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <RefreshCw className="w-3 h-3" />}
+                        Run backfill
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <button
                   onClick={() => triggerSync(integ)}
                   disabled={syncLoading || (!syncTenantId && (!data?.tenants || data.tenants.length === 0))}

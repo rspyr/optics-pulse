@@ -230,6 +230,24 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0))
     .slice(0, 20);
 
+  // Surface the latest Meta historical-backfill log row separately. The
+  // generic `syncTypes` aggregation only carries lastRun/lastStatus/records,
+  // but the backfill writer also stashes a human-readable chunk-progress
+  // string in `errorMessage` while running. The Settings panel needs that
+  // string + startedAt to show in-flight progress to operators.
+  const metaBackfillLog = dataSyncLogs.find(
+    (l) => l.integration === "meta" && l.syncType === "backfill",
+  );
+  const metaBackfillStatus = metaBackfillLog
+    ? {
+        status: metaBackfillLog.status,
+        recordsProcessed: metaBackfillLog.recordsProcessed,
+        progress: metaBackfillLog.errorMessage,
+        startedAt: metaBackfillLog.startedAt?.toISOString() ?? null,
+        completedAt: metaBackfillLog.completedAt?.toISOString() ?? null,
+      }
+    : null;
+
   res.json({
     statusByIntegration,
     recentLogs: allLogs,
@@ -239,6 +257,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       status: lastPurge.status,
       recordsProcessed: lastPurge.recordsProcessed,
     } : null,
+    metaBackfillStatus,
   });
 });
 
