@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useGetMetaCampaignSummary, useGetMetaCampaignBreakdown } from "@workspace/api-client-react";
 import { PremiumCard } from "@/components/ui-helpers";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -39,6 +39,20 @@ function isActiveStatus(status: string | null | undefined): boolean {
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const { data: campaigns, isLoading } = useGetMetaCampaignSummary({ startDate, endDate });
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  // Date-range change resets sort/filter prefs for ALL campaigns, even ones
+  // that aren't currently expanded. We clear localStorage at the parent level
+  // so collapsed campaigns don't restore stale prefs the next time they're
+  // opened. Skip the very first run so freshly-loaded prefs aren't wiped.
+  const isFirstRangeEffect = useRef(true);
+  useEffect(() => {
+    if (isFirstRangeEffect.current) {
+      isFirstRangeEffect.current = false;
+      return;
+    }
+    setExpanded({});
+    clearAllCampaignPrefs();
+  }, [startDate, endDate]);
 
   const toggle = (id: number) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -162,20 +176,105 @@ function SortHeader({ label, columnKey, sortKey, sortDir, onSort }: SortHeaderPr
   );
 }
 
+type CampaignViewPrefs = {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  hideInactive: boolean;
+};
+
+const DEFAULT_PREFS: CampaignViewPrefs = {
+  sortKey: "spend",
+  sortDir: "desc",
+  hideInactive: false,
+};
+
+const PREFS_STORAGE_PREFIX = "marketing-os:meta-campaign-prefs:v1:";
+
+function prefsStorageKey(campaignId: number): string {
+  return `${PREFS_STORAGE_PREFIX}${campaignId}`;
+}
+
+function isSortKey(v: unknown): v is SortKey {
+  return v === "spend" || v === "clicks" || v === "conversions" || v === "cpl";
+}
+
+function isSortDir(v: unknown): v is SortDir {
+  return v === "asc" || v === "desc";
+}
+
+function loadCampaignPrefs(campaignId: number): CampaignViewPrefs {
+  if (typeof window === "undefined") return DEFAULT_PREFS;
+  try {
+    const raw = window.localStorage.getItem(prefsStorageKey(campaignId));
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw) as Partial<CampaignViewPrefs>;
+    return {
+      sortKey: isSortKey(parsed.sortKey) ? parsed.sortKey : DEFAULT_PREFS.sortKey,
+      sortDir: isSortDir(parsed.sortDir) ? parsed.sortDir : DEFAULT_PREFS.sortDir,
+      hideInactive: typeof parsed.hideInactive === "boolean" ? parsed.hideInactive : DEFAULT_PREFS.hideInactive,
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+function saveCampaignPrefs(campaignId: number, prefs: CampaignViewPrefs): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(prefsStorageKey(campaignId), JSON.stringify(prefs));
+  } catch {
+    // Storage unavailable (private mode, quota, etc.) — silently ignore.
+  }
+}
+
+function clearAllCampaignPrefs(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const storage = window.localStorage;
+    const toRemove: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key && key.startsWith(PREFS_STORAGE_PREFIX)) {
+        toRemove.push(key);
+      }
+    }
+    for (const key of toRemove) {
+      storage.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: number; startDate: string; endDate: string }) {
   const { data, isLoading } = useGetMetaCampaignBreakdown(campaignId, { startDate, endDate });
   const [expandedSets, setExpandedSets] = useState<Record<string, boolean>>({});
-  const [sortKey, setSortKey] = useState<SortKey>("spend");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [hideInactive, setHideInactive] = useState(false);
+  const initialPrefs = useMemo(() => loadCampaignPrefs(campaignId), [campaignId]);
+  const [sortKey, setSortKey] = useState<SortKey>(initialPrefs.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(initialPrefs.sortDir);
+  const [hideInactive, setHideInactive] = useState(initialPrefs.hideInactive);
 
-  // Reset sort/filter state when the date range changes (per-campaign).
+  // Reset in-memory sort/filter state when the date range changes
+  // (per-campaign). The parent component clears the persisted prefs across
+  // all campaigns at the same time, so collapsed campaigns also start fresh
+  // for the new range. Skip the first run so we don't wipe freshly-loaded
+  // prefs on initial mount.
+  const isFirstRangeEffect = useRef(true);
   useEffect(() => {
-    setSortKey("spend");
-    setSortDir("desc");
-    setHideInactive(false);
+    if (isFirstRangeEffect.current) {
+      isFirstRangeEffect.current = false;
+      return;
+    }
+    setSortKey(DEFAULT_PREFS.sortKey);
+    setSortDir(DEFAULT_PREFS.sortDir);
+    setHideInactive(DEFAULT_PREFS.hideInactive);
     setExpandedSets({});
-  }, [startDate, endDate]);
+  }, [startDate, endDate, campaignId]);
+
+  // Persist user choices so they survive collapsing/re-expanding and reloads.
+  useEffect(() => {
+    saveCampaignPrefs(campaignId, { sortKey, sortDir, hideInactive });
+  }, [campaignId, sortKey, sortDir, hideInactive]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
