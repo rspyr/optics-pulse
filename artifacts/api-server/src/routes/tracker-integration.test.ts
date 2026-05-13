@@ -515,6 +515,46 @@ describe("POST /collect/submit", () => {
     expect(Object.keys(values)).toEqual(names);
   });
 
+  // Task #386 — when the submit handler strips reserved underscore-prefixed
+  // field names, those keys must also ride along on the live attribution
+  // payload so the live feed can show a "fields dropped" badge on the
+  // matching row (mirroring the audit-row warning from Task #377).
+  it("emits droppedReservedFieldKeys on the live payload when reserved keys were stripped", async () => {
+    const tenant = { id: 17, name: "Tenant" };
+    const fakeEvent = { id: 720, tenantId: 17 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: {
+        first_name: "Alice",
+        _consent: "yes",
+        _custom: "nope",
+      },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const payload = vi.mocked(emitNewAttributionEvent).mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.droppedReservedFieldKeys).toEqual(["_consent", "_custom"]);
+  });
+
+  it("emits null droppedReservedFieldKeys when no reserved keys were stripped", async () => {
+    const tenant = { id: 18, name: "Tenant" };
+    const fakeEvent = { id: 721, tenantId: 18 };
+    mockDb.selectResults = [[tenant]];
+    mockDb.insertResults = [[fakeEvent]];
+
+    await sendRequest(app, "/collect/submit", {
+      client_id: "test-client",
+      fields: { first_name: "Alice", email: "a@b.com" },
+    });
+
+    const { emitNewAttributionEvent } = await import("../socket");
+    const payload = vi.mocked(emitNewAttributionEvent).mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.droppedReservedFieldKeys).toBeNull();
+  });
+
   it("sets unmatchedReason on unmatched events", async () => {
     const tenant = { id: 13, name: "Tenant" };
     const fakeEvent = { id: 702, tenantId: 13 };

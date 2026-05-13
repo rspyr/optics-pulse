@@ -51,6 +51,11 @@ interface LiveAttributionEvent {
   // fieldNames and excludes `_`-prefixed internal keys.
   fieldValues?: Record<string, unknown> | null;
   unmatchedReason?: string | null;
+  // Task #386 — when the submit handler stripped one or more reserved
+  // underscore-prefixed field names (Task #290 / #377), the keys arrive
+  // here so the live feed can show an amber "fields dropped" badge on the
+  // matching row. Null/undefined when nothing was dropped.
+  droppedReservedFieldKeys?: string[] | null;
 }
 
 type ScriptKind = "pulse-current" | "pulse-legacy" | "optics-legacy" | "unknown-tracker" | "none";
@@ -878,6 +883,16 @@ function LiveEventCard({
                   <span>Event #{evt.id}</span>
                   <span className={`text-[11px] px-2 py-0.5 rounded border ${matchPillClass(evt.matchLevel)}`}>match: {evt.matchLevel}</span>
                   <CapturePathBadge formType={evt.formType} />
+                  {evt.droppedReservedFieldKeys && evt.droppedReservedFieldKeys.length > 0 && (
+                    <span
+                      data-testid="live-event-dropped-fields-badge"
+                      className="text-[11px] px-2 py-0.5 rounded border bg-amber-500/15 text-amber-200 border-amber-400/30 inline-flex items-center gap-1 cursor-help"
+                      title={`These field names start with "_", which Pulse reserves for internal use. They were dropped before the lead was stored. Rename the matching <input name="…"> on the form (e.g. "_consent" → "consent") to keep the data.`}
+                    >
+                      <AlertTriangle className="w-3 h-3" />
+                      fields dropped: {evt.droppedReservedFieldKeys.join(", ")}
+                    </span>
+                  )}
                   {fromPriorSession && (
                     <span className="text-[11px] px-2 py-0.5 rounded border bg-white/[0.04] text-muted-foreground border-white/15">from previous session</span>
                   )}

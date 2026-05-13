@@ -523,6 +523,11 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       fieldNames: liveFieldNames,
       fieldValues: liveFieldValues,
       unmatchedReason,
+      // Task #386 — surface the same dropped-reserved-key warning the audit
+      // row gets (Task #377) on the live attribution feed so the operator
+      // can connect the amber finding to the exact submission that tripped
+      // it. Empty array on the wire means "nothing was dropped".
+      droppedReservedFieldKeys: droppedReservedKeys.length > 0 ? droppedReservedKeys : null,
     });
 
     const ingestionMode = tenant.leadIngestionMode || "sheets";
