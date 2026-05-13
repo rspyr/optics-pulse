@@ -227,21 +227,71 @@ describe("extractFieldEntriesForOperator", () => {
 // guard runs at /collect/submit ingest, before the cleaned map is spread
 // into the stored formFields blob alongside `_custom`.
 describe("stripReservedFieldKeys", () => {
-  it("drops keys that start with `_` so a customer field cannot clobber `_custom`", () => {
-    const { cleaned, dropped } = stripReservedFieldKeys({
+  it("renames underscore-prefixed customer keys to their bare form so the value is preserved", () => {
+    const { cleaned, nested, renamed } = stripReservedFieldKeys({
       phone: "555-1234",
-      email: "a@b.com",
-      _custom: "attacker-supplied",
-      _source: "fake_homepage",
+      _consent: "yes",
+      _source_lead: "homepage",
     });
-    expect(cleaned).toEqual({ phone: "555-1234", email: "a@b.com" });
-    expect(dropped.sort()).toEqual(["_custom", "_source"]);
+    expect(cleaned).toEqual({
+      phone: "555-1234",
+      consent: "yes",
+      source_lead: "homepage",
+    });
+    expect(nested).toEqual({});
+    expect(renamed.sort((a, b) => a.from.localeCompare(b.from))).toEqual([
+      { from: "_consent", to: "consent" },
+      { from: "_source_lead", to: "source_lead" },
+    ]);
   });
 
-  it("leaves non-reserved keys untouched and reports no drops", () => {
-    const { cleaned, dropped } = stripReservedFieldKeys({ phone: "x", field_3: "y" });
+  it("nests under _custom when the bare-form name would collide with a real customer field", () => {
+    const { cleaned, nested, renamed } = stripReservedFieldKeys({
+      phone: "555-1234",
+      _phone: "alt-line",
+    });
+    expect(cleaned).toEqual({ phone: "555-1234" });
+    expect(nested).toEqual({ _phone: "alt-line" });
+    expect(renamed).toEqual([]);
+  });
+
+  it("nests when stripping the leading underscore would leave nothing", () => {
+    const { cleaned, nested, renamed } = stripReservedFieldKeys({ _: "naked", __: "more" });
+    expect(cleaned).toEqual({});
+    expect(nested).toEqual({ _: "naked", __: "more" });
+    expect(renamed).toEqual([]);
+  });
+
+  it("nests later siblings whose rename would collide with an earlier rename in the same payload", () => {
+    const { cleaned, nested, renamed } = stripReservedFieldKeys({
+      _consent: "first",
+      __consent: "second",
+    });
+    expect(cleaned).toEqual({ consent: "first" });
+    expect(nested).toEqual({ __consent: "second" });
+    expect(renamed).toEqual([{ from: "_consent", to: "consent" }]);
+  });
+
+  it("never emits an underscore-prefixed key in `cleaned` so reserved internal keys still win", () => {
+    // A customer trying to overwrite our internal `_custom` bookkeeping
+    // simply gets renamed to a plain `custom` field; the reserved key is
+    // free for the route handler to set authoritatively. If the bare
+    // name is already taken (here, `custom`) we nest instead — never
+    // re-emit the underscore form into the cleaned map.
+    const { cleaned, nested } = stripReservedFieldKeys({
+      custom: "real",
+      _custom: "attacker-supplied",
+    });
+    expect(cleaned).toEqual({ custom: "real" });
+    expect(Object.keys(cleaned).every((k) => !k.startsWith("_"))).toBe(true);
+    expect(nested).toEqual({ _custom: "attacker-supplied" });
+  });
+
+  it("leaves non-reserved keys untouched and reports no rename / nest activity", () => {
+    const { cleaned, nested, renamed } = stripReservedFieldKeys({ phone: "x", field_3: "y" });
     expect(cleaned).toEqual({ phone: "x", field_3: "y" });
-    expect(dropped).toEqual([]);
+    expect(nested).toEqual({});
+    expect(renamed).toEqual([]);
   });
 });
 

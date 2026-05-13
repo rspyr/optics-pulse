@@ -104,24 +104,53 @@ export const FIELD_NAMES_CAP = 30;
 // silently overwrite our bookkeeping value when the submission is stored
 // — and would also slip past extractFieldNamesForOperator /
 // extractFieldEntriesForOperator (which already filter `_*` out), making
-// the colliding field invisible to operators. We strip such keys at
-// ingest so the reserved-key promise is enforced at write time.
+// the colliding field invisible to operators. Originally we just dropped
+// such keys at ingest; that was lossy. Task #387: instead, namespace the
+// offender so the lead keeps the value while still protecting reserved
+// keys.
 //
-// Returns the cleaned field map plus the list of dropped keys so the
-// caller can log a single warning for visibility without leaking values.
+// For each underscore-prefixed key we try to RENAME it by stripping the
+// leading underscores (`_consent` → `consent`). If the stripped name is
+// empty, or already exists on the customer's submission (or has already
+// been claimed by a previous rename in this same payload), we fall back
+// to NESTING the value under its original key inside a returned bag —
+// the caller merges that bag into `_custom` so the value lives at
+// `_custom._consent` in the stored fields blob. Reserved internal keys
+// still win on collision: the cleaned map never contains `_`-keys, and
+// the caller layers the real `body.custom` ON TOP of the nested bag so
+// internal bookkeeping always overwrites a customer's lookalike value.
 export function stripReservedFieldKeys(
   fields: Record<string, unknown>,
-): { cleaned: Record<string, unknown>; dropped: string[] } {
+): {
+  cleaned: Record<string, unknown>;
+  nested: Record<string, unknown>;
+  renamed: Array<{ from: string; to: string }>;
+} {
   const cleaned: Record<string, unknown> = {};
-  const dropped: string[] = [];
+  const nested: Record<string, unknown> = {};
+  const renamed: Array<{ from: string; to: string }> = [];
+
+  // First pass: copy the customer's non-underscore keys verbatim. Doing
+  // this up-front gives the second pass a complete view of which target
+  // names are already taken so a rename can never silently overwrite a
+  // real customer field.
   for (const [k, v] of Object.entries(fields)) {
-    if (k.startsWith("_")) {
-      dropped.push(k);
-      continue;
-    }
-    cleaned[k] = v;
+    if (!k.startsWith("_")) cleaned[k] = v;
   }
-  return { cleaned, dropped };
+
+  // Second pass: rename or nest each `_`-prefixed key.
+  for (const [k, v] of Object.entries(fields)) {
+    if (!k.startsWith("_")) continue;
+    const target = k.replace(/^_+/, "");
+    if (!target || target in cleaned) {
+      nested[k] = v;
+    } else {
+      cleaned[target] = v;
+      renamed.push({ from: k, to: target });
+    }
+  }
+
+  return { cleaned, nested, renamed };
 }
 
 export function extractFieldNamesForOperator(fields: Record<string, unknown> | null | undefined): string[] {
@@ -285,20 +314,39 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     // clobber our internal bookkeeping (e.g. `_custom`) when stored, and
     // would also be invisible to operator-facing helpers that filter `_*`.
     // Strip them at ingest so the rest of the pipeline can trust the keys.
-    const { cleaned: fields, dropped: droppedReservedKeys } = stripReservedFieldKeys(rawFields);
-    const custom = (body.custom || {}) as Record<string, unknown>;
+    const { cleaned: fields, nested: nestedReservedFields, renamed: renamedReservedKeys } =
+      stripReservedFieldKeys(rawFields);
+    const rawCustom = (body.custom || {}) as Record<string, unknown>;
+    // Layer the customer's real `_custom` payload ON TOP of the nested
+    // bag so reserved internal bookkeeping always wins on collision —
+    // a customer-supplied `_custom: "x"` is preserved as
+    // `_custom._custom`, but `body.custom` itself remains authoritative.
+    const custom: Record<string, unknown> = Object.keys(nestedReservedFields).length > 0
+      ? { ...nestedReservedFields, ...rawCustom }
+      : rawCustom;
+    const droppedReservedKeys = [
+      ...renamedReservedKeys.map((r) => r.from),
+      ...Object.keys(nestedReservedFields),
+    ];
     if (droppedReservedKeys.length > 0) {
-      console.warn(
-        "[Tracker Submit] dropped reserved underscore-prefixed field keys from",
+      const renameSummary = renamedReservedKeys.length > 0
+        ? `renamed: ${renamedReservedKeys.map((r) => `${r.from}→${r.to}`).join(", ")}`
+        : null;
+      const nestSummary = Object.keys(nestedReservedFields).length > 0
+        ? `nested under _custom: ${Object.keys(nestedReservedFields).join(", ")}`
+        : null;
+      console.info(
+        "[Tracker Submit] preserved reserved underscore-prefixed field keys from",
         clientId,
         "—",
-        droppedReservedKeys.join(", "),
+        [renameSummary, nestSummary].filter(Boolean).join("; "),
       );
-      // Persist on the audit row so Verify Tracker can surface a warning
-      // pointing the operator at the offending <input name> (Task #377).
-      // We piggy-back the form id/name/type the keys came from so the
-      // warning is actionable: "Form 'Contact (#contact-form)' is sending
-      // reserved keys: _custom, _consent — please rename".
+      // Persist on the audit row so Verify Tracker can surface an
+      // informational notice pointing the operator at the offending
+      // <input name> (Task #377/#387). We piggy-back the form
+      // id/name/type the keys came from so the notice is actionable:
+      // "Form 'Contact (#contact-form)' is sending reserved keys: we
+      // renamed _consent → consent so the data is preserved."
       const formObj = (body.form || {}) as Record<string, unknown>;
       await updateTrackerAttempt(auditId, {
         droppedReservedFieldKeys: {

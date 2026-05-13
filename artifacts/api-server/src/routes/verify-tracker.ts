@@ -972,8 +972,8 @@ router.post("/verify-tracker", async (req, res) => {
           ? `type "${w.formType}"`
           : "an unidentified form";
     findings.push({
-      level: "warning",
-      message: `Form ${formLabel} on ${targetHost} is sending field name${w.keys.length === 1 ? "" : "s"} that start with "_" (${w.keys.join(", ")}). Pulse reserves underscore-prefixed keys for internal use, so these field${w.keys.length === 1 ? "" : "s"} are being dropped before the lead is stored — rename the input${w.keys.length === 1 ? "" : "s"} on the form to keep the data.`,
+      level: "info",
+      message: `Form ${formLabel} on ${targetHost} is sending field name${w.keys.length === 1 ? "" : "s"} that start with "_" (${w.keys.join(", ")}). Pulse reserves underscore-prefixed keys for internal use, so we automatically renamed each one (stripping the leading "_", e.g. "_consent" → "consent") or, if that name was already taken, nested the value under "_custom" — the data is preserved either way. Renaming the input${w.keys.length === 1 ? "" : "s"} on the form is still recommended so the stored field name matches the original.`,
     });
   }
 
