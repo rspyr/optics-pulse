@@ -81,6 +81,7 @@ router.post("/integrations/google_ads/backfill", requireRole("super_admin", "age
   if (result.error) {
     const status = /not found/i.test(result.error) ? 404
       : /not configured/i.test(result.error) ? 400
+      : /already running/i.test(result.error) ? 409
       : 502;
     res.status(status).json({ success: false, ...result });
     return;
@@ -116,6 +117,7 @@ router.post("/integrations/service_titan/backfill", requireRole("super_admin", "
   if (result.error) {
     const status = /not found/i.test(result.error) ? 404
       : /not configured|paused/i.test(result.error) ? 400
+      : /already running/i.test(result.error) ? 409
       : 502;
     res.status(status).json({ success: false, ...result });
     return;

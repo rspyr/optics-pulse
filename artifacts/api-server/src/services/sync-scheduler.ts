@@ -145,6 +145,17 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
   const syncLog = await logSync(tenantId, "service_titan", "jobs", new Date());
 
+  // Per-tenant advisory lock (0x5354414e = 'STAN') prevents the 15-min
+  // scheduled sync from racing with a manual ServiceTitan backfill on the
+  // same SELECT/INSERT job upserts.
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x5354414e}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another ServiceTitan sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
+  }
+
   try {
     const stConfig = {
       clientId: config.serviceTitanClientId,
@@ -255,6 +266,12 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     console.error(`[Sync] ServiceTitan error for tenant ${tenantId}:`, message);
     try { await emitSyncFailureNotification(tenantId, "service_titan", message); } catch {}
     return { synced: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x5354414e}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Sync] ServiceTitan tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
   }
 }
 
@@ -406,6 +423,18 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
 
   const syncLog = await logSync(tenantId, "google_ads", "campaigns", new Date());
 
+  // Per-tenant advisory lock (0x47414453 = 'GADS') prevents the hourly
+  // scheduled sync from racing with a manual Google Ads backfill on the
+  // same campaign SELECT/INSERT path (which could otherwise create
+  // duplicate campaigns under contention).
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x47414453}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another Google Ads sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
+  }
+
   try {
     const endDate = new Date().toISOString().split("T")[0];
     const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
@@ -470,6 +499,12 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
     console.error(`[Sync] Google Ads error for tenant ${tenantId}:`, message);
     try { await emitSyncFailureNotification(tenantId, "google_ads", message); } catch {}
     return { synced: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x47414453}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Sync] Google Ads tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
   }
 }
 
@@ -1138,6 +1173,16 @@ export async function backfillGoogleAdsCampaigns(
 
   const syncLog = await logSync(tenantId, "google_ads", "backfill", new Date());
 
+  // Share the per-tenant lock with `syncGoogleAdsCampaigns` so a manual
+  // backfill and the hourly scheduled sync can never overlap.
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x47414453}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another Google Ads sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
   try {
     const gaConfig = {
       developerToken: config!.googleAdsDeveloperToken!,
@@ -1231,6 +1276,12 @@ export async function backfillGoogleAdsCampaigns(
     console.error(`[Backfill] Google Ads error for tenant ${tenantId}:`, message);
     try { await emitSyncFailureNotification(tenantId, "google_ads", message); } catch {}
     return { synced: 0, chunks: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x47414453}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Backfill] Google Ads tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
   }
 }
 
@@ -1277,6 +1328,17 @@ export async function backfillServiceTitanJobs(
   }
 
   const syncLog = await logSync(tenantId, "service_titan", "backfill", new Date());
+
+  // Share the per-tenant lock with `syncServiceTitanJobs` so a manual
+  // backfill and the 15-min scheduled sync can never overlap on the same
+  // job upserts.
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x5354414e}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another ServiceTitan sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
 
   try {
     const stConfig = {
@@ -1390,6 +1452,12 @@ export async function backfillServiceTitanJobs(
     console.error(`[Backfill] ServiceTitan error for tenant ${tenantId}:`, message);
     try { await emitSyncFailureNotification(tenantId, "service_titan", message); } catch {}
     return { synced: 0, chunks: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x5354414e}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Backfill] ServiceTitan tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
   }
 }
 
