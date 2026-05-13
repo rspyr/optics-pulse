@@ -84,13 +84,11 @@ function PushNotificationCard() {
   );
 }
 
-function PodiumUserLinking({ tenantId }: { tenantId: number }) {
+function PodiumUserLinkingPanel({ tenantId }: { tenantId: number }) {
   const [linkingId, setLinkingId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
-  const [expanded, setExpanded] = useState(false);
 
   const { data: usersData, isFetching: loading, refetch } = useGetPodiumUsers({ tenantId });
-  useEffect(() => { if (expanded) refetch(); }, [expanded, refetch]);
   const podiumUsers: PodiumUserEntry[] = (usersData?.podiumUsers ?? []) as PodiumUserEntry[];
   const teamMembers: TeamMemberEntry[] = (usersData?.teamMembers ?? []) as TeamMemberEntry[];
 
@@ -117,6 +115,88 @@ function PodiumUserLinking({ tenantId }: { tenantId: number }) {
   const linkedUids = new Set(teamMembers.filter(m => m.podiumUserUid).map(m => m.podiumUserUid));
 
   return (
+    <div className="mt-4 space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Link your team members to their Podium accounts to enable conversation assignment.
+      </p>
+
+      {feedback && (
+        <div className={cn(
+          "px-3 py-2 rounded-lg text-sm flex items-center gap-2",
+          feedback.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+        )}>
+          {feedback.type === "success" ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+          {feedback.msg}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="py-6 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
+      ) : (
+        <div className="space-y-2">
+          {teamMembers.length === 0 && (
+            <p className="text-sm text-white/30 text-center py-4">No team members found for this tenant.</p>
+          )}
+          {teamMembers.map(member => {
+            const linkedPodiumUser = podiumUsers.find(pu => pu.uid === member.podiumUserUid);
+            const isLinking = linkingId === member.id;
+            return (
+              <div key={member.id} className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg px-4 py-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-white truncate">{member.name || member.email || `User #${member.id}`}</p>
+                  {member.email && member.name && (
+                    <p className="text-xs text-white/30 truncate">{member.email}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {member.podiumUserUid ? (
+                    <>
+                      <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 rounded text-emerald-400">
+                        <Link2 className="w-3 h-3" />
+                        <span className="text-xs">{linkedPodiumUser?.name || linkedPodiumUser?.email || member.podiumUserUid}</span>
+                      </div>
+                      <button
+                        onClick={() => handleLink(member.id, null)}
+                        disabled={isLinking}
+                        className="p-1.5 rounded hover:bg-red-500/10 text-white/30 hover:text-red-400 transition-colors disabled:opacity-50"
+                        title="Unlink"
+                      >
+                        {isLinking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unlink className="w-3.5 h-3.5" />}
+                      </button>
+                    </>
+                  ) : (
+                    <select
+                      onChange={e => { if (e.target.value) handleLink(member.id, e.target.value); }}
+                      disabled={isLinking}
+                      className="text-xs bg-white/5 border border-white/10 rounded px-2 py-1.5 text-white focus:outline-none focus:border-cyan-500/30 disabled:opacity-50 max-w-[180px]"
+                      defaultValue=""
+                    >
+                      <option value="" className="bg-gray-900">Link to Podium user...</option>
+                      {podiumUsers.filter(pu => !linkedUids.has(pu.uid)).map(pu => (
+                        <option key={pu.uid} value={pu.uid} className="bg-gray-900">
+                          {pu.name || pu.email || pu.uid}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {podiumUsers.length === 0 && teamMembers.length > 0 && (
+            <p className="text-xs text-amber-400/60 mt-2">
+              No Podium users found. A user within this tenant needs to connect their Podium account in their own Settings first, or reconnect with the "read_users" scope above.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PodiumUserLinking({ tenantId }: { tenantId: number }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
     <PremiumCard>
       <button
         onClick={() => setExpanded(o => !o)}
@@ -128,85 +208,7 @@ function PodiumUserLinking({ tenantId }: { tenantId: number }) {
         </div>
         <ChevronDown className={cn("w-5 h-5 text-gray-400 transition-transform duration-200", expanded && "rotate-180")} />
       </button>
-
-      {expanded && (
-        <div className="mt-4 space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Link your team members to their Podium accounts to enable conversation assignment.
-          </p>
-
-          {feedback && (
-            <div className={cn(
-              "px-3 py-2 rounded-lg text-sm flex items-center gap-2",
-              feedback.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
-            )}>
-              {feedback.type === "success" ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-              {feedback.msg}
-            </div>
-          )}
-
-          {loading ? (
-            <div className="py-6 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
-          ) : (
-            <div className="space-y-2">
-              {teamMembers.length === 0 && (
-                <p className="text-sm text-white/30 text-center py-4">No team members found for this tenant.</p>
-              )}
-              {teamMembers.map(member => {
-                const linkedPodiumUser = podiumUsers.find(pu => pu.uid === member.podiumUserUid);
-                const isLinking = linkingId === member.id;
-                return (
-                  <div key={member.id} className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg px-4 py-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white truncate">{member.name || member.email || `User #${member.id}`}</p>
-                      {member.email && member.name && (
-                        <p className="text-xs text-white/30 truncate">{member.email}</p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {member.podiumUserUid ? (
-                        <>
-                          <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 rounded text-emerald-400">
-                            <Link2 className="w-3 h-3" />
-                            <span className="text-xs">{linkedPodiumUser?.name || linkedPodiumUser?.email || member.podiumUserUid}</span>
-                          </div>
-                          <button
-                            onClick={() => handleLink(member.id, null)}
-                            disabled={isLinking}
-                            className="p-1.5 rounded hover:bg-red-500/10 text-white/30 hover:text-red-400 transition-colors disabled:opacity-50"
-                            title="Unlink"
-                          >
-                            {isLinking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unlink className="w-3.5 h-3.5" />}
-                          </button>
-                        </>
-                      ) : (
-                        <select
-                          onChange={e => { if (e.target.value) handleLink(member.id, e.target.value); }}
-                          disabled={isLinking}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-1.5 text-white focus:outline-none focus:border-cyan-500/30 disabled:opacity-50 max-w-[180px]"
-                          defaultValue=""
-                        >
-                          <option value="" className="bg-gray-900">Link to Podium user...</option>
-                          {podiumUsers.filter(pu => !linkedUids.has(pu.uid)).map(pu => (
-                            <option key={pu.uid} value={pu.uid} className="bg-gray-900">
-                              {pu.name || pu.email || pu.uid}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {podiumUsers.length === 0 && teamMembers.length > 0 && (
-                <p className="text-xs text-amber-400/60 mt-2">
-                  No Podium users found. A user within this tenant needs to connect their Podium account in their own Settings first, or reconnect with the "read_users" scope above.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {expanded && <PodiumUserLinkingPanel tenantId={tenantId} />}
     </PremiumCard>
   );
 }
