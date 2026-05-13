@@ -15,7 +15,18 @@ router.get("/attribution/events", async (req, res) => {
   const query = ListAttributionEventsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  if (query.tenantId) conditions.push(eq(attributionEventsTable.tenantId, query.tenantId));
+  const role = req.session.userRole;
+  const userTenantId = req.session.tenantId;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (!userTenantId) {
+      res.status(403).json({ error: "No tenant assigned" });
+      return;
+    }
+    conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
+  } else if (query.tenantId) {
+    conditions.push(eq(attributionEventsTable.tenantId, query.tenantId));
+  }
+
   if (query.matchLevel) {
     const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "unmatched";
     conditions.push(eq(attributionEventsTable.matchLevel, level));

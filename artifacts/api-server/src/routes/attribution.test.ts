@@ -29,15 +29,23 @@ function makeSelectChain(results: () => unknown[]) {
   const chain: Record<string, unknown> = {};
   const thenResult = () => makeThenable(results());
   chain.from = vi.fn().mockReturnValue(chain);
+  // .limit() can be called either as a terminal step (returns a thenable
+  // resolving to the results) or chained with .offset() — the list
+  // endpoint does `.limit(n).offset(m)`, so the limit return value must
+  // also expose .offset that resolves to the same results.
+  const limitReturn = () =>
+    Object.assign(thenResult(), {
+      offset: vi.fn().mockImplementation(() => Promise.resolve(results())),
+    });
   chain.where = vi.fn().mockReturnValue(
     Object.assign(thenResult(), {
-      limit: vi.fn().mockImplementation(() => Promise.resolve(results())),
+      limit: vi.fn().mockImplementation(limitReturn),
       orderBy: vi.fn().mockReturnValue(
         Object.assign(thenResult(), {
-          limit: vi.fn().mockImplementation(() => Promise.resolve(results())),
+          limit: vi.fn().mockImplementation(limitReturn),
           offset: vi.fn().mockReturnValue(
             Object.assign(thenResult(), {
-              limit: vi.fn().mockImplementation(() => Promise.resolve(results())),
+              limit: vi.fn().mockImplementation(limitReturn),
             }),
           ),
         }),
@@ -389,6 +397,108 @@ describe("GET /attribution/events/:id — unmatchedReason contract", () => {
     // Matched rows must never trigger the recompute helper either.
     const trackerMod = await import("./tracker");
     expect(vi.mocked(trackerMod.computeUnmatchedReason)).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /attribution/events — list tenant scoping", () => {
+  beforeEach(() => {
+    mockDb.resetCounters();
+    vi.clearAllMocks();
+  });
+
+  async function tenantEqCalls(): Promise<unknown[][]> {
+    const drizzle = await import("drizzle-orm");
+    return vi
+      .mocked(drizzle.eq)
+      .mock.calls.filter((c) => c[0] === "attribution_events.tenantId");
+  }
+
+  it("lets super_admin list across all tenants when no tenantId query param is provided", async () => {
+    await setupApp("super_admin", null);
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 401, tenantId: 5 }), makeBaseEvent({ id: 402, tenantId: 9 })],
+      [{ count: 2 }],
+    ];
+
+    const res = await getJson(app, "/attribution/events");
+
+    expect(res.status).toBe(200);
+    expect((res.json.events as unknown[]).length).toBe(2);
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toEqual([]);
+  });
+
+  it("lets super_admin filter by an arbitrary query.tenantId", async () => {
+    await setupApp("super_admin", null);
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 403, tenantId: 9 })],
+      [{ count: 1 }],
+    ];
+
+    const res = await getJson(app, "/attribution/events?tenantId=9");
+
+    expect(res.status).toBe(200);
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toContainEqual(["attribution_events.tenantId", "9"]);
+  });
+
+  it("lets agency_user list across all tenants when no tenantId query param is provided", async () => {
+    await setupApp("agency_user", null);
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 404, tenantId: 5 }), makeBaseEvent({ id: 405, tenantId: 9 })],
+      [{ count: 2 }],
+    ];
+
+    const res = await getJson(app, "/attribution/events");
+
+    expect(res.status).toBe(200);
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toEqual([]);
+  });
+
+  it("returns 403 for a tenant-scoped role with no tenantId on the session", async () => {
+    await setupApp("tenant_user", null);
+
+    const res = await getJson(app, "/attribution/events");
+
+    expect(res.status).toBe(403);
+    expect(res.json).toEqual({ error: "No tenant assigned" });
+    const dbMod = await import("@workspace/db");
+    expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+  });
+
+  it("forces session tenantId on a tenant-scoped role even when no query.tenantId is supplied", async () => {
+    await setupApp("tenant_user", 7);
+    mockDb.selectResults = [
+      [makeBaseEvent({ id: 406, tenantId: 7 })],
+      [{ count: 1 }],
+    ];
+
+    const res = await getJson(app, "/attribution/events");
+
+    expect(res.status).toBe(200);
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toContainEqual(["attribution_events.tenantId", 7]);
+    // And must NOT scope to any other tenant.
+    const otherTenantScopes = tenantScopes.filter((c) => c[1] !== 7);
+    expect(otherTenantScopes).toEqual([]);
+  });
+
+  it("ignores a cross-tenant query.tenantId override and forces session tenantId for tenant-scoped roles", async () => {
+    await setupApp("tenant_user", 7);
+    mockDb.selectResults = [
+      [],
+      [{ count: 0 }],
+    ];
+
+    const res = await getJson(app, "/attribution/events?tenantId=9");
+
+    expect(res.status).toBe(200);
+    const tenantScopes = await tenantEqCalls();
+    expect(tenantScopes).toContainEqual(["attribution_events.tenantId", 7]);
+    // The attacker-supplied "9" must NOT have been added as a scope.
+    const leakedScopes = tenantScopes.filter((c) => c[1] === "9" || c[1] === 9);
+    expect(leakedScopes).toEqual([]);
   });
 });
 
