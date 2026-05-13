@@ -4,14 +4,14 @@ import type { Request, Response } from "express";
  * Operator-facing hint attached to "No tenant assigned" 403s. A
  * tenant-scoped user (tenant_user, client_admin, client_user) without
  * a `tenantId` is a broken account that should never exist in normal
- * operation — see the broken-account audit logged at server startup
- * by `auditUsersWithoutTenant()` in
- * `services/broken-account-audit.ts`. The hint surfaces a concrete
- * next step instead of leaving end users staring at an unactionable
- * error.
+ * operation. Admins can see and fix affected users on the User
+ * Management page (/admin/users), which surfaces the same data as
+ * the `[broken-account-audit]` startup log via
+ * `GET /admin/broken-accounts`. The hint surfaces a concrete next
+ * step instead of leaving end users staring at an unactionable error.
  */
 export const NO_TENANT_ASSIGNED_HINT =
-  "Your account is missing a tenant. Please contact your administrator — operators can find affected users in the broken-account audit logged at API server startup.";
+  "Your account is missing a tenant. Please contact your administrator — they can find and fix affected users on the User Management admin page (/admin/users).";
 
 export const NO_TENANT_ASSIGNED_ERROR = {
   error: "No tenant assigned",

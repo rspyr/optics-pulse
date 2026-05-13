@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useListTenants } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, UserCog, Trash2 } from "lucide-react";
+import { Plus, Edit2, X, Check, UserCog, Trash2, AlertTriangle } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -24,6 +24,13 @@ const ROLE_LABELS: Record<string, string> = {
   client_user: "Client User",
 };
 
+interface BrokenAccount {
+  id: number;
+  email: string;
+  role: string;
+  isActive: boolean;
+}
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +42,10 @@ export default function AdminUsers() {
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
   const [deleteError, setDeleteError] = useState("");
 
+  const [brokenAccounts, setBrokenAccounts] = useState<BrokenAccount[]>([]);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+
   const fetchUsers = async () => {
     const res = await fetch(`${API_BASE}/api/admin/users`, { credentials: "include" });
     if (res.ok) {
@@ -44,7 +55,29 @@ export default function AdminUsers() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  const fetchBrokenAccounts = async () => {
+    const res = await fetch(`${API_BASE}/api/admin/broken-accounts`, { credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      setBrokenAccounts(data.brokenAccounts || []);
+    }
+  };
+
+  useEffect(() => { fetchUsers(); fetchBrokenAccounts(); }, []);
+
+  const refreshAll = () => { fetchUsers(); fetchBrokenAccounts(); };
+
+  const fixBrokenAccount = (account: BrokenAccount) => {
+    const user = users.find(u => u.id === account.id);
+    if (user) {
+      startEdit(user);
+      setHighlightId(user.id);
+      setTimeout(() => {
+        rowRefs.current[user.id]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
+      setTimeout(() => setHighlightId(null), 3000);
+    }
+  };
 
   const handleCreate = async () => {
     await fetch(`${API_BASE}/api/admin/users`, {
@@ -58,7 +91,7 @@ export default function AdminUsers() {
     });
     setShowCreate(false);
     setForm({ name: "", email: "", password: "", role: "client_user", tenantId: "" });
-    fetchUsers();
+    refreshAll();
   };
 
   const handleUpdate = async (id: number) => {
@@ -77,7 +110,7 @@ export default function AdminUsers() {
       credentials: "include",
     });
     setEditId(null);
-    fetchUsers();
+    refreshAll();
   };
 
   const toggleActive = async (user: AdminUser) => {
@@ -87,7 +120,7 @@ export default function AdminUsers() {
       body: JSON.stringify({ isActive: !user.isActive }),
       credentials: "include",
     });
-    fetchUsers();
+    refreshAll();
   };
 
   const handleDelete = async () => {
@@ -99,7 +132,7 @@ export default function AdminUsers() {
     });
     if (res.ok) {
       setDeleteTarget(null);
-      fetchUsers();
+      refreshAll();
     } else {
       const data = await res.json();
       setDeleteError(data.error || "Failed to delete user");
@@ -132,6 +165,39 @@ export default function AdminUsers() {
           Add User
         </button>
       </header>
+
+      {brokenAccounts.length > 0 && (
+        <PremiumCard className="p-5 border border-amber-500/40 bg-amber-500/5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <h3 className="font-display text-base text-amber-100 mb-1">
+                {brokenAccounts.length} broken {brokenAccounts.length === 1 ? "account" : "accounts"} need attention
+              </h3>
+              <p className="text-sm text-amber-200/80 mb-3">
+                These non-admin users have no tenant assigned. Every list endpoint will return 403 for them until a tenant is set or the account is deactivated.
+              </p>
+              <ul className="space-y-1.5">
+                {brokenAccounts.map((acct) => (
+                  <li key={acct.id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate">
+                      <span className="text-white font-medium">{acct.email}</span>
+                      <span className="text-amber-200/60"> · {ROLE_LABELS[acct.role] || acct.role}</span>
+                      {!acct.isActive && <span className="text-amber-200/50"> · inactive</span>}
+                    </span>
+                    <button
+                      onClick={() => fixBrokenAccount(acct)}
+                      className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 px-3 py-1 rounded text-xs whitespace-nowrap transition-colors"
+                    >
+                      Fix
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </PremiumCard>
+      )}
 
       {showCreate && (
         <PremiumCard className="p-6">
@@ -189,7 +255,11 @@ export default function AdminUsers() {
             </thead>
             <tbody className="divide-y divide-white/5">
               {users.map((user) => (
-                <tr key={user.id} className="hover:bg-white/[0.02] transition-colors">
+                <tr
+                  key={user.id}
+                  ref={(el) => { rowRefs.current[user.id] = el; }}
+                  className={`hover:bg-white/[0.02] transition-colors ${highlightId === user.id ? "bg-amber-500/10" : ""}`}
+                >
                   {editId === user.id ? (
                     <>
                       <td className="p-4"><input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="bg-background/50 border border-white/10 rounded px-2 py-1 text-white text-sm w-full" /></td>

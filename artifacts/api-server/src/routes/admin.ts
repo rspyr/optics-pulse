@@ -5,10 +5,30 @@ import bcrypt from "bcryptjs";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { pool } from "@workspace/db";
 import { backfillMetaAdCreatives } from "../services/sync-scheduler";
+import { findUsersWithoutTenant } from "../services/broken-account-audit";
 
 const router: IRouter = Router();
 
 const agencyOnly = [requireRole("super_admin", "agency_user")];
+
+/**
+ * Surface the same data as the startup `[broken-account-audit]` log
+ * to admins in the UI, so they can act on broken accounts without
+ * needing API server log access. See task #400.
+ */
+router.get("/admin/broken-accounts", ...agencyOnly, async (_req, res) => {
+  try {
+    const broken = await findUsersWithoutTenant();
+    res.json({
+      brokenCount: broken.length,
+      brokenAccounts: broken,
+      scannedAt: new Date().toISOString(),
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to load broken accounts";
+    res.status(500).json({ error: msg });
+  }
+});
 
 router.get("/admin/users", ...agencyOnly, async (req, res) => {
   try {
