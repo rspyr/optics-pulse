@@ -411,7 +411,7 @@ describe("GET /attribution/events — list tenant scoping", () => {
     const drizzle = await import("drizzle-orm");
     return vi
       .mocked(drizzle.eq)
-      .mock.calls.filter((c) => c[0] === "attribution_events.tenantId");
+      .mock.calls.filter((c) => (c[0] as unknown) === "attribution_events.tenantId");
   }
 
   it("lets super_admin list across all tenants when no tenantId query param is provided", async () => {
@@ -517,7 +517,7 @@ describe("GET /attribution/events/:id — tenant scoping", () => {
     const drizzle = await import("drizzle-orm");
     return vi
       .mocked(drizzle.eq)
-      .mock.calls.filter((c) => c[0] === "attribution_events.tenantId");
+      .mock.calls.filter((c) => (c[0] as unknown) === "attribution_events.tenantId");
   }
 
   it("lets super_admin fetch any event without applying a tenant filter", async () => {
