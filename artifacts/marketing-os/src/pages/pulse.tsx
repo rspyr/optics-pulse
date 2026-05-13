@@ -1133,6 +1133,12 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           </span>
           <span className="text-[10px] text-white/50">{entry.csrName as string}</span>
           <span className="text-[10px] text-white/60 font-medium">{getOutcomeLabel(entry)}</span>
+          {entry.spokeResult === "call_back" && entry.callbackAt && (
+            <span className="text-[10px] text-amber-400/70">· CB {formatDateTimeInTz(entry.callbackAt, timezone)}</span>
+          )}
+          {entry.spokeResult === "appointment_set" && (entry.appointmentDate || entry.appointmentTime) && (
+            <span className="text-[10px] text-emerald-400/70">· Appt {entry.appointmentDate || ""}{entry.appointmentTime ? ` ${entry.appointmentTime}` : ""}</span>
+          )}
           {canEdit && (isAdminRole || entry.userId === currentUserId) && (
             <button
               onClick={e => { e.stopPropagation(); startEdit(entry); }}
