@@ -390,6 +390,63 @@ paths:
               schema:
                 $ref: "#/components/schemas/CampaignStatsResponse"
 
+  /campaigns/meta-summary:
+    get:
+      operationId: getMetaCampaignSummary
+      tags: [campaigns]
+      summary: List Meta campaigns with aggregated stats for a date range
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Meta campaigns with summary stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MetaCampaignSummaryRow"
+
+  /campaigns/{campaignId}/breakdown:
+    get:
+      operationId: getMetaCampaignBreakdown
+      tags: [campaigns]
+      summary: Get ad-set + ad breakdown for a Meta campaign
+      parameters:
+        - name: campaignId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ad-set and ad breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetaCampaignBreakdownResponse"
+        "404":
+          description: Campaign not found
+
   /attribution/events:
     get:
       operationId: listAttributionEvents
@@ -1724,6 +1781,110 @@ components:
         conversions:
           type: integer
       required: [date, spend, impressions, clicks, conversions]
+
+    MetaCampaignSummaryRow:
+      type: object
+      properties:
+        campaignId:
+          type: integer
+        externalId:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        currency:
+          type: string
+          nullable: true
+        adAccountId:
+          type: string
+          nullable: true
+        spend:
+          type: number
+        impressions:
+          type: integer
+        clicks:
+          type: integer
+        conversions:
+          type: integer
+        cpl:
+          type: number
+      required: [campaignId, externalId, name, status, spend, impressions, clicks, conversions, cpl]
+
+    MetaAdRow:
+      type: object
+      properties:
+        externalId:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          nullable: true
+        creativeId:
+          type: string
+          nullable: true
+        spend:
+          type: number
+        impressions:
+          type: integer
+        clicks:
+          type: integer
+        conversions:
+          type: integer
+        cpl:
+          type: number
+      required: [externalId, name, spend, impressions, clicks, conversions, cpl]
+
+    MetaAdSetRow:
+      type: object
+      properties:
+        externalId:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          nullable: true
+        dailyBudgetCents:
+          type: integer
+          nullable: true
+        spend:
+          type: number
+        impressions:
+          type: integer
+        clicks:
+          type: integer
+        conversions:
+          type: integer
+        cpl:
+          type: number
+        ads:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetaAdRow"
+      required: [externalId, name, spend, impressions, clicks, conversions, cpl, ads]
+
+    MetaCampaignBreakdownResponse:
+      type: object
+      properties:
+        campaignId:
+          type: integer
+        externalId:
+          type: string
+        name:
+          type: string
+        currency:
+          type: string
+          nullable: true
+        adAccountId:
+          type: string
+          nullable: true
+        adSets:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetaAdSetRow"
+      required: [campaignId, externalId, name, adSets]
 
     AttributionEvent:
       type: object

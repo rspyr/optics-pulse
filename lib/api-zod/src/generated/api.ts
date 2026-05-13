@@ -648,6 +648,78 @@ export const GetCampaignStatsResponse = zod.object({
 });
 
 /**
+ * @summary List Meta campaigns with aggregated stats for a date range
+ */
+export const GetMetaCampaignSummaryQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
+});
+
+export const GetMetaCampaignSummaryResponseItem = zod.object({
+  campaignId: zod.number(),
+  externalId: zod.string(),
+  name: zod.string(),
+  status: zod.string(),
+  currency: zod.string().nullish(),
+  adAccountId: zod.string().nullish(),
+  spend: zod.number(),
+  impressions: zod.number(),
+  clicks: zod.number(),
+  conversions: zod.number(),
+  cpl: zod.number(),
+});
+export const GetMetaCampaignSummaryResponse = zod.array(
+  GetMetaCampaignSummaryResponseItem,
+);
+
+/**
+ * @summary Get ad-set + ad breakdown for a Meta campaign
+ */
+export const GetMetaCampaignBreakdownParams = zod.object({
+  campaignId: zod.coerce.number(),
+});
+
+export const GetMetaCampaignBreakdownQueryParams = zod.object({
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
+});
+
+export const GetMetaCampaignBreakdownResponse = zod.object({
+  campaignId: zod.number(),
+  externalId: zod.string(),
+  name: zod.string(),
+  currency: zod.string().nullish(),
+  adAccountId: zod.string().nullish(),
+  adSets: zod.array(
+    zod.object({
+      externalId: zod.string(),
+      name: zod.string(),
+      status: zod.string().nullish(),
+      dailyBudgetCents: zod.number().nullish(),
+      spend: zod.number(),
+      impressions: zod.number(),
+      clicks: zod.number(),
+      conversions: zod.number(),
+      cpl: zod.number(),
+      ads: zod.array(
+        zod.object({
+          externalId: zod.string(),
+          name: zod.string(),
+          status: zod.string().nullish(),
+          creativeId: zod.string().nullish(),
+          spend: zod.number(),
+          impressions: zod.number(),
+          clicks: zod.number(),
+          conversions: zod.number(),
+          cpl: zod.number(),
+        }),
+      ),
+    }),
+  ),
+});
+
+/**
  * @summary List attribution events
  */
 export const listAttributionEventsQueryLimitDefault = 50;

@@ -333,6 +333,54 @@ export interface CampaignStatsResponse {
   dailyStats: DailyStatRow[];
 }
 
+export interface MetaCampaignSummaryRow {
+  campaignId: number;
+  externalId: string;
+  name: string;
+  status: string;
+  currency?: string | null;
+  adAccountId?: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  cpl: number;
+}
+
+export interface MetaAdRow {
+  externalId: string;
+  name: string;
+  status?: string | null;
+  creativeId?: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  cpl: number;
+}
+
+export interface MetaAdSetRow {
+  externalId: string;
+  name: string;
+  status?: string | null;
+  dailyBudgetCents?: number | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  cpl: number;
+  ads: MetaAdRow[];
+}
+
+export interface MetaCampaignBreakdownResponse {
+  campaignId: number;
+  externalId: string;
+  name: string;
+  currency?: string | null;
+  adAccountId?: string | null;
+  adSets: MetaAdSetRow[];
+}
+
 export type AttributionEventEventType =
   (typeof AttributionEventEventType)[keyof typeof AttributionEventEventType];
 
@@ -1239,6 +1287,17 @@ export const ListCampaignsPlatform = {
 
 export type GetCampaignStatsParams = {
   tenantId?: number;
+  startDate?: string;
+  endDate?: string;
+};
+
+export type GetMetaCampaignSummaryParams = {
+  tenantId?: number;
+  startDate?: string;
+  endDate?: string;
+};
+
+export type GetMetaCampaignBreakdownParams = {
   startDate?: string;
   endDate?: string;
 };

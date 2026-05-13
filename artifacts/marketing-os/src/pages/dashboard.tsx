@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatCurrency, formatPercentage, PLATFORM_COLORS } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { MetaCampaignBreakdown } from "@/components/MetaCampaignBreakdown";
 
 type DateRange = "last30" | "thisMonth" | "lastMonth" | "last7";
 
@@ -209,6 +210,8 @@ export default function Dashboard() {
           </div>
         )}
       </PremiumCard>
+
+      <MetaCampaignBreakdown startDate={startDate} endDate={endDate} />
     </div>
   );
 }

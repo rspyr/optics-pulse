@@ -46,6 +46,8 @@ import type {
   GetDashboardOverviewParams,
   GetHudQueueParams,
   GetHudStatsParams,
+  GetMetaCampaignBreakdownParams,
+  GetMetaCampaignSummaryParams,
   GetPodiumTimelineParams,
   GetReconciliationStatusParams,
   GetSpendRevenueChartParams,
@@ -68,6 +70,8 @@ import type {
   ListTrainingItemsParams,
   LoginInput,
   Logout200,
+  MetaCampaignBreakdownResponse,
+  MetaCampaignSummaryRow,
   PodiumTimelineResponse,
   ReconciliationResult,
   ReconciliationStatusResponse,
@@ -1449,6 +1453,230 @@ export function useGetCampaignStats<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetCampaignStatsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List Meta campaigns with aggregated stats for a date range
+ */
+export const getGetMetaCampaignSummaryUrl = (
+  params?: GetMetaCampaignSummaryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/campaigns/meta-summary?${stringifiedParams}`
+    : `/api/campaigns/meta-summary`;
+};
+
+export const getMetaCampaignSummary = async (
+  params?: GetMetaCampaignSummaryParams,
+  options?: RequestInit,
+): Promise<MetaCampaignSummaryRow[]> => {
+  return customFetch<MetaCampaignSummaryRow[]>(
+    getGetMetaCampaignSummaryUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMetaCampaignSummaryQueryKey = (
+  params?: GetMetaCampaignSummaryParams,
+) => {
+  return [`/api/campaigns/meta-summary`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetMetaCampaignSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMetaCampaignSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetMetaCampaignSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getMetaCampaignSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetMetaCampaignSummaryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMetaCampaignSummary>>
+  > = ({ signal }) =>
+    getMetaCampaignSummary(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMetaCampaignSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMetaCampaignSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMetaCampaignSummary>>
+>;
+export type GetMetaCampaignSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List Meta campaigns with aggregated stats for a date range
+ */
+
+export function useGetMetaCampaignSummary<
+  TData = Awaited<ReturnType<typeof getMetaCampaignSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetMetaCampaignSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getMetaCampaignSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMetaCampaignSummaryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get ad-set + ad breakdown for a Meta campaign
+ */
+export const getGetMetaCampaignBreakdownUrl = (
+  campaignId: number,
+  params?: GetMetaCampaignBreakdownParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/campaigns/${campaignId}/breakdown?${stringifiedParams}`
+    : `/api/campaigns/${campaignId}/breakdown`;
+};
+
+export const getMetaCampaignBreakdown = async (
+  campaignId: number,
+  params?: GetMetaCampaignBreakdownParams,
+  options?: RequestInit,
+): Promise<MetaCampaignBreakdownResponse> => {
+  return customFetch<MetaCampaignBreakdownResponse>(
+    getGetMetaCampaignBreakdownUrl(campaignId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMetaCampaignBreakdownQueryKey = (
+  campaignId: number,
+  params?: GetMetaCampaignBreakdownParams,
+) => {
+  return [
+    `/api/campaigns/${campaignId}/breakdown`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetMetaCampaignBreakdownQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMetaCampaignBreakdown>>,
+  TError = ErrorType<void>,
+>(
+  campaignId: number,
+  params?: GetMetaCampaignBreakdownParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getMetaCampaignBreakdown>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMetaCampaignBreakdownQueryKey(campaignId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMetaCampaignBreakdown>>
+  > = ({ signal }) =>
+    getMetaCampaignBreakdown(campaignId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!campaignId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMetaCampaignBreakdown>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMetaCampaignBreakdownQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMetaCampaignBreakdown>>
+>;
+export type GetMetaCampaignBreakdownQueryError = ErrorType<void>;
+
+/**
+ * @summary Get ad-set + ad breakdown for a Meta campaign
+ */
+
+export function useGetMetaCampaignBreakdown<
+  TData = Awaited<ReturnType<typeof getMetaCampaignBreakdown>>,
+  TError = ErrorType<void>,
+>(
+  campaignId: number,
+  params?: GetMetaCampaignBreakdownParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getMetaCampaignBreakdown>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMetaCampaignBreakdownQueryOptions(
+    campaignId,
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
