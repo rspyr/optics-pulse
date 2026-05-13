@@ -1,25 +1,40 @@
-import { pgTable, serial, text, integer, boolean, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, timestamp, pgEnum, jsonb, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
 
 export const userRoleEnum = pgEnum("user_role", ["super_admin", "agency_user", "client_admin", "client_user"]);
 
-export const usersTable = pgTable("users", {
-  id: serial("id").primaryKey(),
-  email: text("email").notNull().unique(),
-  name: text("name").notNull(),
-  phone: text("phone"),
-  passwordHash: text("password_hash").notNull(),
-  role: userRoleEnum("role").notNull().default("client_user"),
-  tenantId: integer("tenant_id").references(() => tenantsTable.id),
-  isActive: boolean("is_active").notNull().default(true),
-  podiumConfig: text("podium_config"),
-  podiumUserUid: text("podium_user_uid"),
-  preferences: jsonb("preferences").$type<Record<string, unknown>>(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+export const usersTable = pgTable(
+  "users",
+  {
+    id: serial("id").primaryKey(),
+    email: text("email").notNull().unique(),
+    name: text("name").notNull(),
+    phone: text("phone"),
+    passwordHash: text("password_hash").notNull(),
+    role: userRoleEnum("role").notNull().default("client_user"),
+    tenantId: integer("tenant_id").references(() => tenantsTable.id),
+    isActive: boolean("is_active").notNull().default(true),
+    podiumConfig: text("podium_config"),
+    podiumUserUid: text("podium_user_uid"),
+    preferences: jsonb("preferences").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Task #399 — enforce at the DB layer that any tenant-scoped user
+    // (i.e. role NOT IN ('super_admin','agency_user')) has a tenant_id.
+    // Mirrors the SQL CHECK added in migration 0050. The application
+    // also guards this in user-create/patch routes (task #394) and the
+    // startup broken-account audit.
+    nonAdminRequiresTenant: check(
+      "users_non_admin_requires_tenant",
+      sql`${t.role} IN ('super_admin', 'agency_user') OR ${t.tenantId} IS NOT NULL`,
+    ),
+  }),
+);
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
