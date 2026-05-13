@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, inArray, SQL, sql } from "drizzle-orm";
 import { ListCampaignsQueryParams } from "@workspace/api-zod";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -17,7 +18,9 @@ router.get("/campaigns", async (req, res) => {
   const query = ListCampaignsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  if (query.tenantId) conditions.push(eq(campaignsTable.tenantId, query.tenantId));
+  const scope = resolveListTenantScope(req, res, query.tenantId);
+  if (!scope.ok) return;
+  if (scope.tenantId) conditions.push(eq(campaignsTable.tenantId, scope.tenantId));
   if (query.platform) conditions.push(eq(campaignsTable.platform, query.platform));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -26,9 +29,13 @@ router.get("/campaigns", async (req, res) => {
 });
 
 router.get("/campaigns/stats", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   const conditions: SQL[] = [];
 
@@ -81,13 +88,18 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const cplOf = (spend: number, conv: number) => (conv > 0 ? round2(spend / conv) : 0);
 
 router.get("/campaigns/meta-summary", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
 
-  // enforceTenantScope auto-injects tenantId for non-agency users; if it's
-  // still null here the caller is super_admin / agency_user, so we aggregate
-  // across all tenants they can see (matching /dashboard/overview behavior).
+  // resolveListTenantScope forces the session tenantId for non-admin
+  // roles (mirroring /attribution/events). For super_admin / agency_user
+  // a null tenantId means "aggregate across all tenants they can see"
+  // (matching /dashboard/overview behavior).
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
+
   const campaignConds: SQL[] = [eq(campaignsTable.platform, "meta")];
   if (tenantId) campaignConds.push(eq(campaignsTable.tenantId, tenantId));
 

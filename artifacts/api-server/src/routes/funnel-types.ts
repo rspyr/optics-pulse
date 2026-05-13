@@ -3,11 +3,16 @@ import { db, funnelTypesTable, tenantFunnelTypesTable, tenantsTable } from "@wor
 import { eq, and, desc, inArray } from "drizzle-orm";
 
 import { requireRole } from "../middleware/auth";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
 router.get("/funnel-types", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   if (tenantId) {
     const associations = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })

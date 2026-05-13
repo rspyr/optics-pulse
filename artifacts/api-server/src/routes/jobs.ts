@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, jobsTable } from "@workspace/db";
 import { eq, and, count, desc, SQL } from "drizzle-orm";
 import { ListJobsQueryParams } from "@workspace/api-zod";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -9,7 +10,9 @@ router.get("/jobs", async (req, res) => {
   const query = ListJobsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  if (query.tenantId) conditions.push(eq(jobsTable.tenantId, query.tenantId));
+  const scope = resolveListTenantScope(req, res, query.tenantId);
+  if (!scope.ok) return;
+  if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
   if (query.status) {
     const status = query.status as "pending" | "in_progress" | "completed" | "cancelled";
     conditions.push(eq(jobsTable.status, status));

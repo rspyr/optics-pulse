@@ -2,16 +2,20 @@ import { Router, type IRouter } from "express";
 import { db, changeLogsTable } from "@workspace/db";
 import { eq, and, gte, lte, desc, SQL } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
 router.get("/change-logs", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
 
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
   const conditions: SQL[] = [];
-  if (tenantId) conditions.push(eq(changeLogsTable.tenantId, tenantId));
+  if (scope.tenantId) conditions.push(eq(changeLogsTable.tenantId, scope.tenantId));
   if (startDate) conditions.push(gte(changeLogsTable.date, startDate));
   if (endDate) conditions.push(lte(changeLogsTable.date, endDate));
 

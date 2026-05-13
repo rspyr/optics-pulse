@@ -8,6 +8,7 @@ import { getSmartQueue } from "../services/lead-scoring";
 import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../services/coordinator-stats";
 import type { ComparisonBaseline } from "../services/coordinator-stats";
 import { parseFilterQuery } from "../services/parse-filter";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -61,11 +62,9 @@ router.get("/leads", async (req, res) => {
   const query = ListLeadsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  const role = req.session.userRole;
-  const resolvedTenantId = (role === "super_admin" || role === "agency_user")
-    ? (query.tenantId ?? null)
-    : (req.session.tenantId ?? null);
-  if (resolvedTenantId) conditions.push(eq(leadsTable.tenantId, resolvedTenantId));
+  const scope = resolveListTenantScope(req, res, query.tenantId);
+  if (!scope.ok) return;
+  if (scope.tenantId) conditions.push(eq(leadsTable.tenantId, scope.tenantId));
 
   if (query.status) {
     const status = query.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
@@ -95,10 +94,10 @@ router.get("/leads", async (req, res) => {
 });
 
 router.get("/leads/hud/queue", async (req, res) => {
-  const role = req.session.userRole;
-  const tenantId = (role === "super_admin" || role === "agency_user")
-    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
-    : req.session.tenantId ?? null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   try {
     const result = await getSmartQueue(tenantId);
@@ -139,9 +138,10 @@ router.get("/leads/hud/queue", async (req, res) => {
 router.get("/leads/hud/stats", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user" || role === "client_admin";
-  const tenantId = (role === "super_admin" || role === "agency_user")
-    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
-    : req.session.tenantId ?? null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   let csrId: number | null = null;
   if (role === "client_user") {
@@ -169,9 +169,10 @@ router.get("/leads/hud/stats", async (req, res) => {
 router.get("/leads/hud/comparison", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user";
-  const tenantId = isManager
-    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
-    : req.session.tenantId ?? null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   let userId: number | null = null;
   if (!isManager) {
@@ -203,9 +204,10 @@ router.get("/leads/hud/comparison", async (req, res) => {
 router.get("/leads/hud/historical", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user";
-  const tenantId = isManager
-    ? (req.query.tenantId ? Number(req.query.tenantId) : null)
-    : req.session.tenantId ?? null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   let userId: number | null = null;
   if (!isManager) {
@@ -345,11 +347,14 @@ function parseNaturalDate(input: string): { start: Date; end: Date; remainingTex
 }
 
 router.get("/leads/search", async (req, res) => {
-  const role = req.session.userRole;
-  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : undefined;
-  const resolvedTenantId = (role === "super_admin" || role === "agency_user")
-    ? (queryTenantId ?? req.session.tenantId ?? null)
-    : (req.session.tenantId ?? null);
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  // Search requires a concrete tenant scope. For super_admin /
+  // agency_user with no tenantId param, fall back to their session
+  // tenantId (if any) — same behavior as before, just routed through
+  // the shared helper for tenant-scoped roles.
+  const resolvedTenantId = scope.tenantId ?? req.session.tenantId ?? null;
 
   if (!resolvedTenantId) {
     res.json({ leads: [], total: 0 });

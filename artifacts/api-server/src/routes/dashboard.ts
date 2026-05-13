@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, attributionEventsTable, tenantsTable } from "@workspace/db";
 import { eq, and, gte, lte, count, sum, sql, inArray, SQL, desc } from "drizzle-orm";
 import { requireRole, denyClientUser } from "../middleware/auth";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
@@ -115,9 +116,13 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
 }
 
 router.get("/dashboard/overview", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   const current = await computeMetrics(tenantId, startDate, endDate);
 
@@ -139,9 +144,13 @@ router.get("/dashboard/overview", async (req, res) => {
 });
 
 router.get("/dashboard/spend-revenue", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
 
   const statsConditions: SQL[] = [];
   const jobConditions: SQL[] = [eq(jobsTable.status, "completed")];

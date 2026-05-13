@@ -1,11 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable } from "@workspace/db";
 import { eq, and, gte, lte, desc, SQL, inArray } from "drizzle-orm";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
 
 router.get("/drilldown/leads", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
   const status = req.query.status as string | undefined;
@@ -13,8 +14,11 @@ router.get("/drilldown/leads", async (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   const offset = req.query.offset ? Number(req.query.offset) : 0;
 
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
   const conditions: SQL[] = [];
-  if (tenantId) conditions.push(eq(leadsTable.tenantId, tenantId));
+  if (scope.tenantId) conditions.push(eq(leadsTable.tenantId, scope.tenantId));
   if (startDate) conditions.push(gte(leadsTable.createdAt, new Date(startDate)));
   if (endDate) conditions.push(lte(leadsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
   if (status) {
@@ -31,15 +35,18 @@ router.get("/drilldown/leads", async (req, res) => {
 });
 
 router.get("/drilldown/jobs", async (req, res) => {
-  const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
   const status = req.query.status as string | undefined;
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   const offset = req.query.offset ? Number(req.query.offset) : 0;
 
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
   const conditions: SQL[] = [];
-  if (tenantId) conditions.push(eq(jobsTable.tenantId, tenantId));
+  if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
   if (startDate) conditions.push(gte(jobsTable.createdAt, new Date(startDate)));
   if (endDate) conditions.push(lte(jobsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
   if (status) conditions.push(eq(jobsTable.status, status as "pending" | "in_progress" | "completed" | "cancelled"));

@@ -5,6 +5,7 @@ import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
 import { hashValue, hashPhone } from "../lib/phone-utils";
+import { resolveListTenantScope } from "../lib/tenant-scope";
 import { extractFieldNamesForOperator, computeUnmatchedReason, extractPiiFromFields } from "./tracker";
 
 const router: IRouter = Router();
@@ -258,8 +259,10 @@ router.post("/attribution/reconcile", requireRole("super_admin", "agency_user"),
 
 router.get("/attribution/reconciliation-status", async (req, res) => {
   try {
-    const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-    const status = await getReconciliationStatus(tenantId);
+    const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+    const scope = resolveListTenantScope(req, res, queryTenantId);
+    if (!scope.ok) return;
+    const status = await getReconciliationStatus(scope.tenantId);
     res.json(status);
   } catch (error) {
     console.error("[Reconciliation Status] Error:", error);
