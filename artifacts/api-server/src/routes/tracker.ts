@@ -286,6 +286,7 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     // would also be invisible to operator-facing helpers that filter `_*`.
     // Strip them at ingest so the rest of the pipeline can trust the keys.
     const { cleaned: fields, dropped: droppedReservedKeys } = stripReservedFieldKeys(rawFields);
+    const custom = (body.custom || {}) as Record<string, unknown>;
     if (droppedReservedKeys.length > 0) {
       console.warn(
         "[Tracker Submit] dropped reserved underscore-prefixed field keys from",
@@ -293,8 +294,21 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
         "—",
         droppedReservedKeys.join(", "),
       );
+      // Persist on the audit row so Verify Tracker can surface a warning
+      // pointing the operator at the offending <input name> (Task #377).
+      // We piggy-back the form id/name/type the keys came from so the
+      // warning is actionable: "Form 'Contact (#contact-form)' is sending
+      // reserved keys: _custom, _consent — please rename".
+      const formObj = (body.form || {}) as Record<string, unknown>;
+      await updateTrackerAttempt(auditId, {
+        droppedReservedFieldKeys: {
+          keys: droppedReservedKeys,
+          formId: typeof formObj.id === "string" ? formObj.id : null,
+          formName: typeof formObj.name === "string" ? formObj.name : null,
+          formType: typeof formObj.type === "string" ? formObj.type : null,
+        },
+      });
     }
-    const custom = (body.custom || {}) as Record<string, unknown>;
 
     const gclid = (attribution.gclid as string) || null;
     const fbclid = (attribution.fbclid as string) || null;

@@ -513,6 +513,16 @@ export async function updateTrackerAttempt(
     httpStatus: number;
     message: string | null;
     attributionEventId: number | null;
+    // Set when stripReservedFieldKeys (Task #290 / #377) drops one or more
+    // underscore-prefixed customer field names from the submission. Stored
+    // alongside the form id/name/type so Verify Tracker can warn the
+    // operator and tell them which input to rename.
+    droppedReservedFieldKeys: {
+      keys: string[];
+      formId: string | null;
+      formName: string | null;
+      formType: string | null;
+    } | null;
   }>,
 ): Promise<void> {
   if (!id) return;

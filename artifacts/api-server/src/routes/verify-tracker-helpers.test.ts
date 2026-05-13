@@ -7,6 +7,7 @@ import {
   computeInstallVerdict,
   formInventoryHasHoneypotOnlyShape,
   formInventoryHasMissingNameShape,
+  collectReservedKeyWarnings,
 } from "./verify-tracker";
 
 /**
@@ -531,5 +532,59 @@ describe("computeInstallVerdict — Task #253 legacy-tag-dead downgrade", () => 
       hasAnyHeartbeat: false,
       submitOk7d: 0,
     })).toBe("no-tracker-found");
+  });
+});
+
+// Task #377 — collapsing/normalising the dropped-reserved-key audit rows
+// into operator-facing warnings. The submit handler stamps each offending
+// audit row with `{ keys, formId, formName, formType }`; the verify-tracker
+// route folds them down to one warning per (form + sorted key set) so a
+// single misnamed input doesn't flood the findings list.
+describe("collectReservedKeyWarnings", () => {
+  it("returns no warnings when every audit row has no dropped keys", () => {
+    expect(collectReservedKeyWarnings([
+      { droppedReservedFieldKeys: null },
+      { droppedReservedFieldKeys: undefined },
+      { droppedReservedFieldKeys: { keys: [], formId: "x", formName: null, formType: null } },
+    ])).toEqual([]);
+  });
+
+  it("collapses repeated submissions from the same form + same dropped keys into a single warning", () => {
+    const rows = [
+      { droppedReservedFieldKeys: { keys: ["_custom", "_consent"], formId: "contact", formName: "Contact", formType: "form" } },
+      { droppedReservedFieldKeys: { keys: ["_consent", "_custom"], formId: "contact", formName: "Contact", formType: "form" } },
+      { droppedReservedFieldKeys: { keys: ["_custom"], formId: "contact", formName: "Contact", formType: "form" } },
+    ];
+    const out = collectReservedKeyWarnings(rows);
+    expect(out).toHaveLength(2);
+    expect(out[0].keys).toEqual(["_consent", "_custom"]);
+    expect(out[0].formName).toBe("Contact");
+    expect(out[1].keys).toEqual(["_custom"]);
+  });
+
+  it("treats different forms as separate warnings", () => {
+    const rows = [
+      { droppedReservedFieldKeys: { keys: ["_custom"], formId: "contact", formName: "Contact", formType: "form" } },
+      { droppedReservedFieldKeys: { keys: ["_custom"], formId: "quote", formName: "Quote", formType: "form" } },
+    ];
+    const out = collectReservedKeyWarnings(rows);
+    expect(out).toHaveLength(2);
+    expect(out.map(w => w.formId).sort()).toEqual(["contact", "quote"]);
+  });
+
+  it("ignores malformed audit values (wrong type, missing keys, non-string entries)", () => {
+    expect(collectReservedKeyWarnings([
+      { droppedReservedFieldKeys: "not-an-object" },
+      { droppedReservedFieldKeys: ["wrong-shape"] },
+      { droppedReservedFieldKeys: { keys: "not-an-array", formId: null, formName: null, formType: null } },
+      { droppedReservedFieldKeys: { keys: [123, null, ""], formId: null, formName: null, formType: null } },
+    ])).toEqual([]);
+  });
+
+  it("preserves the form fields verbatim so the UI can pick the most useful label", () => {
+    const out = collectReservedKeyWarnings([
+      { droppedReservedFieldKeys: { keys: ["_custom"], formId: null, formName: null, formType: "honeypot-rescue" } },
+    ]);
+    expect(out).toEqual([{ keys: ["_custom"], formId: null, formName: null, formType: "honeypot-rescue" }]);
   });
 });

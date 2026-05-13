@@ -412,6 +412,45 @@ export function formInventoryHasMissingNameShape(items: FormInventoryItem[]): bo
   return false;
 }
 
+/**
+ * Task #377 — collapse recent tracker_submit_attempts rows down to one
+ * warning per (form, sorted dropped-key set). Multiple submissions from
+ * the same offending form would otherwise produce one finding per submit
+ * and drown out the rest of the verify-tracker output. Order is preserved
+ * by first-seen so the most recently active offender appears first
+ * (rows come in DESC createdAt order from the caller).
+ */
+export interface ReservedKeyWarning {
+  keys: string[];
+  formId: string | null;
+  formName: string | null;
+  formType: string | null;
+}
+
+export function collectReservedKeyWarnings(
+  rows: Array<{ droppedReservedFieldKeys: unknown }>,
+): ReservedKeyWarning[] {
+  const seen = new Map<string, ReservedKeyWarning>();
+  for (const row of rows) {
+    const v = row.droppedReservedFieldKeys;
+    if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+    const obj = v as Record<string, unknown>;
+    const rawKeys = obj.keys;
+    if (!Array.isArray(rawKeys) || rawKeys.length === 0) continue;
+    const keys = Array.from(new Set(
+      rawKeys.filter((k): k is string => typeof k === "string" && k.length > 0),
+    )).sort();
+    if (keys.length === 0) continue;
+    const formId = typeof obj.formId === "string" && obj.formId ? obj.formId : null;
+    const formName = typeof obj.formName === "string" && obj.formName ? obj.formName : null;
+    const formType = typeof obj.formType === "string" && obj.formType ? obj.formType : null;
+    const dedupeKey = `${formId ?? ""}\u0001${formName ?? ""}\u0001${formType ?? ""}\u0001${keys.join(",")}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.set(dedupeKey, { keys, formId, formName, formType });
+  }
+  return Array.from(seen.values());
+}
+
 export function buildFormInventory(html: string, baseUrl: string): FormInventoryItem[] {
   const out: FormInventoryItem[] = [];
 
@@ -907,6 +946,7 @@ router.post("/verify-tracker", async (req, res) => {
       message: trackerSubmitAttemptsTable.message,
       pulseVersion: trackerSubmitAttemptsTable.pulseVersion,
       attributionEventId: trackerSubmitAttemptsTable.attributionEventId,
+      droppedReservedFieldKeys: trackerSubmitAttemptsTable.droppedReservedFieldKeys,
       createdAt: trackerSubmitAttemptsTable.createdAt,
     })
     .from(trackerSubmitAttemptsTable)
@@ -914,6 +954,28 @@ router.post("/verify-tracker", async (req, res) => {
     .where(auditWhere)
     .orderBy(desc(trackerSubmitAttemptsTable.createdAt))
     .limit(20);
+
+  // Task #377 — surface forms that sent reserved underscore-prefixed
+  // field names. We dropped those keys at ingest (they would otherwise
+  // clobber `_custom` etc. in the stored fields blob), but until now
+  // operators had no way to know one of their inputs was silently losing
+  // data. We collapse the recent audit rows by (formId or formName) +
+  // sorted dropped-key list so a single offending form doesn't flood the
+  // findings list with one warning per submission.
+  const reservedKeyWarnings = collectReservedKeyWarnings(recentAttempts);
+  for (const w of reservedKeyWarnings) {
+    const formLabel = w.formName
+      ? `"${w.formName}"${w.formId ? ` (${w.formId})` : ""}`
+      : w.formId
+        ? `id "${w.formId}"`
+        : w.formType
+          ? `type "${w.formType}"`
+          : "an unidentified form";
+    findings.push({
+      level: "warning",
+      message: `Form ${formLabel} on ${targetHost} is sending field name${w.keys.length === 1 ? "" : "s"} that start with "_" (${w.keys.join(", ")}). Pulse reserves underscore-prefixed keys for internal use, so these field${w.keys.length === 1 ? "" : "s"} are being dropped before the lead is stored — rename the input${w.keys.length === 1 ? "" : "s"} on the form to keep the data.`,
+    });
+  }
 
   // surface failed submits (excluding diagnostic beacons)
   const recentFailedSubmits = recentAttempts.filter(

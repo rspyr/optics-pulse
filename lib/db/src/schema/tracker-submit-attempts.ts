@@ -54,6 +54,16 @@ export const trackerSubmitAttemptsTable = pgTable("tracker_submit_attempts", {
   // Truncated raw payload (≤4 KB) for diagnostics. Never includes raw PII
   // values — the API handler is responsible for redacting before insert.
   payloadSample: jsonb("payload_sample"),
+  // Underscore-prefixed field keys we stripped from `fields` at ingest
+  // (Task #290 / Task #377). Customer forms whose <input name> starts with
+  // `_` collide with our reserved internal bookkeeping keys (e.g.
+  // `_custom`), so we drop them before the lead is stored. We persist the
+  // dropped key list here, plus the form id/name/type the submission came
+  // from, so Verify Tracker can surface a warning that points the operator
+  // at the offending input. Shape: `{ keys: string[], formId: string|null,
+  // formName: string|null, formType: string|null }`. Null when nothing was
+  // dropped.
+  droppedReservedFieldKeys: jsonb("dropped_reserved_field_keys"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => ({
   byTenantCreated: index("tsa_tenant_created_idx").on(t.tenantId, t.createdAt),

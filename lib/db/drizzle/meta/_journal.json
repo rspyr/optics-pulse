@@ -246,6 +246,13 @@
       "when": 1777030000000,
       "tag": "0045_call_attempt_outcome_details",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1777040000000,
+      "tag": "0049_tracker_submit_attempts_dropped_reserved_keys",
+      "breakpoints": true
     }
   ]
 }
