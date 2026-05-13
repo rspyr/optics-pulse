@@ -114,7 +114,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
           const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
           configuredMap.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret && config.serviceTitanAppKey);
           configuredMap.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
-          configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
+          configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId) && !tenant.metaNeedsReconnect;
         } catch { /* decryption failed */ }
       }
     }

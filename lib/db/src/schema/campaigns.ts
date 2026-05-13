@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, date } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, date, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -10,6 +10,8 @@ export const campaignsTable = pgTable("campaigns", {
   externalId: text("external_id").notNull(),
   name: text("name").notNull(),
   status: text("status").notNull().default("active"),
+  currency: text("currency"),
+  metaAdAccountId: text("meta_ad_account_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -21,6 +23,8 @@ export const campaignDailyStatsTable = pgTable("campaign_daily_stats", {
   impressions: integer("impressions").notNull().default(0),
   clicks: integer("clicks").notNull().default(0),
   conversions: integer("conversions").notNull().default(0),
+  actionsJson: jsonb("actions_json"),
+  currency: text("currency"),
 });
 
 export const insertCampaignSchema = createInsertSchema(campaignsTable).omit({ id: true, createdAt: true });

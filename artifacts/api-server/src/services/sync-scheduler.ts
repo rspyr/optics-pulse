@@ -1,10 +1,10 @@
-import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable, soldEstimatesTable, callAttemptsTable } from "@workspace/db";
+import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable, soldEstimatesTable, callAttemptsTable, metaAdsTable, metaAdSetsTable, metaAdDailyStatsTable } from "@workspace/db";
 import { emitSyncFailureNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
-import { fetchCampaignInsights, formatMetaInsight } from "./integrations/meta";
+import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
 import { runReconciliation } from "./reconciliation";
 import crypto from "crypto";
@@ -471,11 +471,18 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
+  if (tenant.metaNeedsReconnect) {
+    const errorMessage = `Meta needs reconnect: ${tenant.metaReconnectReason || "access token expired"}`;
+    const skippedLog = await logSync(tenantId, "meta", "campaigns", new Date());
+    await completeSyncLog(skippedLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
+  }
+
   const config = getTenantConfig(tenant);
   if (!config?.metaAccessToken || !config?.metaAdAccountId) {
     const missing = [
-      !config?.metaAccessToken && "Access Token",
-      !config?.metaAdAccountId && "Ad Account ID",
+      !config?.metaAccessToken && "Access Token (run Meta OAuth)",
+      !config?.metaAdAccountId && "Ad Account selection",
     ].filter(Boolean).join(", ");
     const errorMessage = `Meta not configured (missing: ${missing})`;
     const missingLog = await logSync(tenantId, "meta", "campaigns", new Date());
@@ -484,65 +491,269 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
   }
 
   const syncLog = await logSync(tenantId, "meta", "campaigns", new Date());
+  const adAccountId = config.metaAdAccountId.startsWith("act_") ? config.metaAdAccountId : `act_${config.metaAdAccountId}`;
+  const accountIdNoPrefix = adAccountId.replace(/^act_/, "");
+
+  // Per-tenant transaction-scoped advisory lock prevents concurrent Meta syncs
+  // (manual + scheduler overlap) from racing on unique-index upserts.
+  // 0x4d455441 = 'META' magic number to namespace this lock from other features.
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x4d455441}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another Meta sync is already running for this tenant";
+    await completeSyncLog(syncLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
+  }
 
   try {
     const endDate = new Date().toISOString().split("T")[0];
-    const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
+    // Refetch last 30 days every run to catch attribution back-fills.
+    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
 
-    const insights = await fetchCampaignInsights(
-      { accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId },
-      startDate,
-      endDate,
-    );
-    let synced = 0;
+    const svc = new MetaAPIService({
+      accessToken: config.metaAccessToken,
+      adAccountId,
+      pixelId: config.metaPixelId,
+    });
 
-    for (const insight of insights) {
-      const formatted = formatMetaInsight(insight);
-
-      let [campaign] = await db.select().from(campaignsTable)
-        .where(and(eq(campaignsTable.tenantId, tenantId), eq(campaignsTable.platform, "meta"), eq(campaignsTable.externalId, formatted.externalId)))
+    // Use account currency if known (from meta_ad_accounts).
+    let currency: string | undefined;
+    try {
+      const { metaAdAccountsTable } = await import("@workspace/db");
+      const [acct] = await db.select().from(metaAdAccountsTable)
+        .where(and(eq(metaAdAccountsTable.tenantId, tenantId), eq(metaAdAccountsTable.accountId, accountIdNoPrefix)))
         .limit(1);
+      currency = acct?.currency;
+    } catch {}
 
-      if (!campaign) {
-        [campaign] = await db.insert(campaignsTable).values({
-          tenantId,
-          platform: formatted.platform,
-          externalId: formatted.externalId,
-          name: formatted.name,
-          status: formatted.status,
-        }).returning();
-      }
+    // Fetch ad-set + ad metadata so we can persist names/statuses/budgets.
+    const [adSets, ads, insights] = await Promise.all([
+      svc.fetchAdSets().catch((e) => { throw e; }),
+      svc.fetchAds().catch((e) => { throw e; }),
+      svc.fetchAdDailyInsights(startDate, endDate),
+    ]);
 
-      const [existingStat] = await db.select().from(campaignDailyStatsTable)
-        .where(and(eq(campaignDailyStatsTable.campaignId, campaign.id), eq(campaignDailyStatsTable.date, formatted.date)))
-        .limit(1);
-
-      if (existingStat) {
-        await db.update(campaignDailyStatsTable)
-          .set({ spend: formatted.spend, impressions: formatted.impressions, clicks: formatted.clicks, conversions: formatted.conversions })
-          .where(eq(campaignDailyStatsTable.id, existingStat.id));
-      } else {
-        await db.insert(campaignDailyStatsTable).values({
-          campaignId: campaign.id,
-          date: formatted.date,
-          spend: formatted.spend,
-          impressions: formatted.impressions,
-          clicks: formatted.clicks,
-          conversions: formatted.conversions,
+    // Batched upsert: ad sets (single statement, ON CONFLICT)
+    if (adSets.length > 0) {
+      const adSetRows = adSets.map((a) => ({
+        tenantId,
+        adAccountId: accountIdNoPrefix,
+        externalId: a.id,
+        campaignExternalId: a.campaign_id ?? null,
+        name: a.name || "",
+        effectiveStatus: a.effective_status ?? null,
+        dailyBudgetCents: a.daily_budget ? parseIntField(a.daily_budget) : null,
+      }));
+      await db.insert(metaAdSetsTable).values(adSetRows)
+        .onConflictDoUpdate({
+          target: [metaAdSetsTable.tenantId, metaAdSetsTable.externalId],
+          set: {
+            adAccountId: sql`excluded.ad_account_id`,
+            campaignExternalId: sql`excluded.campaign_external_id`,
+            name: sql`excluded.name`,
+            effectiveStatus: sql`excluded.effective_status`,
+            dailyBudgetCents: sql`excluded.daily_budget_cents`,
+            updatedAt: sql`now()`,
+          },
         });
-      }
-      synced++;
     }
 
-    await completeSyncLog(syncLog.id, "completed", synced);
-    console.log(`[Sync] Meta: synced ${synced} campaign stats for tenant ${tenantId}`);
-    return { synced };
+    // Batched upsert: ads
+    if (ads.length > 0) {
+      const adRows = ads.map((a) => ({
+        tenantId,
+        adAccountId: accountIdNoPrefix,
+        externalId: a.id,
+        adSetExternalId: a.adset_id ?? null,
+        campaignExternalId: a.campaign_id ?? null,
+        name: a.name || "",
+        effectiveStatus: a.effective_status ?? null,
+        creativeId: a.creative?.id ?? null,
+      }));
+      // Chunk to avoid PG bind-parameter limit (8 cols × 8000 = 64000 < 65535)
+      for (let i = 0; i < adRows.length; i += 1000) {
+        await db.insert(metaAdsTable).values(adRows.slice(i, i + 1000))
+          .onConflictDoUpdate({
+            target: [metaAdsTable.tenantId, metaAdsTable.externalId],
+            set: {
+              adAccountId: sql`excluded.ad_account_id`,
+              adSetExternalId: sql`excluded.ad_set_external_id`,
+              campaignExternalId: sql`excluded.campaign_external_id`,
+              name: sql`excluded.name`,
+              effectiveStatus: sql`excluded.effective_status`,
+              creativeId: sql`excluded.creative_id`,
+              updatedAt: sql`now()`,
+            },
+          });
+      }
+    }
+
+    // Aggregate per-ad rows → per-campaign-per-day for backwards-compatible
+    // dashboards on `campaign_daily_stats`. Keep raw per-ad rows in
+    // `meta_ad_daily_stats`.
+    interface CampaignDayBucket {
+      campaignId: string;
+      campaignName: string;
+      date: string;
+      spend: number;
+      impressions: number;
+      clicks: number;
+      conversions: number;
+      actionsTotals: Map<string, number>;
+    }
+    const campaignBuckets = new Map<string, CampaignDayBucket>();
+    const adDailyRows: Array<typeof metaAdDailyStatsTable.$inferInsert> = [];
+
+    for (const row of insights) {
+      const adId = row.ad_id;
+      if (!adId) continue;
+
+      const date = row.date_start;
+      const spend = parseNumericField(row.spend);
+      const impressions = parseIntField(row.impressions);
+      const clicks = parseIntField(row.clicks);
+      const actions: MetaAction[] = row.actions || [];
+      const conversions = sumConversionActions(actions);
+
+      adDailyRows.push({
+        tenantId,
+        adAccountId: accountIdNoPrefix,
+        adExternalId: adId,
+        campaignExternalId: row.campaign_id,
+        adSetExternalId: row.adset_id ?? null,
+        date,
+        spend,
+        impressions,
+        clicks,
+        conversions,
+        currency: currency ?? null,
+        actionsJson: actions,
+      });
+
+      const bucketKey = `${row.campaign_id}|${date}`;
+      let bucket = campaignBuckets.get(bucketKey);
+      if (!bucket) {
+        bucket = {
+          campaignId: row.campaign_id,
+          campaignName: row.campaign_name || row.campaign_id,
+          date,
+          spend: 0, impressions: 0, clicks: 0, conversions: 0,
+          actionsTotals: new Map(),
+        };
+        campaignBuckets.set(bucketKey, bucket);
+      }
+      bucket.spend += spend;
+      bucket.impressions += impressions;
+      bucket.clicks += clicks;
+      bucket.conversions += conversions;
+      for (const a of actions) {
+        bucket.actionsTotals.set(a.action_type, (bucket.actionsTotals.get(a.action_type) || 0) + parseIntField(a.value));
+      }
+    }
+
+    // Batched upsert: per-ad daily stats (12 cols × 5000 = 60000 < 65535)
+    for (let i = 0; i < adDailyRows.length; i += 1000) {
+      const chunk = adDailyRows.slice(i, i + 1000);
+      if (chunk.length === 0) continue;
+      await db.insert(metaAdDailyStatsTable).values(chunk)
+        .onConflictDoUpdate({
+          target: [metaAdDailyStatsTable.tenantId, metaAdDailyStatsTable.adExternalId, metaAdDailyStatsTable.date],
+          set: {
+            adAccountId: sql`excluded.ad_account_id`,
+            campaignExternalId: sql`excluded.campaign_external_id`,
+            adSetExternalId: sql`excluded.ad_set_external_id`,
+            spend: sql`excluded.spend`,
+            impressions: sql`excluded.impressions`,
+            clicks: sql`excluded.clicks`,
+            conversions: sql`excluded.conversions`,
+            currency: sql`excluded.currency`,
+            actionsJson: sql`excluded.actions_json`,
+          },
+        });
+    }
+    const perAdSynced = adDailyRows.length;
+
+    // Upsert campaigns: bulk insert with ON CONFLICT requires a unique
+    // constraint on (tenant_id, platform, external_id). The legacy
+    // `campaigns` table doesn't have one, so for the (typically small)
+    // number of distinct campaigns per tenant we keep a per-campaign
+    // upsert here — bounded by campaign count, not ad-day rows.
+    const campaignIdByExternal = new Map<string, number>();
+    const distinctCampaigns = new Map<string, string>();
+    for (const b of campaignBuckets.values()) distinctCampaigns.set(b.campaignId, b.campaignName);
+
+    for (const [extId, name] of distinctCampaigns.entries()) {
+      let [campaign] = await db.select().from(campaignsTable)
+        .where(and(
+          eq(campaignsTable.tenantId, tenantId),
+          eq(campaignsTable.platform, "meta"),
+          eq(campaignsTable.externalId, extId),
+        )).limit(1);
+      if (!campaign) {
+        [campaign] = await db.insert(campaignsTable).values({
+          tenantId, platform: "meta", externalId: extId, name,
+          status: "active", currency: currency ?? null, metaAdAccountId: accountIdNoPrefix,
+        }).returning();
+      } else if (campaign.name !== name || campaign.currency !== (currency ?? null) || campaign.metaAdAccountId !== accountIdNoPrefix) {
+        await db.update(campaignsTable)
+          .set({ name, currency: currency ?? null, metaAdAccountId: accountIdNoPrefix })
+          .where(eq(campaignsTable.id, campaign.id));
+      }
+      campaignIdByExternal.set(extId, campaign.id);
+    }
+
+    // Batched upsert: campaign_daily_stats
+    const statRows: Array<typeof campaignDailyStatsTable.$inferInsert> = [];
+    for (const bucket of campaignBuckets.values()) {
+      const campaignId = campaignIdByExternal.get(bucket.campaignId);
+      if (!campaignId) continue;
+      const actionsObj: Record<string, number> = {};
+      for (const [k, v] of bucket.actionsTotals.entries()) actionsObj[k] = v;
+      statRows.push({
+        campaignId, date: bucket.date,
+        spend: bucket.spend, impressions: bucket.impressions,
+        clicks: bucket.clicks, conversions: bucket.conversions,
+        actionsJson: actionsObj, currency: currency ?? null,
+      });
+    }
+    for (let i = 0; i < statRows.length; i += 1000) {
+      const chunk = statRows.slice(i, i + 1000);
+      if (chunk.length === 0) continue;
+      await db.insert(campaignDailyStatsTable).values(chunk)
+        .onConflictDoUpdate({
+          target: [campaignDailyStatsTable.campaignId, campaignDailyStatsTable.date],
+          set: {
+            spend: sql`excluded.spend`,
+            impressions: sql`excluded.impressions`,
+            clicks: sql`excluded.clicks`,
+            conversions: sql`excluded.conversions`,
+            actionsJson: sql`excluded.actions_json`,
+            currency: sql`excluded.currency`,
+          },
+        });
+    }
+
+    await db.update(tenantsTable)
+      .set({ metaLastSyncedAt: new Date(), metaNeedsReconnect: false, metaReconnectReason: null, updatedAt: new Date() })
+      .where(eq(tenantsTable.id, tenantId));
+
+    await completeSyncLog(syncLog.id, "completed", perAdSynced);
+    console.log(`[Sync] Meta tenant ${tenantId}: ${perAdSynced} ad-day rows, ${campaignBuckets.size} campaign-day rollups`);
+    return { synced: perAdSynced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof MetaTokenInvalidError) {
+      await db.update(tenantsTable)
+        .set({ metaNeedsReconnect: true, metaReconnectReason: message, updatedAt: new Date() })
+        .where(eq(tenantsTable.id, tenantId));
+      console.error(`[Sync] Meta tenant ${tenantId} token expired — flagged for reconnect`);
+    }
     await completeSyncLog(syncLog.id, "error", 0, message);
     console.error(`[Sync] Meta error for tenant ${tenantId}:`, message);
     try { await emitSyncFailureNotification(tenantId, "meta", message); } catch {}
     return { synced: 0, error: message };
+  } finally {
+    try { await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`); } catch {}
   }
 }
 
@@ -875,13 +1086,38 @@ export function startSyncScheduler() {
   }, jobsSyncInterval);
 
   const campaignTimer = setInterval(async () => {
-    console.log("[SyncScheduler] Starting campaign spend sync for all tenants");
+    console.log("[SyncScheduler] Starting Google Ads campaign sync for all tenants");
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
     for (const tenant of tenants) {
       await syncGoogleAdsCampaigns(tenant.id);
-      await syncMetaCampaigns(tenant.id);
     }
   }, campaignSyncInterval);
+
+  // Meta sync runs nightly at 1 AM Eastern (configurable via META_SYNC_HOUR_ET).
+  // Per-tenant 10-second sleep keeps us well under Meta's per-app rate limits
+  // even with hundreds of tenants. Scales linearly: 100 tenants = ~17 minutes.
+  const metaSyncHourEt = Number(process.env.META_SYNC_HOUR_ET || "1");
+  const metaPerTenantSleepMs = Number(process.env.META_PER_TENANT_SLEEP_MS || "10000");
+  let lastMetaSyncDateKey = "";
+  const metaTimer = setInterval(async () => {
+    const nowEt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const dateKey = nowEt.toISOString().slice(0, 10);
+    if (nowEt.getHours() !== metaSyncHourEt) return;
+    if (dateKey === lastMetaSyncDateKey) return; // already ran today
+    lastMetaSyncDateKey = dateKey;
+
+    console.log(`[SyncScheduler] Starting nightly Meta sync (ET hour=${metaSyncHourEt}, per-tenant sleep=${metaPerTenantSleepMs}ms)`);
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      try {
+        await syncMetaCampaigns(tenant.id);
+      } catch (err) {
+        console.error(`[SyncScheduler] Meta sync failed for tenant ${tenant.id}:`, err);
+      }
+      await new Promise((r) => setTimeout(r, metaPerTenantSleepMs));
+    }
+    console.log(`[SyncScheduler] Nightly Meta sync complete (${tenants.length} tenants)`);
+  }, 5 * 60 * 1000); // check every 5 minutes whether the trigger hour has arrived
 
   const invoiceSyncInterval = 15 * 60 * 1000;
   const invoiceTimer = setInterval(async () => {
@@ -903,8 +1139,8 @@ export function startSyncScheduler() {
   // removed. If CallRail webhooks ever need a polling safety net,
   // re-enable syncCallRailCalls here on a real interval.
 
-  syncTimers = [jobsTimer, campaignTimer, invoiceTimer, reviewTimer];
-  console.log("[SyncScheduler] Started: ST jobs every 15min, campaigns every 60min, invoices+estimates every 15min, Podium PAUSED, CallRail webhook-only");
+  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer];
+  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail webhook-only`);
 }
 
 export function stopSyncScheduler() {

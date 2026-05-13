@@ -1,23 +1,30 @@
 import { Router, type IRouter } from "express";
-import { db, tenantsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, tenantsTable, metaAdAccountsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
+import { MetaAPIService, MetaTokenInvalidError } from "../services/integrations/meta";
 import crypto from "crypto";
 
 const router: IRouter = Router();
 
 const META_AUTH_URL = "https://www.facebook.com/v21.0/dialog/oauth";
 const META_TOKEN_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
-const META_EXCHANGE_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
 const SCOPES = "ads_read,ads_management,pages_show_list,pages_read_engagement,business_management";
 
 function getRedirectUri(): string {
+  const explicit = process.env.META_REDIRECT_URI;
+  if (explicit) return explicit;
   const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
-  if (domain) {
-    return `https://${domain}/api/oauth/meta/callback`;
-  }
+  if (domain) return `https://${domain}/api/oauth/meta/callback`;
   return "http://localhost:8080/api/oauth/meta/callback";
+}
+
+function getMetaAppCredentials(): { appId: string; appSecret: string } | null {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) return null;
+  return { appId, appSecret };
 }
 
 router.get("/oauth/meta/authorize", requireRole("super_admin", "agency_user"), async (req, res) => {
@@ -27,25 +34,15 @@ router.get("/oauth/meta/authorize", requireRole("super_admin", "agency_user"), a
     return;
   }
 
+  const creds = getMetaAppCredentials();
+  if (!creds) {
+    res.status(500).json({ error: "Server is missing META_APP_ID / META_APP_SECRET environment variables. Contact the administrator." });
+    return;
+  }
+
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) {
     res.status(404).json({ error: "Tenant not found" });
-    return;
-  }
-
-  let config: Record<string, unknown> = {};
-  if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
-    try { config = decryptConfig(tenant.apiConfig); } catch {}
-  }
-
-  const appId = config.metaAppId as string;
-  const appSecret = config.metaAppSecret as string;
-  if (!appId) {
-    res.status(400).json({ error: "Meta App ID must be saved in tenant settings first" });
-    return;
-  }
-  if (!appSecret) {
-    res.status(400).json({ error: "Meta App Secret must be saved in tenant settings first" });
     return;
   }
 
@@ -56,7 +53,7 @@ router.get("/oauth/meta/authorize", requireRole("super_admin", "agency_user"), a
   const redirectUri = getRedirectUri();
 
   const params = new URLSearchParams({
-    client_id: appId,
+    client_id: creds.appId,
     redirect_uri: redirectUri,
     response_type: "code",
     scope: SCOPES,
@@ -101,6 +98,12 @@ router.get("/oauth/meta/callback", async (req, res) => {
   delete req.session.metaOAuthState;
   delete req.session.metaOAuthTenantId;
 
+  const creds = getMetaAppCredentials();
+  if (!creds) {
+    res.redirect("/internal?metaOAuth=error&message=server_missing_app_credentials");
+    return;
+  }
+
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) {
     res.redirect("/internal?metaOAuth=error&message=tenant_not_found");
@@ -112,14 +115,6 @@ router.get("/oauth/meta/callback", async (req, res) => {
     try { config = decryptConfig(tenant.apiConfig); } catch {}
   }
 
-  const appId = config.metaAppId as string;
-  const appSecret = config.metaAppSecret as string;
-
-  if (!appId || !appSecret) {
-    res.redirect("/internal?metaOAuth=error&message=missing_app_credentials");
-    return;
-  }
-
   const redirectUri = getRedirectUri();
 
   try {
@@ -127,8 +122,8 @@ router.get("/oauth/meta/callback", async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: appId,
-        client_secret: appSecret,
+        client_id: creds.appId,
+        client_secret: creds.appSecret,
         redirect_uri: redirectUri,
         code: String(code),
       }),
@@ -141,19 +136,16 @@ router.get("/oauth/meta/callback", async (req, res) => {
       return;
     }
 
-    const tokenData = await tokenResponse.json() as {
-      access_token: string;
-      token_type: string;
-      expires_in?: number;
-    };
+    const tokenData = await tokenResponse.json() as { access_token: string; token_type: string; expires_in?: number };
 
-    const exchangeResponse = await fetch(META_EXCHANGE_URL, {
+    // Exchange short-lived for long-lived (~60 days)
+    const exchangeResponse = await fetch(META_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "fb_exchange_token",
-        client_id: appId,
-        client_secret: appSecret,
+        client_id: creds.appId,
+        client_secret: creds.appSecret,
         fb_exchange_token: tokenData.access_token,
       }),
     });
@@ -167,28 +159,87 @@ router.get("/oauth/meta/callback", async (req, res) => {
       console.warn("[Meta OAuth] Long-lived token exchange failed, using short-lived token");
     }
 
-    const verifyResponse = await fetch(`https://graph.facebook.com/v21.0/me?access_token=${encodeURIComponent(longLivedToken)}`);
-    if (!verifyResponse.ok) {
-      const verifyError = await verifyResponse.text();
-      console.error(`[Meta OAuth] Token verification failed: ${verifyError}`);
-      res.redirect("/internal?metaOAuth=error&message=token_verification_failed");
-      return;
-    }
-    const meData = await verifyResponse.json() as { id: string; name?: string };
-    console.log(`[Meta OAuth] Token verified — Facebook user: ${meData.name || meData.id}`);
+    // Verify token + discover ad accounts via the new MetaAPIService
+    const svc = new MetaAPIService({ accessToken: longLivedToken, adAccountId: "" });
+    const me = await svc.verifyToken();
+    console.log(`[Meta OAuth] Token verified — Facebook user: ${me.name || me.id}`);
 
+    let discovered: Awaited<ReturnType<MetaAPIService["listAdAccounts"]>> = [];
+    try {
+      discovered = await svc.listAdAccounts();
+    } catch (discErr) {
+      console.warn(`[Meta OAuth] Ad-account discovery failed: ${discErr instanceof Error ? discErr.message : discErr}`);
+    }
+
+    // Persist token; clear reconnect flag; remove legacy per-tenant App ID/Secret
     config.metaAccessToken = longLivedToken;
+    delete (config as Record<string, unknown>).metaAppId;
+    delete (config as Record<string, unknown>).metaAppSecret;
 
     await db.update(tenantsTable)
       .set({
         apiConfig: encryptConfig(config) as unknown as typeof tenantsTable.$inferInsert.apiConfig,
+        metaNeedsReconnect: false,
+        metaReconnectReason: null,
         updatedAt: new Date(),
       })
       .where(eq(tenantsTable.id, tenantId));
 
-    console.log(`[Meta OAuth] Successfully stored access token for tenant ${tenantId}`);
-    res.redirect(`/internal?metaOAuth=success&tenantId=${tenantId}`);
+    // Upsert discovered ad accounts; preserve any prior selection.
+    if (discovered.length > 0) {
+      const existing = await db.select().from(metaAdAccountsTable).where(eq(metaAdAccountsTable.tenantId, tenantId));
+      const existingByAcc = new Map(existing.map((r) => [r.accountId, r] as const));
+
+      for (const acc of discovered) {
+        const accountId = acc.account_id || acc.id?.replace(/^act_/, "") || "";
+        if (!accountId) continue;
+        const prior = existingByAcc.get(accountId);
+        if (prior) {
+          await db.update(metaAdAccountsTable)
+            .set({
+              name: acc.name || prior.name,
+              currency: acc.currency || prior.currency,
+              updatedAt: new Date(),
+            })
+            .where(eq(metaAdAccountsTable.id, prior.id));
+        } else {
+          await db.insert(metaAdAccountsTable).values({
+            tenantId,
+            accountId,
+            name: acc.name || "",
+            currency: acc.currency || "USD",
+            isSelected: false,
+          });
+        }
+      }
+
+      // If no account is selected and we discovered exactly one, auto-select it
+      const anySelected = existing.some((r) => r.isSelected) || (config.metaAdAccountId ? true : false);
+      if (!anySelected && discovered.length === 1) {
+        const onlyAccountId = discovered[0].account_id || discovered[0].id.replace(/^act_/, "");
+        await db.update(metaAdAccountsTable)
+          .set({ isSelected: true })
+          .where(and(eq(metaAdAccountsTable.tenantId, tenantId), eq(metaAdAccountsTable.accountId, onlyAccountId)));
+
+        config.metaAdAccountId = `act_${onlyAccountId}`;
+        await db.update(tenantsTable)
+          .set({
+            apiConfig: encryptConfig(config) as unknown as typeof tenantsTable.$inferInsert.apiConfig,
+            updatedAt: new Date(),
+          })
+          .where(eq(tenantsTable.id, tenantId));
+      }
+    }
+
+    console.log(`[Meta OAuth] Stored access token + discovered ${discovered.length} ad account(s) for tenant ${tenantId}`);
+    const needsPick = discovered.length > 1 && !config.metaAdAccountId;
+    res.redirect(`/internal?metaOAuth=success&tenantId=${tenantId}${needsPick ? "&pickAccount=1" : ""}`);
   } catch (err) {
+    if (err instanceof MetaTokenInvalidError) {
+      console.error(`[Meta OAuth] Token verification failed: ${err.message}`);
+      res.redirect("/internal?metaOAuth=error&message=token_verification_failed");
+      return;
+    }
     console.error("[Meta OAuth] Token exchange error:", err);
     res.redirect("/internal?metaOAuth=error&message=server_error");
   }
@@ -212,11 +263,14 @@ router.get("/oauth/meta/status", requireRole("super_admin", "agency_user"), asyn
     try { config = decryptConfig(tenant.apiConfig); } catch {}
   }
 
+  const creds = getMetaAppCredentials();
   res.json({
-    connected: Boolean(config.metaAccessToken),
-    hasAppId: Boolean(config.metaAppId),
-    hasAppSecret: Boolean(config.metaAppSecret),
+    connected: Boolean(config.metaAccessToken) && !tenant.metaNeedsReconnect,
     hasAccessToken: Boolean(config.metaAccessToken),
+    hasAdAccount: Boolean(config.metaAdAccountId),
+    needsReconnect: Boolean(tenant.metaNeedsReconnect),
+    reconnectReason: tenant.metaReconnectReason || null,
+    serverConfigured: Boolean(creds),
   });
 });
 

@@ -20,8 +20,6 @@ interface TenantForm {
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
   serviceTitanAppKey: string;
-  metaAppId: string;
-  metaAppSecret: string;
   metaAccessToken: string;
   metaAdAccountId: string;
   metaPixelId: string;
@@ -82,8 +80,6 @@ const emptyForm: TenantForm = {
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
   serviceTitanAppKey: "",
-  metaAppId: "",
-  metaAppSecret: "",
   metaAccessToken: "",
   metaAdAccountId: "",
   metaPixelId: "",
@@ -210,7 +206,8 @@ export default function AdminTenants() {
       const message = params.get("message") || "Unknown error";
       const readable: Record<string, string> = {
         token_exchange_failed: "Failed to exchange authorization code for access token.",
-        missing_app_credentials: "Meta App ID and App Secret must be saved before connecting.",
+        server_missing_app_credentials: "The server is missing META_APP_ID / META_APP_SECRET. Contact the administrator.",
+        token_verification_failed: "Meta returned an invalid access token. Please retry.",
         invalid_state: "Security validation failed. Please try again.",
       };
       setMetaOAuthMessage({ type: "error", text: readable[message] || `OAuth error: ${message}` });
@@ -287,7 +284,7 @@ export default function AdminTenants() {
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
       "callRailApiKey", "callRailSigningKey", "callRailAccountId", "callRailCompanyId", "callRailTrackingNumber",
       "serviceTitanClientId", "serviceTitanClientSecret", "serviceTitanAppKey",
-      "metaAppId", "metaAppSecret", "metaAccessToken", "metaAdAccountId", "metaPixelId",
+      "metaAccessToken", "metaAdAccountId", "metaPixelId",
       "podiumApiToken", "podiumLocationId",
     ];
     for (const key of integrationKeys) {
@@ -377,8 +374,6 @@ export default function AdminTenants() {
       serviceTitanClientId: lc.serviceTitanClientId || "",
       serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
       serviceTitanAppKey: lc.serviceTitanAppKey || "",
-      metaAppId: lc.metaAppId || "",
-      metaAppSecret: lc.metaAppSecret || "",
       metaAccessToken: lc.metaAccessToken || "",
       metaAdAccountId: lc.metaAdAccountId || "",
       metaPixelId: lc.metaPixelId || "",
@@ -533,17 +528,12 @@ export default function AdminTenants() {
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-xs font-medium text-purple-400 uppercase tracking-wider">Meta (Facebook/Instagram)</h4>
               {editId && (() => {
-                const metaReady = fieldReady("metaAppId") && fieldReady("metaAppSecret");
                 const metaConnected = isSaved("metaAccessToken");
-                const missing: string[] = [];
-                if (!fieldReady("metaAppId")) missing.push("App ID");
-                if (!fieldReady("metaAppSecret")) missing.push("App Secret");
                 return (
                   <button
                     type="button"
                     onClick={() => handleConnectMeta(editId)}
-                    disabled={metaConnecting || !metaReady}
-                    title={metaReady ? "" : `Save ${missing.join(" and ")} first, then click to authorize`}
+                    disabled={metaConnecting}
                     className="px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
                   >
                     {metaConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
@@ -558,22 +548,15 @@ export default function AdminTenants() {
                 {metaOAuthMessage.text}
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <SecretInput field="metaAppId" label="App ID" />
-              <SecretInput field="metaAppSecret" label="App Secret" />
-              <SecretInput field="metaAccessToken" label="Access Token (auto-filled on connect)" />
-            </div>
+            {editId && <MetaAdAccountPicker tenantId={editId} apiBase={API_BASE} currentAdAccountId={form.metaAdAccountId} onChange={(id) => { setForm(f => ({ ...f, metaAdAccountId: id })); refetch(); }} />}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+              <SecretInput field="metaAccessToken" label="Access Token (auto-filled on connect)" />
               <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Ad Account ID</label>
-                <input type="text" value={form.metaAdAccountId} onChange={(e) => { trackFieldChange("metaAdAccountId"); setForm(f => ({ ...f, metaAdAccountId: e.target.value })); }} placeholder="act_123456789" className={inputClass + " w-full"} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Pixel ID</label>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Pixel ID (optional, for CAPI)</label>
                 <input type="text" value={form.metaPixelId} onChange={(e) => { trackFieldChange("metaPixelId"); setForm(f => ({ ...f, metaPixelId: e.target.value })); }} placeholder="For CAPI events" className={inputClass + " w-full"} />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">Save App ID and App Secret first, then click "Connect Meta" to authorize. The access token is automatically exchanged for a long-lived token (~60 days).</p>
+            <p className="text-xs text-muted-foreground mt-2">Click "Connect Meta" to authorize. We exchange for a long-lived token (~60 days), then auto-discover the ad accounts your login can access. Pick the one to sync from the dropdown above. If the token expires, this section shows a "Reconnect required" badge and the nightly sync skips this tenant until you reconnect.</p>
           </div>
           <div>
             <h4 className="text-xs font-medium text-green-400 uppercase tracking-wider mb-3">CallRail</h4>
@@ -1313,6 +1296,118 @@ function formatRelativeTime(iso: string | null): string {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+interface MetaAdAccountRow {
+  accountId: string;
+  name: string;
+  currency: string;
+  isSelected: boolean;
+}
+interface MetaAdAccountResponse {
+  selectedAdAccountId: string | null;
+  needsReconnect: boolean;
+  accounts: MetaAdAccountRow[];
+}
+
+function MetaAdAccountPicker({ tenantId, apiBase, currentAdAccountId, onChange }: {
+  tenantId: number;
+  apiBase: string;
+  currentAdAccountId: string;
+  onChange: (id: string) => void;
+}) {
+  const [data, setData] = useState<MetaAdAccountResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async (refresh = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const url = `${apiBase}/api/integrations/meta/ad-accounts?tenantId=${tenantId}${refresh ? "&refresh=1" : ""}`;
+      const res = await fetch(url, { credentials: "include" });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json?.error || `HTTP ${res.status}`);
+        if (json) setData((prev) => prev ?? { selectedAdAccountId: null, needsReconnect: !!json.needsReconnect, accounts: [] });
+        return;
+      }
+      setData(json);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(false); }, [tenantId]);
+
+  const handleSelect = async (accountId: string) => {
+    if (!accountId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/integrations/meta/ad-accounts/select`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId, accountId }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setError(json?.error || `HTTP ${res.status}`); return; }
+      onChange(json.selectedAdAccountId || `act_${accountId}`);
+      await load(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const accounts = data?.accounts || [];
+  const selectedNoPrefix = (data?.selectedAdAccountId || currentAdAccountId || "").replace(/^act_/, "");
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs text-muted-foreground uppercase tracking-wider">Ad Account</label>
+        <div className="flex items-center gap-2">
+          {data?.needsReconnect && (
+            <span className="px-2 py-0.5 rounded-md bg-red-500/15 text-red-400 text-[10px] font-medium border border-red-500/30">
+              Reconnect required
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => load(true)}
+            disabled={loading || busy}
+            className="text-[11px] text-purple-400 hover:text-purple-300 disabled:opacity-50"
+          >
+            {loading ? "Refreshing…" : "Refresh from Meta"}
+          </button>
+        </div>
+      </div>
+      {accounts.length === 0 ? (
+        <div className="text-xs text-muted-foreground italic">
+          {loading ? "Loading…" : "No ad accounts discovered yet. Connect Meta, then click \"Refresh from Meta\"."}
+        </div>
+      ) : (
+        <select
+          value={selectedNoPrefix}
+          onChange={(e) => handleSelect(e.target.value)}
+          disabled={busy}
+          className={inputClass + " w-full"}
+        >
+          <option value="">-- Select an ad account --</option>
+          {accounts.map((a) => (
+            <option key={a.accountId} value={a.accountId}>
+              {a.name || "(unnamed)"} — act_{a.accountId} ({a.currency}){a.isSelected ? " ✓" : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {error && <div className="text-xs text-red-400">{error}</div>}
+    </div>
+  );
 }
 
 function CallRailWebhookStatus({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {

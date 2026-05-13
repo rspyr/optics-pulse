@@ -13,6 +13,7 @@ const BOOTSTRAP_PENDING = new Set([
   "0028_csr_pause_source",
   "0031_outbound_push_dedup",
   "0033_lead_original_source",
+  "0047_meta_integration_rebuild",
 ]);
 
 function resolveMigrationsDir(): string {
