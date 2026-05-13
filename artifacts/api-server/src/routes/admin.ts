@@ -4,6 +4,7 @@ import { eq, and, sql, gte, lte, count, sum, avg, inArray } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { pool } from "@workspace/db";
+import { backfillMetaAdCreatives } from "../services/sync-scheduler";
 
 const router: IRouter = Router();
 
@@ -432,6 +433,34 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to get leaderboard";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Backfill creative metadata (thumbnail, headline, primary text) for ads that
+ * were synced before the new `meta_ads.creative_*` columns were captured.
+ * Safe to re-run; only touches rows missing `creative_thumbnail_url`.
+ */
+router.post("/admin/meta/:tenantId/backfill-creatives", ...agencyOnly, async (req, res) => {
+  try {
+    const tenantId = parseInt(String(req.params.tenantId), 10);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      res.status(400).json({ error: "Invalid tenant ID" });
+      return;
+    }
+    const body = (req.body ?? {}) as { delayMs?: unknown; maxCreatives?: unknown };
+    const delayMs = typeof body.delayMs === "number" && body.delayMs >= 0 ? body.delayMs : undefined;
+    const maxCreatives = typeof body.maxCreatives === "number" && body.maxCreatives > 0 ? body.maxCreatives : undefined;
+
+    const result = await backfillMetaAdCreatives(tenantId, { delayMs, maxCreatives });
+    if (result.error && result.scanned === 0 && result.updated === 0) {
+      res.status(409).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to backfill Meta creatives";
     res.status(500).json({ error: msg });
   }
 });

@@ -634,6 +634,152 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
   }
 }
 
+/**
+ * One-shot backfill that fills in `creative_thumbnail_url`/`creative_title`/`creative_body`
+ * on `meta_ads` rows for a tenant whose ads were synced before those columns were captured.
+ *
+ * Safe to re-run: only targets rows that still have a `creative_id` but no `creative_thumbnail_url`.
+ * Calls Meta `/<creative_id>?fields=thumbnail_url,title,body` once per unique creative id
+ * (multiple ads can share a creative) and sleeps `delayMs` between calls to stay under the
+ * tenant's per-app rate limit. Token-expiry flips the same `metaNeedsReconnect` flag the
+ * regular sync does. Honors the same `META` advisory lock so it can't race a live sync.
+ */
+export async function backfillMetaAdCreatives(
+  tenantId: number,
+  options: { delayMs?: number; maxCreatives?: number } = {},
+): Promise<{ scanned: number; fetched: number; updated: number; skipped: number; errors: number; error?: string }> {
+  const delayMs = Math.max(0, options.delayMs ?? 250);
+  const maxCreatives = options.maxCreatives && options.maxCreatives > 0 ? options.maxCreatives : Infinity;
+
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { scanned: 0, fetched: 0, updated: 0, skipped: 0, errors: 0, error: "Tenant not found" };
+
+  if (tenant.metaNeedsReconnect) {
+    return {
+      scanned: 0, fetched: 0, updated: 0, skipped: 0, errors: 0,
+      error: `Meta needs reconnect: ${tenant.metaReconnectReason || "access token expired"}`,
+    };
+  }
+
+  const config = getTenantConfig(tenant);
+  if (!config?.metaAccessToken) {
+    return { scanned: 0, fetched: 0, updated: 0, skipped: 0, errors: 0, error: "Meta not configured (missing access token)" };
+  }
+
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x4d455441}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    return { scanned: 0, fetched: 0, updated: 0, skipped: 0, errors: 0, error: "Another Meta sync is already running for this tenant" };
+  }
+
+  const syncLog = await logSync(tenantId, "meta", "creative_backfill", new Date());
+  let fetched = 0;
+  let updated = 0;
+  let errors = 0;
+
+  try {
+    // Find ads missing creative metadata. A row is "missing" only when ALL three
+    // creative_* columns are null — that way a previous backfill that filled in
+    // title/body but couldn't get a thumbnail (some Meta creatives just don't
+    // expose one) won't keep re-triggering API calls forever.
+    // One row per ad but we'll dedupe by creative id.
+    const adsMissing = await db.select({
+      externalId: metaAdsTable.externalId,
+      creativeId: metaAdsTable.creativeId,
+    }).from(metaAdsTable).where(and(
+      eq(metaAdsTable.tenantId, tenantId),
+      isNotNull(metaAdsTable.creativeId),
+      isNull(metaAdsTable.creativeThumbnailUrl),
+      isNull(metaAdsTable.creativeTitle),
+      isNull(metaAdsTable.creativeBody),
+    ));
+
+    const scanned = adsMissing.length;
+    if (scanned === 0) {
+      await completeSyncLog(syncLog.id, "completed", 0);
+      return { scanned: 0, fetched: 0, updated: 0, skipped: 0, errors: 0 };
+    }
+
+    // Group ad ids by creative id so we only fetch each creative once.
+    const adsByCreative = new Map<string, string[]>();
+    for (const row of adsMissing) {
+      if (!row.creativeId) continue;
+      const list = adsByCreative.get(row.creativeId) ?? [];
+      list.push(row.externalId);
+      adsByCreative.set(row.creativeId, list);
+    }
+
+    const svc = new MetaAPIService({ accessToken: config.metaAccessToken, adAccountId: config.metaAdAccountId || "" });
+
+    let processed = 0;
+    for (const [creativeId, adExternalIds] of adsByCreative) {
+      if (processed >= maxCreatives) break;
+      processed++;
+
+      try {
+        const creative = await svc.fetchAdCreative(creativeId);
+        fetched++;
+
+        // Skip update if Meta returned nothing useful (avoid clobbering with all nulls
+        // and re-triggering the backfill on every run).
+        if (!creative.thumbnail_url && !creative.title && !creative.body) {
+          continue;
+        }
+
+        const result = await db.update(metaAdsTable)
+          .set({
+            creativeThumbnailUrl: creative.thumbnail_url ?? null,
+            creativeTitle: creative.title ?? null,
+            creativeBody: creative.body ?? null,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(metaAdsTable.tenantId, tenantId),
+            eq(metaAdsTable.creativeId, creativeId),
+            isNull(metaAdsTable.creativeThumbnailUrl),
+          ));
+        const rowCount = (result as unknown as { rowCount?: number }).rowCount ?? adExternalIds.length;
+        updated += rowCount;
+      } catch (err) {
+        errors++;
+        if (err instanceof MetaTokenInvalidError) {
+          const message = err.message;
+          await db.update(tenantsTable)
+            .set({ metaNeedsReconnect: true, metaReconnectReason: message, updatedAt: new Date() })
+            .where(eq(tenantsTable.id, tenantId));
+          await completeSyncLog(syncLog.id, "error", updated, message);
+          console.error(`[Backfill] Meta tenant ${tenantId} token expired during creative backfill — flagged for reconnect`);
+          return { scanned, fetched, updated, skipped: scanned - updated - errors, errors, error: message };
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[Backfill] Meta tenant ${tenantId} creative ${creativeId} fetch failed: ${msg}`);
+      }
+
+      if (delayMs > 0 && processed < adsByCreative.size && processed < maxCreatives) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+
+    const skipped = scanned - updated - errors;
+    await completeSyncLog(syncLog.id, errors > 0 && updated === 0 ? "error" : "completed", updated);
+    console.log(
+      `[Backfill] Meta tenant ${tenantId}: scanned=${scanned} creatives=${adsByCreative.size} fetched=${fetched} updated=${updated} errors=${errors}`,
+    );
+    return { scanned, fetched, updated, skipped: Math.max(0, skipped), errors };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await completeSyncLog(syncLog.id, "error", updated, message);
+    console.error(`[Backfill] Meta tenant ${tenantId} creative backfill failed:`, message);
+    return { scanned: 0, fetched, updated, skipped: 0, errors: errors + 1, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Backfill] Meta tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+  }
+}
+
 interface MetaInsightLikeRow {
   ad_id?: string;
   adset_id?: string;

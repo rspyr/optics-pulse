@@ -369,6 +369,17 @@ export class MetaAPIService {
     return all;
   }
 
+  /**
+   * Fetch a single ad creative by id. Used by the creative-metadata backfill
+   * for ads that already synced before thumbnail/title/body were captured.
+   */
+  async fetchAdCreative(creativeId: string): Promise<{ id: string; thumbnail_url?: string; title?: string; body?: string }> {
+    return this.request<{ id: string; thumbnail_url?: string; title?: string; body?: string }>(
+      `/${creativeId}`,
+      { params: { fields: "thumbnail_url,title,body" } },
+    );
+  }
+
   async fetchAds(): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }>> {
     if (!this.adAccountId) return [];
     interface Row { id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }
