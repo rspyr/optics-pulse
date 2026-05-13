@@ -4,6 +4,7 @@ import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { toast } from "@/hooks/use-toast";
 import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2, ArrowUpRight, Upload } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
@@ -50,17 +51,40 @@ export default function Internal() {
 
   const triggerSync = async (integration: string) => {
     const targetTenantId = syncTenantId || data?.tenants?.[0]?.tenantId;
-    if (!targetTenantId) return;
+    if (!targetTenantId) {
+      toast({ title: "Pick a tenant first", description: "Use the tenant selector above to choose which tenant to sync.", variant: "destructive" });
+      return;
+    }
     setSyncLoading(true);
     try {
-      await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
+      const res = await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ tenantId: targetTenantId }),
       });
+      let body: { success?: boolean; synced?: number; error?: string } = {};
+      try { body = await res.json(); } catch { /* non-JSON */ }
+      if (!res.ok || body.success === false) {
+        toast({
+          title: `${integration} sync failed`,
+          description: body.error || `HTTP ${res.status}`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: `${integration} sync complete`,
+          description: `Synced ${body.synced ?? 0} record(s).`,
+        });
+      }
       await fetchSyncStatus();
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast({
+        title: `${integration} sync failed`,
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    }
     setSyncLoading(false);
   };
 

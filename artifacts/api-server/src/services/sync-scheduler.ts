@@ -383,15 +383,19 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
   const config = getTenantConfig(tenant);
+  const hasRefreshCredentials = !!(config?.googleAdsRefreshToken && config?.googleAdsClientId && config?.googleAdsClientSecret);
+  let missingMessage: string | null = null;
   if (!config?.googleAdsCustomerId) {
-    return { synced: 0, error: "Google Ads not configured (missing customer ID)" };
+    missingMessage = "Google Ads not configured (missing Customer ID)";
+  } else if (!config.googleAdsDeveloperToken) {
+    missingMessage = "Google Ads not configured (missing Developer Token)";
+  } else if (!config.googleAdsApiKey && !hasRefreshCredentials) {
+    missingMessage = "Google Ads not configured (need either an Access Token or OAuth Refresh Token + Client ID + Client Secret)";
   }
-  if (!config.googleAdsDeveloperToken) {
-    return { synced: 0, error: "Google Ads not configured (missing developer token)" };
-  }
-  const hasRefreshCredentials = config.googleAdsRefreshToken && config.googleAdsClientId && config.googleAdsClientSecret;
-  if (!config.googleAdsApiKey && !hasRefreshCredentials) {
-    return { synced: 0, error: "Google Ads not configured (need either an access token or OAuth refresh credentials)" };
+  if (missingMessage) {
+    const missingLog = await logSync(tenantId, "google_ads", "campaigns", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, missingMessage);
+    return { synced: 0, error: missingMessage };
   }
 
   const syncLog = await logSync(tenantId, "google_ads", "campaigns", new Date());
@@ -401,13 +405,13 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
     const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
 
     const gaConfig = {
-      developerToken: config.googleAdsDeveloperToken || "",
-      accessToken: config.googleAdsApiKey || "",
-      refreshToken: config.googleAdsRefreshToken,
-      clientId: config.googleAdsClientId,
-      clientSecret: config.googleAdsClientSecret,
-      customerId: config.googleAdsCustomerId,
-      loginCustomerId: config.googleAdsLoginCustomerId,
+      developerToken: config!.googleAdsDeveloperToken || "",
+      accessToken: config!.googleAdsApiKey || "",
+      refreshToken: config!.googleAdsRefreshToken,
+      clientId: config!.googleAdsClientId,
+      clientSecret: config!.googleAdsClientSecret,
+      customerId: config!.googleAdsCustomerId!,
+      loginCustomerId: config!.googleAdsLoginCustomerId,
     };
 
     const rows = await fetchCampaignPerformance(gaConfig, startDate, endDate);
@@ -469,7 +473,14 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
 
   const config = getTenantConfig(tenant);
   if (!config?.metaAccessToken || !config?.metaAdAccountId) {
-    return { synced: 0, error: "Meta not configured" };
+    const missing = [
+      !config?.metaAccessToken && "Access Token",
+      !config?.metaAdAccountId && "Ad Account ID",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `Meta not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "meta", "campaigns", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, error: errorMessage };
   }
 
   const syncLog = await logSync(tenantId, "meta", "campaigns", new Date());
