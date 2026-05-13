@@ -1098,6 +1098,301 @@ export async function backfillMetaCampaigns(
   }
 }
 
+/**
+ * One-shot historical Google Ads backfill. Pulls per-campaign daily metrics
+ * for the trailing `days` window (default 365, capped at 730 ≈ 2 years to
+ * stay inside Google Ads' standard reporting retention) in 30-day chunks
+ * iterating oldest → newest. Mirrors `syncGoogleAdsCampaigns`'s SELECT/INSERT
+ * upsert path so a manual backfill can't double-create campaigns or stat
+ * rows. Progress + completion land in `integration_sync_logs` with
+ * sync_type=`backfill` (recordsProcessed = stat rows written).
+ */
+export async function backfillGoogleAdsCampaigns(
+  tenantId: number,
+  days: number,
+): Promise<{ synced: number; chunks: number; error?: string }> {
+  const requestedDays = Number.isFinite(days) ? Math.floor(days) : 0;
+  if (requestedDays <= 30) {
+    return { synced: 0, chunks: 0, error: "days must be > 30 (use the hourly sync for the rolling 90-day window)" };
+  }
+  const totalDays = Math.min(requestedDays, 730);
+
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, chunks: 0, error: "Tenant not found" };
+
+  const config = getTenantConfig(tenant);
+  const hasRefreshCredentials = !!(config?.googleAdsRefreshToken && config?.googleAdsClientId && config?.googleAdsClientSecret);
+  let missingMessage: string | null = null;
+  if (!config?.googleAdsCustomerId) {
+    missingMessage = "Google Ads not configured (missing Customer ID)";
+  } else if (!config.googleAdsDeveloperToken) {
+    missingMessage = "Google Ads not configured (missing Developer Token)";
+  } else if (!config.googleAdsApiKey && !hasRefreshCredentials) {
+    missingMessage = "Google Ads not configured (need either an Access Token or OAuth Refresh Token + Client ID + Client Secret)";
+  }
+  if (missingMessage) {
+    const missingLog = await logSync(tenantId, "google_ads", "backfill", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, missingMessage);
+    return { synced: 0, chunks: 0, error: missingMessage };
+  }
+
+  const syncLog = await logSync(tenantId, "google_ads", "backfill", new Date());
+
+  try {
+    const gaConfig = {
+      developerToken: config!.googleAdsDeveloperToken!,
+      accessToken: config!.googleAdsApiKey || "",
+      refreshToken: config!.googleAdsRefreshToken,
+      clientId: config!.googleAdsClientId,
+      clientSecret: config!.googleAdsClientSecret,
+      customerId: config!.googleAdsCustomerId!,
+      loginCustomerId: config!.googleAdsLoginCustomerId,
+    };
+
+    const CHUNK_DAYS = 30;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const oldest = new Date(today.getTime() - totalDays * 86400000);
+
+    const chunks: Array<{ since: string; until: string }> = [];
+    for (let cursor = new Date(oldest); cursor < today; cursor = new Date(cursor.getTime() + CHUNK_DAYS * 86400000)) {
+      const since = cursor.toISOString().split("T")[0];
+      const untilDate = new Date(Math.min(cursor.getTime() + (CHUNK_DAYS - 1) * 86400000, today.getTime() - 86400000));
+      const until = untilDate.toISOString().split("T")[0];
+      chunks.push({ since, until });
+    }
+
+    let totalSynced = 0;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const { since, until } = chunks[i];
+        await updateSyncLogProgress(
+          syncLog.id,
+          totalSynced,
+          `chunk ${i + 1}/${chunks.length}: ${since} → ${until}`,
+        );
+
+        const rows = await fetchCampaignPerformance(gaConfig, since, until);
+        for (const row of rows) {
+          const formatted = formatCampaignRow(row);
+
+          let [campaign] = await db.select().from(campaignsTable)
+            .where(and(
+              eq(campaignsTable.tenantId, tenantId),
+              eq(campaignsTable.platform, "google_ads"),
+              eq(campaignsTable.externalId, formatted.externalId),
+            ))
+            .limit(1);
+
+          if (!campaign) {
+            [campaign] = await db.insert(campaignsTable).values({
+              tenantId,
+              platform: formatted.platform,
+              externalId: formatted.externalId,
+              name: formatted.name,
+              status: formatted.status,
+            }).returning();
+          }
+
+          const [existingStat] = await db.select().from(campaignDailyStatsTable)
+            .where(and(eq(campaignDailyStatsTable.campaignId, campaign.id), eq(campaignDailyStatsTable.date, formatted.date)))
+            .limit(1);
+
+          if (existingStat) {
+            await db.update(campaignDailyStatsTable)
+              .set({ spend: formatted.spend, impressions: formatted.impressions, clicks: formatted.clicks, conversions: formatted.conversions })
+              .where(eq(campaignDailyStatsTable.id, existingStat.id));
+          } else {
+            await db.insert(campaignDailyStatsTable).values({
+              campaignId: campaign.id,
+              date: formatted.date,
+              spend: formatted.spend,
+              impressions: formatted.impressions,
+              clicks: formatted.clicks,
+              conversions: formatted.conversions,
+            });
+          }
+          totalSynced++;
+        }
+        console.log(`[Backfill] Google Ads tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${rows.length} campaign-day rows`);
+      }
+    } catch (innerErr) {
+      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      throw innerErr;
+    }
+
+    await completeSyncLog(syncLog.id, "completed", totalSynced);
+    console.log(`[Backfill] Google Ads tenant ${tenantId}: backfilled ${totalSynced} campaign-day rows across ${chunks.length} chunks (${totalDays} days)`);
+    return { synced: totalSynced, chunks: chunks.length };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await completeSyncLog(syncLog.id, "error", 0, message);
+    console.error(`[Backfill] Google Ads error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "google_ads", message); } catch {}
+    return { synced: 0, chunks: 0, error: message };
+  }
+}
+
+/**
+ * One-shot historical ServiceTitan jobs backfill. Walks the trailing `days`
+ * window (default 365, capped at 1095 ≈ 3 years) in 90-day chunks using the
+ * `modifiedOnOrAfter` + `modifiedBefore` ServiceTitan filters so each chunk
+ * stays well under the 50-page (5000 job) hard cap inside `fetchCompletedJobs`.
+ * Reuses the same upsert + enrichment pipeline as the scheduled jobs sync.
+ * Progress + completion land in `integration_sync_logs` with
+ * sync_type=`backfill`.
+ */
+export async function backfillServiceTitanJobs(
+  tenantId: number,
+  days: number,
+): Promise<{ synced: number; chunks: number; error?: string }> {
+  const requestedDays = Number.isFinite(days) ? Math.floor(days) : 0;
+  if (requestedDays <= 30) {
+    return { synced: 0, chunks: 0, error: "days must be > 30 (the 15-min scheduler already covers recent jobs)" };
+  }
+  const totalDays = Math.min(requestedDays, 1095);
+
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, chunks: 0, error: "Tenant not found" };
+
+  if (tenant.stSyncPaused) {
+    const errorMessage = "ServiceTitan sync is paused for this tenant";
+    const skippedLog = await logSync(tenantId, "service_titan", "backfill", new Date());
+    await completeSyncLog(skippedLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
+  const config = getTenantConfig(tenant);
+  if (!config?.serviceTitanClientId || !config?.serviceTitanClientSecret || !config?.serviceTitanAppKey) {
+    const missing = [
+      !config?.serviceTitanClientId && "Client ID",
+      !config?.serviceTitanClientSecret && "Client Secret",
+      !config?.serviceTitanAppKey && "App Key",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "service_titan", "backfill", new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, chunks: 0, error: errorMessage };
+  }
+
+  const syncLog = await logSync(tenantId, "service_titan", "backfill", new Date());
+
+  try {
+    const stConfig = {
+      clientId: config.serviceTitanClientId,
+      clientSecret: config.serviceTitanClientSecret,
+      tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+      appKey: config.serviceTitanAppKey,
+    };
+
+    const CHUNK_DAYS = 90;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const oldest = new Date(today.getTime() - totalDays * 86400000);
+
+    const chunks: Array<{ since: string; before: string }> = [];
+    for (let cursor = new Date(oldest); cursor < today; cursor = new Date(cursor.getTime() + CHUNK_DAYS * 86400000)) {
+      const since = cursor.toISOString();
+      const beforeMs = Math.min(cursor.getTime() + CHUNK_DAYS * 86400000, today.getTime());
+      const before = new Date(beforeMs).toISOString();
+      chunks.push({ since, before });
+    }
+
+    let totalSynced = 0;
+
+    async function processJobBatch(stJobs: STJob[]) {
+      for (const stJob of stJobs) {
+        const formatted = formatSTJobForSync(stJob);
+        const jobIdHash = hashStJobId(formatted.stJobId);
+
+        const [existingByHash] = await db.select().from(jobsTable)
+          .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobIdHash, jobIdHash)))
+          .limit(1);
+
+        const existing = existingByHash || await (async () => {
+          const [byRawId] = await db.select().from(jobsTable)
+            .where(and(eq(jobsTable.tenantId, tenantId), eq(jobsTable.stJobId, formatted.stJobId)))
+            .limit(1);
+          return byRawId;
+        })();
+
+        const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        if (existing) {
+          const wasPurged = existing.customerName === null && existing.stJobId === null;
+          if (wasPurged) {
+            await db.update(jobsTable)
+              .set({
+                revenue: formatted.revenue,
+                status: formatted.status,
+                completedAt: formatted.completedAt,
+                jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+                businessUnit: formatted.businessUnit || existing.businessUnit,
+                updatedAt: new Date(),
+              })
+              .where(eq(jobsTable.id, existing.id));
+          } else {
+            await db.update(jobsTable)
+              .set({
+                revenue: formatted.revenue,
+                status: formatted.status,
+                completedAt: formatted.completedAt,
+                customerName: formatted.customerName,
+                customerPhone: formatted.customerPhone || existing.customerPhone,
+                customerEmail: formatted.customerEmail || existing.customerEmail,
+                serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+                stCustomerId: formatted.stCustomerId || existing.stCustomerId,
+                stLocationId: formatted.stLocationId || existing.stLocationId,
+                jobTypeName: formatted.jobTypeName || existing.jobTypeName,
+                businessUnit: formatted.businessUnit || existing.businessUnit,
+                stJobIdHash: jobIdHash,
+                stDataExpiresAt,
+                updatedAt: new Date(),
+              })
+              .where(eq(jobsTable.id, existing.id));
+          }
+        } else {
+          await db.insert(jobsTable).values({ tenantId, ...formatted, stJobIdHash: jobIdHash, stDataExpiresAt });
+        }
+        totalSynced++;
+      }
+    }
+
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const { since, before } = chunks[i];
+        await updateSyncLogProgress(
+          syncLog.id,
+          totalSynced,
+          `chunk ${i + 1}/${chunks.length}: ${since.slice(0, 10)} → ${before.slice(0, 10)}`,
+        );
+        await fetchCompletedJobs(stConfig, since, processJobBatch, before);
+      }
+    } catch (innerErr) {
+      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      try { await updateSyncLogProgress(syncLog.id, totalSynced, `partial: ${innerMessage}`); } catch {}
+      throw innerErr;
+    }
+
+    await completeSyncLog(syncLog.id, "completed", totalSynced);
+    console.log(`[Backfill] ServiceTitan tenant ${tenantId}: backfilled ${totalSynced} jobs across ${chunks.length} chunks (${totalDays} days)`);
+
+    if (totalSynced > 0) {
+      try { await matchJobsToLeads(tenantId); } catch (err) {
+        console.error(`[Backfill] ServiceTitan post-sync lead match failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+    }
+
+    return { synced: totalSynced, chunks: chunks.length };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await completeSyncLog(syncLog.id, "error", 0, message);
+    console.error(`[Backfill] ServiceTitan error for tenant ${tenantId}:`, message);
+    try { await emitSyncFailureNotification(tenantId, "service_titan", message); } catch {}
+    return { synced: 0, chunks: 0, error: message };
+  }
+}
+
 export async function syncServiceTitanInvoices(tenantId: number): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return { synced: 0, error: "Tenant not found" };

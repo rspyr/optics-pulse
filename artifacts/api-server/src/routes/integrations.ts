@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncGoogleAdsCampaigns, syncMetaCampaigns } from "../services/sync-scheduler";
+import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
 
 const router: IRouter = Router();
@@ -52,6 +52,75 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
   } else {
     res.json({ success: true, synced: result.synced });
   }
+});
+
+/**
+ * One-shot historical Google Ads backfill. Mirrors the Meta backfill contract:
+ * `days` must be > 30 and ≤ 730. Writes a sync_type='backfill' log row that
+ * the Settings panel polls for progress via `/api/integrations/sync-status`.
+ */
+router.post("/integrations/google_ads/backfill", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+  const daysRaw = req.query.days ?? req.body?.days ?? 365;
+  const days = Number(daysRaw);
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+  if (!Number.isFinite(days) || days <= 30) {
+    res.status(400).json({ error: "days must be a number > 30 (the hourly sync already covers the last 90 days)" });
+    return;
+  }
+  if (days > 730) {
+    res.status(400).json({ error: "days cannot exceed 730 (Google Ads reporting retention is ~24 months)" });
+    return;
+  }
+
+  const result = await backfillGoogleAdsCampaigns(tenantId, days);
+  if (result.error) {
+    const status = /not found/i.test(result.error) ? 404
+      : /not configured/i.test(result.error) ? 400
+      : 502;
+    res.status(status).json({ success: false, ...result });
+    return;
+  }
+  res.json({ success: true, ...result });
+});
+
+/**
+ * One-shot historical ServiceTitan jobs backfill. Mirrors the Meta backfill
+ * contract: `days` must be > 30 and ≤ 1095. Walks the trailing window in
+ * 90-day chunks using the ST `modifiedOnOrAfter`/`modifiedBefore` filters so
+ * each chunk fits inside the per-call page cap inside `fetchCompletedJobs`.
+ */
+router.post("/integrations/service_titan/backfill", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+  const daysRaw = req.query.days ?? req.body?.days ?? 365;
+  const days = Number(daysRaw);
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+  if (!Number.isFinite(days) || days <= 30) {
+    res.status(400).json({ error: "days must be a number > 30 (the 15-minute scheduler already covers recent jobs)" });
+    return;
+  }
+  if (days > 1095) {
+    res.status(400).json({ error: "days cannot exceed 1095 (ST backfill is capped at ~3 years)" });
+    return;
+  }
+
+  const result = await backfillServiceTitanJobs(tenantId, days);
+  if (result.error) {
+    const status = /not found/i.test(result.error) ? 404
+      : /not configured|paused/i.test(result.error) ? 400
+      : 502;
+    res.status(status).json({ success: false, ...result });
+    return;
+  }
+  res.json({ success: true, ...result });
 });
 
 router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"), async (req, res) => {

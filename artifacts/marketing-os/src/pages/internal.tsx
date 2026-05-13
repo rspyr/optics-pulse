@@ -37,8 +37,14 @@ export default function Internal() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncTenantId, setSyncTenantId] = useState<number | null>(null);
-  const [backfillDays, setBackfillDays] = useState<string>("365");
-  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillDays, setBackfillDays] = useState<Record<string, string>>({});
+  const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
+
+  const BACKFILL_INTEGRATIONS: Record<string, { label: string; max: number; default: string }> = {
+    meta: { label: "Meta", max: 1095, default: "365" },
+    google_ads: { label: "Google Ads", max: 730, default: "365" },
+    service_titan: { label: "ServiceTitan", max: 1095, default: "365" },
+  };
 
   const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -53,35 +59,38 @@ export default function Internal() {
   useEffect(() => { fetchSyncStatus(); }, [fetchSyncStatus]);
 
   // Poll the sync-status endpoint while a backfill is in flight so the
-  // chunk-progress string and ad-day row count update live. We poll when
-  // EITHER (a) the most recent status snapshot says 'running', OR (b) we
-  // just fired the POST and are waiting for the first row to appear /
-  // for the long-running request to return. The route is synchronous, so
-  // without the `backfillBusy` branch the operator who kicked off the
-  // run would see no progress until the whole thing finished.
+  // chunk-progress string and row count update live. We poll when EITHER
+  // (a) the most recent status snapshot says 'running' for any integration,
+  // OR (b) we just fired a POST and are waiting for the first row to
+  // appear / for the long-running request to return. The route is
+  // synchronous, so without the `backfillBusy` branch the operator who
+  // kicked off the run would see no progress until the whole thing finished.
   const anyBackfillRunning = syncStatus?.backfillStatus
     ? Object.values(syncStatus.backfillStatus).some((b) => b?.status === "running")
     : false;
+  const anyBackfillBusy = Object.values(backfillBusy).some(Boolean);
   useEffect(() => {
-    if (!anyBackfillRunning && !backfillBusy) return;
+    if (!anyBackfillRunning && !anyBackfillBusy) return;
     const id = setInterval(() => { fetchSyncStatus(); }, 3000);
     return () => clearInterval(id);
-  }, [anyBackfillRunning, backfillBusy, fetchSyncStatus]);
+  }, [anyBackfillRunning, anyBackfillBusy, fetchSyncStatus]);
 
-  const triggerBackfill = () => {
+  const triggerBackfill = (integ: string) => {
+    const meta = BACKFILL_INTEGRATIONS[integ];
+    if (!meta) return;
     if (!syncTenantId) {
       toast({ title: "Pick a tenant first", description: "Backfill runs against a single tenant — choose one from the selector above.", variant: "destructive" });
       return;
     }
-    const days = Number(backfillDays);
-    if (!Number.isFinite(days) || days <= 30 || days > 1095) {
-      toast({ title: "Invalid days value", description: "Days must be a number between 31 and 1095.", variant: "destructive" });
+    const days = Number(backfillDays[integ] ?? meta.default);
+    if (!Number.isFinite(days) || days <= 30 || days > meta.max) {
+      toast({ title: "Invalid days value", description: `Days must be a number between 31 and ${meta.max}.`, variant: "destructive" });
       return;
     }
-    setBackfillBusy(true);
+    setBackfillBusy((b) => ({ ...b, [integ]: true }));
     toast({
-      title: "Meta backfill started",
-      description: `Pulling the last ${days} days in 30-day chunks. Progress will update live below.`,
+      title: `${meta.label} backfill started`,
+      description: `Pulling the last ${days} days in chunks. Progress will update live below.`,
     });
 
     // Fire-and-forget: the route runs synchronously to completion (can take
@@ -91,7 +100,7 @@ export default function Internal() {
     // and surface the final outcome from the POST resolution.
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/integrations/meta/backfill?tenantId=${syncTenantId}&days=${days}`, {
+        const res = await fetch(`${API_BASE}/api/integrations/${integ}/backfill?tenantId=${syncTenantId}&days=${days}`, {
           method: "POST",
           credentials: "include",
         });
@@ -99,24 +108,24 @@ export default function Internal() {
         try { body = await res.json(); } catch { /* non-JSON */ }
         if (!res.ok || body.success === false) {
           toast({
-            title: "Meta backfill failed",
+            title: `${meta.label} backfill failed`,
             description: body.error || `HTTP ${res.status}`,
             variant: "destructive",
           });
         } else {
           toast({
-            title: "Meta backfill complete",
-            description: `Synced ${body.synced ?? 0} ad-day rows across ${body.chunks ?? 0} chunks.`,
+            title: `${meta.label} backfill complete`,
+            description: `Synced ${body.synced ?? 0} rows across ${body.chunks ?? 0} chunks.`,
           });
         }
       } catch (err) {
         toast({
-          title: "Meta backfill failed",
+          title: `${meta.label} backfill failed`,
           description: err instanceof Error ? err.message : String(err),
           variant: "destructive",
         });
       } finally {
-        setBackfillBusy(false);
+        setBackfillBusy((b) => ({ ...b, [integ]: false }));
         fetchSyncStatus();
       }
     })();
@@ -468,10 +477,13 @@ export default function Internal() {
                 </div>
                 {(() => {
                   const bf = syncStatus?.backfillStatus?.[integ];
-                  // Only Meta currently exposes a Run-backfill API endpoint.
-                  // Other integrations show the historical-backfill row when
-                  // a log row exists, but no manual trigger UI.
-                  const supportsManualBackfill = integ === "meta";
+                  // Meta, Google Ads, and ServiceTitan all expose a
+                  // Run-backfill API endpoint that walks historical data in
+                  // chunks. Other integrations only render the row if a log
+                  // already exists.
+                  const bfMeta = BACKFILL_INTEGRATIONS[integ];
+                  const supportsManualBackfill = !!bfMeta;
+                  const integBusy = backfillBusy[integ] === true;
                   if (!bf && !supportsManualBackfill) return null;
                   return (
                     <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
@@ -505,25 +517,25 @@ export default function Internal() {
                           </p>
                         </div>
                       )}
-                      {supportsManualBackfill && (
+                      {supportsManualBackfill && bfMeta && (
                         <div className="flex items-center gap-2 pt-1">
                           <input
                             type="number"
                             min={31}
-                            max={1095}
-                            value={backfillDays}
-                            onChange={(e) => setBackfillDays(e.target.value)}
+                            max={bfMeta.max}
+                            value={backfillDays[integ] ?? bfMeta.default}
+                            onChange={(e) => setBackfillDays((d) => ({ ...d, [integ]: e.target.value }))}
                             className="w-20 bg-background/50 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/40"
-                            placeholder="365"
+                            placeholder={bfMeta.default}
                           />
-                          <span className="text-[11px] text-muted-foreground">days (max 1095)</span>
+                          <span className="text-[11px] text-muted-foreground">days (max {bfMeta.max})</span>
                           <button
-                            onClick={triggerBackfill}
-                            disabled={backfillBusy || !syncTenantId || bf?.status === "running"}
+                            onClick={() => triggerBackfill(integ)}
+                            disabled={integBusy || !syncTenantId || bf?.status === "running"}
                             className="ml-auto text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
                             title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
                           >
-                            {backfillBusy || bf?.status === "running"
+                            {integBusy || bf?.status === "running"
                               ? <Loader2 className="w-3 h-3 animate-spin" />
                               : <RefreshCw className="w-3 h-3" />}
                             Run backfill

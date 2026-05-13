@@ -245,6 +245,7 @@ export async function fetchCompletedJobs(
   config: STAuthConfig,
   modifiedAfter?: string,
   onBatch?: (jobs: STJob[]) => Promise<void>,
+  modifiedBefore?: string,
 ): Promise<STJob[]> {
   const PAGES_PER_BATCH = 5;
   let page = 1;
@@ -307,6 +308,9 @@ export async function fetchCompletedJobs(
     });
     if (modifiedAfter) {
       params.set("modifiedOnOrAfter", modifiedAfter);
+    }
+    if (modifiedBefore) {
+      params.set("modifiedBefore", modifiedBefore);
     }
 
     const response = await stFetch<STJobsResponse>(config, `/jobs?${params.toString()}`);
