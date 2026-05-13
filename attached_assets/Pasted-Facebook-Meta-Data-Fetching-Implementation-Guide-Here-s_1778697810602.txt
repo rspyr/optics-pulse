@@ -1,0 +1,141 @@
+Facebook / Meta Data Fetching — Implementation Guide
+Here's exactly how this app does Meta auth + data fetching, end-to-end. Use it as a reference to compare against your other app.
+
+1. Prerequisites (Meta App side)
+A Meta app in developers.facebook.com with Marketing API + Facebook Login products enabled.
+App reviewed/approved for these scopes (otherwise you only get test-user access):
+pages_show_list
+pages_read_engagement
+ads_read
+business_management
+Valid OAuth redirect URI registered in the app dashboard, e.g. https://your-domain.com/api/auth/meta/callback.
+Two env vars on the server: META_APP_ID, META_APP_SECRET.
+2. Database fields you need
+Per-user storage (3 columns is enough):
+
+metaAccessToken: text("meta_access_token"),       // long-lived user token
+metaRefreshToken: text("meta_refresh_token"),     // unused — Meta has no refresh tokens
+metaConnected: boolean("meta_connected").default(false),
+
+Plus an ad-account row keyed by metaAccountId (e.g. act_1234567890) so you can store per-account metadata and selections.
+
+3. OAuth flow
+3a. Build the auth URL (server)
+const META_SCOPES = ['pages_show_list','pages_read_engagement','ads_read','business_management'];
+const params = new URLSearchParams({
+  client_id: META_APP_ID,
+  redirect_uri: `${baseUrl}/api/auth/meta/callback`,
+  scope: META_SCOPES.join(','),
+  response_type: 'code',
+  state: userId,                 // round-trips through Meta — use to know who came back
+});
+const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
+
+Frontend hits /api/auth/meta/connect, server returns { authUrl }, frontend does window.location = authUrl.
+
+3b. Handle the callback (server)
+// GET /api/auth/meta/callback?code=...&state=<userId>
+const tokenResponse = await fetch('https://graph.facebook.com/v21.0/oauth/access_token', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({
+    client_id: META_APP_ID,
+    client_secret: META_APP_SECRET,    // server-side exchange returns ~60-day token
+    redirect_uri: `${baseUrl}/api/auth/meta/callback`,
+    code,
+  }),
+});
+const { access_token } = await tokenResponse.json();
+
+Key insight: because we send client_secret from the server, the returned token is already long-lived (~60 days). Combined with regular daily API usage, Meta keeps extending it indefinitely — that's why we never explicitly refresh it. (See note at the end.)
+
+3c. Validate and store
+await new MetaAPIService(access_token).getUserInfo(); // sanity check via /me
+await storage.updateUser(userId, {
+  metaAccessToken: access_token,
+  metaRefreshToken: null,
+  metaConnected: true,
+});
+
+3d. Disconnect
+Just null out the tokens and flip metaConnected = false. (Optionally also call DELETE /{user-id}/permissions on Meta's side.)
+
+4. The API client (MetaAPIService)
+Single class wrapping https://graph.facebook.com/v21.0. Important plumbing:
+
+makeRequest<T>(endpoint, params, retryCount=0) — appends access_token, 30s AbortController timeout, and exponential backoff retry (1s → 2s → 4s, max 3 retries) on:
+HTTP 429 (rate limit)
+HTTP 5xx
+HTTP 400 with error.is_transient === true or "temporarily unavailable" in the message
+AbortError / network errors
+makeBatchRequest(requests[]) — uses Meta's POST / batch endpoint to combine multiple GETs into one HTTP call (e.g. campaigns + ad sets fetched together for daily budget calc). 45s timeout.
+Pagination — every list call loops on paging.cursors.after, capped at maxPaginationIterations = 200 and bails if the cursor stops advancing (defensive against infinite loops).
+Daily-budget cache — in-memory Map<adAccountId, {total, details, fetchedAt}> with 15-min TTL, plus a stale-fallback path: if the live call fails (rate limited), return the expired cache entry rather than nothing.
+Numeric safety — parseNumericField / parseIntField helpers guard against Meta returning strings/null.
+5. The data-fetch endpoints used
+All under Graph API v21.0:
+
+Purpose	Endpoint
+Sanity check	GET /me
+List ad accounts	GET /me/adaccounts?fields=id,name,currency&limit=500
+List Pages	GET /me/accounts (returns Page tokens)
+Page insights	GET /{page-id}/insights?metric=page_fans,page_views_total,page_impressions,page_actions_post_reactions_like_total (uses Page access token, not user token)
+Campaigns	GET /{ad-account-id}/campaigns?fields=id,name,status,daily_budget,effective_status&limit=500
+Ad sets	GET /{ad-account-id}/adsets?fields=id,name,status,effective_status,daily_budget,campaign_id&filtering=[{effective_status IN [ACTIVE,PAUSED]}]
+Ads (with creatives)	GET /{ad-account-id}/ads?fields=id,name,status,campaign_id,adset_id,adset{name},creative{object_story_spec},created_time,effective_status
+Daily ad insights (the big one)	GET /{ad-account-id}/insights?level=ad&fields=ad_id,ad_name,campaign_id,spend,impressions,cpm,video_p25/50/75/100_watched_actions,video_play_actions,video_thruplay_watched_actions,actions,date_start,date_stop&time_range={since,until}&time_increment=1&limit=500
+The time_increment=1 on insights is what gives you per-day rows instead of one aggregated number — essential for arbitrary date filtering later.
+
+6. The orchestrator (fetchMetaData)
+The single function called by the OAuth callback, the dashboard endpoints, and the scheduled job. Signature:
+
+fetchMetaData(userId, accessToken, dateRange = '30days', adAccountId?, lastFetchedAt?)
+
+Steps it runs:
+
+Discover ad accounts → upsert each into adAccounts table.
+If user has no selectedAdAccountId, set it to the first one.
+Pick the target ad account (param > selected > first).
+Fetch Pages and, if any, pull page-level insights (followers, views, impressions, likes) into the socialMediaMetrics table.
+Resolve the date window based on dateRange:
+'7days' | '30days' | '90days' — N days back.
+'mtd' — first of current month → today.
+'custom:YYYY-MM-DD:YYYY-MM-DD' — explicit range, validated.
+'alltime' — last 37 months (Meta's hard limit on insights).
+Delta-fetch optimization: if lastFetchedAt is provided AND the range isn't alltime/custom, only ask Meta for [lastFetchedAt → today] instead of the full window. Massive speedup on refreshes.
+Pull campaigns (for name lookup) and the daily insights, then upsert per-day per-ad rows into the DB.
+Update cacheMetadata with furthestDateBack to remember how far back you've successfully fetched, so you don't re-fetch the same history forever.
+7. When fetches are triggered
+On connect — fires fetchMetaData for ['7days','30days','90days'] in Promise.all so the dashboard is hot immediately. (alltime is fired separately in the background and returns existing cache with _cacheStatus: 'incomplete-refreshing' while it runs.)
+On dashboard request — when the user changes date range or ad account, the route fires fetchMetaData with the new range and the lastFetchedAt from cache metadata (delta path).
+Nightly at 1 AM ET (server/scheduledRefresh.ts):
+Iterate all users with metaConnected = true.
+For each: list their ad accounts, then call fetchMetaData(user.id, token, '30days', accountId) per account.
+10-second sleep between accounts to stay under rate limits.
+On error code 190 / "expired" / "invalid", log "user needs to reconnect Meta" and move on — never crash the whole job.
+Errors are collected per-account; one bad account doesn't kill the others.
+8. Token-lifetime handling (the part you asked about earlier)
+We do not call fb_exchange_token.
+We do not store a refresh token (Meta doesn't issue one).
+We rely on:
+Server-side code exchange returning a long-lived (~60-day) token by default.
+The nightly job hitting Meta for every account every day, which auto-extends the token.
+The business_management scope, which makes tokens behave very durably for Business-Manager-owned apps.
+Recovery path: scheduled refresh detects error 190, logs it, user manually reconnects.
+If your other app needs guaranteed non-expiring tokens, the upgrade is System User access tokens in Business Manager — they don't expire at all and don't depend on a human being logged in.
+
+9. Gotchas to watch for when comparing apps
+Insights rows MUST use time_increment=1 if you want per-day storage — otherwise you'll only get aggregated rows you can't slice by date later.
+Page insights need a Page access token, not the user token. You get them from GET /me/accounts.
+Currency: Meta returns spend as a string in the account currency — store currency per ad account or you'll silently mix USD and CAD.
+Daily budgets are in cents (string). Always parseInt and divide by 100.
+Pagination cursors can repeat at end-of-data — check paging.next AND that the cursor changed, or you'll loop forever.
+alltime = 37 months max on insights; longer windows return empty.
+Rate limits are per-app + per-user; the per-account sleep + exponential retry are what keep you under them in practice.
+Attribution lag: Meta retroactively updates conversion data for several days after the fact — this is why the nightly job re-fetches the last 30 days, not just yesterday.
+That's the whole picture. Files to look at side-by-side with your other app:
+
+server/routes.ts (lines ~50–72 for OAuth URL, ~437–525 for callback, ~4211+ for fetchMetaData)
+server/meta-api.ts (the entire MetaAPIService class)
+server/scheduledRefresh.ts (lines ~180–299 for the Meta nightly job)
+shared/schema.ts (the 3 user columns + adAccounts table)
