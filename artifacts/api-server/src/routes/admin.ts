@@ -44,13 +44,32 @@ router.post("/admin/users", ...agencyOnly, async (req, res) => {
       return;
     }
 
+    const validRoles = ["super_admin", "agency_user", "client_admin", "client_user"] as const;
+    if (!validRoles.includes(role as typeof validRoles[number])) {
+      res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+      return;
+    }
+
+    // A non-admin role (client_admin / client_user / any future
+    // tenant-scoped role) without a tenantId is a broken account that
+    // would 403 on every list endpoint via resolveListTenantScope.
+    // Reject at creation so this state never enters the DB.
+    const isAdminRole = role === "super_admin" || role === "agency_user";
+    const normalizedTenantId = tenantId ?? null;
+    if (!isAdminRole && !normalizedTenantId) {
+      res.status(400).json({
+        error: `tenantId is required for role "${role}". Only super_admin and agency_user may be created without a tenant.`,
+      });
+      return;
+    }
+
     const passwordHash = await bcrypt.hash(password, 10);
     const [user] = await db.insert(usersTable).values({
       email: email.toLowerCase(),
       name,
       passwordHash,
-      role: role as "super_admin" | "agency_user" | "client_admin" | "client_user",
-      tenantId: tenantId || null,
+      role: role as typeof validRoles[number],
+      tenantId: normalizedTenantId,
     }).returning();
 
     res.status(201).json({
@@ -81,6 +100,31 @@ router.patch("/admin/users/:userId", ...agencyOnly, async (req, res) => {
     if (body.isActive !== undefined) updates.isActive = body.isActive;
     if (body.password) updates.passwordHash = await bcrypt.hash(body.password as string, 10);
     updates.updatedAt = new Date();
+
+    // Reject patches that would leave a non-admin user without a
+    // tenant. We need the resulting (role, tenantId) pair, so peek at
+    // the current row whenever either field is changing.
+    if (body.role !== undefined || body.tenantId !== undefined) {
+      const [existing] = await db
+        .select({ role: usersTable.role, tenantId: usersTable.tenantId })
+        .from(usersTable)
+        .where(eq(usersTable.id, userId));
+      if (!existing) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+      const nextRole = (body.role as string | undefined) ?? existing.role;
+      const nextTenantId = body.tenantId !== undefined
+        ? (body.tenantId as number | null | undefined) ?? null
+        : existing.tenantId;
+      const isAdminRole = nextRole === "super_admin" || nextRole === "agency_user";
+      if (!isAdminRole && !nextTenantId) {
+        res.status(400).json({
+          error: `tenantId is required for role "${nextRole}". Only super_admin and agency_user may exist without a tenant.`,
+        });
+        return;
+      }
+    }
 
     const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, userId)).returning();
     if (!user) {

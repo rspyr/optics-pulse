@@ -1,6 +1,24 @@
 import type { Request, Response } from "express";
 
 /**
+ * Operator-facing hint attached to "No tenant assigned" 403s. A
+ * tenant-scoped user (tenant_user, client_admin, client_user) without
+ * a `tenantId` is a broken account that should never exist in normal
+ * operation — see the broken-account audit logged at server startup
+ * by `auditUsersWithoutTenant()` in
+ * `services/broken-account-audit.ts`. The hint surfaces a concrete
+ * next step instead of leaving end users staring at an unactionable
+ * error.
+ */
+export const NO_TENANT_ASSIGNED_HINT =
+  "Your account is missing a tenant. Please contact your administrator — operators can find affected users in the broken-account audit logged at API server startup.";
+
+export const NO_TENANT_ASSIGNED_ERROR = {
+  error: "No tenant assigned",
+  hint: NO_TENANT_ASSIGNED_HINT,
+} as const;
+
+/**
  * Result of resolving the tenant scope for a list-style handler.
  *
  * `ok: false` means the helper has already written a 403 response to
@@ -44,7 +62,7 @@ export function resolveListTenantScope(
   }
   const userTenantId = req.session.tenantId ?? null;
   if (!userTenantId) {
-    res.status(403).json({ error: "No tenant assigned" });
+    res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
     return { ok: false };
   }
   return { ok: true, tenantId: userTenantId };

@@ -5,7 +5,7 @@ import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
 import { hashValue, hashPhone } from "../lib/phone-utils";
-import { resolveListTenantScope } from "../lib/tenant-scope";
+import { resolveListTenantScope, NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 import { extractFieldNamesForOperator, computeUnmatchedReason, extractPiiFromFields } from "./tracker";
 
 const router: IRouter = Router();
@@ -20,7 +20,7 @@ router.get("/attribution/events", async (req, res) => {
   const userTenantId = req.session.tenantId;
   if (role !== "super_admin" && role !== "agency_user") {
     if (!userTenantId) {
-      res.status(403).json({ error: "No tenant assigned" });
+      res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
       return;
     }
     conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
@@ -59,7 +59,7 @@ router.get("/attribution/events/:id", async (req, res) => {
     const conditions: SQL[] = [eq(attributionEventsTable.id, id)];
     if (role !== "super_admin" && role !== "agency_user") {
       if (!userTenantId) {
-        res.status(403).json({ error: "No tenant assigned" });
+        res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
         return;
       }
       conditions.push(eq(attributionEventsTable.tenantId, userTenantId));

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 
 const mockDb = {
   selectResults: [] as unknown[][],
@@ -462,7 +463,7 @@ describe("GET /attribution/events — list tenant scoping", () => {
     const res = await getJson(app, "/attribution/events");
 
     expect(res.status).toBe(403);
-    expect(res.json).toEqual({ error: "No tenant assigned" });
+    expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
     const dbMod = await import("@workspace/db");
     expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
   });
@@ -555,7 +556,7 @@ describe("GET /attribution/events/:id — tenant scoping", () => {
     const res = await getJson(app, "/attribution/events/303");
 
     expect(res.status).toBe(403);
-    expect(res.json).toEqual({ error: "No tenant assigned" });
+    expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
     // Must short-circuit before issuing the select — db.select is the
     // signal that the handler proceeded past the 403 guard.
     const dbMod = await import("@workspace/db");

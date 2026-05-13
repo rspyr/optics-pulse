@@ -16,6 +16,7 @@ import { recoverPendingNewLeadEmits } from "./services/lead-notify-scheduler";
 import { startCallbackScheduler } from "./services/callback-scheduler";
 import { startHeartbeatMonitor, startStaleInstallMonitor } from "./services/notifications";
 import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
+import { auditUsersWithoutTenant } from "./services/broken-account-audit";
 
 const rawPort = process.env["PORT"];
 
@@ -56,6 +57,7 @@ async function startServer() {
   httpServer.listen(port, async () => {
     console.log(`Server listening on port ${port}`);
     await runOneTimeMigrations();
+    await auditUsersWithoutTenant();
     await closeStaleLoginSessions();
     startLoginSessionExpiryJob();
     startReconciliationCron(3, 0);

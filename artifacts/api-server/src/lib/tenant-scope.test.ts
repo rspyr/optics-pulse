@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Request, Response } from "express";
-import { resolveListTenantScope } from "./tenant-scope";
+import { resolveListTenantScope, NO_TENANT_ASSIGNED_ERROR } from "./tenant-scope";
 
 function makeReq(role: string, tenantId: number | null): Request {
   return {
@@ -49,7 +49,7 @@ describe("resolveListTenantScope — list-handler tenant scoping contract", () =
     const out = resolveListTenantScope(makeReq("tenant_user", null), res, null);
     expect(out).toEqual({ ok: false });
     expect(status).toHaveBeenCalledWith(403);
-    expect(json).toHaveBeenCalledWith({ error: "No tenant assigned" });
+    expect(json).toHaveBeenCalledWith(NO_TENANT_ASSIGNED_ERROR);
   });
 
   it("tenant-scoped role with no session tenantId → 403 even if a query.tenantId is supplied", () => {
@@ -57,7 +57,7 @@ describe("resolveListTenantScope — list-handler tenant scoping contract", () =
     const out = resolveListTenantScope(makeReq("tenant_user", null), res, 9);
     expect(out).toEqual({ ok: false });
     expect(status).toHaveBeenCalledWith(403);
-    expect(json).toHaveBeenCalledWith({ error: "No tenant assigned" });
+    expect(json).toHaveBeenCalledWith(NO_TENANT_ASSIGNED_ERROR);
   });
 
   it("tenant-scoped role with session tenantId → forces session tenantId, ignoring query.tenantId", () => {
@@ -93,6 +93,6 @@ describe("resolveListTenantScope — list-handler tenant scoping contract", () =
     const out = resolveListTenantScope(makeReq("future_role_we_havent_invented", null), res, null);
     expect(out).toEqual({ ok: false });
     expect(status).toHaveBeenCalledWith(403);
-    expect(json).toHaveBeenCalledWith({ error: "No tenant assigned" });
+    expect(json).toHaveBeenCalledWith(NO_TENANT_ASSIGNED_ERROR);
   });
 });

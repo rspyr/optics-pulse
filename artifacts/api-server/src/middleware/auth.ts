@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import { NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
@@ -44,7 +45,7 @@ export function enforceTenantScope(req: Request, res: Response, next: NextFuncti
 
   const userTenantId = req.session.tenantId;
   if (!userTenantId) {
-    res.status(403).json({ error: "No tenant assigned" });
+    res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
     return;
   }
 

@@ -17,6 +17,7 @@
 // route is wired through the helper *before* any DB access.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 
 const mockDb = {
   selectResults: [] as unknown[][],
@@ -290,7 +291,7 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
         const res = await getJson(app, c.url);
 
         expect(res.status).toBe(403);
-        expect(res.json).toEqual({ error: "No tenant assigned" });
+        expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
 
         // Critical: the handler must short-circuit BEFORE any DB read.
         // If it doesn't, even a transient unscoped query is enough to
@@ -327,7 +328,7 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
       const app = await setupApp("./dashboard", "tenant_user", null);
       const res = await getJson(app, "/dashboard/spend-revenue");
       expect(res.status).toBe(403);
-      expect(res.json).toEqual({ error: "No tenant assigned" });
+      expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
       const dbMod = await import("@workspace/db");
       expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
     });
@@ -355,7 +356,7 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
       const app = await setupApp("./attribution", "tenant_user", null);
       const res = await getJson(app, "/attribution/reconciliation-status");
       expect(res.status).toBe(403);
-      expect(res.json).toEqual({ error: "No tenant assigned" });
+      expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
       expect(mockReconciliationStatus).not.toHaveBeenCalled();
     });
 
@@ -378,7 +379,7 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
       const app = await setupApp("./dashboard", "tenant_user", null);
       const res = await getJson(app, "/dashboard/overview");
       expect(res.status).toBe(403);
-      expect(res.json).toEqual({ error: "No tenant assigned" });
+      expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
       const dbMod = await import("@workspace/db");
       expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
     });
