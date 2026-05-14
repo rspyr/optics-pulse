@@ -311,6 +311,14 @@ export function emitLeadUpdated(tenantId: number, lead: Record<string, unknown>)
   }
 }
 
+export function emitLeadAssigned(tenantId: number, lead: Record<string, unknown>) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("lead-assigned", { ...lead, tenantId });
+    const assignedCsrId = (lead.assignedCsrId ?? lead.assignedUserId) as number | undefined;
+    console.log(`[Socket.IO] Emitted lead-assigned for tenant-${tenantId} (lead ${lead.id} -> csr ${assignedCsrId ?? "none"})`);
+  }
+}
+
 export function emitPodiumMessage(tenantId: number, message: Record<string, unknown>) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("podium-message", message);

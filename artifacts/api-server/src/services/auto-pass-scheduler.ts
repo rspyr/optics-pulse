@@ -2,7 +2,7 @@ import {
   db, leadsTable, usersTable, routingConfigTable, csrScheduleTable, callAttemptsTable, podiumMessagesTable,
 } from "@workspace/db";
 import { eq, and, inArray, isNull, isNotNull, or, ne, sql } from "drizzle-orm";
-import { emitLeadUpdated } from "../socket";
+import { emitLeadAssigned, emitLeadUpdated } from "../socket";
 import { syncPodiumConversationAssignment } from "./integrations/podium-api";
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -465,6 +465,7 @@ async function fireAutoPass(leadId: number): Promise<void> {
 
   if (updated) {
     emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
+    emitLeadAssigned(lead.tenantId, updated as unknown as Record<string, unknown>);
   }
 
   if (stickyResult.terminal) {

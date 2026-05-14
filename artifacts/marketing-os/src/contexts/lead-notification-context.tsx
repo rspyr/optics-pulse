@@ -256,6 +256,23 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
       playSound("new-lead", `${name}${lead.source ? ` from ${lead.source}` : ""}`);
     });
+    socket.on("lead-assigned", (lead: LeadNotificationData) => {
+      if (tenantIdRef.current && lead.tenantId && lead.tenantId !== tenantIdRef.current) return;
+      if (lead.id == null) return;
+      const myUserId = userIdRef.current;
+      if (myUserId == null) return;
+      const assignedCsrId = getAssignedCsrId(lead);
+      if (assignedCsrId !== myUserId) return;
+      const normalized: LeadNotificationData = { ...lead, assignedCsrId };
+      setPendingNewLeads(prev => {
+        const filtered = prev.filter(l => l.id !== normalized.id);
+        const next = [normalized, ...filtered];
+        return next.slice(0, MAX_PENDING_NEW_LEADS);
+      });
+      setNewLeadSignal(s => s + 1);
+      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
+      playSound("new-lead", `${name}${lead.source ? ` from ${lead.source}` : ""}`);
+    });
     socket.on("podium-message", (msg: PodiumNotificationData) => {
       if (tenantIdRef.current && msg.tenantId && msg.tenantId !== tenantIdRef.current) return;
       podiumMessageListenersRef.current.forEach(cb => {
@@ -293,9 +310,8 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       setPendingNewLeads(prev => {
         const existing = prev.find(l => l.id === lead.id);
         if (!existing) return prev;
-        const wasMine = getAssignedCsrId(existing) === myUserId;
         const stillMine = getAssignedCsrId(lead) === myUserId;
-        if (wasMine && !stillMine) {
+        if (!stillMine) {
           return prev.filter(l => l.id !== lead.id);
         }
         return prev;

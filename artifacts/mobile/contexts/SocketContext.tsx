@@ -100,7 +100,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         emitReconnect();
       });
 
-      const events = ["new-lead", "lead-updated", "lead-resubmitted", "podium-message", "hud-stats"];
+      const events = ["new-lead", "lead-assigned", "lead-updated", "lead-resubmitted", "podium-message", "hud-stats"];
       for (const event of events) {
         socket.on(event, (data: any) => {
           const handlers = listenersRef.current.get(event);

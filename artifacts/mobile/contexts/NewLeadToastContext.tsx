@@ -226,6 +226,29 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
       }
     };
 
+    const handleLeadAssigned = (data: ToastLead & { assignedCsrId?: number | null; assignedUserId?: number | null }) => {
+      if (!data || !data.id) return;
+      const assignedCsrId = (data.assignedCsrId ?? data.assignedUserId) as number | undefined | null;
+      if (assignedCsrId !== user.id) return;
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (
+        AppState.currentState === "active" &&
+        !recentToastIds.current.has(data.id) &&
+        !pushLeadIds.current.has(data.id)
+      ) {
+        recentToastIds.current.add(data.id);
+        setTimeout(() => recentToastIds.current.delete(data.id), 120000);
+        setToastLead(data);
+      }
+    };
+
+    const handleLeadUpdated = (data: { id?: number; assignedCsrId?: number | null; assignedUserId?: number | null } | null | undefined) => {
+      if (!data || !data.id) return;
+      const assignedCsrId = (data.assignedCsrId ?? data.assignedUserId) as number | undefined | null;
+      if (assignedCsrId === user.id) return;
+      setToastLead(prev => (prev && prev.id === data.id ? null : prev));
+    };
+
     const handlePodiumMessage = (data: PodiumToast) => {
       if (
         data &&
@@ -259,10 +282,14 @@ export function NewLeadToastProvider({ children }: { children: React.ReactNode }
     };
 
     on("new-lead", handleNewLead);
+    on("lead-assigned", handleLeadAssigned);
+    on("lead-updated", handleLeadUpdated);
     on("podium-message", handlePodiumMessage);
     on("lead-resubmitted", handleLeadResubmitted);
     return () => {
       off("new-lead", handleNewLead);
+      off("lead-assigned", handleLeadAssigned);
+      off("lead-updated", handleLeadUpdated);
       off("podium-message", handlePodiumMessage);
       off("lead-resubmitted", handleLeadResubmitted);
     };
