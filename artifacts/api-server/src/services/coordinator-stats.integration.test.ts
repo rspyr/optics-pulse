@@ -798,14 +798,14 @@ describe("funnel rename keeps spiff payouts deterministic (task #412)", () => {
       source: "Meta", originalSource: "Meta",
       assignedCsrId: u.id, assignedAt: at(20, 0),
       status: "booked", funnelId: funnel.id, bookedByCsrId: u.id,
-      preBooked: false, updatedAt: at(11, 0),
+      preBooked: false, bookedAt: at(11, 0), updatedAt: at(11, 0),
     }).returning();
     const [sold] = await db.insert(leadsTable).values({
       tenantId: tenant.id, firstName: "Rename", lastName: "Sold",
       source: "Meta", originalSource: "Meta",
       assignedCsrId: u.id, assignedAt: at(20, 0),
       status: "sold", funnelId: funnel.id, bookedByCsrId: u.id,
-      preBooked: false, updatedAt: at(12, 0),
+      preBooked: false, bookedAt: at(12, 0), updatedAt: at(12, 0),
     }).returning();
 
     await db.insert(callAttemptsTable).values([
