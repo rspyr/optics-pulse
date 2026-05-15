@@ -19,6 +19,16 @@ The api-server build (`artifacts/api-server/build.ts`) copies these files into
 > push`). It is never run in production because it can emit destructive
 > `ALTER`/`DROP` statements when the journal drifts from real-world state.
 
+## Tests
+
+Integration tests under `artifacts/api-server/` apply these migrations
+automatically before any suite runs, via a Vitest `globalSetup` at
+`artifacts/api-server/src/test-setup/global-setup.ts`. That hook invokes the
+same `runSchemaMigrations()` used at api-server boot, so a fresh test database
+(CI container or a newly-provisioned dev DB) is brought up to the current
+schema without any manual SQL. Adding a new file in this folder is enough —
+the next test run will pick it up.
+
 ## Adding a new migration
 
 1. Edit the Drizzle schema under `lib/db/src/schema/**`.
