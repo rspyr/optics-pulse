@@ -4,6 +4,7 @@ import { emitLeadUpdated } from "../socket";
 import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
 import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
 import { rerouteLeadsStrandedOnPausedStickyCsr } from "./auto-pass-scheduler";
+import { backfillDailyStats } from "./coordinator-stats";
 
 interface Migration {
   id: string;
@@ -971,6 +972,64 @@ const migrations: Migration[] = [
     run: async () => {
       const count = await rerouteLeadsStrandedOnPausedStickyCsr();
       console.log(`[Migration] Re-routed ${count} lead(s) previously stranded on paused sticky CSRs`);
+    },
+  },
+  {
+    id: "2026-05-15_backfill-coordinator-stats-speed-to-lead-fix",
+    description:
+      "Re-aggregate coordinator_daily_stats across all tenants/CSRs to correct historical " +
+      "speed-to-lead and newLeadsHandled numbers after the follow-up-inflation fix (task #406).",
+    run: async () => {
+      // Find the full range of days that have any coordinator activity, so we
+      // recompute every day that previously used the inflated calculation.
+      // aggregateDailyStats() iterates ALL users with call attempts per day,
+      // so calling backfillDailyStats once covers every tenant and CSR.
+      const rangeResult = await db.execute<{ min_date: string | null; max_date: string | null }>(sql`
+        SELECT
+          LEAST(
+            (SELECT MIN(DATE(attempted_at AT TIME ZONE 'UTC')) FROM call_attempts),
+            (SELECT MIN(date) FROM coordinator_daily_stats)
+          ) AS min_date,
+          GREATEST(
+            (SELECT MAX(DATE(attempted_at AT TIME ZONE 'UTC')) FROM call_attempts),
+            (SELECT MAX(date) FROM coordinator_daily_stats)
+          ) AS max_date
+      `);
+
+      const row = rangeResult.rows[0] as { min_date: string | null; max_date: string | null } | undefined;
+      const minDate = row?.min_date;
+      const maxDate = row?.max_date;
+      if (!minDate || !maxDate) {
+        console.log("[Migration] No historical coordinator data found — nothing to backfill");
+        return;
+      }
+
+      // Cap the upper bound at yesterday — today's row will be (re)written by
+      // the nightly aggregation and live "today" stats already use the fixed
+      // calculation.
+      const yesterday = new Date();
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split("T")[0];
+      const effectiveMax = maxDate < yesterdayStr ? maxDate : yesterdayStr;
+
+      if (minDate > effectiveMax) {
+        console.log(`[Migration] Nothing to backfill (min=${minDate}, max=${effectiveMax})`);
+        return;
+      }
+
+      console.log(`[Migration] Backfilling coordinator_daily_stats from ${minDate} to ${effectiveMax}`);
+      const result = await backfillDailyStats(minDate, effectiveMax);
+      console.log(
+        `[Migration] Backfill complete: re-aggregated ${result.processed} coordinator-day rows; ` +
+        `${result.failedDates.length} day(s) failed${result.failedDates.length ? `: ${result.failedDates.join(", ")}` : ""}`
+      );
+
+      if (result.failedDates.length > 0) {
+        // Don't throw — partial recovery is better than no recovery, and the
+        // migration is idempotent (re-runs only happen if we delete the row).
+        // Failed dates are logged so they can be inspected and retried.
+        console.warn(`[Migration] Some dates failed during backfill; see logs above`);
+      }
     },
   },
 ];
