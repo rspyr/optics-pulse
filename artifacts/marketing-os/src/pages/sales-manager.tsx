@@ -2136,7 +2136,20 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
     setSaving(false);
   };
 
+  const funnelNameSet = useMemo(() => new Set((funnels || []).map(f => f.name)), [funnels]);
   const availableFunnels = (funnels || []).map(f => f.name).filter(name => !(name in overrides));
+  const staleKeys = Object.keys(overrides).filter(k => !funnelNameSet.has(k));
+
+  const renameOverride = (oldKey: string, newKey: string) => {
+    if (!newKey || newKey === oldKey || newKey in overrides) return;
+    setOverrides(prev => {
+      const next: Record<string, number> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        next[k === oldKey ? newKey : k] = v;
+      }
+      return next;
+    });
+  };
 
   if (loading) {
     return (
@@ -2175,30 +2188,66 @@ function SpiffConfigSection({ tenantId, funnels }: { tenantId: number | null; fu
           <label className="block text-xs text-white/40 uppercase tracking-wider mb-1.5">Funnel Overrides</label>
           <p className="text-[10px] text-white/30 mb-3">Set custom spiff amounts for specific funnels.</p>
 
+          {staleKeys.length > 0 && (
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                {staleKeys.length === 1 ? "1 override points" : `${staleKeys.length} overrides point`} at a funnel that no longer exists. These commissions fall back to the default payout until you rename or remove them below.
+              </p>
+            </div>
+          )}
+
           {Object.keys(overrides).length > 0 && (
             <div className="space-y-2 mb-3">
-              {Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)).map(([fn, amount]) => (
-                <div key={fn} className="flex items-center gap-2">
-                  <span className="flex-1 text-sm text-white/70 truncate">{fn}</span>
-                  <div className="relative w-28">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 text-xs">$</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={amount === 0 ? "" : String(amount)}
-                      onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ""); setOverrides(prev => ({ ...prev, [fn]: v === "" ? 0 : Number(v) })); }}
-                      placeholder="0"
-                      className="w-full bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    />
+              {Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)).map(([fn, amount]) => {
+                const isStale = !funnelNameSet.has(fn);
+                const renameTargets = (funnels || []).map(f => f.name).filter(n => !(n in overrides));
+                return (
+                  <div key={fn} className={cn("flex items-center gap-2 flex-wrap", isStale && "rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5")}>
+                    <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                      {isStale && <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0" />}
+                      <span className={cn("text-sm truncate", isStale ? "text-amber-200" : "text-white/70")}>{fn}</span>
+                      {isStale && (
+                        <span className="text-[9px] uppercase tracking-wider font-mono text-amber-400/80 flex-shrink-0">Stale</span>
+                      )}
+                    </div>
+                    {isStale && renameTargets.length > 0 && (
+                      <Select
+                        value="__none__"
+                        onValueChange={v => { if (v !== "__none__") renameOverride(fn, v); }}
+                      >
+                        <SelectTrigger className="w-36 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white h-auto">
+                          <SelectValue placeholder="Rename to..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Rename to...</SelectItem>
+                          {renameTargets.map(n => (
+                            <SelectItem key={n} value={n}>{n}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <div className="relative w-28">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40 text-xs">$</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={amount === 0 ? "" : String(amount)}
+                        onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ""); setOverrides(prev => ({ ...prev, [fn]: v === "" ? 0 : Number(v) })); }}
+                        placeholder="0"
+                        className="w-full bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      />
+                    </div>
+                    <button
+                      onClick={() => setOverrides(prev => { const next = { ...prev }; delete next[fn]; return next; })}
+                      className="text-white/30 hover:text-red-400 text-xs px-1"
+                      title="Remove override"
+                    >
+                      ✕
+                    </button>
                   </div>
-                  <button
-                    onClick={() => setOverrides(prev => { const next = { ...prev }; delete next[fn]; return next; })}
-                    className="text-white/30 hover:text-red-400 text-xs px-1"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
