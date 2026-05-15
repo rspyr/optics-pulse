@@ -36,6 +36,7 @@ const {
   leadAssignmentsTable,
   coordinatorDailyStatsTable,
   userLoginSessionsTable,
+  funnelTypesTable,
 } = dbModule;
 const {
   getFirstResponseEvents,
@@ -54,7 +55,9 @@ interface Fixtures {
   tenantId: number;
   csr1: number;
   csr2: number;
-  leadIds: { L1: number; L2: number; L3: number; L4: number; L5: number };
+  funnelId: number;
+  funnelName: string;
+  leadIds: { L1: number; L2: number; L3: number; L4: number; L5: number; L6: number; L7: number; L8: number };
   day1: Date;
   day2: Date;
   day1Str: string;
@@ -94,11 +97,21 @@ beforeAll(async () => {
   await resyncSerial("users");
   await resyncSerial("leads");
   await resyncSerial("call_attempts");
+  await resyncSerial("funnel_types");
 
   const slug = `stl-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  // Tenant carries a spiff config exercising both byFunnel (Solar = $100)
+  // and default ($20) branches of computeSpiffCommission.
+  const funnelName = `Solar-${slug}`;
   const [tenant] = await db.insert(tenantsTable).values({
     name: `Speed-to-Lead Int ${slug}`,
     clientSlug: slug,
+    spiffConfig: { default: 20, byFunnel: { [funnelName]: 100 } },
+  }).returning();
+
+  const [funnel] = await db.insert(funnelTypesTable).values({
+    name: funnelName,
+    slug: `solar-${slug}`,
   }).returning();
 
   const [u1] = await db.insert(usersTable).values({
@@ -163,6 +176,39 @@ beforeAll(async () => {
     assignedCsrId: u1.id, assignedAt: day2At(9, 0),
   }).returning();
 
+  // ── Booking / commission leads (day1, CSR1) ─────────────────────────────
+  // L6/L7/L8 have assignedAt LATE in day1 with their seeded call attempts
+  // happening EARLIER the same day. That keeps them out of
+  // getFirstResponseEvents (which requires attemptedAt >= assignedAt) so
+  // existing newLeadsHandled / avg-speed assertions still hold, while the
+  // call attempts still land them in `handledLeadIds` (the booking scope).
+  //
+  // L6 — booked Solar lead, CSR1, updatedAt day1 11:00 → $100 spiff.
+  const [l6] = await db.insert(leadsTable).values({
+    tenantId: tenant.id, firstName: "Lead", lastName: "Six",
+    source: "Meta", originalSource: "Meta",
+    assignedCsrId: u1.id, assignedAt: day1At(20, 0),
+    status: "booked", funnelId: funnel.id, bookedByCsrId: u1.id,
+    preBooked: false, updatedAt: day1At(11, 0),
+  }).returning();
+  // L7 — sold Solar lead, CSR1, updatedAt day1 12:00 → $100 spiff, soldCount++.
+  const [l7] = await db.insert(leadsTable).values({
+    tenantId: tenant.id, firstName: "Lead", lastName: "Seven",
+    source: "Meta", originalSource: "Meta",
+    assignedCsrId: u1.id, assignedAt: day1At(20, 0),
+    status: "sold", funnelId: funnel.id, bookedByCsrId: u1.id,
+    preBooked: false, updatedAt: day1At(12, 0),
+  }).returning();
+  // L8 — pre-booked Solar lead, CSR1. Must be EXCLUDED from bookings_count
+  // and commission even though status=booked and bookedByCsrId matches.
+  const [l8] = await db.insert(leadsTable).values({
+    tenantId: tenant.id, firstName: "Lead", lastName: "Eight",
+    source: "Meta", originalSource: "Meta",
+    assignedCsrId: u1.id, assignedAt: day1At(20, 0),
+    status: "booked", funnelId: funnel.id, bookedByCsrId: u1.id,
+    preBooked: true, updatedAt: day1At(13, 0),
+  }).returning();
+
   // ── Seed call attempts ─────────────────────────────────────────────────
   await db.insert(callAttemptsTable).values([
     // L1: same-day repeat — first touch at 09:02 (120s wall-clock).
@@ -182,6 +228,13 @@ beforeAll(async () => {
 
     // L5: same-day-only on day2, 60s wall-clock.
     { leadId: l5.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day2At(9, 1) },
+
+    // L6/L7/L8: same-day CSR1 attempts BEFORE their 20:00 assignedAt so they
+    // land in handledLeadIds (booking scope) without producing first-response
+    // events. Counts toward callsMade for CSR1 on day1.
+    { leadId: l6.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(11, 0) },
+    { leadId: l7.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(12, 0) },
+    { leadId: l8.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(13, 0) },
   ]);
 
   // Login sessions spanning both days so the login-aware speed equals
@@ -197,7 +250,9 @@ beforeAll(async () => {
     tenantId: tenant.id,
     csr1: u1.id,
     csr2: u2.id,
-    leadIds: { L1: l1.id, L2: l2.id, L3: l3.id, L4: l4.id, L5: l5.id },
+    funnelId: funnel.id,
+    funnelName,
+    leadIds: { L1: l1.id, L2: l2.id, L3: l3.id, L4: l4.id, L5: l5.id, L6: l6.id, L7: l7.id, L8: l8.id },
     day1, day2,
     day1Str: dateStr(day1), day2Str: dateStr(day2),
     day1Start: startOfLocalDay(day1), day1End: endOfLocalDay(day1),
@@ -215,6 +270,7 @@ afterAll(async () => {
     await db.delete(userLoginSessionsTable).where(inArray(userLoginSessionsTable.userId, [fx.csr1, fx.csr2]));
     await db.delete(usersTable).where(inArray(usersTable.id, [fx.csr1, fx.csr2]));
     await db.delete(tenantsTable).where(eq(tenantsTable.id, fx.tenantId));
+    await db.delete(funnelTypesTable).where(eq(funnelTypesTable.id, fx.funnelId));
   } catch {
     /* best-effort cleanup */
   }
@@ -315,6 +371,42 @@ describe("aggregateDailyStats parity with live getComparisonStats (real Postgres
     expect(byUser[fx.csr2]).toBeDefined();
     expect(byUser[fx.csr2].newLeadsHandled).toBe(1);
     expect(byUser[fx.csr2].avgSpeedToLead).toBeCloseTo(300, 0);
+  });
+
+  it("persists bookings_count, sold_count, booking_rate, and commission per spiff config on day1", async () => {
+    await aggregateDailyStats(fx.day1Str);
+
+    const [csr1Row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, fx.csr1),
+      eq(coordinatorDailyStatsTable.date, fx.day1Str),
+    ));
+    expect(csr1Row).toBeDefined();
+
+    // L6 (booked) + L7 (sold) count. L8 is pre-booked → excluded from
+    // bookings_count, sold_count, and commission even though it has the
+    // booked status and a matching bookedByCsrId.
+    expect(csr1Row.bookingsCount).toBe(2);
+    expect(csr1Row.soldCount).toBe(1);
+
+    // CSR1 day1 callsMade = 3 (L1) + 1 (L2) + 1 (L3 pre-pass) + 1 (L6) +
+    // 1 (L7) + 1 (L8) = 8 → bookingRate = round(2/8 * 100) = 25.
+    expect(csr1Row.callsMade).toBe(8);
+    expect(csr1Row.bookingRate).toBe(25);
+
+    // Both L6 and L7 are on the Solar funnel ($100 each per spiffConfig);
+    // L8 is pre-booked and contributes $0. Commission = $200.
+    expect(csr1Row.commission).toBe(200);
+
+    // CSR2 had no bookings on day1 (only L3's first-touch response).
+    const [csr2Row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, fx.csr2),
+      eq(coordinatorDailyStatsTable.date, fx.day1Str),
+    ));
+    expect(csr2Row).toBeDefined();
+    expect(csr2Row.bookingsCount).toBe(0);
+    expect(csr2Row.soldCount).toBe(0);
+    expect(csr2Row.commission).toBe(0);
+    expect(csr2Row.bookingRate).toBe(0);
   });
 
   it("re-aggregating day1 a second time is idempotent (ON CONFLICT DO UPDATE)", async () => {
