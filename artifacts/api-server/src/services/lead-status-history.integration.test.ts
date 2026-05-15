@@ -430,7 +430,7 @@ describe("sheet-sync write site — syncSingleSheet()", () => {
 });
 
 describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest booking", () => {
-  it("counts a same-day book → un-book → re-book sequence exactly once via distinctOn(leadId)", async () => {
+  it("counts a same-day book → un-book → re-book sequence exactly once, and excludes a book → un-book (no re-book) lead", async () => {
     // Use a fresh CSR scoped to this test so the per-user booking aggregate
     // is not polluted by leads booked in earlier describe blocks (which
     // assert lead-level history, not CSR-level aggregates).
@@ -444,19 +444,17 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
     }).returning();
     fx.extraUserIds.push(scopedCsr.id);
     const scopedApp = makeApp(fx.tenantId, scopedCsr.id);
-    // The status_history rows recorded by the leads-hub write site should be
-    // exactly:
+    // For leadA, the status_history rows recorded by the leads-hub write
+    // site should be exactly:
     //   1) null         → day_1     (create)
     //   2) day_1        → appt_set  (book)
     //   3) appt_set     → dead      (un-book via deadReason)
     //   4) dead         → appt_set  (re-book)
-    // distinctOn(leadId) inside getBookingStatsByIdsAndDate must collapse
-    // the two appt_set rows into a single contribution so bookingsCount=1 —
-    // and because the lead's *current* status is booked + preBooked=false,
-    // it satisfies the join filter, so the re-book (the latest booking)
-    // is reflected. If the aggregation used a snapshot like `leads.booked_at`
-    // it would still count the lead exactly once; the meaningful coverage
-    // here is that two appt_set audit rows do NOT double-count.
+    // distinctOn(leadId) inside getBookingStatsByIdsAndDate collapses the
+    // two appt_set rows into a single contribution. The lead's *current*
+    // status is booked + preBooked=false after the re-book, so it
+    // satisfies the join filter — bookingsCount picks up the re-book
+    // exactly once.
     const createRes = await httpReq(scopedApp, "POST", "/leads-hub/create", {
       firstName: "Rebook", lastName: "WinsLatest",
       source: "Meta",
@@ -478,10 +476,9 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
     });
     expect(r.status).toBe(200);
 
-    // Un-book: spoke + deadReason → hubStatus=dead. (Note: the route does
-    // not reset `status` from 'booked' here, so the lead's cache column
-    // stays inside the {booked, sold} join filter — which is exactly why
-    // distinctOn(leadId) is necessary to prevent double counting.)
+    // Un-book: spoke + deadReason → hubStatus=dead. The route now fully
+    // resets the booking cache (status, disposition, bookedByCsrId,
+    // bookedAt) so the lead leaves the {booked, sold} aggregate window.
     r = await httpReq(scopedApp, "POST", "/leads-hub/action", {
       leadId: leadA,
       actionType: "call",
@@ -489,6 +486,14 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
       deadReason: "customer_cancelled",
     });
     expect(r.status).toBe(200);
+
+    // Confirm the lead's booking cache is fully reset after un-book.
+    const [afterUnbookA] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadA));
+    expect(afterUnbookA.hubStatus).toBe("dead");
+    expect(afterUnbookA.status).toBe("lost");
+    expect(afterUnbookA.disposition).toBeNull();
+    expect(afterUnbookA.bookedByCsrId).toBeNull();
+    expect(afterUnbookA.bookedAt).toBeNull();
 
     // Re-book: spoke + appointmentSet → hubStatus=appt_set, status=booked.
     r = await httpReq(scopedApp, "POST", "/leads-hub/action", {
@@ -513,6 +518,44 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
     // mutable `booked_at` snapshot would have lost).
     expect(historyA.filter(h => h.toStatus === "appt_set").length).toBe(2);
 
+    // leadB: booked then un-booked, never re-booked. Must NOT contribute to
+    // bookingsCount — its booking cache should leave the {booked, sold}
+    // join filter entirely.
+    const createResB = await httpReq(scopedApp, "POST", "/leads-hub/create", {
+      firstName: "Unbook", lastName: "OnlyOnce",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createResB.status).toBe(201);
+    const leadB = (createResB.json as { id: number }).id;
+    fx.leadIds.push(leadB);
+
+    r = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId: leadB,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-04",
+      appointmentTime: "09:00",
+    });
+    expect(r.status).toBe(200);
+
+    r = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId: leadB,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      deadReason: "customer_cancelled",
+    });
+    expect(r.status).toBe(200);
+
+    const [afterUnbookB] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadB));
+    expect(afterUnbookB.hubStatus).toBe("dead");
+    expect(afterUnbookB.status).toBe("lost");
+    expect(afterUnbookB.disposition).toBeNull();
+    expect(afterUnbookB.bookedByCsrId).toBeNull();
+    expect(afterUnbookB.bookedAt).toBeNull();
+
     // Aggregate today and pull the persisted row for our CSR.
     const today = new Date();
     const y = today.getFullYear();
@@ -527,6 +570,8 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
       eq(coordinatorDailyStatsTable.date, dayStr),
     ));
     expect(statsRow).toBeDefined();
+    // Only leadA (currently re-booked) contributes — leadB has been fully
+    // un-booked and is excluded from the aggregate window.
     expect(statsRow.bookingsCount).toBe(1);
   });
 });

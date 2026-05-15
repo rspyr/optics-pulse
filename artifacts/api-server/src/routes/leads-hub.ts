@@ -475,6 +475,20 @@ router.post("/leads-hub/action", async (req, res) => {
   if (deadReason) {
     updates.hubStatus = "dead";
     updates.deadReason = deadReason;
+    // Un-booking a previously-booked lead must fully reset the booking
+    // cache, otherwise `getBookingStatsByIdsAndDate` keeps counting the
+    // lead via its `status IN ('booked','sold')` join filter (and
+    // `bookedByCsrId` per-CSR scoping) even though the appointment is
+    // gone. The hubStatusToLegacy mapping below already flips
+    // `status` to 'lost' for hubStatus 'dead', but we set it explicitly
+    // here alongside the rest of the cache rollback so the intent is
+    // obvious and resilient to future refactors.
+    if (lead.status === "booked" || lead.status === "sold") {
+      updates.status = "lost";
+      updates.disposition = null;
+      updates.bookedByCsrId = null;
+      updates.bookedAt = null;
+    }
   }
 
   if (callResult === "spoke_with_customer" && req.body.appointmentSet) {
