@@ -741,3 +741,333 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a c
     expect(statsRow?.bookingsCount ?? 0).toBe(0);
   });
 });
+
+// Task #432: sweep coverage for booking-cache leaks across all lead edit
+// paths. The cases below exercise paths that previously transitioned a
+// booked lead out of {booked, sold} without resetting the cache — they
+// would have left stale disposition / bookedByCsrId / bookedAt fields,
+// causing the lead to keep contributing to per-CSR booking aggregates
+// after the appointment was effectively gone.
+
+describe("POST /leads-hub/action — spoke + callbackAt on a booked lead un-books it", () => {
+  it("resets disposition/bookedByCsrId/bookedAt when a previously-booked lead moves into call_back without a deadReason", async () => {
+    const slug = `post-callback-unbook-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Post Callback Unbook CSR",
+      passwordHash: "x",
+      role: "client_user",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+    const scopedApp = makeApp(fx.tenantId, scopedCsr.id);
+
+    const createRes = await httpReq(scopedApp, "POST", "/leads-hub/create", {
+      firstName: "PostCallback", lastName: "Unbook",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    const bookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+
+    const [beforeUnbook] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(beforeUnbook.status).toBe("booked");
+    expect(beforeUnbook.bookedByCsrId).toBe(scopedCsr.id);
+
+    // CSR follows up with the customer who asks to be called back later —
+    // logged as spoke + callbackAt (no deadReason, no appointmentSet).
+    const callbackAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const unbookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      callbackAt,
+    });
+    expect(unbookRes.status).toBe(200);
+
+    const [afterUnbook] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterUnbook.hubStatus).toBe("call_back");
+    expect(afterUnbook.status).toBe("contacted");
+    expect(afterUnbook.disposition).toBeNull();
+    expect(afterUnbook.bookedByCsrId).toBeNull();
+    expect(afterUnbook.bookedAt).toBeNull();
+
+    const today = new Date();
+    const dayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    await aggregateDailyStats(dayStr);
+    const [statsRow] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, scopedCsr.id),
+      eq(coordinatorDailyStatsTable.date, dayStr),
+    ));
+    expect(statsRow?.bookingsCount ?? 0).toBe(0);
+  });
+});
+
+describe("POST /leads-hub/action — day-aging a booked lead un-books it", () => {
+  it("resets the booking cache when a no_answer attempt on an appt_set lead pushes it into a day_N bucket", async () => {
+    const slug = `post-aging-unbook-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Post Aging Unbook CSR",
+      passwordHash: "x",
+      role: "client_user",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+    const scopedApp = makeApp(fx.tenantId, scopedCsr.id);
+
+    const createRes = await httpReq(scopedApp, "POST", "/leads-hub/create", {
+      firstName: "PostAging", lastName: "Unbook",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    const bookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+
+    const [beforeAging] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(beforeAging.hubStatus).toBe("appt_set");
+    expect(beforeAging.status).toBe("booked");
+    expect(beforeAging.bookedByCsrId).toBe(scopedCsr.id);
+
+    // Edge: a CSR logs a no_answer attempt against an already-booked
+    // lead. shouldIncrementDay flips the hubStatus into a day_N
+    // bucket; that's an implicit un-book and the booking cache must
+    // follow.
+    const noAnswerRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "no_answer",
+    });
+    expect(noAnswerRes.status).toBe(200);
+
+    const [afterAging] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterAging.hubStatus).not.toBe("appt_set");
+    expect(afterAging.status).not.toBe("booked");
+    expect(afterAging.disposition).toBeNull();
+    expect(afterAging.bookedByCsrId).toBeNull();
+    expect(afterAging.bookedAt).toBeNull();
+
+    const today = new Date();
+    const dayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    await aggregateDailyStats(dayStr);
+    const [statsRow] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, scopedCsr.id),
+      eq(coordinatorDailyStatsTable.date, dayStr),
+    ));
+    expect(statsRow?.bookingsCount ?? 0).toBe(0);
+  });
+});
+
+describe("PATCH /leads/:leadId — un-booking a lead by status change resets the booking cache", () => {
+  it("resets disposition/bookedByCsrId/bookedAt when status transitions from booked to lost", async () => {
+    const leadsRouter = (await import("../routes/leads")).default;
+    const slug = `patch-unbook-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Patch Unbook CSR",
+      passwordHash: "x",
+      role: "client_admin",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+
+    const hubApp = makeApp(fx.tenantId, scopedCsr.id, "client_admin");
+    const leadsApp = express();
+    leadsApp.use(express.json());
+    leadsApp.use((req: Request, _res: Response, next: NextFunction) => {
+      (req as unknown as { session: Record<string, unknown> }).session = {
+        userId: scopedCsr.id, userRole: "client_admin", tenantId: fx.tenantId,
+      };
+      next();
+    });
+    leadsApp.use(leadsRouter);
+    leadsApp.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+      res.status(500).json({ error: err.message });
+    });
+
+    const createRes = await httpReq(hubApp, "POST", "/leads-hub/create", {
+      firstName: "PatchUnbook", lastName: "Lead",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    const bookRes = await httpReq(hubApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+
+    const [beforePatch] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(beforePatch.status).toBe("booked");
+    expect(beforePatch.disposition).toBe("booked");
+    expect(beforePatch.bookedByCsrId).toBe(scopedCsr.id);
+
+    // Admin un-books via PATCH /leads/:leadId — flipping status away
+    // from booked must roll the booking cache back.
+    const patchRes = await httpReq(leadsApp, "PATCH" as "POST", `/leads/${leadId}`, {
+      status: "lost",
+    });
+    expect(patchRes.status).toBe(200);
+
+    const [afterPatch] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterPatch.status).toBe("lost");
+    expect(afterPatch.disposition).toBeNull();
+    expect(afterPatch.bookedByCsrId).toBeNull();
+    expect(afterPatch.bookedAt).toBeNull();
+  });
+});
+
+describe("POST /leads-hub/action — callbackAt with non-spoke callResult on a booked lead un-books it", () => {
+  it("resets the booking cache when a no_answer attempt with callbackAt flips a booked lead into call_back via the broad callback branch", async () => {
+    const slug = `post-callback-broad-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Post Callback Broad CSR",
+      passwordHash: "x",
+      role: "client_user",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+    const scopedApp = makeApp(fx.tenantId, scopedCsr.id);
+
+    const createRes = await httpReq(scopedApp, "POST", "/leads-hub/create", {
+      firstName: "PostCallbackBroad", lastName: "Unbook",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    const bookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+
+    const [beforeUnbook] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(beforeUnbook.status).toBe("booked");
+
+    // Edge case the inner spoke-gated reset doesn't cover: callResult
+    // isn't 'spoke_with_customer' and textResult isn't 'yes', but
+    // callbackAt is set — the broad `callbackAt && !deadReason &&
+    // !appointmentSet` branch still flips the lead into call_back and
+    // must reset the booking cache.
+    const callbackAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const unbookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "no_answer",
+      callbackAt,
+    });
+    expect(unbookRes.status).toBe(200);
+
+    const [afterUnbook] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterUnbook.hubStatus).toBe("call_back");
+    expect(afterUnbook.status).toBe("contacted");
+    expect(afterUnbook.disposition).toBeNull();
+    expect(afterUnbook.bookedByCsrId).toBeNull();
+    expect(afterUnbook.bookedAt).toBeNull();
+  });
+});
+
+describe("PATCH /leads/:leadId — caller-supplied disposition cannot undo the booking-cache reset on un-book", () => {
+  it("ignores body.disposition when status moves out of booked/sold so the reset is preserved", async () => {
+    const leadsRouter = (await import("../routes/leads")).default;
+    const slug = `patch-unbook-disp-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Patch Unbook Disposition CSR",
+      passwordHash: "x",
+      role: "client_admin",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+
+    const hubApp = makeApp(fx.tenantId, scopedCsr.id, "client_admin");
+    const leadsApp = express();
+    leadsApp.use(express.json());
+    leadsApp.use((req: Request, _res: Response, next: NextFunction) => {
+      (req as unknown as { session: Record<string, unknown> }).session = {
+        userId: scopedCsr.id, userRole: "client_admin", tenantId: fx.tenantId,
+      };
+      next();
+    });
+    leadsApp.use(leadsRouter);
+    leadsApp.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+      res.status(500).json({ error: err.message });
+    });
+
+    const createRes = await httpReq(hubApp, "POST", "/leads-hub/create", {
+      firstName: "PatchUnbookDisp", lastName: "Lead",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    const bookRes = await httpReq(hubApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+
+    // Caller un-books AND tries to set disposition='booked' in the
+    // same PATCH. The disposition assignment must be skipped or the
+    // booking-cache reset is undone.
+    const patchRes = await httpReq(leadsApp, "PATCH" as "POST", `/leads/${leadId}`, {
+      status: "lost",
+      disposition: "booked",
+    });
+    expect(patchRes.status).toBe(200);
+
+    const [afterPatch] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterPatch.status).toBe("lost");
+    expect(afterPatch.disposition).toBeNull();
+    expect(afterPatch.bookedByCsrId).toBeNull();
+    expect(afterPatch.bookedAt).toBeNull();
+  });
+});

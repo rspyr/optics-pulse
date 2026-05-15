@@ -9,6 +9,7 @@ import { getComparisonStats, getHistoricalStats, aggregateDailyStats } from "../
 import type { ComparisonBaseline } from "../services/coordinator-stats";
 import { parseFilterQuery } from "../services/parse-filter";
 import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
+import { resetBookingCache } from "../services/lead-booking-cache";
 
 const router: IRouter = Router();
 
@@ -698,6 +699,11 @@ router.patch("/leads/:leadId", async (req, res) => {
     (body.status === "booked" || body.status === "sold") &&
     existingLead.status !== "booked" &&
     existingLead.status !== "sold";
+  const becameUnbooked =
+    !!body.status &&
+    body.status !== "booked" &&
+    body.status !== "sold" &&
+    (existingLead.status === "booked" || existingLead.status === "sold");
   if (body.status) {
     updateData.status = body.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
     // Task #413: stamp bookedAt when this PATCH is the path that *first*
@@ -706,9 +712,22 @@ router.patch("/leads/:leadId", async (req, res) => {
     if (becameBooked && !existingLead.bookedAt) {
       updateData.bookedAt = now;
     }
+    // Task #432: when this PATCH moves the lead OUT of booked/sold,
+    // fully reset the denormalized booking cache (disposition,
+    // bookedByCsrId, bookedAt) so the lead leaves the {booked, sold}
+    // aggregate window used by `getBookingStatsByIdsAndDate` and so a
+    // future re-book through any path can't pick up stale per-CSR
+    // attribution from the prior booker.
+    if (becameUnbooked) {
+      resetBookingCache(updateData, existingLead);
+    }
   }
   if (body.assignedTo) updateData.assignedTo = body.assignedTo;
-  if (body.disposition) updateData.disposition = body.disposition;
+  // Task #432: skip caller-supplied disposition on an un-book transition
+  // so it can't undo the booking-cache reset above. A caller un-booking
+  // a lead shouldn't be able to leave a stale 'booked' disposition on
+  // the row.
+  if (body.disposition && !becameUnbooked) updateData.disposition = body.disposition;
 
   const [lead] = await db.update(leadsTable).set(updateData).where(eq(leadsTable.id, leadId)).returning();
   if (!lead) {

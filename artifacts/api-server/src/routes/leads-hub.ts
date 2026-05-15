@@ -15,6 +15,7 @@ import { syncPodiumConversationAssignment } from "../services/integrations/podiu
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { recordLeadStatusChange } from "../services/lead-status-history";
+import { resetBookingCache } from "../services/lead-booking-cache";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -469,6 +470,12 @@ router.post("/leads-hub/action", async (req, res) => {
     if (callbackAt) {
       updates.hubStatus = "call_back";
       updates.callbackAt = new Date(callbackAt);
+      // A previously-booked lead being moved into call_back is an
+      // implicit un-book. Reset the booking cache so the lead exits
+      // the {booked, sold} aggregate window used by
+      // `getBookingStatsByIdsAndDate`. hubStatusToLegacy maps
+      // call_back → contacted, so `status` is handled below.
+      resetBookingCache(updates, lead);
     }
   }
 
@@ -485,10 +492,8 @@ router.post("/leads-hub/action", async (req, res) => {
     // obvious and resilient to future refactors.
     if (lead.status === "booked" || lead.status === "sold") {
       updates.status = "lost";
-      updates.disposition = null;
-      updates.bookedByCsrId = null;
-      updates.bookedAt = null;
     }
+    resetBookingCache(updates, lead);
   }
 
   if (callResult === "spoke_with_customer" && req.body.appointmentSet) {
@@ -512,12 +517,30 @@ router.post("/leads-hub/action", async (req, res) => {
     } else if (outcome === "canceled") {
       updates.hubStatus = "dead";
       updates.deadReason = req.body.cancelReason || "appointment_canceled";
+      // Defense-in-depth: today only pre-booked sheet-imported leads
+      // (preBooked=true, status="new") can land in `appt_booked`, so the
+      // `getBookingStatsByIdsAndDate` aggregate (which filters preBooked
+      // = false AND status IN booked/sold) already excludes them. We
+      // still reset the booking cache here so a future code path that
+      // produces a booked appt_booked lead (e.g. a re-book that lands
+      // back on appt_booked instead of appt_set) can't silently leak.
+      if (lead.status === "booked" || lead.status === "sold") {
+        updates.status = "lost";
+      }
+      resetBookingCache(updates, lead);
     }
   }
 
   if (callbackAt && !deadReason && !req.body.appointmentSet) {
     updates.hubStatus = "call_back";
     updates.callbackAt = new Date(callbackAt);
+    // Catch-all un-book: any callback transition (spoke, text=yes, or
+    // any other result combo with callbackAt set) moves a booked/sold
+    // lead into call_back/contacted. Resetting here covers the
+    // branches the inner gated resets above don't (e.g. callResult
+    // 'no_answer' or 'left_voicemail' with callbackAt set). No-op
+    // when the lead isn't currently booked/sold.
+    resetBookingCache(updates, lead);
   }
 
 
@@ -537,6 +560,13 @@ router.post("/leads-hub/action", async (req, res) => {
     } else if (newDay <= 4) {
       updates.hubStatus = `day_${newDay}`;
     }
+    // If day-aging just flipped a previously-booked lead into a day_N
+    // bucket (only possible when lead.hubStatus was 'appt_set' and
+    // newDay <= 4 — newDay >= threshold is gated to skip appt_set), the
+    // lead has been implicitly un-booked. Reset the booking cache so
+    // it exits the {booked, sold} aggregate window. No-op when the
+    // lead isn't currently booked/sold.
+    resetBookingCache(updates, lead);
   }
 
   const UNRESPONSIVE_THRESHOLD = oldLeadThreshold;
@@ -776,10 +806,8 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
       // `getBookingStatsByIdsAndDate` stops counting this lead.
       if (lead.status === "booked" || lead.status === "sold") {
         leadUpdates.status = "lost";
-        leadUpdates.disposition = null;
-        leadUpdates.bookedByCsrId = null;
-        leadUpdates.bookedAt = null;
       }
+      resetBookingCache(leadUpdates, lead);
     }
   } else if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
     leadUpdates.hubStatus = "call_back";
@@ -790,11 +818,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     // cache (disposition, bookedByCsrId, bookedAt) so the lead leaves
     // the {booked, sold} aggregate window used by
     // `getBookingStatsByIdsAndDate`.
-    if (lead.status === "booked" || lead.status === "sold") {
-      leadUpdates.disposition = null;
-      leadUpdates.bookedByCsrId = null;
-      leadUpdates.bookedAt = null;
-    }
+    resetBookingCache(leadUpdates, lead);
   } else if (callResult === "spoke_with_customer" && spokeResult === "appointment_set" && appointmentSet) {
     leadUpdates.hubStatus = "appt_set";
     leadUpdates.status = "booked";
@@ -813,11 +837,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     // bookedAt) so the lead leaves the {booked, sold} aggregate window
     // used by `getBookingStatsByIdsAndDate`. `status` is already set to
     // "lost" above.
-    if (lead.status === "booked" || lead.status === "sold") {
-      leadUpdates.disposition = null;
-      leadUpdates.bookedByCsrId = null;
-      leadUpdates.bookedAt = null;
-    }
+    resetBookingCache(leadUpdates, lead);
   } else if (callbackAt === null && spokeResult !== "call_back") {
     leadUpdates.callbackAt = null;
   }
