@@ -28,7 +28,7 @@ import { usePauseState } from "@/hooks/usePauseState";
 import { LeadCard } from "@/components/LeadCard";
 import { EditableSourcePicker } from "@/components/EditableSourcePicker";
 
-type Tab = "new" | "reengagement" | "callbacks" | "old" | "archive";
+type Tab = "new" | "reengagement" | "callbacks" | "old" | "recently_booked" | "archive";
 
 interface QueueLead {
   id: number;
@@ -55,6 +55,7 @@ interface QueueData {
   callbacks: QueueLead[];
   reengagement: QueueLead[];
   oldLeads: QueueLead[];
+  recentlyBooked: QueueLead[];
   archive: QueueLead[];
   total: number;
 }
@@ -64,6 +65,7 @@ const TABS: { key: Tab; label: string; icon: keyof typeof Feather.glyphMap; colo
   { key: "reengagement", label: "Re-engage", icon: "refresh-cw", color: "#8B5CF6" },
   { key: "callbacks", label: "Callbacks", icon: "phone-incoming", color: "#F59E0B" },
   { key: "old", label: "Old", icon: "clock", color: "#8B919E" },
+  { key: "recently_booked", label: "Recently Booked", icon: "calendar", color: "#10B981" },
   { key: "archive", label: "Archive", icon: "archive", color: "#6B7280" },
 ];
 
@@ -72,6 +74,7 @@ const EMPTY_MESSAGES: Record<Tab, string> = {
   reengagement: "No leads needing follow-up right now.",
   callbacks: "No pending callbacks.",
   old: "No old leads in queue.",
+  recently_booked: "No appointments booked recently.",
   archive: "No archived leads.",
 };
 
@@ -87,7 +90,7 @@ export default function QueueScreen() {
   const { isPaused, toggling: pauseToggling, toggle: togglePause, isManagerPaused } = usePauseState();
   const isCsr = user?.role === "client_user";
   const [activeTab, setActiveTab] = useState<Tab>("new");
-  const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], archive: [], total: 0 });
+  const [queue, setQueue] = useState<QueueData>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], recentlyBooked: [], archive: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
@@ -322,6 +325,7 @@ export default function QueueScreen() {
       case "reengagement": return queue.reengagement || [];
       case "callbacks": return queue.callbacks || [];
       case "old": return queue.oldLeads || [];
+      case "recently_booked": return queue.recentlyBooked || [];
       case "archive": return queue.archive || [];
       default: return [];
     }
@@ -334,6 +338,7 @@ export default function QueueScreen() {
     reengagement: (queue.reengagement || []).length,
     callbacks: (queue.callbacks || []).length,
     old: (queue.oldLeads || []).length,
+    recently_booked: (queue.recentlyBooked || []).length,
     archive: (queue.archive || []).length,
   };
 

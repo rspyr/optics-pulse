@@ -64,13 +64,14 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
-type QueueTab = "new" | "callbacks" | "reengagement" | "old" | "archive";
+type QueueTab = "new" | "callbacks" | "reengagement" | "old" | "recently_booked" | "archive";
 
 const QUEUE_TABS: { key: QueueTab; label: string; color: string }[] = [
   { key: "new", label: "New", color: "text-red-400" },
   { key: "reengagement", label: "Re-engage", color: "text-purple-400" },
   { key: "callbacks", label: "Callbacks", color: "text-amber-400" },
   { key: "old", label: "Old Leads", color: "text-white/60" },
+  { key: "recently_booked", label: "Recently Booked", color: "text-emerald-400" },
   { key: "archive", label: "Archive", color: "text-white/40" },
 ];
 
@@ -319,9 +320,10 @@ function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: numbe
 function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean, csrId?: number | null) {
   const [data, setData] = useState<{
     newLeads: LeadData[]; callbacks: LeadData[];
-    reengagement: LeadData[]; oldLeads: LeadData[]; total: number;
+    reengagement: LeadData[]; oldLeads: LeadData[];
+    recentlyBooked: LeadData[]; total: number;
     timezone?: string;
-  }>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], total: 0 });
+  }>({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], recentlyBooked: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const shouldFetch = !isAgency || tenantId !== null;
 
@@ -2909,6 +2911,7 @@ export default function Leads() {
     callbacks: queueData.callbacks.length,
     reengagement: queueData.reengagement.length,
     old: queueData.oldLeads.length,
+    recently_booked: (queueData.recentlyBooked ?? []).length,
     archive: 0,
   };
 
@@ -2918,6 +2921,7 @@ export default function Leads() {
       case "callbacks": return queueData.callbacks;
       case "reengagement": return queueData.reengagement;
       case "old": return queueData.oldLeads;
+      case "recently_booked": return queueData.recentlyBooked ?? [];
       default: return [];
     }
   };

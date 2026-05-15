@@ -90,6 +90,10 @@ router.get("/leads-hub/queue", async (req, res) => {
   try {
     const noRealAttempts = sql`NOT EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
     const hasRealAttempts = sql`EXISTS (SELECT 1 FROM call_attempts WHERE call_attempts.lead_id = ${leadsTable.id} AND call_attempts.action_type NOT IN ('transfer', 'system'))`;
+    // Booked-status leads (appt_set, appt_booked) should anchor on bookedAt so
+    // that a lead's queue position stays stable when notes are edited. Use
+    // updatedAt (or createdAt for the New tab) as the fallback when bookedAt
+    // is null, which is also what non-booked rows in the same query rely on.
     const newLeads = (tab === "all" || tab === "new") ? await db.select().from(leadsTable)
       .where(and(
         ...baseConds,
@@ -105,7 +109,7 @@ router.get("/leads-hub/queue", async (req, res) => {
           ),
         ),
       ))
-      .orderBy(desc(leadsTable.createdAt)).limit(100) : [];
+      .orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.createdAt}) DESC`).limit(100) : [];
 
     const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
 
@@ -125,7 +129,7 @@ router.get("/leads-hub/queue", async (req, res) => {
         isNull(leadsTable.callbackAt),
         gt(leadsTable.createdAt, fiveDaysAgo),
       ))
-      .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
+      .orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.updatedAt}) DESC`).limit(100) : [];
 
     const oldLeads = (tab === "all" || tab === "old") ? await db.select().from(leadsTable)
       .where(and(
@@ -133,6 +137,16 @@ router.get("/leads-hub/queue", async (req, res) => {
         eq(leadsTable.hubStatus, "day_5_old"),
       ))
       .orderBy(desc(leadsTable.updatedAt)).limit(100) : [];
+
+    // Recently-booked surfaces every appointment-set/booked lead anchored to
+    // bookedAt so CSRs and managers can see the most recent wins regardless
+    // of which sub-bucket they currently live in.
+    const recentlyBooked = (tab === "all" || tab === "recently_booked") ? await db.select().from(leadsTable)
+      .where(and(
+        ...baseConds,
+        inArray(leadsTable.hubStatus, ["appt_set", "appt_booked"] as const),
+      ))
+      .orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.updatedAt}) DESC`).limit(100) : [];
 
     const [totalResult] = await db.select({ count: count() }).from(leadsTable)
       .where(and(...baseConds, sql`${leadsTable.hubStatus} NOT IN ('appt_set', 'dead')`));
@@ -249,6 +263,7 @@ router.get("/leads-hub/queue", async (req, res) => {
       callbacks: enrichWithNextPass(callbacks),
       reengagement: reengagementWithMeta,
       oldLeads: enrichWithNextPass(oldLeads),
+      recentlyBooked: enrichWithNextPass(recentlyBooked),
       total: totalResult.count,
       timezone: tz,
     });
@@ -288,7 +303,7 @@ router.get("/leads-hub/archive", async (req, res) => {
 
   const where = and(...conds);
   const [leads, [totalResult]] = await Promise.all([
-    db.select().from(leadsTable).where(where).orderBy(desc(leadsTable.updatedAt)).limit(limit).offset(offset),
+    db.select().from(leadsTable).where(where).orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.updatedAt}) DESC`).limit(limit).offset(offset),
     db.select({ count: count() }).from(leadsTable).where(where),
   ]);
 
