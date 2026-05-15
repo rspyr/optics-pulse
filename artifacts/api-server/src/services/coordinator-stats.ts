@@ -1,5 +1,5 @@
-import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
-import { eq, and, sql, gte, lte, count, inArray, ne, asc } from "drizzle-orm";
+import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, leadAssignmentsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
+import { eq, and, or, sql, gte, lte, lt, isNull, count, inArray, ne, asc } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 import { computeLoginAwareSpeeds, type LeadSpeedWindow } from "./login-time-calculator";
 
@@ -24,16 +24,24 @@ export interface FirstResponseEvent {
 /**
  * Find first-response events whose `firstTouchAt` falls in [dayStart, dayEnd].
  *
- * Implementation: a `SELECT DISTINCT ON (lead_id, assigned_at) ... ORDER BY
- * lead_id, assigned_at, attempted_at ASC` subquery picks exactly one row per
- * assignment window (the globally-earliest qualifying attempt across all
- * users). The outer SELECT then filters to the requested day window and, when
+ * Implementation: a `SELECT DISTINCT ON (lead_assignments.id) ... ORDER BY
+ * lead_assignments.id, attempted_at ASC` subquery picks exactly one row per
+ * assignment window — the globally-earliest qualifying attempt across all
+ * users that happened during that window (attempted_at >= assigned_at AND
+ * (ended_at IS NULL OR attempted_at < ended_at)).
+ *
+ * The outer SELECT then filters to the requested day window and, when
  * provided, to a specific set of CSR user ids.
+ *
+ * Joining against the durable `lead_assignments` history table (instead of
+ * the mutable `leads.assigned_at` field) makes historical re-aggregation
+ * reproducible: an auto-pass that overwrites the current assignment no
+ * longer destroys the prior window's first-response event.
  *
  * - If `userIds` is undefined → matches events by any user (tenant-wide).
  * - If `userIds` is provided → only events whose first-touch CSR is in the
- *   list are returned. If another CSR responded first, that lead is *not*
- *   counted for the requested users.
+ *   list are returned. If another CSR responded first within the same
+ *   assignment window, that lead is *not* counted for the requested users.
  */
 export async function getFirstResponseEvents(
   userIds: number[] | undefined,
@@ -43,20 +51,25 @@ export async function getFirstResponseEvents(
   if (userIds && userIds.length === 0) return [];
 
   const firstResp = db
-    .selectDistinctOn([leadsTable.id, leadsTable.assignedAt], {
+    .selectDistinctOn([leadAssignmentsTable.id], {
+      assignmentId: leadAssignmentsTable.id,
       leadId: callAttemptsTable.leadId,
       userId: callAttemptsTable.userId,
-      assignedAt: leadsTable.assignedAt,
+      assignedAt: leadAssignmentsTable.assignedAt,
       firstTouchAt: callAttemptsTable.attemptedAt,
     })
     .from(callAttemptsTable)
-    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+    .innerJoin(leadAssignmentsTable, eq(callAttemptsTable.leadId, leadAssignmentsTable.leadId))
     .where(and(
       ne(callAttemptsTable.actionType, "transfer"),
       ne(callAttemptsTable.actionType, "system"),
-      gte(callAttemptsTable.attemptedAt, leadsTable.assignedAt),
+      gte(callAttemptsTable.attemptedAt, leadAssignmentsTable.assignedAt),
+      or(
+        isNull(leadAssignmentsTable.endedAt),
+        lt(callAttemptsTable.attemptedAt, leadAssignmentsTable.endedAt),
+      ),
     ))
-    .orderBy(leadsTable.id, leadsTable.assignedAt, asc(callAttemptsTable.attemptedAt))
+    .orderBy(leadAssignmentsTable.id, asc(callAttemptsTable.attemptedAt))
     .as("first_resp");
 
   const outerConds = [

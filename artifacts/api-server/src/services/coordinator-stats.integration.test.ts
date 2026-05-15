@@ -33,6 +33,7 @@ const {
   usersTable,
   leadsTable,
   callAttemptsTable,
+  leadAssignmentsTable,
   coordinatorDailyStatsTable,
   userLoginSessionsTable,
 } = dbModule;
@@ -333,5 +334,127 @@ describe("aggregateDailyStats parity with live getComparisonStats (real Postgres
     const computed = await computeAvgSpeedFromEvents(ours);
     // (120 + 180 + 300) / 3 = 200
     expect(Math.round(computed)).toBe(200);
+  });
+});
+
+/**
+ * Task #407 — Reassignment history. When a lead is reassigned mid-day, the
+ * prior assignment window must still produce its own first-response event:
+ * the new assignment cannot overwrite or destroy the old one. The trigger on
+ * `leads` writes a new `lead_assignments` row (and closes the prior active
+ * row) whenever `assigned_csr_id` or `assigned_at` changes.
+ */
+describe("lead_assignments history makes speed-to-lead reproducible (task #407)", () => {
+  interface ReassignFx {
+    tenantId: number;
+    csr1: number;
+    csr2: number;
+    leadId: number;
+    day1Start: Date;
+    day1End: Date;
+  }
+  let rfx: ReassignFx;
+
+  beforeAll(async () => {
+    const slug = `stl-reassign-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const [tenant] = await db.insert(tenantsTable).values({
+      name: `Speed-to-Lead Reassign ${slug}`,
+      clientSlug: slug,
+    }).returning();
+    const [u1] = await db.insert(usersTable).values({
+      email: `${slug}-csr1@example.com`, name: "RCSR One", passwordHash: "x",
+      role: "client_user", tenantId: tenant.id,
+    }).returning();
+    const [u2] = await db.insert(usersTable).values({
+      email: `${slug}-csr2@example.com`, name: "RCSR Two", passwordHash: "x",
+      role: "client_user", tenantId: tenant.id,
+    }).returning();
+
+    const day1 = new Date(); day1.setDate(day1.getDate() - 1); day1.setHours(0, 0, 0, 0);
+    const at = (h: number, m = 0) => {
+      const d = new Date(day1); d.setHours(h, m, 0, 0); return d;
+    };
+
+    // Insert lead initially assigned to CSR1 at 09:00 — trigger writes row #1.
+    const [lead] = await db.insert(leadsTable).values({
+      tenantId: tenant.id, firstName: "Reassign", lastName: "Me",
+      source: "Meta", originalSource: "Meta",
+      assignedCsrId: u1.id, assignedAt: at(9, 0),
+    }).returning();
+
+    // Reassign to CSR2 at 13:00 — trigger closes row #1 (ended_at=13:00) and
+    // inserts row #2 (assigned_at=13:00, csr=u2, ended_at=NULL).
+    await db.update(leadsTable)
+      .set({ assignedCsrId: u2.id, assignedAt: at(13, 0), updatedAt: new Date() })
+      .where(eq(leadsTable.id, lead.id));
+
+    // Calls in each window.
+    await db.insert(callAttemptsTable).values([
+      // Window A (09:00–13:00): CSR1 first touch at 09:30 → 1800s.
+      { leadId: lead.id, userId: u1.id, outcome: "no_answer", actionType: "call", attemptedAt: at(9, 30) },
+      // Window B (13:00–∞): CSR2 first touch at 13:05 → 300s.
+      { leadId: lead.id, userId: u2.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(13, 5) },
+    ]);
+
+    rfx = {
+      tenantId: tenant.id, csr1: u1.id, csr2: u2.id, leadId: lead.id,
+      day1Start: startOfLocalDay(day1), day1End: endOfLocalDay(day1),
+    };
+  });
+
+  afterAll(async () => {
+    if (!rfx) return;
+    try {
+      await db.delete(callAttemptsTable).where(eq(callAttemptsTable.leadId, rfx.leadId));
+      await db.delete(leadsTable).where(eq(leadsTable.id, rfx.leadId));
+      await db.delete(usersTable).where(inArray(usersTable.id, [rfx.csr1, rfx.csr2]));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, rfx.tenantId));
+    } catch { /* best-effort */ }
+  });
+
+  it("trigger writes one row per assignment window (initial + change)", async () => {
+    const rows = await db.select().from(leadAssignmentsTable)
+      .where(eq(leadAssignmentsTable.leadId, rfx.leadId))
+      .orderBy(leadAssignmentsTable.assignedAt);
+    expect(rows.length).toBe(2);
+
+    // Row 1: initial assignment to CSR1, closed when the change happened.
+    expect(rows[0].assignedCsrId).toBe(rfx.csr1);
+    expect(rows[0].endedAt).not.toBeNull();
+    expect(rows[0].reason).toBe("initial");
+
+    // Row 2: current assignment to CSR2, still active.
+    expect(rows[1].assignedCsrId).toBe(rfx.csr2);
+    expect(rows[1].endedAt).toBeNull();
+    expect(rows[1].reason).toBe("change");
+
+    // The first window's ended_at must equal the second window's assigned_at.
+    expect(rows[0].endedAt!.getTime()).toBe(rows[1].assignedAt.getTime());
+  });
+
+  it("produces a distinct first-response event for each assignment window", async () => {
+    const events = await getFirstResponseEvents(
+      [rfx.csr1, rfx.csr2], rfx.day1Start, rfx.day1End,
+    );
+    const ours = events.filter(e => e.leadId === rfx.leadId);
+
+    // TWO events for the same lead on day1 — one per window.
+    expect(ours).toHaveLength(2);
+
+    const byUser = Object.fromEntries(ours.map(e => [e.userId, e]));
+    expect(byUser[rfx.csr1]).toBeDefined();
+    expect(byUser[rfx.csr1].wallClockSpeed).toBeCloseTo(1800, 0); // 09:00 → 09:30
+    expect(byUser[rfx.csr2]).toBeDefined();
+    expect(byUser[rfx.csr2].wallClockSpeed).toBeCloseTo(300, 0);  // 13:00 → 13:05
+  });
+
+  it("requesting only the original CSR still returns the historical window after reassignment", async () => {
+    const events = await getFirstResponseEvents([rfx.csr1], rfx.day1Start, rfx.day1End);
+    const ours = events.filter(e => e.leadId === rfx.leadId);
+    // Even though leads.assignedCsrId is now CSR2, the durable history keeps
+    // the prior window discoverable for CSR1.
+    expect(ours).toHaveLength(1);
+    expect(ours[0].userId).toBe(rfx.csr1);
+    expect(ours[0].wallClockSpeed).toBeCloseTo(1800, 0);
   });
 });

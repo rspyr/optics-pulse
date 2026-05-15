@@ -975,6 +975,126 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: "2026-05-15_create-lead-assignments-history",
+    description:
+      "Create lead_assignments history table + trigger on leads to capture every " +
+      "assignment window (task #407). Seeds one row per existing lead from the " +
+      "current assignment.",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS lead_assignments (
+          id SERIAL PRIMARY KEY,
+          lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          assigned_csr_id INTEGER REFERENCES users(id),
+          assigned_at TIMESTAMP NOT NULL,
+          ended_at TIMESTAMP,
+          reason TEXT NOT NULL DEFAULT 'change',
+          created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS lead_assignments_lead_idx ON lead_assignments(lead_id, assigned_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS lead_assignments_csr_idx ON lead_assignments(assigned_csr_id, assigned_at)`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS lead_assignments_one_active_per_lead ON lead_assignments(lead_id) WHERE ended_at IS NULL`);
+      console.log("[Migration] Created lead_assignments table + indexes");
+
+      await db.execute(sql`
+        CREATE OR REPLACE FUNCTION lead_assignments_track() RETURNS TRIGGER AS $$
+        BEGIN
+          IF TG_OP = 'INSERT' THEN
+            INSERT INTO lead_assignments (lead_id, tenant_id, assigned_csr_id, assigned_at, reason)
+            VALUES (NEW.id, NEW.tenant_id, NEW.assigned_csr_id, NEW.assigned_at, 'initial');
+          ELSIF TG_OP = 'UPDATE' THEN
+            IF NEW.assigned_csr_id IS DISTINCT FROM OLD.assigned_csr_id
+               OR NEW.assigned_at IS DISTINCT FROM OLD.assigned_at THEN
+              UPDATE lead_assignments
+                SET ended_at = NEW.assigned_at
+                WHERE lead_id = NEW.id AND ended_at IS NULL;
+              INSERT INTO lead_assignments (lead_id, tenant_id, assigned_csr_id, assigned_at, reason)
+              VALUES (NEW.id, NEW.tenant_id, NEW.assigned_csr_id, NEW.assigned_at, 'change');
+            END IF;
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `);
+      await db.execute(sql`DROP TRIGGER IF EXISTS lead_assignments_track_trg ON leads`);
+      await db.execute(sql`
+        CREATE TRIGGER lead_assignments_track_trg
+        AFTER INSERT OR UPDATE ON leads
+        FOR EACH ROW EXECUTE FUNCTION lead_assignments_track()
+      `);
+      console.log("[Migration] Installed lead_assignments_track trigger on leads");
+
+      // Seed initial rows for existing leads (one active row each).
+      const seeded = await db.execute(sql`
+        INSERT INTO lead_assignments (lead_id, tenant_id, assigned_csr_id, assigned_at, reason)
+        SELECT l.id, l.tenant_id, l.assigned_csr_id, l.assigned_at, 'seed'
+        FROM leads l
+        WHERE NOT EXISTS (
+          SELECT 1 FROM lead_assignments la WHERE la.lead_id = l.id
+        )
+        RETURNING id
+      `);
+      console.log(`[Migration] Seeded ${seeded.rows.length} initial lead_assignments row(s)`);
+    },
+  },
+  {
+    id: "2026-05-15_normalize-lead-assignments-timestamp-types",
+    description:
+      "Normalize lead_assignments time columns to TIMESTAMP (without time zone) " +
+      "so they match leads.assigned_at and call_attempts.attempted_at — avoids " +
+      "implicit TZ conversions during window comparisons (task #407 follow-up).",
+    run: async () => {
+      // Idempotent: if a prior dev run created the columns as TIMESTAMPTZ, this
+      // converts them. If they're already TIMESTAMP, the type cast is a no-op.
+      await db.execute(sql`ALTER TABLE lead_assignments ALTER COLUMN assigned_at TYPE TIMESTAMP USING assigned_at AT TIME ZONE 'UTC'`);
+      await db.execute(sql`ALTER TABLE lead_assignments ALTER COLUMN ended_at TYPE TIMESTAMP USING ended_at AT TIME ZONE 'UTC'`);
+      await db.execute(sql`ALTER TABLE lead_assignments ALTER COLUMN created_at TYPE TIMESTAMP USING created_at AT TIME ZONE 'UTC'`);
+      console.log("[Migration] Normalized lead_assignments timestamp columns to TIMESTAMP");
+    },
+  },
+  {
+    id: "2026-05-15_re-backfill-coordinator-stats-after-assignment-history",
+    description:
+      "Re-aggregate coordinator_daily_stats now that lead_assignments exists, so " +
+      "going-forward backfills use the durable assignment-window query path.",
+    run: async () => {
+      const rangeResult = await db.execute<{ min_date: string | null; max_date: string | null }>(sql`
+        SELECT
+          LEAST(
+            (SELECT MIN(DATE(attempted_at AT TIME ZONE 'UTC')) FROM call_attempts),
+            (SELECT MIN(date) FROM coordinator_daily_stats)
+          ) AS min_date,
+          GREATEST(
+            (SELECT MAX(DATE(attempted_at AT TIME ZONE 'UTC')) FROM call_attempts),
+            (SELECT MAX(date) FROM coordinator_daily_stats)
+          ) AS max_date
+      `);
+      const row = rangeResult.rows[0] as { min_date: string | null; max_date: string | null } | undefined;
+      const minDate = row?.min_date;
+      const maxDate = row?.max_date;
+      if (!minDate || !maxDate) {
+        console.log("[Migration] No historical coordinator data — skipping re-backfill");
+        return;
+      }
+      const yesterday = new Date();
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split("T")[0];
+      const effectiveMax = maxDate < yesterdayStr ? maxDate : yesterdayStr;
+      if (minDate > effectiveMax) {
+        console.log(`[Migration] Nothing to re-backfill (min=${minDate}, max=${effectiveMax})`);
+        return;
+      }
+      console.log(`[Migration] Re-backfilling coordinator_daily_stats from ${minDate} to ${effectiveMax}`);
+      const result = await backfillDailyStats(minDate, effectiveMax);
+      console.log(
+        `[Migration] Re-backfill complete: ${result.processed} coordinator-day rows; ` +
+        `${result.failedDates.length} day(s) failed${result.failedDates.length ? `: ${result.failedDates.join(", ")}` : ""}`
+      );
+    },
+  },
+  {
     id: "2026-05-15_backfill-coordinator-stats-speed-to-lead-fix",
     description:
       "Re-aggregate coordinator_daily_stats across all tenants/CSRs to correct historical " +
