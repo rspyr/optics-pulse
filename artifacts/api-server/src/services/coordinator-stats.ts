@@ -1,10 +1,116 @@
 import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
-import { computeLoginAwareSpeeds } from "./login-time-calculator";
+import { computeLoginAwareSpeeds, type LeadSpeedWindow } from "./login-time-calculator";
 
-async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEnd: Date, bookerCsrId?: number) {
-  if (leadIds.length === 0) return { bookingsCount: 0, soldCount: 0, avgSpeedToLead: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
+/**
+ * A "first-response" event for a (user, lead) pair: the user's earliest
+ * non-transfer / non-system call attempt that occurred on or after the lead's
+ * current `assignedAt`. There is at most one such event per assignment.
+ *
+ * Speed-to-lead is measured exclusively from these events — follow-up touches
+ * on later days do not produce additional events and therefore do not inflate
+ * a CSR's daily speed-to-lead average.
+ */
+export interface FirstResponseEvent {
+  leadId: number;
+  userId: number;
+  assignedAt: Date;
+  firstTouchAt: Date;
+  wallClockSpeed: number;
+}
+
+/**
+ * Find first-response events whose `firstTouchAt` falls in [dayStart, dayEnd].
+ *
+ * If `userIds` is empty/undefined, returns events for all users (used by
+ * tenant-wide aggregation). If `bookerCsrId` is undefined, all CSRs match.
+ */
+export async function getFirstResponseEvents(
+  userIds: number[] | undefined,
+  dayStart: Date,
+  dayEnd: Date,
+): Promise<FirstResponseEvent[]> {
+  if (userIds && userIds.length === 0) return [];
+
+  const baseConds = [
+    ne(callAttemptsTable.actionType, "transfer"),
+    ne(callAttemptsTable.actionType, "system"),
+    gte(callAttemptsTable.attemptedAt, leadsTable.assignedAt),
+  ];
+  if (userIds && userIds.length > 0) {
+    baseConds.push(inArray(callAttemptsTable.userId, userIds));
+  }
+
+  const rows = await db
+    .select({
+      leadId: callAttemptsTable.leadId,
+      userId: callAttemptsTable.userId,
+      assignedAt: leadsTable.assignedAt,
+      firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
+    })
+    .from(callAttemptsTable)
+    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+    .where(and(...baseConds))
+    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt)
+    .having(and(
+      gte(sql`MIN(${callAttemptsTable.attemptedAt})`, dayStart),
+      lte(sql`MIN(${callAttemptsTable.attemptedAt})`, dayEnd),
+    ));
+
+  return rows
+    .filter(r => r.userId !== null && r.assignedAt && r.firstTouchAt)
+    .map(r => {
+      const assignedAt = new Date(r.assignedAt as Date);
+      const firstTouchAt = new Date(r.firstTouchAt as Date);
+      const wallClockSpeed = Math.max(0, (firstTouchAt.getTime() - assignedAt.getTime()) / 1000);
+      return {
+        leadId: r.leadId,
+        userId: Number(r.userId),
+        assignedAt,
+        firstTouchAt,
+        wallClockSpeed,
+      };
+    });
+}
+
+/**
+ * Average login-aware speed across first-response events. Returns 0 when
+ * there are no qualifying events. Falls back to wall-clock if the login-aware
+ * computation throws.
+ */
+export async function computeAvgSpeedFromEvents(events: FirstResponseEvent[]): Promise<number> {
+  if (events.length === 0) return 0;
+  const windows: LeadSpeedWindow[] = events
+    .filter(e => e.wallClockSpeed > 0)
+    .map(e => ({
+      leadId: e.leadId,
+      userId: e.userId,
+      assignedAt: e.assignedAt,
+      firstTouchAt: e.firstTouchAt,
+      wallClockSpeed: e.wallClockSpeed,
+    }));
+  if (windows.length === 0) return 0;
+  try {
+    const speedResults = await computeLoginAwareSpeeds(windows);
+    if (speedResults.length === 0) return 0;
+    return speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length;
+  } catch (err) {
+    console.error("[CoordinatorStats] Login-aware speed computation failed, using wall-clock fallback:", err);
+    const wallClock = windows.map(w => w.wallClockSpeed);
+    return wallClock.reduce((sum, n) => sum + n, 0) / wallClock.length;
+  }
+}
+
+async function getBookingStatsByIdsAndDate(
+  leadIds: number[],
+  dayStart: Date,
+  dayEnd: Date,
+  bookerCsrId?: number,
+) {
+  if (leadIds.length === 0) {
+    return { bookingsCount: 0, soldCount: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
+  }
 
   const bookingConds = [
     inArray(leadsTable.id, leadIds),
@@ -24,49 +130,6 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
   const bookingsCount = bookedSoldLeads.length;
   const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;
 
-  const firstTouchRows = await db.select({
-    leadId: callAttemptsTable.leadId,
-    userId: sql<number>`(ARRAY_AGG(${callAttemptsTable.userId} ORDER BY ${callAttemptsTable.attemptedAt} ASC))[1]`.as("first_touch_user"),
-    firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
-    assignedAt: leadsTable.assignedAt,
-    wallClockSpeed: sql<number>`MIN(EXTRACT(EPOCH FROM (${callAttemptsTable.attemptedAt} - ${leadsTable.assignedAt})))`.as("wall_clock_speed"),
-  })
-    .from(callAttemptsTable)
-    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
-    .where(and(
-      inArray(callAttemptsTable.leadId, leadIds),
-      ne(callAttemptsTable.actionType, "transfer"),
-      ne(callAttemptsTable.actionType, "system"),
-      gte(callAttemptsTable.attemptedAt, dayStart),
-      lte(callAttemptsTable.attemptedAt, dayEnd),
-    ))
-    .groupBy(callAttemptsTable.leadId, leadsTable.assignedAt);
-
-  let avgSpeedValue = 0;
-  if (firstTouchRows.length > 0) {
-    const windows = firstTouchRows
-      .filter(r => r.userId && r.assignedAt && r.firstTouchAt && Number(r.wallClockSpeed) > 0)
-      .map(r => ({
-        leadId: r.leadId,
-        userId: Number(r.userId),
-        assignedAt: new Date(r.assignedAt!),
-        firstTouchAt: new Date(r.firstTouchAt!),
-        wallClockSpeed: Math.max(0, Number(r.wallClockSpeed)),
-      }));
-    try {
-      const speedResults = await computeLoginAwareSpeeds(windows);
-      if (speedResults.length > 0) {
-        avgSpeedValue = speedResults.reduce((sum, s) => sum + s.speed, 0) / speedResults.length;
-      }
-    } catch (err) {
-      console.error("[CoordinatorStats] Login-aware speed computation failed, using wall-clock fallback:", err);
-      const wallClockSpeeds = windows.filter(w => w.wallClockSpeed > 0).map(w => w.wallClockSpeed);
-      if (wallClockSpeeds.length > 0) {
-        avgSpeedValue = wallClockSpeeds.reduce((sum, s) => sum + s, 0) / wallClockSpeeds.length;
-      }
-    }
-  }
-
   const funnelIds = [...new Set(bookedSoldLeads.map(l => l.funnelId).filter((id): id is number => id !== null))];
   let funnelNameLookup: Record<number, string> = {};
   if (funnelIds.length > 0) {
@@ -74,16 +137,40 @@ async function getLeadStatsByIdsAndDate(leadIds: number[], dayStart: Date, dayEn
       .from(funnelTypesTable).where(inArray(funnelTypesTable.id, funnelIds));
     funnelNameLookup = Object.fromEntries(fRows.map(f => [f.id, f.name]));
   }
-  const bookedLeadsWithFunnel = bookedSoldLeads.map(l => ({
+  const bookedLeads = bookedSoldLeads.map(l => ({
     status: l.status,
     funnelName: l.funnelId ? (funnelNameLookup[l.funnelId] || null) : null,
   }));
 
+  return { bookingsCount, soldCount, bookedLeads };
+}
+
+/**
+ * Compute the day's stats for a single CSR (or, when `userIds` covers the
+ * whole tenant, the tenant aggregate).
+ *
+ * Speed-to-lead and newLeadsHandled are derived from first-response events
+ * only — repeat touches on previously-handled leads do not contribute.
+ */
+async function getCoordinatorDayStats(opts: {
+  dayStart: Date;
+  dayEnd: Date;
+  speedUserIds: number[];
+  scopeLeadIds: number[];
+  bookerCsrId?: number;
+}) {
+  const { dayStart, dayEnd, speedUserIds, scopeLeadIds, bookerCsrId } = opts;
+
+  const events = await getFirstResponseEvents(speedUserIds, dayStart, dayEnd);
+  const avgSpeedValue = await computeAvgSpeedFromEvents(events);
+  const booking = await getBookingStatsByIdsAndDate(scopeLeadIds, dayStart, dayEnd, bookerCsrId);
+
   return {
-    bookingsCount,
-    soldCount,
+    bookingsCount: booking.bookingsCount,
+    soldCount: booking.soldCount,
+    bookedLeads: booking.bookedLeads,
     avgSpeedToLead: Math.round(avgSpeedValue),
-    bookedLeads: bookedLeadsWithFunnel,
+    newLeadsHandled: events.length,
   };
 }
 
@@ -127,7 +214,13 @@ export async function aggregateDailyStats(dateStr: string) {
       .where(userAttemptConds);
     const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-    const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, startOfDay, endOfDay, userId);
+    const leadStats = await getCoordinatorDayStats({
+      dayStart: startOfDay,
+      dayEnd: endOfDay,
+      speedUserIds: [userId],
+      scopeLeadIds: handledLeadIds,
+      bookerCsrId: userId,
+    });
 
     const [tenantRow] = await db.select({ spiffConfig: tenantsTable.spiffConfig })
       .from(tenantsTable).where(eq(tenantsTable.id, tenantId));
@@ -146,7 +239,7 @@ export async function aggregateDailyStats(dateStr: string) {
       commission,
       avgSpeedToLead: leadStats.avgSpeedToLead,
       soldCount: leadStats.soldCount,
-      newLeadsHandled: handledLeadIds.length,
+      newLeadsHandled: leadStats.newLeadsHandled,
     }).onConflictDoUpdate({
       target: [coordinatorDailyStatsTable.userId, coordinatorDailyStatsTable.date],
       set: {
@@ -157,13 +250,57 @@ export async function aggregateDailyStats(dateStr: string) {
         commission,
         avgSpeedToLead: leadStats.avgSpeedToLead,
         soldCount: leadStats.soldCount,
-        newLeadsHandled: handledLeadIds.length,
+        newLeadsHandled: leadStats.newLeadsHandled,
       },
     });
     processed++;
   }
 
   return processed;
+}
+
+export interface BackfillResult {
+  processed: number;
+  failedDates: string[];
+}
+
+/**
+ * Re-aggregate `coordinator_daily_stats` for every day in [startDateStr, endDateStr]
+ * using the current logic. Existing rows are overwritten via the same upsert
+ * path the nightly job uses, so this is safe to re-run.
+ *
+ * Used to correct historical numbers after a calculation change (e.g. the
+ * speed-to-lead follow-up fix).
+ *
+ * Note: speed-to-lead events for prior assignments cannot be reconstructed for
+ * leads that were later auto-passed, because `leads.assignedAt` is mutated on
+ * each pass. Backfilled days will reflect each lead's *current* assignment.
+ * Forward-going aggregation is unaffected. A follow-up task should introduce
+ * an assignment-history table so backfills are exact.
+ */
+export async function backfillDailyStats(startDateStr: string, endDateStr: string): Promise<BackfillResult> {
+  const start = new Date(`${startDateStr}T00:00:00Z`);
+  const end = new Date(`${endDateStr}T00:00:00Z`);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    throw new Error(`Invalid date range: ${startDateStr} .. ${endDateStr}`);
+  }
+
+  let processed = 0;
+  const failedDates: string[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const dateStr = cursor.toISOString().split("T")[0];
+    try {
+      const n = await aggregateDailyStats(dateStr);
+      processed += n;
+      console.log(`[StatsBackfill] ${dateStr}: re-aggregated ${n} coordinator(s)`);
+    } catch (err) {
+      console.error(`[StatsBackfill] ${dateStr}: failed`, err);
+      failedDates.push(dateStr);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return { processed, failedDates };
 }
 
 export function startNightlyAggregation() {
@@ -256,7 +393,13 @@ async function getUserTodayStats(userId: number, tenantId: number | null = null)
     .from(callAttemptsTable).where(and(...attemptConds));
   const handledLeadIds = leadIdsResult.map(r => r.leadId);
 
-  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday, userId);
+  const leadStats = await getCoordinatorDayStats({
+    dayStart: today,
+    dayEnd: endOfToday,
+    speedUserIds: [userId],
+    scopeLeadIds: handledLeadIds,
+    bookerCsrId: userId,
+  });
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
   const spiffConfig = await loadSpiffConfig(tenantId);
@@ -306,7 +449,12 @@ async function getTenantTodayStats(tenantId: number): Promise<StatSnapshot> {
 
   const endOfToday = new Date();
   endOfToday.setHours(23, 59, 59, 999);
-  const leadStats = await getLeadStatsByIdsAndDate(handledLeadIds, today, endOfToday);
+  const leadStats = await getCoordinatorDayStats({
+    dayStart: today,
+    dayEnd: endOfToday,
+    speedUserIds: userIds,
+    scopeLeadIds: handledLeadIds,
+  });
   const bookingRate = callsMade > 0 ? Math.round((leadStats.bookingsCount / callsMade) * 100) : 0;
 
   const spiffConfig = await loadSpiffConfig(tenantId);
