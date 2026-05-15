@@ -550,3 +550,148 @@ describe("lead_assignments history makes speed-to-lead reproducible (task #407)"
     expect(ours[0].wallClockSpeed).toBeCloseTo(1800, 0);
   });
 });
+
+/**
+ * Login-aware speed with mid-day logout gaps (real Postgres).
+ *
+ * The other suite seeds full-day login sessions so login-aware speed equals
+ * wall-clock — that keeps its cross-day assertions deterministic but does NOT
+ * exercise the subtraction in `getLoggedInSecondsWithCoverage`. Here we seed a
+ * dedicated tenant whose CSR was logged out during part(s) of the gap between
+ * `assignedAt` and the first call attempt, and assert that the aggregated
+ * `avg_speed_to_lead` reflects only the logged-in portion (not wall-clock).
+ *
+ * Scenarios seeded (all in a fresh tenant, day1 = yesterday):
+ *   L6 — assigned 09:00, first touched 10:00 (3600s wall-clock). CSR logged
+ *        out 09:15–09:45 (1800s gap). Expected login-aware speed: 1800s.
+ *   L7 — assigned 13:00, first touched 14:00 (3600s wall-clock). Multi-segment
+ *        logout: 13:10–13:20 (600s) and 13:30–13:50 (1200s). Expected
+ *        login-aware speed: 3600 − 600 − 1200 = 1800s.
+ */
+describe("login-aware speed subtracts mid-day logout gaps (real Postgres)", () => {
+  interface OfflineFixtures {
+    tenantId: number;
+    csrId: number;
+    leadIds: { L6: number; L7: number };
+    day1Str: string;
+    day1Start: Date;
+    day1End: Date;
+  }
+
+  let ofx: OfflineFixtures;
+
+  beforeAll(async () => {
+    await resyncSerial("tenants");
+    await resyncSerial("users");
+    await resyncSerial("leads");
+    await resyncSerial("call_attempts");
+
+    const slug = `stl-offline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const [tenant] = await db.insert(tenantsTable).values({
+      name: `Speed-to-Lead Offline ${slug}`,
+      clientSlug: slug,
+    }).returning();
+
+    const [csr] = await db.insert(usersTable).values({
+      email: `${slug}-csr@example.com`,
+      name: "Offline CSR",
+      passwordHash: "x",
+      role: "client_user",
+      tenantId: tenant.id,
+    }).returning();
+
+    const now = new Date();
+    const day2 = startOfLocalDay(now);
+    const day1 = new Date(day2);
+    day1.setDate(day1.getDate() - 1);
+    const at = (h: number, m = 0) => {
+      const d = new Date(day1); d.setHours(h, m, 0, 0); return d;
+    };
+
+    // L6 — single logout gap inside the assignment→first-touch window.
+    const [l6] = await db.insert(leadsTable).values({
+      tenantId: tenant.id, firstName: "Lead", lastName: "Six",
+      source: "Meta", originalSource: "Meta",
+      assignedCsrId: csr.id, assignedAt: at(9, 0),
+    }).returning();
+    // L7 — multi-segment logouts inside the window.
+    const [l7] = await db.insert(leadsTable).values({
+      tenantId: tenant.id, firstName: "Lead", lastName: "Seven",
+      source: "Meta", originalSource: "Meta",
+      assignedCsrId: csr.id, assignedAt: at(13, 0),
+    }).returning();
+
+    await db.insert(callAttemptsTable).values([
+      { leadId: l6.id, userId: csr.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(10, 0) },
+      { leadId: l7.id, userId: csr.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(14, 0) },
+    ]);
+
+    // Login sessions designed to leave specific offline gaps:
+    //   logged out 09:15–09:45 (covers L6's window)
+    //   logged out 13:10–13:20 and 13:30–13:50 (covers L7's window)
+    const dayStart = startOfLocalDay(day1);
+    const dayEnd = endOfLocalDay(day1);
+    await db.insert(userLoginSessionsTable).values([
+      { userId: csr.id, tenantId: tenant.id, loginAt: dayStart,   logoutAt: at(9, 15) },
+      { userId: csr.id, tenantId: tenant.id, loginAt: at(9, 45),  logoutAt: at(13, 10) },
+      { userId: csr.id, tenantId: tenant.id, loginAt: at(13, 20), logoutAt: at(13, 30) },
+      { userId: csr.id, tenantId: tenant.id, loginAt: at(13, 50), logoutAt: dayEnd },
+    ]);
+
+    ofx = {
+      tenantId: tenant.id,
+      csrId: csr.id,
+      leadIds: { L6: l6.id, L7: l7.id },
+      day1Str: dateStr(day1),
+      day1Start: startOfLocalDay(day1),
+      day1End: endOfLocalDay(day1),
+    };
+  });
+
+  afterAll(async () => {
+    if (!ofx) return;
+    const allLeadIds = Object.values(ofx.leadIds);
+    try {
+      await db.delete(callAttemptsTable).where(inArray(callAttemptsTable.leadId, allLeadIds));
+      await db.delete(leadsTable).where(inArray(leadsTable.id, allLeadIds));
+      await db.delete(coordinatorDailyStatsTable).where(eq(coordinatorDailyStatsTable.tenantId, ofx.tenantId));
+      await db.delete(userLoginSessionsTable).where(eq(userLoginSessionsTable.userId, ofx.csrId));
+      await db.delete(usersTable).where(eq(usersTable.id, ofx.csrId));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, ofx.tenantId));
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("computeAvgSpeedFromEvents subtracts a single mid-day logout gap (L6) and multi-segment gaps (L7)", async () => {
+    const events = await getFirstResponseEvents([ofx.csrId], ofx.day1Start, ofx.day1End);
+    const ours = events.filter(e => Object.values(ofx.leadIds).includes(e.leadId));
+    expect(ours.map(e => e.leadId).sort()).toEqual([ofx.leadIds.L6, ofx.leadIds.L7].sort());
+
+    // Wall-clock for both is 3600s; the helper exposes that pre-subtraction.
+    for (const e of ours) {
+      expect(e.wallClockSpeed).toBeCloseTo(3600, 0);
+    }
+
+    // Login-aware average: (1800 + 1800) / 2 = 1800s. If the subtraction
+    // regressed to wall-clock, this would be 3600.
+    const avg = await computeAvgSpeedFromEvents(ours);
+    expect(Math.round(avg)).toBe(1800);
+  });
+
+  it("aggregateDailyStats persists the login-aware avg (not wall-clock) for day1", async () => {
+    const processed = await aggregateDailyStats(ofx.day1Str);
+    expect(processed).toBeGreaterThanOrEqual(1);
+
+    const [row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.tenantId, ofx.tenantId),
+      eq(coordinatorDailyStatsTable.userId, ofx.csrId),
+      eq(coordinatorDailyStatsTable.date, ofx.day1Str),
+    ));
+    expect(row).toBeDefined();
+    expect(row.newLeadsHandled).toBe(2);
+    // 1800s, not the 3600s wall-clock — proves the offline subtraction ran
+    // end-to-end through the nightly aggregation path.
+    expect(row.avgSpeedToLead).toBeCloseTo(1800, 0);
+  });
+});
