@@ -185,7 +185,7 @@ async function rescanExistingRows(
   return updated;
 }
 
-async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSelect): Promise<number> {
+export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSelect): Promise<number> {
   const sheetId = config.googleSheetId;
   const tab = config.googleSheetTab;
   const mapping = config.columnMapping as Record<string, string>;

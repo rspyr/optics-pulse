@@ -368,7 +368,7 @@ async function loadFunnelTypesCache(): Promise<void> {
   } catch { /* ignore */ }
 }
 
-async function createDemoLead(): Promise<void> {
+export async function createDemoLead(): Promise<void> {
   try {
     const firstName = randomFrom(DEMO_FIRST_NAMES);
     const lastName = randomFrom(DEMO_LAST_NAMES);
