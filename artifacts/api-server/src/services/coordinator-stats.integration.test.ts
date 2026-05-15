@@ -891,3 +891,181 @@ describe("funnel rename keeps spiff payouts deterministic (task #412)", () => {
     expect(row.commission).toBe(200);
   });
 });
+
+/**
+ * Task #418 — Stale-funnel spiff warning surfaces via GET /sales-manager/spiff-config.
+ *
+ * Sister coverage to "funnel rename keeps spiff payouts deterministic": that
+ * suite locks in the *aggregator's* fallback behaviour after a funnel rename.
+ * This suite locks in the *admin-facing* surface that lets operators FIX the
+ * mismatch — the GET response continues to expose the byFunnel override
+ * keyed on the now-stale name (so the UI can flag it), and a UI-shaped rename
+ * (PUT with the override re-keyed under the new funnel name) preserves the
+ * dollar amount.
+ */
+const expressMod = await import("express");
+const expressApp = expressMod.default;
+const httpMod = await import("http");
+
+interface RouteResp { status: number; json: any }
+async function callSpiffRoute(
+  method: "GET" | "PUT",
+  tenantId: number,
+  body?: unknown,
+): Promise<RouteResp> {
+  // Re-import the router fresh so it picks up the real (un-mocked) db module.
+  const routerMod = await import("../routes/sales-manager");
+  const app = expressApp();
+  app.use(expressApp.json());
+  app.use((req, _res, next) => {
+    (req as unknown as { session: Record<string, unknown> }).session = {
+      userId: 1,
+      userRole: "super_admin",
+      tenantId,
+    };
+    next();
+  });
+  app.use(routerMod.default);
+  return await new Promise<RouteResp>((resolve, reject) => {
+    const server = httpMod.createServer(app);
+    server.listen(0, () => {
+      const port = (server.address() as { port: number }).port;
+      const payload = body !== undefined ? JSON.stringify(body) : undefined;
+      const req = httpMod.request({
+        hostname: "127.0.0.1",
+        port,
+        path: `/sales-manager/spiff-config?tenantId=${tenantId}`,
+        method,
+        headers: payload
+          ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload).toString() }
+          : {},
+      }, res => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+        res.on("end", () => {
+          server.close();
+          resolve({ status: res.statusCode ?? 0, json: data ? JSON.parse(data) : {} });
+        });
+      });
+      req.on("error", err => { server.close(); reject(err); });
+      if (payload) req.write(payload);
+      req.end();
+    });
+  });
+}
+
+describe("stale-funnel spiff warning surfaces on the spiff-config API (task #418)", () => {
+  interface StaleFx {
+    tenantId: number;
+    funnelId: number;
+    origFunnelName: string;
+    renamedFunnelName: string;
+  }
+  let sfx: StaleFx;
+
+  beforeAll(async () => {
+    const slug = `spiff-stale-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const origFunnelName = `StaleOrig-${slug}`;
+    const renamedFunnelName = `StaleRenamed-${slug}`;
+
+    // Tenant's byFunnel maps the ORIGINAL funnel name → $175. After we rename
+    // the funnel row, the key in byFunnel will no longer match any current
+    // funnel_types.name — that's the staleness condition the UI flags.
+    const [tenant] = await db.insert(tenantsTable).values({
+      name: `Spiff Stale ${slug}`,
+      clientSlug: slug,
+      spiffConfig: { default: 25, byFunnel: { [origFunnelName]: 175 } },
+    }).returning();
+
+    const [funnel] = await db.insert(funnelTypesTable).values({
+      name: origFunnelName,
+      slug: `stale-${slug}`,
+    }).returning();
+
+    sfx = {
+      tenantId: tenant.id,
+      funnelId: funnel.id,
+      origFunnelName,
+      renamedFunnelName,
+    };
+  });
+
+  afterAll(async () => {
+    if (!sfx) return;
+    try {
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, sfx.tenantId));
+      await db.delete(funnelTypesTable).where(eq(funnelTypesTable.id, sfx.funnelId));
+    } catch { /* best-effort */ }
+  });
+
+  // Mirror of the UI's `staleKeys` computation in sales-manager.tsx — a
+  // byFunnel key is stale iff no current funnel_types row has that name.
+  async function computeStaleKeys(tenantId: number, byFunnel: Record<string, number>): Promise<string[]> {
+    const funnels = await db.select({ name: funnelTypesTable.name }).from(funnelTypesTable);
+    void tenantId; // funnel_types is global in the current schema
+    const nameSet = new Set(funnels.map(f => f.name));
+    return Object.keys(byFunnel).filter(k => !nameSet.has(k));
+  }
+
+  it("pre-rename: GET response exposes the override and the UI computes zero stale keys", async () => {
+    const res = await callSpiffRoute("GET", sfx.tenantId);
+    expect(res.status).toBe(200);
+    expect(res.json.spiffConfig).toBeDefined();
+    expect(res.json.spiffConfig.default).toBe(25);
+    expect(res.json.spiffConfig.byFunnel[sfx.origFunnelName]).toBe(175);
+
+    const stale = await computeStaleKeys(sfx.tenantId, res.json.spiffConfig.byFunnel);
+    expect(stale).toEqual([]);
+  });
+
+  it("post-rename: GET still returns the old key and the UI surfaces it as stale", async () => {
+    // Rename the funnel WITHOUT touching tenant.spiff_config — the scenario
+    // the warning is designed to catch.
+    await db.update(funnelTypesTable)
+      .set({ name: sfx.renamedFunnelName })
+      .where(eq(funnelTypesTable.id, sfx.funnelId));
+
+    const res = await callSpiffRoute("GET", sfx.tenantId);
+    expect(res.status).toBe(200);
+    // The override is still stored under the OLD name (source-of-truth is
+    // tenant.spiff_config — we don't silently migrate keys server-side).
+    expect(res.json.spiffConfig.byFunnel[sfx.origFunnelName]).toBe(175);
+    expect(res.json.spiffConfig.byFunnel[sfx.renamedFunnelName]).toBeUndefined();
+
+    // The UI's staleKeys algorithm flags exactly the orphaned key.
+    const stale = await computeStaleKeys(sfx.tenantId, res.json.spiffConfig.byFunnel);
+    expect(stale).toEqual([sfx.origFunnelName]);
+  });
+
+  it("UI rename: PUT re-keyed under the new funnel name preserves the amount and clears staleness", async () => {
+    // Simulate the UI's `renameOverride(oldKey, newKey)` helper — it builds a
+    // new byFunnel map with the value moved from oldKey → newKey, then PUTs
+    // the whole spiffConfig. Amount must be preserved verbatim.
+    const getBefore = await callSpiffRoute("GET", sfx.tenantId);
+    const prev = getBefore.json.spiffConfig as { default: number; byFunnel: Record<string, number> };
+    const amount = prev.byFunnel[sfx.origFunnelName];
+    expect(amount).toBe(175);
+
+    const nextByFunnel: Record<string, number> = {};
+    for (const [k, v] of Object.entries(prev.byFunnel)) {
+      nextByFunnel[k === sfx.origFunnelName ? sfx.renamedFunnelName : k] = v;
+    }
+
+    const putRes = await callSpiffRoute("PUT", sfx.tenantId, {
+      spiffConfig: { default: prev.default, byFunnel: nextByFunnel },
+    });
+    expect(putRes.status).toBe(200);
+    expect(putRes.json.spiffConfig.byFunnel[sfx.renamedFunnelName]).toBe(175);
+    expect(putRes.json.spiffConfig.byFunnel[sfx.origFunnelName]).toBeUndefined();
+    expect(putRes.json.spiffConfig.default).toBe(prev.default);
+
+    // GET reads back the persisted state — the rename is durable and the
+    // UI's staleKeys is empty again.
+    const getAfter = await callSpiffRoute("GET", sfx.tenantId);
+    expect(getAfter.json.spiffConfig.byFunnel[sfx.renamedFunnelName]).toBe(175);
+    expect(getAfter.json.spiffConfig.byFunnel[sfx.origFunnelName]).toBeUndefined();
+
+    const stale = await computeStaleKeys(sfx.tenantId, getAfter.json.spiffConfig.byFunnel);
+    expect(stale).toEqual([]);
+  });
+});
