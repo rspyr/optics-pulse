@@ -575,3 +575,86 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
     expect(statsRow.bookingsCount).toBe(1);
   });
 });
+
+describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a deadReason rolls back the booking cache", () => {
+  it("resets status/disposition/bookedByCsrId/bookedAt and drops the lead from the daily booking aggregate", async () => {
+    // Fresh CSR so the per-user aggregate isn't polluted by prior describe
+    // blocks that book leads against fx.csrId.
+    const slug = `edit-unbook-csr-${Date.now()}`;
+    const [scopedCsr] = await db.insert(usersTable).values({
+      email: `${slug}@example.com`,
+      name: "Edit Unbook CSR",
+      passwordHash: "x",
+      role: "client_user",
+      tenantId: fx.tenantId,
+    }).returning();
+    fx.extraUserIds.push(scopedCsr.id);
+    const scopedApp = makeApp(fx.tenantId, scopedCsr.id);
+
+    const createRes = await httpReq(scopedApp, "POST", "/leads-hub/create", {
+      firstName: "EditUnbook", lastName: "Lead",
+      source: "Meta",
+      assignedCsrId: scopedCsr.id,
+      funnelId: fx.funnelId,
+    });
+    expect(createRes.status).toBe(201);
+    const leadId = (createRes.json as { id: number }).id;
+    fx.leadIds.push(leadId);
+
+    // Book the lead via POST /leads-hub/action.
+    const bookRes = await httpReq(scopedApp, "POST", "/leads-hub/action", {
+      leadId,
+      actionType: "call",
+      callResult: "spoke_with_customer",
+      appointmentSet: true,
+      appointmentDate: "2026-06-10",
+      appointmentTime: "14:00",
+    });
+    expect(bookRes.status).toBe(200);
+    const attemptId = (bookRes.json as { attempt: { id: number } }).attempt.id;
+
+    // Sanity: lead is in the booked aggregate window.
+    const [beforeEdit] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(beforeEdit.hubStatus).toBe("appt_set");
+    expect(beforeEdit.status).toBe("booked");
+    expect(beforeEdit.disposition).toBe("booked");
+    expect(beforeEdit.bookedByCsrId).toBe(scopedCsr.id);
+    expect(beforeEdit.bookedAt).not.toBeNull();
+
+    // CSR edits the past attempt into a dead state via
+    // PUT /leads-hub/action/:attemptId — effectively un-booking the lead.
+    const editRes = await httpReq(scopedApp, "PUT", `/leads-hub/action/${attemptId}`, {
+      callResult: "spoke_with_customer",
+      spokeResult: "dead",
+      deadReason: "customer_cancelled",
+    });
+    expect(editRes.status).toBe(200);
+
+    // The booking cache must be fully reset, mirroring the POST un-book path.
+    const [afterEdit] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+    expect(afterEdit.hubStatus).toBe("dead");
+    expect(afterEdit.status).toBe("lost");
+    expect(afterEdit.disposition).toBeNull();
+    expect(afterEdit.bookedByCsrId).toBeNull();
+    expect(afterEdit.bookedAt).toBeNull();
+    expect(afterEdit.deadReason).toBe("customer_cancelled");
+
+    // The daily booking aggregate must exclude this lead — there's nothing
+    // else booked for this CSR today, so bookingsCount should be 0.
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, "0");
+    const d = String(today.getDate()).padStart(2, "0");
+    const dayStr = `${y}-${m}-${d}`;
+
+    await aggregateDailyStats(dayStr);
+
+    const [statsRow] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, scopedCsr.id),
+      eq(coordinatorDailyStatsTable.date, dayStr),
+    ));
+    // The CSR may or may not have a row depending on whether other activity
+    // was recorded; either way, bookingsCount for them must be 0.
+    expect(statsRow?.bookingsCount ?? 0).toBe(0);
+  });
+});

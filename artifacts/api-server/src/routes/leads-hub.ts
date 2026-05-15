@@ -772,6 +772,14 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     } else if (apptBookedOutcome === "canceled") {
       leadUpdates.hubStatus = "dead";
       leadUpdates.deadReason = deadReason || "appointment_canceled";
+      // Mirror the POST un-book path: fully reset the booking cache so
+      // `getBookingStatsByIdsAndDate` stops counting this lead.
+      if (lead.status === "booked" || lead.status === "sold") {
+        leadUpdates.status = "lost";
+        leadUpdates.disposition = null;
+        leadUpdates.bookedByCsrId = null;
+        leadUpdates.bookedAt = null;
+      }
     }
   } else if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
     leadUpdates.hubStatus = "call_back";
@@ -789,6 +797,17 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     leadUpdates.status = "lost";
     leadUpdates.deadReason = deadReason;
     leadUpdates.callbackAt = null;
+    // Editing a past attempt into a dead state effectively un-books a
+    // previously-booked lead. Mirror the POST handler's un-book path and
+    // fully reset the booking cache (disposition, bookedByCsrId,
+    // bookedAt) so the lead leaves the {booked, sold} aggregate window
+    // used by `getBookingStatsByIdsAndDate`. `status` is already set to
+    // "lost" above.
+    if (lead.status === "booked" || lead.status === "sold") {
+      leadUpdates.disposition = null;
+      leadUpdates.bookedByCsrId = null;
+      leadUpdates.bookedAt = null;
+    }
   } else if (callbackAt === null && spokeResult !== "call_back") {
     leadUpdates.callbackAt = null;
   }
