@@ -673,7 +673,10 @@ router.get("/leads/:leadId/merges", async (req, res) => {
 
 router.patch("/leads/:leadId", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
-  const [existingLead] = await db.select({ tenantId: leadsTable.tenantId }).from(leadsTable).where(eq(leadsTable.id, leadId));
+  const [existingLead] = await db.select({
+    tenantId: leadsTable.tenantId,
+    bookedAt: leadsTable.bookedAt,
+  }).from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!existingLead) {
     res.status(404).json({ error: "Lead not found" });
     return;
@@ -684,6 +687,12 @@ router.patch("/leads/:leadId", async (req, res) => {
   const updateData: Partial<typeof leadsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
   if (body.status) {
     updateData.status = body.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
+    // Task #413: stamp bookedAt when this PATCH is the path that transitions
+    // the lead into booked/sold so daily booking attribution is anchored to
+    // the booking moment, not the row's last-touched timestamp.
+    if ((body.status === "booked" || body.status === "sold") && !existingLead.bookedAt) {
+      updateData.bookedAt = new Date();
+    }
   }
   if (body.assignedTo) updateData.assignedTo = body.assignedTo;
   if (body.disposition) updateData.disposition = body.disposition;

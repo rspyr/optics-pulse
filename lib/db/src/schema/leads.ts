@@ -60,6 +60,7 @@ export const leadsTable = pgTable("leads", {
   resubmissionCount: integer("resubmission_count").notNull().default(0),
 
   assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+  bookedAt: timestamp("booked_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

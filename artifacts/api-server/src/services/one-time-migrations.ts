@@ -1152,6 +1152,49 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "2026-05-15_add-booked-at-to-leads",
+    description: "Add booked_at column to leads (task #413), backfill from updated_at for booked/sold leads, and re-aggregate coordinator_daily_stats for the affected range",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS booked_at TIMESTAMP
+      `);
+      console.log("[Migration] Ensured booked_at column exists on leads");
+
+      // Historical rows don't have an audit trail for the booking moment, so
+      // the closest proxy is the lead row's last-touched timestamp at the
+      // time of the migration. Forward-going traffic sets booked_at on the
+      // actual transition (see leads-hub.ts).
+      const backfilled = await db.execute(sql`
+        UPDATE leads
+        SET booked_at = updated_at
+        WHERE status IN ('booked', 'sold')
+          AND booked_at IS NULL
+        RETURNING id, updated_at
+      `);
+      console.log(`[Migration] Backfilled booked_at on ${backfilled.rows.length} existing booked/sold lead(s)`);
+
+      // Re-aggregate coordinator_daily_stats over the affected date range so
+      // historical bookings_count / commission reflect the new bookedAt-anchored
+      // logic. Safe to skip silently when no rows were backfilled.
+      if (backfilled.rows.length > 0) {
+        const dates = (backfilled.rows as { updated_at: string | Date }[])
+          .map(r => new Date(r.updated_at))
+          .filter(d => !isNaN(d.getTime()));
+        if (dates.length > 0) {
+          const minDate = new Date(Math.min(...dates.map(d => d.getTime()))).toISOString().split("T")[0];
+          const maxDate = new Date(Math.max(...dates.map(d => d.getTime()))).toISOString().split("T")[0];
+          console.log(`[Migration] Re-aggregating coordinator_daily_stats from ${minDate} to ${maxDate} after booked_at backfill`);
+          const result = await backfillDailyStats(minDate, maxDate);
+          console.log(
+            `[Migration] Re-aggregation complete: ${result.processed} coordinator-day rows; ` +
+            `${result.failedDates.length} day(s) failed${result.failedDates.length ? `: ${result.failedDates.join(", ")}` : ""}`
+          );
+        }
+      }
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

@@ -466,6 +466,7 @@ router.post("/leads-hub/action", async (req, res) => {
     updates.status = "booked";
     updates.disposition = "booked";
     updates.bookedByCsrId = userId;
+    if (!lead.bookedAt) updates.bookedAt = new Date();
   }
 
   if (apptBookedOutcome && lead.hubStatus === "appt_booked") {
@@ -475,6 +476,7 @@ router.post("/leads-hub/action", async (req, res) => {
       updates.status = "booked";
       updates.disposition = "booked";
       updates.bookedByCsrId = userId;
+      if (!lead.bookedAt) updates.bookedAt = new Date();
     } else if (outcome === "rescheduled") {
       updates.hubStatus = "appt_booked";
     } else if (outcome === "canceled") {
@@ -723,6 +725,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
       leadUpdates.status = "booked";
       leadUpdates.disposition = "booked";
       leadUpdates.bookedByCsrId = userId;
+      if (!lead.bookedAt) leadUpdates.bookedAt = new Date();
     } else if (apptBookedOutcome === "rescheduled") {
       leadUpdates.hubStatus = "appt_booked";
     } else if (apptBookedOutcome === "canceled") {
@@ -739,6 +742,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     leadUpdates.disposition = "booked";
     leadUpdates.bookedByCsrId = userId;
     leadUpdates.callbackAt = null;
+    if (!lead.bookedAt) leadUpdates.bookedAt = new Date();
   } else if (deadReason) {
     leadUpdates.hubStatus = "dead";
     leadUpdates.status = "lost";

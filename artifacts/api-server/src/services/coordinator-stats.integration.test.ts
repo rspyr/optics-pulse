@@ -57,7 +57,7 @@ interface Fixtures {
   csr2: number;
   funnelId: number;
   funnelName: string;
-  leadIds: { L1: number; L2: number; L3: number; L4: number; L5: number; L6: number; L7: number; L8: number };
+  leadIds: { L1: number; L2: number; L3: number; L4: number; L5: number; L6: number; L7: number; L8: number; L9: number };
   day1: Date;
   day2: Date;
   day1Str: string;
@@ -183,21 +183,21 @@ beforeAll(async () => {
   // existing newLeadsHandled / avg-speed assertions still hold, while the
   // call attempts still land them in `handledLeadIds` (the booking scope).
   //
-  // L6 — booked Solar lead, CSR1, updatedAt day1 11:00 → $100 spiff.
+  // L6 — booked Solar lead, CSR1, bookedAt day1 11:00 → $100 spiff.
   const [l6] = await db.insert(leadsTable).values({
     tenantId: tenant.id, firstName: "Lead", lastName: "Six",
     source: "Meta", originalSource: "Meta",
     assignedCsrId: u1.id, assignedAt: day1At(20, 0),
     status: "booked", funnelId: funnel.id, bookedByCsrId: u1.id,
-    preBooked: false, updatedAt: day1At(11, 0),
+    preBooked: false, bookedAt: day1At(11, 0), updatedAt: day1At(11, 0),
   }).returning();
-  // L7 — sold Solar lead, CSR1, updatedAt day1 12:00 → $100 spiff, soldCount++.
+  // L7 — sold Solar lead, CSR1, bookedAt day1 12:00 → $100 spiff, soldCount++.
   const [l7] = await db.insert(leadsTable).values({
     tenantId: tenant.id, firstName: "Lead", lastName: "Seven",
     source: "Meta", originalSource: "Meta",
     assignedCsrId: u1.id, assignedAt: day1At(20, 0),
     status: "sold", funnelId: funnel.id, bookedByCsrId: u1.id,
-    preBooked: false, updatedAt: day1At(12, 0),
+    preBooked: false, bookedAt: day1At(12, 0), updatedAt: day1At(12, 0),
   }).returning();
   // L8 — pre-booked Solar lead, CSR1. Must be EXCLUDED from bookings_count
   // and commission even though status=booked and bookedByCsrId matches.
@@ -206,7 +206,19 @@ beforeAll(async () => {
     source: "Meta", originalSource: "Meta",
     assignedCsrId: u1.id, assignedAt: day1At(20, 0),
     status: "booked", funnelId: funnel.id, bookedByCsrId: u1.id,
-    preBooked: true, updatedAt: day1At(13, 0),
+    preBooked: true, bookedAt: day1At(13, 0), updatedAt: day1At(13, 0),
+  }).returning();
+  // L9 — task #413: booked on day1 (bookedAt day1 14:00) but later edited on
+  // day2 (updatedAt = day2 09:00). Must stay anchored to day1's bookings_count
+  // — re-saving a booked lead the next day should not flip the booking onto
+  // day2 or double-count it on day1+day2. assignedAt is set in the future so
+  // L9's attempts can't create a first-response event (mirrors L6/L7/L8).
+  const [l9] = await db.insert(leadsTable).values({
+    tenantId: tenant.id, firstName: "Lead", lastName: "Nine",
+    source: "Meta", originalSource: "Meta",
+    assignedCsrId: u1.id, assignedAt: day2At(20, 0),
+    status: "booked", funnelId: funnel.id, bookedByCsrId: u1.id,
+    preBooked: false, bookedAt: day1At(14, 0), updatedAt: day2At(9, 0),
   }).returning();
 
   // ── Seed call attempts ─────────────────────────────────────────────────
@@ -235,6 +247,15 @@ beforeAll(async () => {
     { leadId: l6.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(11, 0) },
     { leadId: l7.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(12, 0) },
     { leadId: l8.id, userId: u1.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: day1At(13, 0) },
+
+    // L9: booked on day1, then "edited" on day2 — both attempts are before
+    // L9's day2At(20,0) assignedAt so neither produces a first-response event.
+    // The day1 attempt lands L9 in day1's handledLeadIds; the day2 attempt
+    // lands L9 in day2's handledLeadIds. With the task #413 fix, L9 should
+    // count exactly once on day1's bookings_count and NEVER on day2's,
+    // because bookedAt (day1 14:00) anchors the booking — not updated_at.
+    { leadId: l9.id, userId: u1.id, outcome: "no_answer", actionType: "call", attemptedAt: day1At(14, 30) },
+    { leadId: l9.id, userId: u1.id, outcome: "no_answer", actionType: "call", attemptedAt: day2At(9, 30) },
   ]);
 
   // Login sessions spanning both days so the login-aware speed equals
@@ -252,7 +273,7 @@ beforeAll(async () => {
     csr2: u2.id,
     funnelId: funnel.id,
     funnelName,
-    leadIds: { L1: l1.id, L2: l2.id, L3: l3.id, L4: l4.id, L5: l5.id, L6: l6.id, L7: l7.id, L8: l8.id },
+    leadIds: { L1: l1.id, L2: l2.id, L3: l3.id, L4: l4.id, L5: l5.id, L6: l6.id, L7: l7.id, L8: l8.id, L9: l9.id },
     day1, day2,
     day1Str: dateStr(day1), day2Str: dateStr(day2),
     day1Start: startOfLocalDay(day1), day1End: endOfLocalDay(day1),
@@ -345,9 +366,14 @@ describe("aggregateDailyStats parity with live getComparisonStats (real Postgres
     expect(aggRow.newLeadsHandled).toBe(1);
     expect(aggRow.avgSpeedToLead).toBeCloseTo(60, 0);
 
-    // CSR1 made two call attempts on day2 (L5 + L2 follow-up). callsMade is
-    // raw attempts, not first-response events.
-    expect(aggRow.callsMade).toBe(2);
+    // CSR1 made three call attempts on day2 (L5 + L2 follow-up + L9 follow-up
+    // "edit"). callsMade is raw attempts, not first-response events.
+    expect(aggRow.callsMade).toBe(3);
+
+    // Task #413: L9 was booked on day1 but its lead row was touched on day2.
+    // bookings_count on day2 must NOT include L9 — the booking is anchored to
+    // bookedAt (day1), not updated_at (day2).
+    expect(aggRow.bookingsCount).toBe(0);
   });
 
   it("aggregating day1 records the correct per-CSR numbers from first-response events only", async () => {
@@ -382,20 +408,20 @@ describe("aggregateDailyStats parity with live getComparisonStats (real Postgres
     ));
     expect(csr1Row).toBeDefined();
 
-    // L6 (booked) + L7 (sold) count. L8 is pre-booked → excluded from
-    // bookings_count, sold_count, and commission even though it has the
-    // booked status and a matching bookedByCsrId.
-    expect(csr1Row.bookingsCount).toBe(2);
+    // L6 (booked) + L7 (sold) + L9 (booked, task #413) count. L8 is pre-booked
+    // → excluded from bookings_count, sold_count, and commission even though
+    // it has the booked status and a matching bookedByCsrId.
+    expect(csr1Row.bookingsCount).toBe(3);
     expect(csr1Row.soldCount).toBe(1);
 
     // CSR1 day1 callsMade = 3 (L1) + 1 (L2) + 1 (L3 pre-pass) + 1 (L6) +
-    // 1 (L7) + 1 (L8) = 8 → bookingRate = round(2/8 * 100) = 25.
-    expect(csr1Row.callsMade).toBe(8);
-    expect(csr1Row.bookingRate).toBe(25);
+    // 1 (L7) + 1 (L8) + 1 (L9 day1) = 9 → bookingRate = round(3/9 * 100) = 33.
+    expect(csr1Row.callsMade).toBe(9);
+    expect(csr1Row.bookingRate).toBe(33);
 
-    // Both L6 and L7 are on the Solar funnel ($100 each per spiffConfig);
-    // L8 is pre-booked and contributes $0. Commission = $200.
-    expect(csr1Row.commission).toBe(200);
+    // L6, L7, L9 are all on the Solar funnel ($100 each per spiffConfig);
+    // L8 is pre-booked and contributes $0. Commission = $300.
+    expect(csr1Row.commission).toBe(300);
 
     // CSR2 had no bookings on day1 (only L3's first-touch response).
     const [csr2Row] = await db.select().from(coordinatorDailyStatsTable).where(and(

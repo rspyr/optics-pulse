@@ -144,12 +144,16 @@ async function getBookingStatsByIdsAndDate(
     return { bookingsCount: 0, soldCount: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
   }
 
+  // Anchor bookings to the day the booking actually happened (leads.bookedAt),
+  // not the lead row's last-touched timestamp. Otherwise a same-day status
+  // flip + later edit would either double-count or drift the booking onto the
+  // wrong day. See task #413.
   const bookingConds = [
     inArray(leadsTable.id, leadIds),
     inArray(leadsTable.status, ["booked", "sold"]),
     eq(leadsTable.preBooked, false),
-    gte(leadsTable.updatedAt, dayStart),
-    lte(leadsTable.updatedAt, dayEnd),
+    gte(leadsTable.bookedAt, dayStart),
+    lte(leadsTable.bookedAt, dayEnd),
   ];
   if (bookerCsrId !== undefined) {
     bookingConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
