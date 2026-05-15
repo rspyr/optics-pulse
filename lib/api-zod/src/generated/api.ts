@@ -566,9 +566,9 @@ export const GetPodiumTimelineResponse = zod.object({
     zod
       .object({
         type: zod
-          .enum(["pulse_action", "podium_text", "podium_call"])
+          .enum(["pulse_action", "podium_text", "podium_call", "status_change"])
           .describe(
-            "Discriminator. `pulse_action` is a native Pulse\ncall\/text\/voicemail attempt; `podium_text` is a Podium SMS\nor form message; `podium_call` is a Podium-tracked phone\ncall.\n",
+            "Discriminator. `pulse_action` is a native Pulse\ncall\/text\/voicemail attempt; `podium_text` is a Podium SMS\nor form message; `podium_call` is a Podium-tracked phone\ncall; `status_change` is an entry from the durable\n`lead_status_history` audit log (a hub-status transition).\n",
           ),
         source: zod
           .enum(["pulse", "podium"])
@@ -703,9 +703,95 @@ export const GetPodiumTimelineResponse = zod.object({
           .describe(
             "Podium-only. Raw Podium `items` payload (text, image, or\nother attachment descriptors). Forwarded as-is so the UI\ncan render attachments without a second fetch.\n",
           ),
+        fromStatus: zod
+          .string()
+          .nullish()
+          .describe(
+            "Status-change only. The lead's prior `hub_status` before\nthis transition, or `null` for the very first row.\n",
+          ),
+        toStatus: zod
+          .string()
+          .optional()
+          .describe(
+            "Status-change only. The lead's `hub_status` after this\ntransition.\n",
+          ),
+        reason: zod
+          .string()
+          .nullish()
+          .describe(
+            "Status-change only. Free-form reason recorded with the\ntransition (e.g. dead reason, `appointment_canceled`).\n",
+          ),
+        changedByUserId: zod
+          .number()
+          .nullish()
+          .describe(
+            "Status-change only. ID of the user who drove the\ntransition, or `null` for system-driven changes.\n",
+          ),
       })
       .describe(
         "A single entry in the unified Pulse + Podium timeline for a\nlead. Discriminated by `type`: `pulse_action` entries are\nsourced from `call_attempts` and carry the same fields as\n`HistoryEntry`; `podium_text` and `podium_call` entries are\nsourced from `podium_messages` and carry Podium-specific fields\n(direction, body, channelType, …). Variant-specific fields are\nomitted on entries from other variants.\n",
+      ),
+  ),
+});
+
+/**
+ * Returns every `lead_status_history` row recorded against the lead
+in ascending chronological order, scoped to the lead's tenant.
+Each row captures a single hub-status transition (`from_status` →
+`to_status`), who drove it (or `null` for system-driven changes),
+when it happened, and an optional reason string. This is the
+append-only audit log surfaced alongside the call-attempt
+timeline so CSRs and admins can see exactly how a lead moved
+through statuses (e.g. day_1 → call_back → appt_set → dead →
+appt_set).
+
+ * @summary Get the durable hub-status transition audit trail for a lead
+ */
+export const GetLeadStatusHistoryParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetLeadStatusHistoryQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetLeadStatusHistoryResponse = zod.object({
+  history: zod.array(
+    zod
+      .object({
+        id: zod.number(),
+        leadId: zod.number(),
+        fromStatus: zod
+          .string()
+          .nullish()
+          .describe(
+            "Prior `hub_status` before the transition, or `null` for the\nvery first row in a lead's history.\n",
+          ),
+        toStatus: zod
+          .string()
+          .describe("New `hub_status` after the transition."),
+        changedAt: zod.date(),
+        changedByUserId: zod
+          .number()
+          .nullish()
+          .describe(
+            "ID of the user who drove the transition, or `null` for\nsystem-driven changes (e.g. day-sequence advancement,\nbackfill).\n",
+          ),
+        changedByName: zod
+          .string()
+          .nullish()
+          .describe(
+            "Display name of the user who drove the transition, joined\nfrom `users.name`. Null when `changedByUserId` is null or\nthe user has been deleted.\n",
+          ),
+        reason: zod
+          .string()
+          .nullish()
+          .describe(
+            "Optional free-form reason recorded with the transition\n(e.g. dead reason, `appointment_canceled`).\n",
+          ),
+      })
+      .describe(
+        "A single row from the `lead_status_history` append-only audit\nlog, recording one hub-status transition for a lead.\n",
       ),
   ),
 });

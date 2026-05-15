@@ -163,10 +163,46 @@ export interface LeadHistoryResponse {
 }
 
 /**
+ * A single row from the `lead_status_history` append-only audit
+log, recording one hub-status transition for a lead.
+
+ */
+export interface LeadStatusHistoryEntry {
+  id: number;
+  leadId: number;
+  /** Prior `hub_status` before the transition, or `null` for the
+very first row in a lead's history.
+ */
+  fromStatus?: string | null;
+  /** New `hub_status` after the transition. */
+  toStatus: string;
+  changedAt: string;
+  /** ID of the user who drove the transition, or `null` for
+system-driven changes (e.g. day-sequence advancement,
+backfill).
+ */
+  changedByUserId?: number | null;
+  /** Display name of the user who drove the transition, joined
+from `users.name`. Null when `changedByUserId` is null or
+the user has been deleted.
+ */
+  changedByName?: string | null;
+  /** Optional free-form reason recorded with the transition
+(e.g. dead reason, `appointment_canceled`).
+ */
+  reason?: string | null;
+}
+
+export interface LeadStatusHistoryResponse {
+  history: LeadStatusHistoryEntry[];
+}
+
+/**
  * Discriminator. `pulse_action` is a native Pulse
 call/text/voicemail attempt; `podium_text` is a Podium SMS
 or form message; `podium_call` is a Podium-tracked phone
-call.
+call; `status_change` is an entry from the durable
+`lead_status_history` audit log (a hub-status transition).
 
  */
 export type TimelineEntryType =
@@ -176,6 +212,7 @@ export const TimelineEntryType = {
   pulse_action: "pulse_action",
   podium_text: "podium_text",
   podium_call: "podium_call",
+  status_change: "status_change",
 } as const;
 
 /**
@@ -206,7 +243,8 @@ export interface TimelineEntry {
   /** Discriminator. `pulse_action` is a native Pulse
 call/text/voicemail attempt; `podium_text` is a Podium SMS
 or form message; `podium_call` is a Podium-tracked phone
-call.
+call; `status_change` is an entry from the durable
+`lead_status_history` audit log (a hub-status transition).
  */
   type: TimelineEntryType;
   /** Origin system that produced the entry. `pulse_action` rows
@@ -291,6 +329,22 @@ other attachment descriptors). Forwarded as-is so the UI
 can render attachments without a second fetch.
  */
   messageItems?: unknown | null;
+  /** Status-change only. The lead's prior `hub_status` before
+this transition, or `null` for the very first row.
+ */
+  fromStatus?: string | null;
+  /** Status-change only. The lead's `hub_status` after this
+transition.
+ */
+  toStatus?: string;
+  /** Status-change only. Free-form reason recorded with the
+transition (e.g. dead reason, `appointment_canceled`).
+ */
+  reason?: string | null;
+  /** Status-change only. ID of the user who drove the
+transition, or `null` for system-driven changes.
+ */
+  changedByUserId?: number | null;
 }
 
 export interface PodiumTimelineResponse {
@@ -1389,6 +1443,10 @@ export type LinkPodiumUserParams = {
 };
 
 export type GetPodiumTimelineParams = {
+  tenantId?: number;
+};
+
+export type GetLeadStatusHistoryParams = {
   tenantId?: number;
 };
 

@@ -3,7 +3,7 @@ import {
   db, leadsTable, callAttemptsTable, usersTable, scheduledFollowupsTable,
   funnelTypesTable, routingConfigTable, csrScheduleTable, tenantFunnelTypesTable,
   tenantsTable, leadSourceAliasesTable, soldEstimatesTable, isUnknownSource,
-  leadAttributionCorrectionsTable,
+  leadAttributionCorrectionsTable, leadStatusHistoryTable,
 } from "@workspace/db";
 import { eq, and, sql, desc, asc, gte, gt, lte, inArray, isNull, ne, count, or, isNotNull } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
@@ -884,6 +884,56 @@ router.get("/leads-hub/:leadId/history", async (req, res) => {
       appointmentTime,
     };
   });
+
+  res.json({ history });
+});
+
+router.get("/leads-hub/:leadId/status-history", async (req, res) => {
+  const leadId = parseInt(String(req.params.leadId));
+  if (isNaN(leadId)) { res.status(400).json({ error: "Invalid leadId" }); return; }
+
+  const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId })
+    .from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const access = assertResourceTenantAccess(req, res, lead.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Lead not found",
+  });
+  if (!access.ok) return;
+
+  const rows = await db.select({
+    id: leadStatusHistoryTable.id,
+    leadId: leadStatusHistoryTable.leadId,
+    fromStatus: leadStatusHistoryTable.fromStatus,
+    toStatus: leadStatusHistoryTable.toStatus,
+    changedAt: leadStatusHistoryTable.changedAt,
+    changedByUserId: leadStatusHistoryTable.changedByUserId,
+    reason: leadStatusHistoryTable.reason,
+  }).from(leadStatusHistoryTable)
+    .where(and(
+      eq(leadStatusHistoryTable.leadId, leadId),
+      eq(leadStatusHistoryTable.tenantId, lead.tenantId),
+    ))
+    .orderBy(asc(leadStatusHistoryTable.changedAt));
+
+  const userIds = [...new Set(rows.map(r => r.changedByUserId).filter((id): id is number => id !== null))];
+  let userMap: Record<number, string> = {};
+  if (userIds.length > 0) {
+    const users = await db.select({ id: usersTable.id, name: usersTable.name })
+      .from(usersTable).where(inArray(usersTable.id, userIds));
+    userMap = Object.fromEntries(users.map(u => [u.id, u.name]));
+  }
+
+  const history = rows.map(r => ({
+    id: r.id,
+    leadId: r.leadId,
+    fromStatus: r.fromStatus,
+    toStatus: r.toStatus,
+    changedAt: r.changedAt.toISOString(),
+    changedByUserId: r.changedByUserId,
+    changedByName: r.changedByUserId ? (userMap[r.changedByUserId] ?? null) : null,
+    reason: r.reason,
+  }));
 
   res.json({ history });
 });

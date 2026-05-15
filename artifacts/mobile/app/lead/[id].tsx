@@ -158,7 +158,7 @@ interface PodiumMessage {
 }
 
 interface TimelineEntry {
-  type: "pulse_action" | "podium_text" | "podium_call";
+  type: "pulse_action" | "podium_text" | "podium_call" | "status_change";
   source: string;
   timestamp: string;
   id: number;
@@ -181,6 +181,10 @@ interface TimelineEntry {
   channelType?: string;
   senderName?: string;
   deliveryStatus?: string;
+  fromStatus?: string | null;
+  toStatus?: string;
+  reason?: string | null;
+  changedByUserId?: number | null;
 }
 
 function formatBookedAt(iso: string): string {
@@ -822,6 +826,7 @@ export default function LeadDetailScreen() {
   const getTimelineIcon = (entry: TimelineEntry): { name: keyof typeof Feather.glyphMap; color: string } => {
     if (entry.type === "podium_text") return { name: "message-square", color: "#3B82F6" };
     if (entry.type === "podium_call") return { name: "phone", color: "#06B6D4" };
+    if (entry.type === "status_change") return { name: "git-branch", color: "#8B5CF6" };
     if (entry.outcome === "resubmission") return { name: "refresh-cw", color: "#06B6D4" };
     if (entry.actionType === "call" || entry.method === "call") return { name: "phone", color: colors.foreground };
     if (entry.actionType === "text" || entry.method === "text") return { name: "message-square", color: colors.foreground };
@@ -838,6 +843,7 @@ export default function LeadDetailScreen() {
 
   const canEditEntry = (entry: TimelineEntry) => {
     if (entry.source !== "pulse") return false;
+    if (entry.type === "status_change") return false;
     if (entry.id < 0) return false;
     const isAdminRole = ["client_admin", "agency_user", "super_admin"].includes(user?.role || "");
     return isAdminRole || entry.userId === user?.id;
@@ -1539,7 +1545,7 @@ export default function LeadDetailScreen() {
                       const isEditing = editingId === entry.id;
 
                       return (
-                        <View key={`${entry.source}-${entry.id}`} style={styles.timelineRow}>
+                        <View key={`${entry.type}-${entry.id}`} style={styles.timelineRow}>
                           <View style={styles.timelineNodeCol}>
                             <View style={[styles.timelineNode, { backgroundColor: nodeColor, borderColor: nodeBorder }]}>
                               <Feather name={icon.name} size={10} color={icon.color} />
@@ -1610,7 +1616,28 @@ export default function LeadDetailScreen() {
                               </View>
                             )}
 
-                            {entry.source === "pulse" && !isEditing && (
+                            {entry.type === "status_change" && (
+                              <View style={[styles.pulseEntry, { backgroundColor: colors.secondary, borderRadius: 8, padding: 8, borderLeftWidth: 2, borderLeftColor: "#8B5CF6" }]}>
+                                <View style={styles.pulseEntryHeader}>
+                                  <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>
+                                    {new Date(entry.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </Text>
+                                  {entry.csrName && <Text style={{ fontSize: 11, color: colors.mutedForeground + "80", fontFamily: "Inter_400Regular" }}>{entry.csrName}</Text>}
+                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                                    {entry.fromStatus ? (
+                                      <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: colors.mutedForeground }}>{entry.fromStatus.replace(/_/g, " ").toUpperCase()}</Text>
+                                    ) : (
+                                      <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: colors.mutedForeground, fontStyle: "italic" }}>NEW</Text>
+                                    )}
+                                    <Feather name="arrow-right" size={10} color="#8B5CF6" />
+                                    <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#A78BFA" }}>{(entry.toStatus || "").replace(/_/g, " ").toUpperCase()}</Text>
+                                  </View>
+                                </View>
+                                {entry.reason && <Text style={[styles.historyNotes, { color: colors.foreground + "60" }]}>Reason: {entry.reason.replace(/_/g, " ")}</Text>}
+                              </View>
+                            )}
+
+                            {entry.source === "pulse" && entry.type !== "status_change" && !isEditing && (
                               <View style={styles.pulseEntry}>
                                 <View style={styles.pulseEntryHeader}>
                                   <Text style={[styles.msgTime, { color: colors.mutedForeground }]}>

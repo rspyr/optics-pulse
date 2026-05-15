@@ -17,7 +17,7 @@ import {
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
   Pencil, Timer, Send, ArrowDown, ExternalLink, Search,
-  Pause, Play
+  Pause, Play, GitBranch, ArrowRight
 } from "lucide-react";
 import { isUnknownSource } from "@workspace/api-zod";
 import { useGetPodiumTimeline, useGetPodiumConversation, useSendPodiumMessage, type TimelineEntry, type PodiumMessage } from "@workspace/api-client-react";
@@ -985,6 +985,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   const getIcon = (entry: TimelineEntry) => {
     if (entry.type === "podium_text") return <MessageSquare className="w-3 h-3 text-blue-400" />;
     if (entry.type === "podium_call") return <Phone className="w-3 h-3 text-cyan-400" />;
+    if (entry.type === "status_change") return <GitBranch className="w-3 h-3 text-purple-400" />;
     if (entry.outcome === "resubmission") return <RefreshCw className="w-3 h-3 text-cyan-400" />;
     if (entry.actionType === "call" || entry.method === "call") return <Phone className="w-3 h-3" />;
     if (entry.actionType === "text" || entry.method === "text") return <MessageSquare className="w-3 h-3" />;
@@ -1293,8 +1294,34 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
     return renderPodiumText(entry);
   };
 
-  const pulseCount = unifiedTimeline.filter(e => e.source === "pulse").length;
+  const renderStatusChange = (entry: TimelineEntry) => (
+    <div className="flex items-center gap-2 flex-wrap py-1">
+      <span className="text-[10px] text-white/30 font-mono shrink-0">
+        {formatDateTimeInTz(entry.timestamp, timezone)}
+      </span>
+      <span className="text-[10px] text-white/50">{(entry.csrName as string) || "System"}</span>
+      <div className="flex items-center gap-1">
+        {entry.fromStatus ? (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/60 border border-white/10 font-medium uppercase tracking-wide">
+            {entry.fromStatus.replace(/_/g, " ")}
+          </span>
+        ) : (
+          <span className="text-[10px] text-white/40 italic">new</span>
+        )}
+        <ArrowRight className="w-3 h-3 text-purple-400/70" />
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/20 font-semibold uppercase tracking-wide">
+          {(entry.toStatus || "").replace(/_/g, " ")}
+        </span>
+      </div>
+      {entry.reason && (
+        <span className="text-[10px] text-white/40 italic">— {entry.reason.replace(/_/g, " ")}</span>
+      )}
+    </div>
+  );
+
+  const pulseCount = unifiedTimeline.filter(e => e.source === "pulse" && e.type !== "status_change").length;
   const podiumCount = unifiedTimeline.filter(e => e.source === "podium").length;
+  const statusChangeCount = unifiedTimeline.filter(e => e.type === "status_change").length;
 
   return (
     <div className="space-y-0">
@@ -1303,15 +1330,20 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
         Interaction Timeline ({unifiedTimeline.length})
         {podiumCount > 0 && <span className="text-[9px] text-blue-400/50 ml-1">{podiumCount} Podium</span>}
         {pulseCount > 0 && <span className="text-[9px] text-white/30 ml-1">{pulseCount} Pulse</span>}
+        {statusChangeCount > 0 && <span className="text-[9px] text-purple-400/60 ml-1">{statusChangeCount} Status</span>}
         <ChevronDown className={cn("w-3 h-3 transition-transform", expanded && "rotate-180")} />
       </button>
       <div className="relative pl-4 border-l border-white/5 space-y-2">
         {displayed.map(entry => (
-          <div key={`${entry.source}-${entry.id}`} className="relative">
+          <div key={`${entry.type}-${entry.id}`} className="relative">
             <div className={cn("absolute -left-[21px] top-1.5 w-3 h-3 rounded-full flex items-center justify-center border", getNodeColor(entry))}>
               {getIcon(entry)}
             </div>
-            {entry.source === "podium" ? renderPodiumEntry(entry) : renderPulseAction(entry)}
+            {entry.type === "status_change"
+              ? renderStatusChange(entry)
+              : entry.source === "podium"
+                ? renderPodiumEntry(entry)
+                : renderPulseAction(entry)}
           </div>
         ))}
       </div>

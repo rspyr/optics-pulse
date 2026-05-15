@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable } from "@workspace/db";
-import { eq, and, or, desc, inArray } from "drizzle-orm";
+import { db, leadsTable, callAttemptsTable, podiumMessagesTable, usersTable, leadStatusHistoryTable } from "@workspace/db";
+import { eq, and, or, desc, inArray, asc } from "drizzle-orm";
 import { getContactConversations, getConversationMessages, sendMessage, ensurePodiumContact, getPodiumUsers } from "../services/integrations/podium-api";
 import { isPodiumConnected } from "../services/integrations/podium-auth";
 import { emitPodiumMessage } from "../socket";
@@ -215,7 +215,7 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
     ? syncPodiumMessagesForLead(podiumUserId, tenantId, leadId, lead.phone)
     : Promise.resolve([]);
 
-  const [callAttempts, podiumMessages] = await Promise.all([
+  const [callAttempts, podiumMessages, statusChanges] = await Promise.all([
     db.select({
       id: callAttemptsTable.id,
       leadId: callAttemptsTable.leadId,
@@ -238,9 +238,25 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
       .where(eq(callAttemptsTable.leadId, leadId))
       .orderBy(desc(callAttemptsTable.attemptedAt)),
     podiumSyncPromise,
+    db.select({
+      id: leadStatusHistoryTable.id,
+      fromStatus: leadStatusHistoryTable.fromStatus,
+      toStatus: leadStatusHistoryTable.toStatus,
+      changedAt: leadStatusHistoryTable.changedAt,
+      changedByUserId: leadStatusHistoryTable.changedByUserId,
+      reason: leadStatusHistoryTable.reason,
+    }).from(leadStatusHistoryTable)
+      .where(and(
+        eq(leadStatusHistoryTable.leadId, leadId),
+        eq(leadStatusHistoryTable.tenantId, tenantId),
+      ))
+      .orderBy(desc(leadStatusHistoryTable.changedAt)),
   ]);
 
-  const userIds = [...new Set(callAttempts.map(a => a.userId))];
+  const userIds = [...new Set([
+    ...callAttempts.map(a => a.userId),
+    ...statusChanges.map(s => s.changedByUserId).filter((id): id is number => id !== null),
+  ])];
   let userMap: Record<number, string> = {};
   if (userIds.length > 0) {
     const users = await db.select({ id: usersTable.id, name: usersTable.name })
@@ -249,7 +265,7 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
   }
 
   interface TimelineEntry {
-    type: "pulse_action" | "podium_text" | "podium_call";
+    type: "pulse_action" | "podium_text" | "podium_call" | "status_change";
     source: string;
     timestamp: string;
     id: number;
@@ -298,6 +314,20 @@ router.get("/podium/timeline/:leadId", async (req, res) => {
       callbackAt,
       appointmentDate,
       appointmentTime,
+    });
+  }
+
+  for (const sc of statusChanges) {
+    timeline.push({
+      type: "status_change",
+      source: "pulse",
+      timestamp: sc.changedAt.toISOString(),
+      id: sc.id,
+      fromStatus: sc.fromStatus,
+      toStatus: sc.toStatus,
+      reason: sc.reason,
+      changedByUserId: sc.changedByUserId,
+      csrName: sc.changedByUserId ? (userMap[sc.changedByUserId] || "Unknown") : "System",
     });
   }
 

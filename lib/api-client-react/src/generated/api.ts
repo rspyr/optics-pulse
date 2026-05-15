@@ -46,6 +46,7 @@ import type {
   GetDashboardOverviewParams,
   GetHudQueueParams,
   GetHudStatsParams,
+  GetLeadStatusHistoryParams,
   GetMetaCampaignBreakdownParams,
   GetMetaCampaignSummaryParams,
   GetPodiumConversationParams,
@@ -61,6 +62,7 @@ import type {
   Lead,
   LeadHistoryResponse,
   LeadListResponse,
+  LeadStatusHistoryResponse,
   LeaderboardResponse,
   LinkPodiumUserInput,
   LinkPodiumUserParams,
@@ -1625,6 +1627,136 @@ export function useGetPodiumTimeline<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetPodiumTimelineQueryOptions(
+    leadId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns every `lead_status_history` row recorded against the lead
+in ascending chronological order, scoped to the lead's tenant.
+Each row captures a single hub-status transition (`from_status` →
+`to_status`), who drove it (or `null` for system-driven changes),
+when it happened, and an optional reason string. This is the
+append-only audit log surfaced alongside the call-attempt
+timeline so CSRs and admins can see exactly how a lead moved
+through statuses (e.g. day_1 → call_back → appt_set → dead →
+appt_set).
+
+ * @summary Get the durable hub-status transition audit trail for a lead
+ */
+export const getGetLeadStatusHistoryUrl = (
+  leadId: number,
+  params?: GetLeadStatusHistoryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/leads-hub/${leadId}/status-history?${stringifiedParams}`
+    : `/api/leads-hub/${leadId}/status-history`;
+};
+
+export const getLeadStatusHistory = async (
+  leadId: number,
+  params?: GetLeadStatusHistoryParams,
+  options?: RequestInit,
+): Promise<LeadStatusHistoryResponse> => {
+  return customFetch<LeadStatusHistoryResponse>(
+    getGetLeadStatusHistoryUrl(leadId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetLeadStatusHistoryQueryKey = (
+  leadId: number,
+  params?: GetLeadStatusHistoryParams,
+) => {
+  return [
+    `/api/leads-hub/${leadId}/status-history`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetLeadStatusHistoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getLeadStatusHistory>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetLeadStatusHistoryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadStatusHistory>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetLeadStatusHistoryQueryKey(leadId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getLeadStatusHistory>>
+  > = ({ signal }) =>
+    getLeadStatusHistory(leadId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getLeadStatusHistory>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetLeadStatusHistoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getLeadStatusHistory>>
+>;
+export type GetLeadStatusHistoryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the durable hub-status transition audit trail for a lead
+ */
+
+export function useGetLeadStatusHistory<
+  TData = Awaited<ReturnType<typeof getLeadStatusHistory>>,
+  TError = ErrorType<unknown>,
+>(
+  leadId: number,
+  params?: GetLeadStatusHistoryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadStatusHistory>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetLeadStatusHistoryQueryOptions(
     leadId,
     params,
     options,

@@ -10,7 +10,8 @@
  * Discriminator. `pulse_action` is a native Pulse
 call/text/voicemail attempt; `podium_text` is a Podium SMS
 or form message; `podium_call` is a Podium-tracked phone
-call.
+call; `status_change` is an entry from the durable
+`lead_status_history` audit log (a hub-status transition).
 
  */
 export type TimelineEntryType =
@@ -20,4 +21,5 @@ export const TimelineEntryType = {
   pulse_action: "pulse_action",
   podium_text: "podium_text",
   podium_call: "podium_call",
+  status_change: "status_change",
 } as const;
