@@ -551,6 +551,7 @@ describe("lead_assignments history makes speed-to-lead reproducible (task #407)"
   });
 });
 
+
 /**
  * Login-aware speed with mid-day logout gaps (real Postgres).
  *
@@ -693,5 +694,174 @@ describe("login-aware speed subtracts mid-day logout gaps (real Postgres)", () =
     // 1800s, not the 3600s wall-clock — proves the offline subtraction ran
     // end-to-end through the nightly aggregation path.
     expect(row.avgSpeedToLead).toBeCloseTo(1800, 0);
+  });
+});
+
+/**
+ * Task #412 — Funnel rename safety for spiff payouts.
+ *
+ * `computeSpiffCommission` keys on the funnel **name** read from
+ * `funnel_types` at aggregation time, while tenants configure payouts by
+ * funnel name in `tenants.spiff_config.byFunnel`. The funnel itself is
+ * referenced by id on `leads.funnel_id`, so renaming the row is a one-line
+ * UPDATE that does NOT touch the lead history — but it WILL change every
+ * subsequent commission aggregation for those leads.
+ *
+ * Documented contract (asserted below):
+ *   Commission lookup uses the CURRENT funnel name at the moment of
+ *   aggregation. If a funnel is renamed without updating
+ *   `spiff_config.byFunnel` to match, that funnel's bookings fall back
+ *   DETERMINISTICALLY to `spiff_config.default`. Re-aggregating an older
+ *   day after the rename will overwrite the previously-persisted commission
+ *   with the fallback value (`bookings × default`).
+ *
+ * This is the product expectation: spiff_config is the source of truth for
+ * payouts, and we don't silently chase renames. Operators renaming a funnel
+ * are expected to also update the tenant's spiff config (or rely on the
+ * default).
+ */
+describe("funnel rename keeps spiff payouts deterministic (task #412)", () => {
+  interface RenameFx {
+    tenantId: number;
+    csr: number;
+    funnelId: number;
+    origFunnelName: string;
+    renamedFunnelName: string;
+    bookedLeadId: number;
+    soldLeadId: number;
+    day1: Date;
+    day1Str: string;
+  }
+  let xfx: RenameFx;
+
+  beforeAll(async () => {
+    const slug = `spiff-rename-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const origFunnelName = `OrigFunnel-${slug}`;
+    const renamedFunnelName = `RenamedFunnel-${slug}`;
+
+    // Tenant's byFunnel keys ONLY the original name. After rename, neither
+    // the old nor the new name will match leads' current funnel name (the
+    // new one), so commission must fall back to default ($20).
+    const [tenant] = await db.insert(tenantsTable).values({
+      name: `Spiff Rename ${slug}`,
+      clientSlug: slug,
+      spiffConfig: { default: 20, byFunnel: { [origFunnelName]: 100 } },
+    }).returning();
+
+    const [funnel] = await db.insert(funnelTypesTable).values({
+      name: origFunnelName,
+      slug: `orig-${slug}`,
+    }).returning();
+
+    const [u] = await db.insert(usersTable).values({
+      email: `${slug}-csr@example.com`, name: "Rename CSR", passwordHash: "x",
+      role: "client_user", tenantId: tenant.id,
+    }).returning();
+
+    const day1 = new Date(); day1.setDate(day1.getDate() - 1); day1.setHours(0, 0, 0, 0);
+    const at = (h: number, m = 0) => {
+      const d = new Date(day1); d.setHours(h, m, 0, 0); return d;
+    };
+
+    // Two leads on the funnel, both worked + booked/sold by the CSR on day1.
+    // Assigned LATE in the day with call attempts EARLIER so they land in
+    // `handledLeadIds` (booking scope) without producing first-response events
+    // (keeps the rest of the day's stats orthogonal to this test).
+    const [booked] = await db.insert(leadsTable).values({
+      tenantId: tenant.id, firstName: "Rename", lastName: "Booked",
+      source: "Meta", originalSource: "Meta",
+      assignedCsrId: u.id, assignedAt: at(20, 0),
+      status: "booked", funnelId: funnel.id, bookedByCsrId: u.id,
+      preBooked: false, updatedAt: at(11, 0),
+    }).returning();
+    const [sold] = await db.insert(leadsTable).values({
+      tenantId: tenant.id, firstName: "Rename", lastName: "Sold",
+      source: "Meta", originalSource: "Meta",
+      assignedCsrId: u.id, assignedAt: at(20, 0),
+      status: "sold", funnelId: funnel.id, bookedByCsrId: u.id,
+      preBooked: false, updatedAt: at(12, 0),
+    }).returning();
+
+    await db.insert(callAttemptsTable).values([
+      { leadId: booked.id, userId: u.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(11, 0) },
+      { leadId: sold.id, userId: u.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(12, 0) },
+    ]);
+
+    xfx = {
+      tenantId: tenant.id, csr: u.id, funnelId: funnel.id,
+      origFunnelName, renamedFunnelName,
+      bookedLeadId: booked.id, soldLeadId: sold.id,
+      day1, day1Str: dateStr(day1),
+    };
+  });
+
+  afterAll(async () => {
+    if (!xfx) return;
+    try {
+      const leadIds = [xfx.bookedLeadId, xfx.soldLeadId];
+      await db.delete(callAttemptsTable).where(inArray(callAttemptsTable.leadId, leadIds));
+      await db.delete(leadsTable).where(inArray(leadsTable.id, leadIds));
+      await db.delete(coordinatorDailyStatsTable).where(eq(coordinatorDailyStatsTable.tenantId, xfx.tenantId));
+      await db.delete(usersTable).where(eq(usersTable.id, xfx.csr));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, xfx.tenantId));
+      await db.delete(funnelTypesTable).where(eq(funnelTypesTable.id, xfx.funnelId));
+    } catch { /* best-effort */ }
+  });
+
+  it("pre-rename: aggregation persists commission keyed on the matching funnel name ($100 × 2)", async () => {
+    await aggregateDailyStats(xfx.day1Str);
+    const [row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, xfx.csr),
+      eq(coordinatorDailyStatsTable.date, xfx.day1Str),
+    ));
+    expect(row).toBeDefined();
+    expect(row.bookingsCount).toBe(2);
+    expect(row.soldCount).toBe(1);
+    // byFunnel[OrigFunnel] = $100 → 2 bookings × $100 = $200.
+    expect(row.commission).toBe(200);
+  });
+
+  it("post-rename: re-aggregating the same day falls back to spiff default (deterministic)", async () => {
+    // Rename the funnel WITHOUT touching tenant.spiff_config. Leads still
+    // point at the same funnel_id; only the row's name changes.
+    await db.update(funnelTypesTable)
+      .set({ name: xfx.renamedFunnelName })
+      .where(eq(funnelTypesTable.id, xfx.funnelId));
+
+    // Re-aggregate the same day. The upsert overwrites the prior commission.
+    await aggregateDailyStats(xfx.day1Str);
+
+    const [row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, xfx.csr),
+      eq(coordinatorDailyStatsTable.date, xfx.day1Str),
+    ));
+    expect(row).toBeDefined();
+    // Bookings/sold unchanged — only the commission lookup is affected.
+    expect(row.bookingsCount).toBe(2);
+    expect(row.soldCount).toBe(1);
+    // RenamedFunnel is NOT in byFunnel → default ($20) × 2 = $40.
+    // This is the documented product behavior: spiff_config is the source of
+    // truth; renaming a funnel without updating it deterministically drops
+    // those bookings to the default payout (NOT zero, NOT the stale $100).
+    expect(row.commission).toBe(40);
+  });
+
+  it("post-rename: updating spiff_config to the new name restores the original payout", async () => {
+    // Operator remediation: point byFunnel at the new name.
+    await db.update(tenantsTable)
+      .set({
+        spiffConfig: { default: 20, byFunnel: { [xfx.renamedFunnelName]: 100 } },
+        updatedAt: new Date(),
+      })
+      .where(eq(tenantsTable.id, xfx.tenantId));
+
+    await aggregateDailyStats(xfx.day1Str);
+
+    const [row] = await db.select().from(coordinatorDailyStatsTable).where(and(
+      eq(coordinatorDailyStatsTable.userId, xfx.csr),
+      eq(coordinatorDailyStatsTable.date, xfx.day1Str),
+    ));
+    expect(row).toBeDefined();
+    expect(row.commission).toBe(200);
   });
 });
