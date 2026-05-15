@@ -128,6 +128,7 @@ interface LeadDetail {
   state?: string;
   attemptCount?: number;
   callbackAt?: string;
+  bookedAt?: string | null;
   appointmentDate?: string;
   appointmentTime?: string;
   addOns?: string;
@@ -180,6 +181,25 @@ interface TimelineEntry {
   channelType?: string;
   senderName?: string;
   deliveryStatus?: string;
+}
+
+function formatBookedAt(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  const absolute = d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const diff = Date.now() - d.getTime();
+  const secs = Math.floor(diff / 1000);
+  let rel = "just now";
+  if (secs >= 60) {
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) rel = `${mins}m ago`;
+    else {
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) rel = `${hrs}h ago`;
+      else rel = `${Math.floor(hrs / 24)}d ago`;
+    }
+  }
+  return `${absolute} · ${rel}`;
 }
 
 function formatPhone(phone: string): string {
@@ -421,6 +441,22 @@ export default function LeadDetailScreen() {
       setTimelineLoading(false);
     }
   }, [apiFetch, params.id, tenantQs]);
+
+  const displayTimeline = React.useMemo(() => {
+    const base = unifiedTimeline;
+    if (!lead?.bookedAt) return base;
+    const ts = new Date(lead.bookedAt).getTime();
+    if (!Number.isFinite(ts)) return base;
+    const synthetic: TimelineEntry = {
+      type: "pulse_action",
+      source: "pulse",
+      timestamp: lead.bookedAt,
+      id: -1,
+      outcome: "lead_booked",
+      actionType: "booked",
+    };
+    return [...base, synthetic].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [unifiedTimeline, lead?.bookedAt]);
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -802,6 +838,7 @@ export default function LeadDetailScreen() {
 
   const canEditEntry = (entry: TimelineEntry) => {
     if (entry.source !== "pulse") return false;
+    if (entry.id < 0) return false;
     const isAdminRole = ["client_admin", "agency_user", "super_admin"].includes(user?.role || "");
     return isAdminRole || entry.userId === user?.id;
   };
@@ -963,6 +1000,17 @@ export default function LeadDetailScreen() {
                 <Feather name="calendar" size={14} color="#F59E0B" />
                 <Text style={styles.callbackBannerText}>
                   Callback: {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                </Text>
+              </View>
+            )}
+
+            {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
+              <View style={[styles.callbackBanner, { backgroundColor: "#10B98115" }]}>
+                <Feather name="check-circle" size={14} color="#10B981" />
+                <Text style={[styles.callbackBannerText, { color: "#10B981" }]}>
+                  {lead.bookedAt
+                    ? `Booked ${formatBookedAt(lead.bookedAt)}`
+                    : "Booked —"}
                 </Text>
               </View>
             )}
@@ -1474,7 +1522,7 @@ export default function LeadDetailScreen() {
             <View style={styles.historyContainer}>
               {timelineLoading ? (
                 <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
-              ) : unifiedTimeline.length === 0 ? (
+              ) : displayTimeline.length === 0 ? (
                 <View style={[styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={styles.emptyMessages}>
                     <Feather name="clock" size={32} color={colors.mutedForeground} />
@@ -1484,7 +1532,7 @@ export default function LeadDetailScreen() {
               ) : (
                 <>
                   <View style={styles.timelineLine}>
-                    {(timelineExpanded ? unifiedTimeline : unifiedTimeline.slice(0, 5)).map(entry => {
+                    {(timelineExpanded ? displayTimeline : displayTimeline.slice(0, 5)).map(entry => {
                       const icon = getTimelineIcon(entry);
                       const nodeColor = entry.source === "podium" ? "#3B82F620" : colors.card;
                       const nodeBorder = entry.source === "podium" ? "#3B82F630" : colors.border;

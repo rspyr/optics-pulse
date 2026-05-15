@@ -201,6 +201,7 @@ interface LeadData {
   assignedTo?: string | null;
   assignedCsrId?: number | null;
   callbackAt?: string | null;
+  bookedAt?: string | null;
   deadReason?: string | null;
   disposition?: string | null;
   notes?: string | null;
@@ -805,6 +806,12 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
                 CB: {formatDateTimeInTz(lead.callbackAt, timezone)}
               </span>
             )}
+            {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                <Calendar className="w-2.5 h-2.5" />
+                Booked: {lead.bookedAt ? formatDateTimeInTz(lead.bookedAt, timezone) : "—"}
+              </span>
+            )}
           </div>
           <ContactFlags preferences={lead.contactPreferences} />
           {lead.disposition && (
@@ -825,7 +832,7 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
   );
 }
 
-function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false, leadHubStatus }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean; leadHubStatus?: string }) {
+function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, currentUserId, isAdminRole = false, leadHubStatus, leadBookedAt }: { leadId: number; tenantId: number; timezone: string; canEdit?: boolean; currentUserId?: number; isAdminRole?: boolean; leadHubStatus?: string; leadBookedAt?: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<{ actionType: string; notes: string; callResult: string; textResult: string; vmResult: string; deadReason: string; apptBookedOutcome: string; spokeResult: string; callbackAt: string; appointmentDate: string; appointmentTime: string }>({ actionType: "", notes: "", callResult: "", textResult: "", vmResult: "", deadReason: "", apptBookedOutcome: "", spokeResult: "", callbackAt: "", appointmentDate: "", appointmentTime: "" });
@@ -842,7 +849,23 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
   };
 
   const { data: timelineData, isLoading: loading, refetch: refetchTimeline } = useGetPodiumTimeline(leadId, { tenantId });
-  const unifiedTimeline = useMemo(() => timelineData?.timeline ?? [], [timelineData]);
+  const unifiedTimeline = useMemo(() => {
+    const base = (timelineData?.timeline ?? []) as TimelineEntry[];
+    if (!leadBookedAt) return base;
+    const bookedTs = new Date(leadBookedAt).getTime();
+    if (!Number.isFinite(bookedTs)) return base;
+    const synthetic: TimelineEntry = {
+      type: "pulse_action",
+      source: "pulse",
+      timestamp: leadBookedAt,
+      id: -1,
+      outcome: "lead_booked",
+      actionType: "booked",
+    } as TimelineEntry;
+    const merged = [...base, synthetic];
+    merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return merged;
+  }, [timelineData, leadBookedAt]);
   const fetchHistory = useCallback(() => { refetchTimeline(); }, [refetchTimeline]);
 
   const { onPodiumMessage } = useLeadNotification();
@@ -1139,7 +1162,7 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           {entry.spokeResult === "appointment_set" && (entry.appointmentDate || entry.appointmentTime) && (
             <span className="text-[10px] text-emerald-400/70">· Appt {entry.appointmentDate || ""}{entry.appointmentTime ? ` ${entry.appointmentTime}` : ""}</span>
           )}
-          {canEdit && (isAdminRole || entry.userId === currentUserId) && (
+          {entry.id >= 0 && canEdit && (isAdminRole || entry.userId === currentUserId) && (
             <button
               onClick={e => { e.stopPropagation(); startEdit(entry); }}
               className="p-0.5 rounded hover:bg-white/10 text-white/20 hover:text-amber-400 transition-colors"
@@ -1660,6 +1683,11 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
             {lead.callbackAt && (
               <p className="text-xs text-amber-400/70 mt-1 flex items-center gap-1">
                 <Calendar className="w-3 h-3" /> Callback: {formatDateTimeInTz(lead.callbackAt, timezone)}
+              </p>
+            )}
+            {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
+              <p className="text-xs text-emerald-400/80 mt-1 flex items-center gap-1">
+                <Calendar className="w-3 h-3" /> Booked: {lead.bookedAt ? `${formatDateTimeInTz(lead.bookedAt, timezone)} · ${formatTimeSince(lead.bookedAt).text}` : "—"}
               </p>
             )}
             {lead.deadReason && (
@@ -2277,7 +2305,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
       <LeadCorrectionHistory leadId={lead.id} tenantId={tenantId} timezone={timezone} />
 
       <PremiumCard className="p-4">
-        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} />
+        <ActionHistoryTimeline leadId={lead.id} tenantId={tenantId} timezone={timezone} canEdit={canEditActions} currentUserId={currentUserId} isAdminRole={isAdminRole} leadHubStatus={lead.hubStatus} leadBookedAt={lead.bookedAt} />
       </PremiumCard>
     </div>
   );

@@ -15,6 +15,7 @@ interface Lead {
   createdAt: string;
   dayInSequence?: number;
   callbackAt?: string | null;
+  bookedAt?: string | null;
   nextPassAt?: string | null;
   passIntervalMinutes?: number | null;
   attemptCount?: number;
@@ -218,6 +219,17 @@ export function LeadCard({ lead, onPress, renderSourceOverride }: LeadCardProps)
               <Feather name="clock" size={10} color="#F59E0B" />
               <Text style={[styles.callbackText, { color: "#F59E0B" }]}>
                 CB {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              </Text>
+            </View>
+          )}
+
+          {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
+            <View style={[styles.callbackBadge, { backgroundColor: "#10B98120" }]}>
+              <Feather name="check-circle" size={10} color="#10B981" />
+              <Text style={[styles.callbackText, { color: "#10B981" }]}>
+                Booked {lead.bookedAt
+                  ? new Date(lead.bookedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+                  : "—"}
               </Text>
             </View>
           )}
