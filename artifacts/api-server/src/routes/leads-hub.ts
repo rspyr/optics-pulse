@@ -785,6 +785,16 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     leadUpdates.hubStatus = "call_back";
     leadUpdates.callbackAt = new Date(callbackAt);
     leadUpdates.status = "contacted";
+    // Editing a previously-booked attempt into a call-back un-books the
+    // lead. Mirror the deadReason rollback and fully reset the booking
+    // cache (disposition, bookedByCsrId, bookedAt) so the lead leaves
+    // the {booked, sold} aggregate window used by
+    // `getBookingStatsByIdsAndDate`.
+    if (lead.status === "booked" || lead.status === "sold") {
+      leadUpdates.disposition = null;
+      leadUpdates.bookedByCsrId = null;
+      leadUpdates.bookedAt = null;
+    }
   } else if (callResult === "spoke_with_customer" && spokeResult === "appointment_set" && appointmentSet) {
     leadUpdates.hubStatus = "appt_set";
     leadUpdates.status = "booked";
