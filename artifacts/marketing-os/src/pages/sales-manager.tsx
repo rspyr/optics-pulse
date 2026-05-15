@@ -619,13 +619,30 @@ function LeadsDrilldownPopout({
   );
 }
 
-function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked }: { tenantId: number | null; funnels: FunnelType[]; includePreBooked: boolean; setIncludePreBooked: (v: boolean) => void }) {
+function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked, onNavigateToSettings }: { tenantId: number | null; funnels: FunnelType[]; includePreBooked: boolean; setIncludePreBooked: (v: boolean) => void; onNavigateToSettings: () => void }) {
   const [datePreset, setDatePreset] = useState("today");
   const [funnelFilter, setFunnelFilter] = useState<number | null>(null);
   const [startDate, endDate] = useDateRange(datePreset);
   const { stats, loading } = useStats(tenantId, startDate, endDate, funnelFilter, includePreBooked);
   const { stats: allStats, loading: allStatsLoading } = useStats(tenantId, startDate, endDate, null, includePreBooked);
   const [drilldownFilter, setDrilldownFilter] = useState<DrilldownFilter | null>(null);
+
+  const [spiffByFunnel, setSpiffByFunnel] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!tenantId) { setSpiffByFunnel({}); return; }
+    let cancelled = false;
+    fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(data => { if (!cancelled && data?.spiffConfig?.byFunnel) setSpiffByFunnel(data.spiffConfig.byFunnel); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [tenantId]);
+  const funnelNameSet = useMemo(() => new Set((funnels || []).map(f => f.name)), [funnels]);
+  const staleSpiffKeys = useMemo(
+    () => Object.keys(spiffByFunnel).filter(k => !funnelNameSet.has(k)),
+    [spiffByFunnel, funnelNameSet]
+  );
+  const hasStaleSpiffs = staleSpiffKeys.length > 0;
 
   const isToday = datePreset === "today";
   const overallBookingRate = (isToday ? allStats?.activityBookingRate : allStats?.bookingRate) ?? 0;
@@ -646,6 +663,30 @@ function DashboardTab({ tenantId, funnels, includePreBooked, setIncludePreBooked
 
   return (
     <div className="space-y-6">
+      {hasStaleSpiffs && (
+        <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-amber-200 font-medium">
+              {staleSpiffKeys.length === 1
+                ? `Spiff override "${staleSpiffKeys[0]}" no longer matches a live funnel`
+                : `${staleSpiffKeys.length} spiff overrides no longer match a live funnel`}
+            </p>
+            <p className="text-[11px] text-amber-200/70 leading-relaxed mt-0.5">
+              {staleSpiffKeys.length === 1
+                ? "It's paying the default amount until you rename or remove it."
+                : `Stale keys: ${staleSpiffKeys.map(k => `"${k}"`).join(", ")}. They're paying the default amount until you rename or remove them.`}
+            </p>
+          </div>
+          <button
+            onClick={onNavigateToSettings}
+            className="flex items-center gap-1 text-xs text-amber-200 hover:text-amber-100 underline whitespace-nowrap"
+          >
+            Fix in Settings
+            <ArrowUpRight className="w-3 h-3" />
+          </button>
+        </div>
+      )}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-1">
           {(["today", "7d", "30d", "90d"] as const).map(p => (
@@ -4233,7 +4274,7 @@ export default function SalesManager() {
 
       <div>
         {tab === "dashboard" && (
-          <DashboardTab tenantId={effectiveTenantId} funnels={funnels} includePreBooked={includePreBooked} setIncludePreBooked={setIncludePreBooked} />
+          <DashboardTab tenantId={effectiveTenantId} funnels={funnels} includePreBooked={includePreBooked} setIncludePreBooked={setIncludePreBooked} onNavigateToSettings={() => setTab("settings")} />
         )}
         {tab === "team" && (
           <TeamTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} includePreBooked={includePreBooked} setIncludePreBooked={setIncludePreBooked} />

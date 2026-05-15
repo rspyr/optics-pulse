@@ -1,9 +1,31 @@
 import { Router, type IRouter } from "express";
-import { db, funnelTypesTable, tenantFunnelTypesTable, tenantsTable } from "@workspace/db";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { db, funnelTypesTable, tenantFunnelTypesTable, tenantsTable, changeLogsTable } from "@workspace/db";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 
 import { requireRole } from "../middleware/auth";
 import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
+import { parseSpiffConfig } from "./sales-manager";
+
+export async function flagStaleSpiffMappingsForRename(oldName: string, newName: string): Promise<number> {
+  if (!oldName || oldName === newName) return 0;
+  const affected = await db.select({ id: tenantsTable.id, spiffConfig: tenantsTable.spiffConfig })
+    .from(tenantsTable)
+    .where(sql`${tenantsTable.spiffConfig}->'byFunnel' ? ${oldName}`);
+  if (affected.length === 0) return 0;
+  const today = new Date().toISOString().split("T")[0];
+  const rows = affected
+    .filter(t => oldName in parseSpiffConfig(t.spiffConfig).byFunnel)
+    .map(t => ({
+      tenantId: t.id,
+      date: today,
+      title: `Stale spiff override: "${oldName}"`,
+      description: `Funnel "${oldName}" was renamed to "${newName}". The spiff override for "${oldName}" no longer matches a live funnel and is paying the default amount until you rename or remove it in Sales Manager → Settings → Spiff Configuration.`,
+      category: "spiff-stale",
+    }));
+  if (rows.length === 0) return 0;
+  await db.insert(changeLogsTable).values(rows);
+  return rows.length;
+}
 
 const router: IRouter = Router();
 
@@ -59,8 +81,24 @@ router.put("/funnel-types/:id", requireRole("super_admin", "agency_user"), async
   if (description !== undefined) updates.description = description;
   if (isActive !== undefined) updates.isActive = isActive;
 
+  let oldName: string | null = null;
+  if (name !== undefined) {
+    const [existing] = await db.select({ name: funnelTypesTable.name })
+      .from(funnelTypesTable).where(eq(funnelTypesTable.id, id));
+    oldName = existing?.name ?? null;
+  }
+
   const [ft] = await db.update(funnelTypesTable).set(updates).where(eq(funnelTypesTable.id, id)).returning();
   if (!ft) { res.status(404).json({ error: "Funnel type not found" }); return; }
+
+  if (oldName && name && oldName !== name) {
+    try {
+      await flagStaleSpiffMappingsForRename(oldName, name);
+    } catch (err) {
+      console.error("[funnel-types] Failed to flag stale spiff mappings:", err);
+    }
+  }
+
   res.json(ft);
 });
 
