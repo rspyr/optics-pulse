@@ -1,16 +1,17 @@
 import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
-import { eq, and, sql, gte, lte, count, inArray, ne } from "drizzle-orm";
+import { eq, and, sql, gte, lte, count, inArray, ne, asc } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 import { computeLoginAwareSpeeds, type LeadSpeedWindow } from "./login-time-calculator";
 
 /**
- * A "first-response" event for a (user, lead) pair: the user's earliest
- * non-transfer / non-system call attempt that occurred on or after the lead's
- * current `assignedAt`. There is at most one such event per assignment.
+ * A "first-response" event represents the **globally** earliest qualifying call
+ * attempt against a lead's current assignment window. There is at most ONE
+ * first-response event per (lead, assignedAt) — credited to whichever CSR
+ * actually got there first. A second CSR making a later call for the same
+ * assignment does NOT produce a second event.
  *
- * Speed-to-lead is measured exclusively from these events — follow-up touches
- * on later days do not produce additional events and therefore do not inflate
- * a CSR's daily speed-to-lead average.
+ * Speed-to-lead and `newLeadsHandled` are both derived exclusively from these
+ * events, so follow-up touches on later days do not inflate either metric.
  */
 export interface FirstResponseEvent {
   leadId: number;
@@ -23,8 +24,16 @@ export interface FirstResponseEvent {
 /**
  * Find first-response events whose `firstTouchAt` falls in [dayStart, dayEnd].
  *
- * If `userIds` is empty/undefined, returns events for all users (used by
- * tenant-wide aggregation). If `bookerCsrId` is undefined, all CSRs match.
+ * Implementation: a `SELECT DISTINCT ON (lead_id, assigned_at) ... ORDER BY
+ * lead_id, assigned_at, attempted_at ASC` subquery picks exactly one row per
+ * assignment window (the globally-earliest qualifying attempt across all
+ * users). The outer SELECT then filters to the requested day window and, when
+ * provided, to a specific set of CSR user ids.
+ *
+ * - If `userIds` is undefined → matches events by any user (tenant-wide).
+ * - If `userIds` is provided → only events whose first-touch CSR is in the
+ *   list are returned. If another CSR responded first, that lead is *not*
+ *   counted for the requested users.
  */
 export async function getFirstResponseEvents(
   userIds: number[] | undefined,
@@ -33,30 +42,40 @@ export async function getFirstResponseEvents(
 ): Promise<FirstResponseEvent[]> {
   if (userIds && userIds.length === 0) return [];
 
-  const baseConds = [
-    ne(callAttemptsTable.actionType, "transfer"),
-    ne(callAttemptsTable.actionType, "system"),
-    gte(callAttemptsTable.attemptedAt, leadsTable.assignedAt),
+  const firstResp = db
+    .selectDistinctOn([leadsTable.id, leadsTable.assignedAt], {
+      leadId: callAttemptsTable.leadId,
+      userId: callAttemptsTable.userId,
+      assignedAt: leadsTable.assignedAt,
+      firstTouchAt: callAttemptsTable.attemptedAt,
+    })
+    .from(callAttemptsTable)
+    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
+    .where(and(
+      ne(callAttemptsTable.actionType, "transfer"),
+      ne(callAttemptsTable.actionType, "system"),
+      gte(callAttemptsTable.attemptedAt, leadsTable.assignedAt),
+    ))
+    .orderBy(leadsTable.id, leadsTable.assignedAt, asc(callAttemptsTable.attemptedAt))
+    .as("first_resp");
+
+  const outerConds = [
+    gte(firstResp.firstTouchAt, dayStart),
+    lte(firstResp.firstTouchAt, dayEnd),
   ];
   if (userIds && userIds.length > 0) {
-    baseConds.push(inArray(callAttemptsTable.userId, userIds));
+    outerConds.push(inArray(firstResp.userId, userIds));
   }
 
   const rows = await db
     .select({
-      leadId: callAttemptsTable.leadId,
-      userId: callAttemptsTable.userId,
-      assignedAt: leadsTable.assignedAt,
-      firstTouchAt: sql<Date>`MIN(${callAttemptsTable.attemptedAt})`.as("first_touch_at"),
+      leadId: firstResp.leadId,
+      userId: firstResp.userId,
+      assignedAt: firstResp.assignedAt,
+      firstTouchAt: firstResp.firstTouchAt,
     })
-    .from(callAttemptsTable)
-    .innerJoin(leadsTable, eq(callAttemptsTable.leadId, leadsTable.id))
-    .where(and(...baseConds))
-    .groupBy(callAttemptsTable.leadId, callAttemptsTable.userId, leadsTable.assignedAt)
-    .having(and(
-      gte(sql`MIN(${callAttemptsTable.attemptedAt})`, dayStart),
-      lte(sql`MIN(${callAttemptsTable.attemptedAt})`, dayEnd),
-    ));
+    .from(firstResp)
+    .where(and(...outerConds));
 
   return rows
     .filter(r => r.userId !== null && r.assignedAt && r.firstTouchAt)
