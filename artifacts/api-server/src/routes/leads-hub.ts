@@ -14,6 +14,7 @@ import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseC
 import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
+import { recordLeadStatusChange } from "../services/lead-status-history";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -588,6 +589,17 @@ router.post("/leads-hub/action", async (req, res) => {
 
   const [updated] = await db.update(leadsTable).set(updates).where(eq(leadsTable.id, leadId)).returning();
 
+  if (updates.hubStatus && updates.hubStatus !== lead.hubStatus) {
+    await recordLeadStatusChange({
+      leadId,
+      tenantId: lead.tenantId,
+      fromStatus: lead.hubStatus,
+      toStatus: updates.hubStatus as string,
+      changedByUserId: userId,
+      reason: `action:${actionType}`,
+    });
+  }
+
   consumeClaim(leadId, userId);
 
   const activeAutoPassStatuses = ["day_1", "day_2", "day_3", "day_4"];
@@ -769,6 +781,16 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
 
   if (Object.keys(leadUpdates).length > 1) {
     await db.update(leadsTable).set(leadUpdates).where(eq(leadsTable.id, attempt.leadId));
+    if (leadUpdates.hubStatus && leadUpdates.hubStatus !== lead.hubStatus) {
+      await recordLeadStatusChange({
+        leadId: attempt.leadId,
+        tenantId: lead.tenantId,
+        fromStatus: lead.hubStatus,
+        toStatus: leadUpdates.hubStatus as string,
+        changedByUserId: userId,
+        reason: `action_edit:${attemptId}`,
+      });
+    }
   }
 
   res.json({ attempt: updated });
@@ -1071,6 +1093,15 @@ router.post("/leads-hub/create", async (req, res) => {
     dayInSequence: 1,
     status: "new",
   }).returning();
+
+  await recordLeadStatusChange({
+    leadId: lead.id,
+    tenantId,
+    fromStatus: null,
+    toStatus: "day_1",
+    changedByUserId: req.session?.userId ?? validatedCsrId ?? null,
+    reason: "created",
+  });
 
   if (!validatedCsrId) {
     try {

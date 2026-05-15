@@ -207,6 +207,15 @@ export async function syncCallRailCalls(
           }).returning();
 
           if (newLead) {
+            const { recordLeadStatusChange } = await import("../lead-status-history");
+            await recordLeadStatusChange({
+              leadId: newLead.id,
+              tenantId,
+              fromStatus: null,
+              toStatus: newLead.hubStatus,
+              changedAt: newLead.createdAt ?? undefined,
+              reason: "callrail_sync_create",
+            });
             scheduleOrEmitNewLead(newLead.id, (newLead.visibleAfter as Date | null) ?? null);
           }
         }

@@ -462,6 +462,15 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       }).returning();
 
       if (lead) {
+        const { recordLeadStatusChange } = await import("../services/lead-status-history");
+        await recordLeadStatusChange({
+          leadId: lead.id,
+          tenantId: config.tenantId,
+          fromStatus: null,
+          toStatus: lead.hubStatus,
+          changedAt: lead.createdAt ?? undefined,
+          reason: "sheet_ingest_create",
+        });
         try {
           const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {

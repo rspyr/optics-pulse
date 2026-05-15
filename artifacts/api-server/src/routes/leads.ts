@@ -676,6 +676,8 @@ router.patch("/leads/:leadId", async (req, res) => {
   const [existingLead] = await db.select({
     tenantId: leadsTable.tenantId,
     bookedAt: leadsTable.bookedAt,
+    status: leadsTable.status,
+    hubStatus: leadsTable.hubStatus,
   }).from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!existingLead) {
     res.status(404).json({ error: "Lead not found" });
@@ -685,13 +687,24 @@ router.patch("/leads/:leadId", async (req, res) => {
   if (!access.ok) return;
   const body = UpdateLeadBody.parse(req.body);
   const updateData: Partial<typeof leadsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
+  const now = new Date();
+  // A booking event happens whenever the lead transitions *into* booked/sold
+  // from a non-booked/sold status — including re-books after the lead was
+  // moved back out. The history table must capture every such event for
+  // accurate metrics; bookedAt remains a one-shot denormalized cache of the
+  // first booking moment.
+  const becameBooked =
+    !!body.status &&
+    (body.status === "booked" || body.status === "sold") &&
+    existingLead.status !== "booked" &&
+    existingLead.status !== "sold";
   if (body.status) {
     updateData.status = body.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
-    // Task #413: stamp bookedAt when this PATCH is the path that transitions
-    // the lead into booked/sold so daily booking attribution is anchored to
-    // the booking moment, not the row's last-touched timestamp.
-    if ((body.status === "booked" || body.status === "sold") && !existingLead.bookedAt) {
-      updateData.bookedAt = new Date();
+    // Task #413: stamp bookedAt when this PATCH is the path that *first*
+    // transitions the lead into booked/sold so daily booking attribution is
+    // anchored to the booking moment, not the row's last-touched timestamp.
+    if (becameBooked && !existingLead.bookedAt) {
+      updateData.bookedAt = now;
     }
   }
   if (body.assignedTo) updateData.assignedTo = body.assignedTo;
@@ -701,6 +714,45 @@ router.patch("/leads/:leadId", async (req, res) => {
   if (!lead) {
     res.status(404).json({ error: "Lead not found" });
     return;
+  }
+
+  // Task #416: record every status transition routed through this endpoint
+  // so the audit log is complete and coordinator-stats booking counts (now
+  // history-anchored) include bookings made via PATCH /leads/:leadId. When
+  // the patch produces a new booking we emit an `appt_set` row — that's the
+  // toStatus the booking-stats query keys on — using the freshly stamped
+  // bookedAt as the transition time. Other status changes are logged with
+  // their literal `status` values for general audit completeness.
+  if (body.status && body.status !== existingLead.status) {
+    const { recordLeadStatusChange } = await import("../services/lead-status-history");
+    if (becameBooked) {
+      // Booking event: emit `appt_set` so coordinator-stats (history-anchored
+      // on toStatus='appt_set') counts every booking, including re-books that
+      // happen after the lead had already been booked once before. We key
+      // fromStatus off the lead's legacy `status` field (the column actually
+      // being mutated here) rather than `hubStatus`, otherwise a stale
+      // `hubStatus='appt_set'` from a prior booking would collide with the
+      // new toStatus and the helper's no-op guard would silently drop the
+      // re-book row.
+      await recordLeadStatusChange({
+        leadId,
+        tenantId: existingLead.tenantId,
+        fromStatus: existingLead.status,
+        toStatus: "appt_set",
+        changedAt: now,
+        changedByUserId: req.session.userId ?? null,
+        reason: `patch_lead_status:${body.status}`,
+      });
+    } else {
+      await recordLeadStatusChange({
+        leadId,
+        tenantId: existingLead.tenantId,
+        fromStatus: existingLead.status,
+        toStatus: body.status,
+        changedByUserId: req.session.userId ?? null,
+        reason: "patch_lead_status",
+      });
+    }
   }
 
   if (body.disposition && req.session.userId) {

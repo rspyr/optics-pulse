@@ -402,6 +402,14 @@ async function createDemoLead(): Promise<void> {
     }).returning();
 
     if (lead) {
+      const { recordLeadStatusChange } = await import("./services/lead-status-history");
+      await recordLeadStatusChange({
+        leadId: lead.id,
+        tenantId,
+        fromStatus: null,
+        toStatus: "day_1",
+        reason: "demo_created",
+      });
       try {
         const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId);
         if (result.assignedCsrId && result.passIntervalMinutes != null) {

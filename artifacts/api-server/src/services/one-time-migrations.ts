@@ -1195,6 +1195,70 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "2026-05-15_create-lead-status-history",
+    description:
+      "Create lead_status_history table for durable per-transition audit (task #416). " +
+      "Seeds creation rows (null -> hub_status at created_at) and booking rows " +
+      "(null -> appt_set at booked_at) for existing booked/sold leads so historical " +
+      "re-aggregation has a starting point. New transitions are written by application code.",
+    run: async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS lead_status_history (
+          id SERIAL PRIMARY KEY,
+          lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          from_status TEXT,
+          to_status TEXT NOT NULL,
+          changed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          changed_by_user_id INTEGER REFERENCES users(id),
+          reason TEXT
+        )
+      `);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS lead_status_history_lead_idx ON lead_status_history(lead_id, changed_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS lead_status_history_to_status_idx ON lead_status_history(to_status, changed_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS lead_status_history_tenant_idx ON lead_status_history(tenant_id, changed_at)`);
+      console.log("[Migration] Created lead_status_history table + indexes");
+
+      // Seed one creation row per lead so the table reflects every lead's
+      // existence, anchored at created_at. Skips leads that already have any
+      // history row (idempotent re-run).
+      const seededCreate = await db.execute(sql`
+        INSERT INTO lead_status_history (lead_id, tenant_id, from_status, to_status, changed_at, reason)
+        SELECT l.id, l.tenant_id, NULL, l.hub_status::text, l.created_at, 'backfill_create'
+        FROM leads l
+        WHERE NOT EXISTS (
+          SELECT 1 FROM lead_status_history h WHERE h.lead_id = l.id
+        )
+        RETURNING id
+      `);
+      console.log(`[Migration] Seeded ${seededCreate.rows.length} creation row(s) into lead_status_history`);
+
+      // For every booked/sold lead, seed an appt_set transition row so
+      // getBookingStatsByIdsAndDate (now history-anchored) sees the booking
+      // moment. Prefers booked_at when present; falls back to updated_at,
+      // then created_at, so sold/booked leads without a booked_at snapshot
+      // are not silently dropped from historical aggregates. We can't
+      // reconstruct the prior status, so from_status is left null and reason
+      // flags the row as backfilled. Skipped when an appt_set row already
+      // exists for that lead (handles partial reruns).
+      const seededBooking = await db.execute(sql`
+        INSERT INTO lead_status_history (lead_id, tenant_id, from_status, to_status, changed_at, reason)
+        SELECT l.id, l.tenant_id, NULL, 'appt_set',
+               COALESCE(l.booked_at, l.updated_at, l.created_at),
+               'backfill_booking'
+        FROM leads l
+        WHERE l.status IN ('booked', 'sold')
+          AND COALESCE(l.booked_at, l.updated_at, l.created_at) IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM lead_status_history h
+            WHERE h.lead_id = l.id AND h.to_status = 'appt_set'
+          )
+        RETURNING id
+      `);
+      console.log(`[Migration] Seeded ${seededBooking.rows.length} booking row(s) into lead_status_history`);
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

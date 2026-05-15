@@ -37,6 +37,7 @@ const {
   coordinatorDailyStatsTable,
   userLoginSessionsTable,
   funnelTypesTable,
+  leadStatusHistoryTable,
 } = dbModule;
 const {
   getFirstResponseEvents,
@@ -221,6 +222,17 @@ beforeAll(async () => {
     preBooked: false, bookedAt: day1At(14, 0), updatedAt: day2At(9, 0),
   }).returning();
 
+  // ── Seed lead_status_history rows for booked leads ─────────────────────
+  // getBookingStatsByIdsAndDate is anchored to the durable status-history
+  // audit table now (task #416). Each booked/sold lead needs a transition
+  // row into appt_set at its booking moment so the query can locate it.
+  await db.insert(leadStatusHistoryTable).values([
+    { leadId: l6.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: day1At(11, 0), changedByUserId: u1.id, reason: "test_fixture" },
+    { leadId: l7.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: day1At(12, 0), changedByUserId: u1.id, reason: "test_fixture" },
+    { leadId: l8.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: day1At(13, 0), changedByUserId: u1.id, reason: "test_fixture" },
+    { leadId: l9.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: day1At(14, 0), changedByUserId: u1.id, reason: "test_fixture" },
+  ]);
+
   // ── Seed call attempts ─────────────────────────────────────────────────
   await db.insert(callAttemptsTable).values([
     // L1: same-day repeat — first touch at 09:02 (120s wall-clock).
@@ -286,6 +298,7 @@ afterAll(async () => {
   const allLeadIds = Object.values(fx.leadIds);
   try {
     await db.delete(callAttemptsTable).where(inArray(callAttemptsTable.leadId, allLeadIds));
+    await db.delete(leadStatusHistoryTable).where(inArray(leadStatusHistoryTable.leadId, allLeadIds));
     await db.delete(leadsTable).where(inArray(leadsTable.id, allLeadIds));
     await db.delete(coordinatorDailyStatsTable).where(eq(coordinatorDailyStatsTable.tenantId, fx.tenantId));
     await db.delete(userLoginSessionsTable).where(inArray(userLoginSessionsTable.userId, [fx.csr1, fx.csr2]));

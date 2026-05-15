@@ -192,6 +192,15 @@ router.post("/webhooks/ingest", webhookLimiter, async (req, res) => {
       }).returning();
 
       if (newLead) {
+        const { recordLeadStatusChange } = await import("../services/lead-status-history");
+        await recordLeadStatusChange({
+          leadId: newLead.id,
+          tenantId,
+          fromStatus: null,
+          toStatus: newLead.hubStatus,
+          changedAt: newLead.createdAt ?? undefined,
+          reason: "webhook_create",
+        });
         try {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {
@@ -444,6 +453,15 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       }).returning();
 
       if (newLead) {
+        const { recordLeadStatusChange } = await import("../services/lead-status-history");
+        await recordLeadStatusChange({
+          leadId: newLead.id,
+          tenantId,
+          fromStatus: null,
+          toStatus: "day_1",
+          changedAt: newLead.createdAt ?? undefined,
+          reason: "callrail_webhook_create",
+        });
         try {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, null);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {
@@ -674,6 +692,15 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
       }).returning();
 
       if (newLead) {
+        const { recordLeadStatusChange } = await import("../services/lead-status-history");
+        await recordLeadStatusChange({
+          leadId: newLead.id,
+          tenantId,
+          fromStatus: null,
+          toStatus: newLead.hubStatus,
+          changedAt: newLead.createdAt ?? undefined,
+          reason: "webhook_create",
+        });
         try {
           const result = await assignLeadRoundRobin(tenantId, newLead.id, resolvedFunnelId);
           if (result.assignedCsrId && result.passIntervalMinutes != null) {

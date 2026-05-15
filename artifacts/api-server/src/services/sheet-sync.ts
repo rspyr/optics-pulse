@@ -159,6 +159,17 @@ async function rescanExistingRows(
       .set(updates)
       .where(eq(leadsTable.id, existingLead.id));
 
+    if (updates.hubStatus && updates.hubStatus !== existingLead.hubStatus) {
+      const { recordLeadStatusChange } = await import("./lead-status-history");
+      await recordLeadStatusChange({
+        leadId: existingLead.id,
+        tenantId: config.tenantId,
+        fromStatus: existingLead.hubStatus,
+        toStatus: updates.hubStatus as string,
+        reason: `sheet_sync:${config.id}`,
+      });
+    }
+
     const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingLead.id));
     if (refreshed) {
       emitLeadUpdated(config.tenantId, refreshed as unknown as Record<string, unknown>);
@@ -284,6 +295,15 @@ async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSele
     }).returning();
 
     if (lead) {
+      const { recordLeadStatusChange } = await import("./lead-status-history");
+      await recordLeadStatusChange({
+        leadId: lead.id,
+        tenantId: config.tenantId,
+        fromStatus: null,
+        toStatus: lead.hubStatus,
+        changedAt: lead.createdAt ?? undefined,
+        reason: "sheet_sync_create",
+      });
       try {
         const result = await assignLeadRoundRobin(config.tenantId, lead.id, resolvedFunnelId || null);
         if (result.assignedCsrId && result.passIntervalMinutes != null) {

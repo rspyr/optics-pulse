@@ -652,6 +652,15 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
         }).returning();
 
         if (newLead) {
+          const { recordLeadStatusChange } = await import("../services/lead-status-history");
+          await recordLeadStatusChange({
+            leadId: newLead.id,
+            tenantId,
+            fromStatus: null,
+            toStatus: newLead.hubStatus,
+            changedAt: newLead.createdAt ?? undefined,
+            reason: "tracker_create",
+          });
           await db.update(attributionEventsTable)
             .set({ createdLeadId: newLead.id })
             .where(eq(attributionEventsTable.id, event.id));

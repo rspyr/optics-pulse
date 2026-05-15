@@ -2,6 +2,7 @@ import { db, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { emitLeadResubmitted } from "../socket";
 import { sendPushToUser } from "./push-notifications";
+import { recordLeadStatusChange } from "./lead-status-history";
 
 const TERMINAL_HUB_STATUSES = new Set(["appt_set", "appt_booked", "dead"]);
 
@@ -48,6 +49,18 @@ export async function handleResubmission(
   }
 
   await db.update(leadsTable).set(updates).where(eq(leadsTable.id, existingLeadId));
+
+  if (!isTerminal && lead.hubStatus !== "day_1") {
+    await recordLeadStatusChange({
+      leadId: existingLeadId,
+      tenantId,
+      fromStatus: lead.hubStatus,
+      toStatus: "day_1",
+      changedAt: now,
+      changedByUserId: lead.assignedCsrId ?? null,
+      reason: `resubmission:${sourceLabel}`,
+    });
+  }
 
   // Resolve a userId for the system timeline entry. Prefer the assigned CSR;
   // fall back to the most recent attempt's user; finally any tenant user.

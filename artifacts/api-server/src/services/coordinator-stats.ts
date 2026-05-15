@@ -1,4 +1,4 @@
-import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, leadAssignmentsTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
+import { db, coordinatorDailyStatsTable, leadsTable, callAttemptsTable, leadAssignmentsTable, leadStatusHistoryTable, usersTable, tenantsTable, funnelTypesTable } from "@workspace/db";
 import { eq, and, or, sql, gte, lte, lt, isNull, count, inArray, ne, asc } from "drizzle-orm";
 import { parseSpiffConfig, computeSpiffCommission } from "../routes/sales-manager";
 import { computeLoginAwareSpeeds, type LeadSpeedWindow } from "./login-time-calculator";
@@ -144,24 +144,38 @@ async function getBookingStatsByIdsAndDate(
     return { bookingsCount: 0, soldCount: 0, bookedLeads: [] as { status: string; funnelName: string | null }[] };
   }
 
-  // Anchor bookings to the day the booking actually happened (leads.bookedAt),
-  // not the lead row's last-touched timestamp. Otherwise a same-day status
-  // flip + later edit would either double-count or drift the booking onto the
-  // wrong day. See task #413.
-  const bookingConds = [
-    inArray(leadsTable.id, leadIds),
+  // Anchor bookings to the day the booking actually happened. The durable
+  // `lead_status_history` audit table records every transition into appt_set,
+  // so a same-day un-book / re-book sequence reconstructs exactly instead of
+  // collapsing onto the mutable `leads.booked_at` snapshot (which only kept
+  // the FIRST booking moment — see task #416). The legacy snapshot column
+  // remains a denormalized cache for hot reads. Distinct-on (lead_id) keeps
+  // the per-lead counting contract: each lead in the window contributes once.
+  const bookingEventConds = [
+    inArray(leadStatusHistoryTable.leadId, leadIds),
+    eq(leadStatusHistoryTable.toStatus, "appt_set"),
+    gte(leadStatusHistoryTable.changedAt, dayStart),
+    lte(leadStatusHistoryTable.changedAt, dayEnd),
+  ];
+
+  const leadConds = [
     inArray(leadsTable.status, ["booked", "sold"]),
     eq(leadsTable.preBooked, false),
-    gte(leadsTable.bookedAt, dayStart),
-    lte(leadsTable.bookedAt, dayEnd),
   ];
   if (bookerCsrId !== undefined) {
-    bookingConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
+    leadConds.push(eq(leadsTable.bookedByCsrId, bookerCsrId));
   }
 
-  const bookedSoldLeads = await db.select({ status: leadsTable.status, funnelId: leadsTable.funnelId, preBooked: leadsTable.preBooked })
-    .from(leadsTable)
-    .where(and(...bookingConds));
+  const bookedSoldLeads = await db
+    .selectDistinctOn([leadStatusHistoryTable.leadId], {
+      status: leadsTable.status,
+      funnelId: leadsTable.funnelId,
+      preBooked: leadsTable.preBooked,
+    })
+    .from(leadStatusHistoryTable)
+    .innerJoin(leadsTable, eq(leadsTable.id, leadStatusHistoryTable.leadId))
+    .where(and(...bookingEventConds, ...leadConds))
+    .orderBy(leadStatusHistoryTable.leadId);
 
   const bookingsCount = bookedSoldLeads.length;
   const soldCount = bookedSoldLeads.filter(l => l.status === "sold").length;

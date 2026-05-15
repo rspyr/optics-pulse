@@ -6,6 +6,7 @@ import {
   tenantsTable,
   funnelTypesTable,
   callAttemptsTable,
+  leadStatusHistoryTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
@@ -314,6 +315,15 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
         }).returning();
 
         if (!insertedLead) throw new Error("Lead insert returned no row");
+
+        await tx.insert(leadStatusHistoryTable).values({
+          leadId: insertedLead.id,
+          tenantId: opts.tenantId,
+          fromStatus: null,
+          toStatus: insertedLead.hubStatus,
+          changedAt: insertedLead.createdAt ?? rowDate,
+          reason: "backfill_sheet_create",
+        });
 
         await tx.insert(attributionEventsTable).values({
           tenantId: opts.tenantId,
