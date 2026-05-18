@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink } from "lucide-react";
+import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -13,10 +14,18 @@ interface FunnelType {
   createdAt: string;
 }
 
-interface Tenant {
-  id: number;
-  name: string;
-  clientSlug: string;
+type Tenant = TenantOption;
+
+function TenantsSkeleton() {
+  return (
+    <PremiumCard className="p-6">
+      <div className="animate-pulse space-y-3">
+        <div className="h-4 w-1/3 bg-white/10 rounded" />
+        <div className="h-3 w-1/2 bg-white/5 rounded" />
+        <div className="h-3 w-2/5 bg-white/5 rounded" />
+      </div>
+    </PremiumCard>
+  );
 }
 
 interface TrackerHealth {
@@ -28,8 +37,8 @@ interface TrackerHealth {
 }
 
 export default function AdminFunnels() {
+  const { tenants, tenantsLoading } = useTenants();
   const [funnels, setFunnels] = useState<FunnelType[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [health, setHealth] = useState<TrackerHealth[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -38,7 +47,6 @@ export default function AdminFunnels() {
   const [tab, setTab] = useState<"funnels" | "assignments" | "health" | "tracking">("funnels");
 
   useEffect(() => {
-    fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
     fetch(`${API}/api/collect/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
   }, []);
 
@@ -178,7 +186,7 @@ export default function AdminFunnels() {
       )}
 
       {tab === "assignments" && (
-        <TenantAssignmentsTab tenants={tenants} funnels={funnels} />
+        tenantsLoading ? <TenantsSkeleton /> : <TenantAssignmentsTab tenants={tenants} funnels={funnels} />
       )}
 
       {tab === "health" && (
@@ -189,7 +197,9 @@ export default function AdminFunnels() {
         }} />
       )}
 
-      {tab === "tracking" && <AdminTrackingPanel tenants={tenants} />}
+      {tab === "tracking" && (
+        tenantsLoading ? <TenantsSkeleton /> : <AdminTrackingPanel tenants={tenants} />
+      )}
     </div>
   );
 }

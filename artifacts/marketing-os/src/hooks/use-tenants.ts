@@ -17,13 +17,18 @@ export interface TenantOption {
  * tenant" empty states all read from the same source and show a consistent
  * loading skeleton instead of issuing duplicate requests on every page.
  *
+ * The raw payload is preserved (not mapped down) so heavier admin surfaces
+ * like `admin-tenants` can read additional fields (loadableConfig, isActive,
+ * isDemo, ingestionMode, etc.) from the same cache entry without firing a
+ * second request. Lightweight consumers can still narrow to `TenantOption`.
+ *
  * Non-agency users never trigger the fetch — they don't have a list to
  * choose from.
  */
-export function useTenants() {
+export function useTenants<T extends TenantOption = TenantOption>() {
   const { isAgency } = useAuth();
 
-  const query = useQuery<TenantOption[]>({
+  const query = useQuery<T[]>({
     queryKey: ["tenants-list"],
     enabled: isAgency,
     staleTime: 5 * 60 * 1000,
@@ -33,17 +38,13 @@ export function useTenants() {
       const res = await fetch(`${API_BASE}/tenants`, { credentials: "include" });
       if (!res.ok) throw new Error(`Failed to load tenants (${res.status})`);
       const data = await res.json();
-      if (!Array.isArray(data)) return [];
-      return data.map((t: { id: number; name: string; timezone?: string }) => ({
-        id: t.id,
-        name: t.name,
-        timezone: t.timezone,
-      }));
+      return Array.isArray(data) ? (data as T[]) : [];
     },
   });
 
   return {
     tenants: query.data ?? [],
     tenantsLoading: isAgency ? query.isPending : false,
+    refetchTenants: query.refetch,
   };
 }

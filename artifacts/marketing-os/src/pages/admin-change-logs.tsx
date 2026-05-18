@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Plus, Pencil, Trash2, X, Save } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
+import { useTenants } from "@/hooks/use-tenants";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -16,25 +17,16 @@ interface ChangeLog {
   createdAt: string;
 }
 
-interface Tenant {
-  id: number;
-  name: string;
-}
-
 const CATEGORIES = ["general", "campaigns", "funnel", "tracking", "creative", "budget", "strategy"];
 
 export default function AdminChangeLogs() {
-  const { user } = useAuth();
+  useAuth();
+  const { tenants, tenantsLoading } = useTenants();
   const [logs, setLogs] = useState<ChangeLog[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [filterTenant, setFilterTenant] = useState<number | "">("");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ tenantId: "", date: "", title: "", description: "", category: "general" });
-
-  useEffect(() => {
-    fetch(`${API}/api/tenants`, { credentials: "include" }).then(r => r.json()).then(setTenants).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const params = filterTenant ? `?tenantId=${filterTenant}` : "";
@@ -159,6 +151,15 @@ export default function AdminChangeLogs() {
         </PremiumCard>
       )}
 
+      {tenantsLoading ? (
+        <PremiumCard className="p-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      ) : (
       <PremiumCard>
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -194,6 +195,7 @@ export default function AdminChangeLogs() {
           </table>
         </div>
       </PremiumCard>
+      )}
     </div>
   );
 }

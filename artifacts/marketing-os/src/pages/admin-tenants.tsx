@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
+import { useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { useAuth } from "@/components/auth-context";
+import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -136,7 +137,8 @@ function CopyableUrl({ url }: { url: string }) {
 }
 
 export default function AdminTenants() {
-  const { data: allTenants, isLoading, refetch } = useListTenants();
+  const { tenants: allTenants, tenantsLoading: isLoading, refetchTenants } = useTenants<TenantOption & Record<string, unknown>>();
+  const refetch = refetchTenants;
   const createTenant = useCreateTenant();
   const updateTenant = useUpdateTenant();
   const deleteTenant = useDeleteTenant();
@@ -764,7 +766,13 @@ export default function AdminTenants() {
 
       <PremiumCard className="p-0 overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-muted-foreground">Loading tenants...</div>
+          <div className="p-6">
+            <div className="animate-pulse space-y-3">
+              <div className="h-4 w-1/3 bg-white/10 rounded" />
+              <div className="h-3 w-1/2 bg-white/5 rounded" />
+              <div className="h-3 w-2/5 bg-white/5 rounded" />
+            </div>
+          </div>
         ) : (
           <table className="w-full text-left border-collapse">
             <thead>
