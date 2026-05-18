@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { db, tenantsTable, metaAdAccountsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
@@ -12,9 +12,16 @@ const META_AUTH_URL = "https://www.facebook.com/v21.0/dialog/oauth";
 const META_TOKEN_URL = "https://graph.facebook.com/v21.0/oauth/access_token";
 const SCOPES = "ads_read,ads_management,pages_show_list,pages_read_engagement,business_management";
 
-function getRedirectUri(): string {
+function getRedirectUri(req: Request): string {
   const explicit = process.env.META_REDIRECT_URI;
   if (explicit) return explicit;
+  const host = req.get("host");
+  if (host) {
+    const forwardedProto = req.get("x-forwarded-proto");
+    const proto = forwardedProto?.split(",")[0]?.trim()
+      || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+    return `${proto}://${host}/api/oauth/meta/callback`;
+  }
   const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.REPLIT_DEV_DOMAIN;
   if (domain) return `https://${domain}/api/oauth/meta/callback`;
   return "http://localhost:8080/api/oauth/meta/callback";
@@ -50,7 +57,8 @@ router.get("/oauth/meta/authorize", requireRole("super_admin", "agency_user"), a
   req.session.metaOAuthState = state;
   req.session.metaOAuthTenantId = tenantId;
 
-  const redirectUri = getRedirectUri();
+  const redirectUri = getRedirectUri(req);
+  req.session.metaOAuthRedirectUri = redirectUri;
 
   const params = new URLSearchParams({
     client_id: creds.appId,
@@ -115,7 +123,8 @@ router.get("/oauth/meta/callback", async (req, res) => {
     try { config = decryptConfig(tenant.apiConfig); } catch {}
   }
 
-  const redirectUri = getRedirectUri();
+  const redirectUri = req.session.metaOAuthRedirectUri || getRedirectUri(req);
+  delete req.session.metaOAuthRedirectUri;
 
   try {
     const tokenResponse = await fetch(META_TOKEN_URL, {
