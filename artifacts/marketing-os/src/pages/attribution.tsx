@@ -1641,6 +1641,13 @@ interface SubdomainRule {
   createdAt?: string;
 }
 
+interface PreviewCounts {
+  updatedEventCount: number;
+  updatedLeadCount: number;
+  conflictingEventCount: number;
+  matchedEventCount: number;
+}
+
 function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
   const [rules, setRules] = useState<SubdomainRule[]>([]);
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
@@ -1650,13 +1657,30 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
   const [newSubdomain, setNewSubdomain] = useState("");
   const [newFunnelId, setNewFunnelId] = useState("");
   const [adding, setAdding] = useState(false);
+  const [addPreview, setAddPreview] = useState<PreviewCounts | null>(null);
+  const [previewingAdd, setPreviewingAdd] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editFunnelId, setEditFunnelId] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editPreview, setEditPreview] = useState<PreviewCounts | null>(null);
+  const [previewingEdit, setPreviewingEdit] = useState(false);
 
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const [savedMessage, setSavedMessage] = useState<{
+    subdomain: string;
+    funnelName: string;
+    events: number;
+    leads: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (savedMessage === null) return;
+    const t = setTimeout(() => setSavedMessage(null), 6000);
+    return () => clearTimeout(t);
+  }, [savedMessage]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -1678,6 +1702,37 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
     loadAll().finally(() => setLoading(false));
   }, [loadAll]);
 
+  const previewAdd = async () => {
+    const sub = newSubdomain.trim().toLowerCase().replace(/^www\./, "");
+    if (!sub || !newFunnelId) return;
+    setPreviewingAdd(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/preview?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to preview rule");
+      } else {
+        setAddPreview({
+          updatedEventCount: d.updatedEventCount ?? 0,
+          updatedLeadCount: d.updatedLeadCount ?? 0,
+          conflictingEventCount: d.conflictingEventCount ?? 0,
+          matchedEventCount: d.matchedEventCount ?? 0,
+        });
+      }
+    } catch {
+      setError("Network error");
+    }
+    setPreviewingAdd(false);
+  };
+
+  const cancelAddPreview = () => setAddPreview(null);
+
   const addRule = async () => {
     const sub = newSubdomain.trim().toLowerCase().replace(/^www\./, "");
     if (!sub || !newFunnelId) return;
@@ -1694,8 +1749,19 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to add rule");
       } else {
+        const d = await res.json().catch(() => ({}));
+        const funnelName = d.rule?.funnelName
+          || funnelTypes.find(f => f.id === Number(newFunnelId))?.name
+          || "";
+        setSavedMessage({
+          subdomain: sub,
+          funnelName,
+          events: d.updatedEventCount ?? 0,
+          leads: d.updatedLeadCount ?? 0,
+        });
         setNewSubdomain("");
         setNewFunnelId("");
+        setAddPreview(null);
         await loadAll();
       }
     } catch {
@@ -1707,12 +1773,45 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
   const startEdit = (rule: SubdomainRule) => {
     setEditingId(rule.id);
     setEditFunnelId(String(rule.funnelTypeId));
+    setEditPreview(null);
     setError(null);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditFunnelId("");
+    setEditPreview(null);
+  };
+
+  const previewEdit = async (rule: SubdomainRule) => {
+    if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
+      cancelEdit();
+      return;
+    }
+    setPreviewingEdit(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/preview?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to preview rule");
+      } else {
+        setEditPreview({
+          updatedEventCount: d.updatedEventCount ?? 0,
+          updatedLeadCount: d.updatedLeadCount ?? 0,
+          conflictingEventCount: d.conflictingEventCount ?? 0,
+          matchedEventCount: d.matchedEventCount ?? 0,
+        });
+      }
+    } catch {
+      setError("Network error");
+    }
+    setPreviewingEdit(false);
   };
 
   const saveEdit = async (rule: SubdomainRule) => {
@@ -1733,6 +1832,16 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to update rule");
       } else {
+        const d = await res.json().catch(() => ({}));
+        const funnelName = d.rule?.funnelName
+          || funnelTypes.find(f => f.id === Number(editFunnelId))?.name
+          || "";
+        setSavedMessage({
+          subdomain: rule.subdomain,
+          funnelName,
+          events: d.updatedEventCount ?? 0,
+          leads: d.updatedLeadCount ?? 0,
+        });
         cancelEdit();
         await loadAll();
       }
@@ -1783,11 +1892,16 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
           <Input
             placeholder="subdomain (e.g. repair)"
             value={newSubdomain}
-            onChange={e => setNewSubdomain(e.target.value)}
+            onChange={e => { setNewSubdomain(e.target.value); setAddPreview(null); }}
+            disabled={!!addPreview}
             className="max-w-[220px] bg-white/5 border-white/10 text-sm font-mono"
           />
           <ArrowRight className="w-4 h-4 text-white/30" />
-          <Select value={newFunnelId} onValueChange={setNewFunnelId}>
+          <Select
+            value={newFunnelId}
+            onValueChange={(v) => { setNewFunnelId(v); setAddPreview(null); }}
+            disabled={!!addPreview}
+          >
             <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm">
               <SelectValue placeholder="Select funnel type" />
             </SelectTrigger>
@@ -1797,15 +1911,75 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
               ))}
             </SelectContent>
           </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={addRule}
-            disabled={adding || !newSubdomain.trim() || !newFunnelId}
-          >
-            {adding ? "Adding..." : "Add Rule"}
-          </Button>
+          {addPreview ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={addRule}
+                disabled={adding}
+                className="border-emerald-500/30 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/10"
+              >
+                {adding ? "Saving..." : "Confirm & Save"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={cancelAddPreview}
+                disabled={adding}
+                className="text-white/50"
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={previewAdd}
+              disabled={previewingAdd || !newSubdomain.trim() || !newFunnelId}
+            >
+              {previewingAdd ? "Previewing..." : "Preview"}
+            </Button>
+          )}
         </div>
+
+        {addPreview && (
+          <div className="mb-4 text-xs bg-white/[0.03] border border-white/10 rounded-md px-3 py-2 space-y-1">
+            <div className="text-white/80">
+              This will re-tag{" "}
+              <span className="text-emerald-300 font-medium">{addPreview.updatedEventCount.toLocaleString()}</span>{" "}
+              past {addPreview.updatedEventCount === 1 ? "event" : "events"}
+              {addPreview.updatedLeadCount > 0 && (
+                <>
+                  {" "}and{" "}
+                  <span className="text-emerald-300 font-medium">{addPreview.updatedLeadCount.toLocaleString()}</span>{" "}
+                  {addPreview.updatedLeadCount === 1 ? "lead" : "leads"}
+                </>
+              )}
+              .
+            </div>
+            {addPreview.conflictingEventCount > 0 && (
+              <div className="text-amber-300/90">
+                ⚠ {addPreview.conflictingEventCount.toLocaleString()} matching{" "}
+                {addPreview.conflictingEventCount === 1 ? "event is" : "events are"} already attributed to a different funnel and will be left alone.
+              </div>
+            )}
+            {addPreview.matchedEventCount === 0 && (
+              <div className="text-white/40">
+                No historical events match this subdomain yet — the rule will apply to new traffic only.
+              </div>
+            )}
+          </div>
+        )}
+
+        {savedMessage && (
+          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2">
+            Saved <span className="font-mono">{savedMessage.subdomain}</span> → {savedMessage.funnelName}.
+            Updated {savedMessage.events.toLocaleString()} {savedMessage.events === 1 ? "event" : "events"}
+            {savedMessage.leads > 0 && <> and {savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"}</>}.
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 text-xs text-red-400 bg-red-400/5 border border-red-400/20 rounded-md px-3 py-2">
@@ -1834,16 +2008,35 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
                       <td className="py-3 pr-4 font-mono text-sm text-white">{rule.subdomain}</td>
                       <td className="py-3 pr-4 text-sm">
                         {isEditing ? (
-                          <Select value={editFunnelId} onValueChange={setEditFunnelId}>
-                            <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm h-8">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {funnelTypes.map(ft => (
-                                <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <div className="space-y-2">
+                            <Select value={editFunnelId} onValueChange={(v) => { setEditFunnelId(v); setEditPreview(null); }}>
+                              <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {funnelTypes.map(ft => (
+                                  <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {editPreview && (
+                              <div className="text-xs bg-white/[0.03] border border-white/10 rounded-md px-2 py-1.5 space-y-0.5">
+                                <div className="text-white/80">
+                                  Re-tag{" "}
+                                  <span className="text-emerald-300 font-medium">{editPreview.updatedEventCount.toLocaleString()}</span>{" "}
+                                  {editPreview.updatedEventCount === 1 ? "event" : "events"}
+                                  {editPreview.updatedLeadCount > 0 && (
+                                    <> &middot; <span className="text-emerald-300 font-medium">{editPreview.updatedLeadCount.toLocaleString()}</span> {editPreview.updatedLeadCount === 1 ? "lead" : "leads"}</>
+                                  )}
+                                </div>
+                                {editPreview.conflictingEventCount > 0 && (
+                                  <div className="text-amber-300/90">
+                                    ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event" : "events"} already on a different funnel — left alone.
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-white/80">{rule.funnelName}</span>
                         )}
@@ -1851,12 +2044,25 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
                       <td className="py-3 pr-4 whitespace-nowrap">
                         {isEditing ? (
                           <div className="flex gap-1 justify-end">
-                            <Button size="sm" variant="ghost" disabled={savingEdit} onClick={() => saveEdit(rule)} className="h-7 px-2 text-xs">
-                              {savingEdit ? "Saving..." : "Save"}
-                            </Button>
-                            <Button size="sm" variant="ghost" disabled={savingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
-                              Cancel
-                            </Button>
+                            {editPreview ? (
+                              <>
+                                <Button size="sm" variant="ghost" disabled={savingEdit} onClick={() => saveEdit(rule)} className="h-7 px-2 text-xs text-emerald-300">
+                                  {savingEdit ? "Saving..." : "Confirm"}
+                                </Button>
+                                <Button size="sm" variant="ghost" disabled={savingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button size="sm" variant="ghost" disabled={previewingEdit || !editFunnelId || Number(editFunnelId) === rule.funnelTypeId} onClick={() => previewEdit(rule)} className="h-7 px-2 text-xs">
+                                  {previewingEdit ? "..." : "Preview"}
+                                </Button>
+                                <Button size="sm" variant="ghost" disabled={previewingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
+                                  Cancel
+                                </Button>
+                              </>
+                            )}
                           </div>
                         ) : isPendingDelete ? (
                           <div className="flex gap-1 justify-end items-center">

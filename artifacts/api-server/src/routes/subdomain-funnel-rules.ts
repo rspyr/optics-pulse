@@ -50,7 +50,9 @@ async function backfillEventsForSubdomainRule(
   subdomain: string,
   funnelTypeId: number,
   canonicalFunnelName: string,
+  options: { dryRun?: boolean } = {},
 ): Promise<{ updatedEventCount: number; updatedLeadIds: number[] }> {
+  const dryRun = options.dryRun === true;
   const normSub = subdomain.toLowerCase().trim();
   if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [] };
 
@@ -110,7 +112,7 @@ async function backfillEventsForSubdomainRule(
     if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
   }
 
-  if (eligibleIds.length > 0) {
+  if (eligibleIds.length > 0 && !dryRun) {
     await db
       .update(attributionEventsTable)
       .set({ resolvedFunnel: canonicalFunnelName })
@@ -145,13 +147,15 @@ async function backfillEventsForSubdomainRule(
       toUpdate.push(l.id);
     }
     if (toUpdate.length > 0) {
-      await db
-        .update(leadsTable)
-        .set({ leadType: canonicalFunnelName, funnelId: funnelTypeId, updatedAt: new Date() })
-        .where(and(
-          eq(leadsTable.tenantId, tenantId),
-          inArray(leadsTable.id, toUpdate),
-        ));
+      if (!dryRun) {
+        await db
+          .update(leadsTable)
+          .set({ leadType: canonicalFunnelName, funnelId: funnelTypeId, updatedAt: new Date() })
+          .where(and(
+            eq(leadsTable.tenantId, tenantId),
+            inArray(leadsTable.id, toUpdate),
+          ));
+      }
       updatedLeadIds.push(...toUpdate);
     }
   }
@@ -301,6 +305,118 @@ router.get("/subdomain-funnel-rules", async (req, res) => {
     .orderBy(subdomainFunnelRulesTable.subdomain);
 
   res.json({ rules: rows });
+});
+
+router.post("/subdomain-funnel-rules/preview", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+
+  const { subdomain, funnelTypeId } = req.body as {
+    subdomain?: string;
+    funnelTypeId?: number | string;
+  };
+  if (!subdomain || typeof subdomain !== "string" || !funnelTypeId) {
+    res.status(400).json({ error: "subdomain and funnelTypeId are required" });
+    return;
+  }
+
+  const normSub = normalizeSubdomain(subdomain);
+  if (!normSub) {
+    res.status(400).json({ error: "subdomain cannot be empty" });
+    return;
+  }
+
+  const numericFunnelTypeId = Number(funnelTypeId);
+  const [tenantAssoc] = await db
+    .select({ id: tenantFunnelTypesTable.funnelTypeId })
+    .from(tenantFunnelTypesTable)
+    .where(and(
+      eq(tenantFunnelTypesTable.tenantId, tenantId),
+      eq(tenantFunnelTypesTable.funnelTypeId, numericFunnelTypeId),
+    ));
+  if (!tenantAssoc) {
+    res.status(400).json({ error: "Funnel type is not enabled for this tenant" });
+    return;
+  }
+
+  const [funnelType] = await db
+    .select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+    .from(funnelTypesTable)
+    .where(eq(funnelTypesTable.id, numericFunnelTypeId));
+  if (!funnelType) {
+    res.status(400).json({ error: "Unknown funnel type" });
+    return;
+  }
+
+  // Identify how many historical events match this subdomain at all (any
+  // resolved funnel) and how many of those are still on a *different*,
+  // non-fall-through funnel — those would be skipped by the actual backfill
+  // and represent a "conflict" the operator should know about.
+  const hostExpr = sql`regexp_replace(
+    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    '^www\\.', ''
+  )`;
+  const [defaultAssoc] = await db
+    .select({ funnelName: funnelTypesTable.name })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
+    .orderBy(tenantFunnelTypesTable.funnelTypeId)
+    .limit(1);
+  const defaultFunnelName = defaultAssoc?.funnelName ?? null;
+
+  const allCandidates = await db.execute(sql`
+    WITH parsed AS (
+      SELECT
+        ae.id,
+        ae.resolved_funnel,
+        string_to_array(${hostExpr}, '.') AS parts
+      FROM attribution_events ae
+      WHERE ae.tenant_id = ${tenantId}
+        AND ae.page_url IS NOT NULL
+    )
+    SELECT id, resolved_funnel
+    FROM parsed
+    WHERE array_length(parts, 1) >= 3
+      AND array_to_string(parts[1:array_length(parts, 1) - 2], '.') = ${normSub}
+  `);
+  const allRows = (allCandidates.rows ?? []) as Array<{
+    id: number;
+    resolved_funnel: string | null;
+  }>;
+
+  const canonicalName = funnelType.name;
+  let conflictingEventCount = 0;
+  for (const r of allRows) {
+    const cur = (r.resolved_funnel ?? "").trim();
+    if (!cur) continue;
+    const isDefault =
+      defaultFunnelName !== null && cur.toLowerCase() === defaultFunnelName.toLowerCase();
+    if (isDefault) continue;
+    if (cur.toLowerCase() === canonicalName.toLowerCase()) continue;
+    conflictingEventCount += 1;
+  }
+
+  const { updatedEventCount, updatedLeadIds } = await backfillEventsForSubdomainRule(
+    tenantId,
+    normSub,
+    numericFunnelTypeId,
+    canonicalName,
+    { dryRun: true },
+  );
+
+  res.json({
+    subdomain: normSub,
+    funnelTypeId: numericFunnelTypeId,
+    funnelName: canonicalName,
+    updatedEventCount,
+    updatedLeadCount: updatedLeadIds.length,
+    conflictingEventCount,
+    matchedEventCount: allRows.length,
+  });
 });
 
 router.post("/subdomain-funnel-rules", async (req, res) => {
