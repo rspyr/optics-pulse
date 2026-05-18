@@ -565,7 +565,11 @@ export default function Attribution() {
       )}
 
       {activeTab === "funnel-aliases" && effectiveTenantId && (
-        <FunnelAliasesPanel tenantId={effectiveTenantId} />
+        <FunnelAliasesPanel
+          tenantId={effectiveTenantId}
+          suggestions={suggestions}
+          refetchSuggestions={refetchSuggestions}
+        />
       )}
 
       {activeTab === "subdomain-rules" && effectiveTenantId && (
@@ -1600,13 +1604,41 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
   );
 }
 
-function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
+type AliasSuggestion = {
+  subdomain: string;
+  suggestedFunnelTypeId: number;
+  suggestedFunnelName: string;
+  eventCount: number;
+  fellThroughCount: number;
+  reason?: "observed" | "label-match";
+  matchedAlias?: string;
+};
+
+function FunnelAliasesPanel({
+  tenantId,
+  suggestions,
+  refetchSuggestions,
+}: {
+  tenantId: number;
+  suggestions: AliasSuggestion[];
+  refetchSuggestions: () => void;
+}) {
   const [groups, setGroups] = useState<FunnelAliasGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [newAlias, setNewAlias] = useState("");
   const [selectedFunnelId, setSelectedFunnelId] = useState<string>("");
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
   const [hasSheetConfigs, setHasSheetConfigs] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+
+  const suggestionsByAlias = new Map<string, AliasSuggestion[]>();
+  for (const s of suggestions) {
+    if (!s.matchedAlias) continue;
+    const key = s.matchedAlias.toLowerCase();
+    const arr = suggestionsByAlias.get(key) ?? [];
+    arr.push(s);
+    suggestionsByAlias.set(key, arr);
+  }
 
   const loadAliases = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/funnel-aliases?tenantId=${tenantId}`, { credentials: "include" });
@@ -1653,6 +1685,7 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
     });
     setNewAlias("");
     await loadAliases();
+    refetchSuggestions();
   };
 
   const deleteAlias = async (id: number) => {
@@ -1660,7 +1693,9 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
       method: "DELETE",
       credentials: "include",
     });
+    setPendingDeleteId(null);
     await loadAliases();
+    refetchSuggestions();
   };
 
   const loadDefaults = async () => {
@@ -1669,6 +1704,7 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
       credentials: "include",
     });
     await loadAliases();
+    refetchSuggestions();
   };
 
   if (loading) {
@@ -1719,21 +1755,79 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
             {groups.map(g => (
               <div key={g.funnelTypeId} className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
                 <h4 className="text-sm font-medium text-white mb-2">{g.funnelName}</h4>
-                <div className="flex flex-wrap gap-2">
-                  {g.aliases.map(a => (
-                    <span
-                      key={a.id}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-white/70"
-                    >
-                      {a.alias}
-                      <button
-                        onClick={() => deleteAlias(a.id)}
-                        className="text-white/30 hover:text-red-400 transition-colors"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
+                <div className="flex flex-col gap-2">
+                  {g.aliases.map(a => {
+                    const aliasSuggestions = suggestionsByAlias.get(a.alias.toLowerCase()) ?? [];
+                    const isPending = pendingDeleteId === a.id;
+                    return (
+                      <div key={a.id} className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-white/70">
+                            {a.alias}
+                            <button
+                              onClick={() => {
+                                if (aliasSuggestions.length > 0 && !isPending) {
+                                  setPendingDeleteId(a.id);
+                                } else {
+                                  deleteAlias(a.id);
+                                }
+                              }}
+                              className="text-white/30 hover:text-red-400 transition-colors"
+                              aria-label={`Remove alias ${a.alias}`}
+                            >
+                              ×
+                            </button>
+                          </span>
+                          {aliasSuggestions.length > 0 && !isPending && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-amber-300/80">
+                              <Lightbulb className="w-3 h-3" />
+                              Unlocks {aliasSuggestions.length} pending subdomain suggestion{aliasSuggestions.length === 1 ? "" : "s"}
+                            </span>
+                          )}
+                        </div>
+                        {aliasSuggestions.length > 0 && (
+                          <ul className="ml-1 space-y-1">
+                            {aliasSuggestions.map(s => (
+                              <li
+                                key={s.subdomain}
+                                className={`flex items-center gap-2 text-[11px] px-2 py-1 rounded border ${
+                                  isPending
+                                    ? "border-red-400/30 bg-red-400/[0.04] text-red-200/80 line-through"
+                                    : "border-white/5 bg-white/[0.02] text-muted-foreground"
+                                }`}
+                              >
+                                <span className="font-mono text-white/70">{s.subdomain}</span>
+                                <ArrowRight className="w-3 h-3 text-white/30" />
+                                <span className="text-emerald-400/90">{s.suggestedFunnelName}</span>
+                                <span>· {s.eventCount} event{s.eventCount === 1 ? "" : "s"}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {isPending && (
+                          <div className="ml-1 flex items-center gap-2 text-[11px]">
+                            <span className="text-amber-300/90">
+                              Removing this alias will hide {aliasSuggestions.length} subdomain suggestion{aliasSuggestions.length === 1 ? "" : "s"}.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => deleteAlias(a.id)}
+                              className="px-2 py-0.5 rounded border border-red-400/30 text-red-300 hover:bg-red-400/10 transition-colors"
+                            >
+                              Remove anyway
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingDeleteId(null)}
+                              className="px-2 py-0.5 rounded border border-white/10 text-white/60 hover:bg-white/5 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
