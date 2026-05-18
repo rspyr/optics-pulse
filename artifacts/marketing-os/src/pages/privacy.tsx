@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 const LAST_UPDATED = "May 18, 2026";
-const CONTACT_EMAIL = "privacy@hvaclaunch.ai";
+const CONTACT_EMAIL = "legal@hvaclaunch.ai";
 const COMPANY = "HVAC Launch";
 const PRODUCT = "Optics";
 
