@@ -38,6 +38,7 @@ export default function Attribution() {
   const [filterSource, setFilterSource] = useState<string>("all");
   const [filterFunnel, setFilterFunnel] = useState<string>("all");
   const [filterDateRange, setFilterDateRange] = useState<string>("all");
+  const [filterSubdomainRule, setFilterSubdomainRule] = useState<string>("all");
   const [searchText, setSearchText] = useState("");
   const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
   const [highlightSubdomainRule, setHighlightSubdomainRule] = useState<{ subdomain: string; nonce: number } | null>(null);
@@ -233,6 +234,15 @@ export default function Attribution() {
       const now = new Date();
       const daysAgo = filterDateRange === "1d" ? 1 : filterDateRange === "7d" ? 7 : filterDateRange === "30d" ? 30 : 0;
       if (daysAgo > 0 && evDate < new Date(now.getTime() - daysAgo * 86400000)) return false;
+    }
+    if (filterSubdomainRule !== "all") {
+      const evSubdomain = extractSubdomain(ev.pageUrl);
+      const matchingRule = evSubdomain ? subdomainRules.get(evSubdomain) : undefined;
+      if (filterSubdomainRule === "__none__") {
+        if (matchingRule) return false;
+      } else {
+        if (!matchingRule || matchingRule.subdomain !== filterSubdomainRule) return false;
+      }
     }
     if (searchText) {
       const s = searchText.toLowerCase();
@@ -493,6 +503,22 @@ export default function Attribution() {
                   <SelectItem value="1d">Last 24h</SelectItem>
                   <SelectItem value="7d">Last 7 days</SelectItem>
                   <SelectItem value="30d">Last 30 days</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filterSubdomainRule} onValueChange={setFilterSubdomainRule}>
+                <SelectTrigger className="w-[180px] bg-white/5 border border-white/10 text-sm">
+                  <SelectValue placeholder="Subdomain Rule" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All rules</SelectItem>
+                  <SelectItem value="__none__">No matching rule</SelectItem>
+                  {[...subdomainRules.values()]
+                    .sort((a, b) => a.subdomain.localeCompare(b.subdomain))
+                    .map(r => (
+                      <SelectItem key={r.id} value={r.subdomain}>
+                        {r.subdomain} → {r.funnelName}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Input
