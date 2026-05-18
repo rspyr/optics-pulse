@@ -39,11 +39,22 @@ export default function Internal() {
   // off of it.
   const { data: allTenants } = useListTenants();
   const tenantOptions = useMemo(() => {
-    return (allTenants ?? [])
+    const all = allTenants ?? [];
+    const active = all
       .filter((t) => t.isActive !== false)
-      .map((t) => ({ id: t.id, name: t.name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [allTenants]);
+      .map((t) => ({ id: t.id, name: t.name, inactive: false }));
+    // If the persisted selection points at a tenant that's been deactivated,
+    // surface it in the dropdown with an "(inactive)" tag so the admin can
+    // see what's selected and switch away — otherwise the trigger renders
+    // blank and the user has no easy escape hatch.
+    if (globalTenantId && !active.some((t) => t.id === globalTenantId)) {
+      const inactive = all.find((t) => t.id === globalTenantId);
+      if (inactive) {
+        active.push({ id: inactive.id, name: inactive.name, inactive: true });
+      }
+    }
+    return active.sort((a, b) => a.name.localeCompare(b.name));
+  }, [allTenants, globalTenantId]);
   const selectedTenantName = useMemo(() => {
     if (!globalTenantId) return null;
     return tenantOptions.find((t) => t.id === globalTenantId)?.name
@@ -347,7 +358,9 @@ export default function Internal() {
               <SelectContent>
                 <SelectItem value="all">All Tenants</SelectItem>
                 {tenantOptions.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.inactive ? `${t.name} (inactive)` : t.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
