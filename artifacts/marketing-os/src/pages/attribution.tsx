@@ -48,6 +48,37 @@ export default function Attribution() {
     setHighlightSubdomainRule({ subdomain, nonce: Date.now() });
   }, []);
 
+  // Mirrors extractSubdomain() on the server so we can show, inline on each
+  // event row, which subdomain rule (if any) covers it.
+  const extractSubdomain = useCallback((pageUrl: string | null | undefined): string | null => {
+    if (!pageUrl) return null;
+    try {
+      let host = new URL(pageUrl).hostname.toLowerCase();
+      if (host.startsWith("www.")) host = host.slice(4);
+      const parts = host.split(".").filter(Boolean);
+      if (parts.length < 3) return null;
+      return parts.slice(0, parts.length - 2).join(".");
+    } catch { return null; }
+  }, []);
+
+  const [subdomainRules, setSubdomainRules] = useState<Map<string, { id: number; subdomain: string; funnelName: string }>>(new Map());
+  useEffect(() => {
+    if (!effectiveTenantId) { setSubdomainRules(new Map()); return; }
+    let cancelled = false;
+    fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${effectiveTenantId}`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : { rules: [] }))
+      .then(d => {
+        if (cancelled) return;
+        const map = new Map<string, { id: number; subdomain: string; funnelName: string }>();
+        for (const r of (d.rules || []) as Array<{ id: number; subdomain: string; funnelName: string }>) {
+          map.set(r.subdomain.toLowerCase(), r);
+        }
+        setSubdomainRules(map);
+      })
+      .catch(() => { if (!cancelled) setSubdomainRules(new Map()); });
+    return () => { cancelled = true; };
+  }, [effectiveTenantId]);
+
   const queryClient = useQueryClient();
 
   const { data } = useListAttributionEvents({
@@ -520,6 +551,8 @@ export default function Attribution() {
                       const resolvedFunnel = ev.resolvedFunnel || null;
                       const detectedMappings = ev.detectedMappings ?? null;
                       const detectedCount = detectedMappings ? Object.keys(detectedMappings).length : 0;
+                      const evSubdomain = extractSubdomain(ev.pageUrl);
+                      const matchingRule = evSubdomain ? subdomainRules.get(evSubdomain) : undefined;
 
                       return (
                         <tr
@@ -530,7 +563,22 @@ export default function Attribution() {
                           <td className="p-4 text-muted-foreground">{format(new Date(ev.createdAt), 'MM/dd HH:mm:ss')}</td>
                           <td className="p-4 text-white uppercase">{ev.eventType.replace('_', ' ')}</td>
                           <td className="p-4 text-gray-400">{resolvedSource}</td>
-                          <td className="p-4 text-gray-400">{resolvedFunnel || <span className="text-white/20">—</span>}</td>
+                          <td className="p-4 text-gray-400">
+                            <div className="flex flex-col gap-1">
+                              <span>{resolvedFunnel || <span className="text-white/20">—</span>}</span>
+                              {matchingRule && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); jumpToSubdomainRule(matchingRule.subdomain); }}
+                                  className="self-start inline-flex items-center gap-1 text-[10px] font-sans text-blue-300/80 hover:text-blue-200 bg-blue-400/10 hover:bg-blue-400/15 border border-blue-400/20 rounded-full px-2 py-0.5 transition-colors"
+                                  title={`Matches subdomain rule: ${matchingRule.subdomain} → ${matchingRule.funnelName}`}
+                                >
+                                  <Globe className="w-2.5 h-2.5" />
+                                  <span>via {matchingRule.subdomain} rule</span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
                           <td className="p-4 text-muted-foreground truncate max-w-[120px]" title={ev.pageUrl || ""}>
                             {ev.pageUrl ? (() => { try { return new URL(ev.pageUrl).pathname; } catch { return ev.pageUrl; } })() : <span className="text-white/20">—</span>}
                           </td>
