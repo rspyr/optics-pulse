@@ -16,7 +16,7 @@ import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
-  Upload, Info, Clock,
+  Upload, Info, Clock, Lightbulb,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -40,9 +40,71 @@ export default function Attribution() {
   const [searchText, setSearchText] = useState("");
   const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
 
+  const queryClient = useQueryClient();
+
   const { data } = useListAttributionEvents({
     ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
   });
+
+  type SubdomainSuggestion = {
+    subdomain: string;
+    suggestedFunnelTypeId: number;
+    suggestedFunnelName: string;
+    eventCount: number;
+    fellThroughCount: number;
+  };
+  const [suggestions, setSuggestions] = useState<SubdomainSuggestion[]>([]);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [acceptingSuggestion, setAcceptingSuggestion] = useState<string | null>(null);
+  const [suggestionToast, setSuggestionToast] = useState<string | null>(null);
+
+  const refetchSuggestions = useCallback(() => {
+    if (!effectiveTenantId) {
+      setSuggestions([]);
+      return;
+    }
+    fetch(`${API_BASE}/api/subdomain-funnel-rules/suggestions?tenantId=${effectiveTenantId}`, {
+      credentials: "include",
+    })
+      .then(r => (r.ok ? r.json() : { suggestions: [] }))
+      .then(d => setSuggestions(d.suggestions || []))
+      .catch(() => setSuggestions([]));
+  }, [effectiveTenantId]);
+
+  useEffect(() => {
+    refetchSuggestions();
+  }, [refetchSuggestions]);
+
+  useEffect(() => {
+    setDismissedSuggestions(new Set());
+  }, [effectiveTenantId]);
+
+  const acceptSuggestion = useCallback(async (s: SubdomainSuggestion) => {
+    if (!effectiveTenantId) return;
+    setAcceptingSuggestion(s.subdomain);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subdomain: s.subdomain, funnelTypeId: s.suggestedFunnelTypeId }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setSuggestionToast(d.error || "Failed to create rule");
+      } else {
+        setSuggestionToast(
+          `Rule created: ${s.subdomain} → ${s.suggestedFunnelName}. Updated ${d.updatedEventCount ?? 0} past event${(d.updatedEventCount ?? 0) === 1 ? "" : "s"}.`,
+        );
+        refetchSuggestions();
+        queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() });
+      }
+    } catch {
+      setSuggestionToast("Failed to create rule");
+    } finally {
+      setAcceptingSuggestion(null);
+    }
+  }, [effectiveTenantId, refetchSuggestions, queryClient]);
 
   const { data: detailData } = useGetAttributionEvent(selectedEventId!, {
     query: {
@@ -156,6 +218,67 @@ export default function Attribution() {
         <TabButton active={activeTab === "funnel-aliases"} onClick={() => setActiveTab("funnel-aliases")} icon={<Brain className="w-4 h-4" />} label="Funnel Aliases" />
         <TabButton active={activeTab === "subdomain-rules"} onClick={() => setActiveTab("subdomain-rules")} icon={<Globe className="w-4 h-4" />} label="Subdomain Rules" />
       </div>
+
+      {activeTab === "events" && suggestions.filter(s => !dismissedSuggestions.has(s.subdomain)).length > 0 && (
+        <PremiumCard className="p-4 border-amber-400/20 bg-amber-400/[0.03]">
+          <div className="flex items-start gap-3">
+            <Lightbulb className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-medium text-white">Suggested subdomain rules</h4>
+                <span className="text-xs text-muted-foreground">
+                  Each subdomain below has only ever served one funnel in the last 90 days.
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {suggestions
+                  .filter(s => !dismissedSuggestions.has(s.subdomain))
+                  .map(s => (
+                    <div
+                      key={s.subdomain}
+                      className="flex items-center gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-2"
+                    >
+                      <span className="font-mono text-sm text-white/80">{s.subdomain}</span>
+                      <ArrowRight className="w-3 h-3 text-white/30 flex-shrink-0" />
+                      <span className="text-sm text-emerald-400">{s.suggestedFunnelName}</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        {s.eventCount} event{s.eventCount === 1 ? "" : "s"}
+                        {s.fellThroughCount > 0 && (
+                          <> · {s.fellThroughCount} would be re-tagged</>
+                        )}
+                      </span>
+                      <div className="ml-auto flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={acceptingSuggestion === s.subdomain}
+                          onClick={() => acceptSuggestion(s)}
+                        >
+                          {acceptingSuggestion === s.subdomain ? "Creating…" : "Create rule"}
+                        </Button>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:text-white/70 transition-colors px-1"
+                          onClick={() => setDismissedSuggestions(prev => {
+                            const next = new Set(prev);
+                            next.add(s.subdomain);
+                            return next;
+                          })}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              {suggestionToast && (
+                <p className="text-xs text-emerald-300/80">{suggestionToast}</p>
+              )}
+            </div>
+          </div>
+        </PremiumCard>
+      )}
 
       {activeTab === "events" && (
         <>

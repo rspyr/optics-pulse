@@ -159,6 +159,127 @@ async function backfillEventsForSubdomainRule(
   return { updatedEventCount: eligibleIds.length, updatedLeadIds };
 }
 
+// Suggest subdomain → funnel rules from historical attribution events.
+// A subdomain is suggested when:
+//   * It is not already covered by an existing rule.
+//   * Within the last 90 days, every event whose resolved_funnel is set to a
+//     non-default value points at the same funnel (i.e. the subdomain has
+//     "only ever served one funnel"). Fell-through events (null/empty or the
+//     tenant's default funnel) are counted toward the backfill opportunity
+//     but do not count as a competing funnel signal.
+//   * That funnel is enabled for the tenant.
+//   * At least 3 events were observed on the subdomain in the window, to
+//     avoid noise from one-off traffic.
+//
+// One-click accept happens via the existing POST /subdomain-funnel-rules,
+// which creates the rule and re-resolves matching past events.
+router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.json({ suggestions: [] });
+    return;
+  }
+
+  const [defaultAssoc] = await db
+    .select({ funnelName: funnelTypesTable.name })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
+    .orderBy(tenantFunnelTypesTable.funnelTypeId)
+    .limit(1);
+  const defaultFunnelLcName = defaultAssoc?.funnelName?.toLowerCase() ?? null;
+
+  const tenantFunnels = await db
+    .select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
+  const funnelByLcName = new Map(tenantFunnels.map(f => [f.name.toLowerCase(), f]));
+
+  const existingRules = await db
+    .select({ subdomain: subdomainFunnelRulesTable.subdomain })
+    .from(subdomainFunnelRulesTable)
+    .where(eq(subdomainFunnelRulesTable.tenantId, tenantId));
+  const ruled = new Set(existingRules.map(r => r.subdomain.toLowerCase()));
+
+  const hostExpr = sql`regexp_replace(
+    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    '^www\\.', ''
+  )`;
+
+  const grouped = await db.execute(sql`
+    WITH parsed AS (
+      SELECT
+        ae.resolved_funnel,
+        string_to_array(${hostExpr}, '.') AS parts
+      FROM attribution_events ae
+      WHERE ae.tenant_id = ${tenantId}
+        AND ae.page_url IS NOT NULL
+        AND ae.created_at > now() - interval '90 days'
+    )
+    SELECT
+      array_to_string(parts[1:array_length(parts, 1) - 2], '.') AS subdomain,
+      resolved_funnel,
+      count(*)::int AS cnt
+    FROM parsed
+    WHERE array_length(parts, 1) >= 3
+    GROUP BY subdomain, resolved_funnel
+  `);
+
+  type Row = { subdomain: string; resolved_funnel: string | null; cnt: number };
+  const rows = (grouped.rows ?? []) as Row[];
+
+  const bySub = new Map<string, Row[]>();
+  for (const r of rows) {
+    if (!r.subdomain) continue;
+    if (ruled.has(r.subdomain)) continue;
+    const arr = bySub.get(r.subdomain) ?? [];
+    arr.push(r);
+    bySub.set(r.subdomain, arr);
+  }
+
+  const suggestions: Array<{
+    subdomain: string;
+    suggestedFunnelTypeId: number;
+    suggestedFunnelName: string;
+    eventCount: number;
+    fellThroughCount: number;
+  }> = [];
+
+  for (const [subdomain, srows] of bySub.entries()) {
+    const distinctFunnels = new Map<string, number>();
+    let fellThrough = 0;
+    let total = 0;
+    for (const r of srows) {
+      total += r.cnt;
+      const cur = (r.resolved_funnel ?? "").trim();
+      const isFellThrough =
+        !cur || (defaultFunnelLcName !== null && cur.toLowerCase() === defaultFunnelLcName);
+      if (isFellThrough) {
+        fellThrough += r.cnt;
+      } else {
+        const lc = cur.toLowerCase();
+        distinctFunnels.set(lc, (distinctFunnels.get(lc) ?? 0) + r.cnt);
+      }
+    }
+    if (distinctFunnels.size !== 1) continue;
+    if (total < 3) continue;
+    const [funnelLcName] = [...distinctFunnels.keys()];
+    const funnel = funnelByLcName.get(funnelLcName);
+    if (!funnel) continue;
+    suggestions.push({
+      subdomain,
+      suggestedFunnelTypeId: funnel.id,
+      suggestedFunnelName: funnel.name,
+      eventCount: total,
+      fellThroughCount: fellThrough,
+    });
+  }
+
+  suggestions.sort((a, b) => b.eventCount - a.eventCount);
+  res.json({ suggestions });
+});
+
 router.get("/subdomain-funnel-rules", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
