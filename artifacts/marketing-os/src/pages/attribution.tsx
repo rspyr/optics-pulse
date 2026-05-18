@@ -2036,12 +2036,22 @@ function SubdomainRulesPanel({
   const [pendingDeleteRevert, setPendingDeleteRevert] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const [savedMessage, setSavedMessage] = useState<{
-    subdomain: string;
-    funnelName: string;
-    events: number;
-    leads: number;
-  } | null>(null);
+  const [savedMessage, setSavedMessage] = useState<
+    | {
+        kind?: "saved";
+        subdomain: string;
+        funnelName: string;
+        events: number;
+        leads: number;
+      }
+    | {
+        kind: "reverted";
+        subdomain: string;
+        events: number;
+        leads: number;
+      }
+    | null
+  >(null);
 
   useEffect(() => {
     if (savedMessage === null) return;
@@ -2246,8 +2256,10 @@ function SubdomainRulesPanel({
     setDeleting(true);
     setError(null);
     try {
+      const rule = rules.find(r => r.id === id);
+      const wantsRevert = pendingDeleteRevert;
       const qs = new URLSearchParams();
-      if (pendingDeleteRevert) qs.set("revertEvents", "true");
+      if (wantsRevert) qs.set("revertEvents", "true");
       const suffix = qs.toString() ? `?${qs.toString()}` : "";
       const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/${id}${suffix}`, {
         method: "DELETE",
@@ -2257,6 +2269,17 @@ function SubdomainRulesPanel({
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to delete rule");
       } else {
+        if (wantsRevert && rule) {
+          const d = await res.json().catch(() => ({}));
+          const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+          const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+          setSavedMessage({
+            kind: "reverted",
+            subdomain: rule.subdomain,
+            events,
+            leads,
+          });
+        }
         setPendingDeleteId(null);
         setPendingDeleteRevert(false);
         await loadAll();
@@ -2402,7 +2425,15 @@ function SubdomainRulesPanel({
           </div>
         )}
 
-        {savedMessage && (
+        {savedMessage && savedMessage.kind === "reverted" && (
+          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2">
+            Removed rule <span className="font-mono">{savedMessage.subdomain}</span> and reverted{" "}
+            {savedMessage.events.toLocaleString()} past {savedMessage.events === 1 ? "event" : "events"}
+            {savedMessage.leads > 0 && <> ({savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"})</>}
+            {" "}to the tenant default.
+          </div>
+        )}
+        {savedMessage && savedMessage.kind !== "reverted" && (
           <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2">
             Saved <span className="font-mono">{savedMessage.subdomain}</span> → {savedMessage.funnelName}.
             Updated {savedMessage.events.toLocaleString()} {savedMessage.events === 1 ? "event" : "events"}
