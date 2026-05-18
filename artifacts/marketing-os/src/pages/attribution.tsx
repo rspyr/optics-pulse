@@ -268,7 +268,7 @@ export default function Attribution() {
         <TabButton active={activeTab === "subdomain-rules"} onClick={() => setActiveTab("subdomain-rules")} icon={<Globe className="w-4 h-4" />} label="Subdomain Rules" />
       </div>
 
-      {activeTab === "events" && (suggestions.length > 0 || hiddenSubdomains.length > 0) && (
+      {(activeTab === "events" || activeTab === "subdomain-rules") && (suggestions.length > 0 || hiddenSubdomains.length > 0) && (
         <PremiumCard className="p-4 border-amber-400/20 bg-amber-400/[0.03]">
           <div className="flex items-start gap-3">
             <Lightbulb className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
