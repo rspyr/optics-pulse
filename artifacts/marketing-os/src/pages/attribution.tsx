@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useListAttributionEvents, useGetAttributionEvent, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -39,6 +39,13 @@ export default function Attribution() {
   const [filterDateRange, setFilterDateRange] = useState<string>("all");
   const [searchText, setSearchText] = useState("");
   const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
+  const [highlightSubdomainRule, setHighlightSubdomainRule] = useState<{ subdomain: string; nonce: number } | null>(null);
+
+  const jumpToSubdomainRule = useCallback((subdomain: string) => {
+    setSelectedEventId(null);
+    setActiveTab("subdomain-rules");
+    setHighlightSubdomainRule({ subdomain, nonce: Date.now() });
+  }, []);
 
   const queryClient = useQueryClient();
 
@@ -579,6 +586,7 @@ export default function Attribution() {
             setActiveTab("events");
             setSelectedEventId(id);
           }}
+          highlightRule={highlightSubdomainRule}
         />
       )}
 
@@ -631,6 +639,7 @@ export default function Attribution() {
                     key={selectedEvent.id}
                     tenantId={effectiveTenantId}
                     event={selectedEvent}
+                    onJumpToSubdomainRule={jumpToSubdomainRule}
                   />
                 )}
 
@@ -829,7 +838,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRule }: { tenantId: number; event: AttributionEvent; onJumpToSubdomainRule?: (subdomain: string) => void }) {
   const queryClient = useQueryClient();
   const resolvedSource = event.resolvedLeadSource ?? undefined;
   const resolvedFunnel = event.resolvedFunnel ?? undefined;
@@ -1184,11 +1193,25 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Subdomain</span>
             {subdomainRule && !subdomainEditing ? (
               <div className="flex items-center gap-2">
-                <div className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center">
-                  <span className="font-mono text-white/60">{subdomainRule.subdomain}</span>
-                  <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
-                  <span>{subdomainRule.funnelName}</span>
-                </div>
+                {onJumpToSubdomainRule ? (
+                  <button
+                    type="button"
+                    onClick={() => onJumpToSubdomainRule(subdomainRule.subdomain)}
+                    className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center hover:bg-black/60 hover:border-white/20 transition-colors text-left"
+                    title="Open in Subdomain Rules"
+                  >
+                    <span className="font-mono text-white/60">{subdomainRule.subdomain}</span>
+                    <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
+                    <span>{subdomainRule.funnelName}</span>
+                    <ExternalLink className="w-3 h-3 ml-auto text-white/30" />
+                  </button>
+                ) : (
+                  <div className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center">
+                    <span className="font-mono text-white/60">{subdomainRule.subdomain}</span>
+                    <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
+                    <span>{subdomainRule.funnelName}</span>
+                  </div>
+                )}
                 <Button size="sm" variant="ghost" disabled={saving} onClick={() => setSubdomainEditing(true)} className="text-xs h-8 px-2 shrink-0">
                   Change
                 </Button>
@@ -1922,11 +1945,26 @@ function PreviewSampleList({
 function SubdomainRulesPanel({
   tenantId,
   onOpenEvent,
+  highlightRule,
 }: {
   tenantId: number;
   onOpenEvent?: (eventId: number) => void;
+  highlightRule?: { subdomain: string; nonce: number } | null;
 }) {
   const [rules, setRules] = useState<SubdomainRule[]>([]);
+  const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+  const [highlightedRuleId, setHighlightedRuleId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!highlightRule) return;
+    const match = rules.find(r => r.subdomain.toLowerCase() === highlightRule.subdomain.toLowerCase());
+    if (!match) return;
+    setHighlightedRuleId(match.id);
+    const el = rowRefs.current.get(match.id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = setTimeout(() => setHighlightedRuleId(null), 2500);
+    return () => clearTimeout(t);
+  }, [highlightRule, rules]);
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -2298,8 +2336,15 @@ function SubdomainRulesPanel({
                 {rules.map(rule => {
                   const isEditing = editingId === rule.id;
                   const isPendingDelete = pendingDeleteId === rule.id;
+                  const isHighlighted = highlightedRuleId === rule.id;
                   return (
-                    <tr key={rule.id} className="hover:bg-white/[0.02] transition-colors">
+                    <tr
+                      key={rule.id}
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(rule.id, el);
+                        else rowRefs.current.delete(rule.id);
+                      }}
+                      className={`transition-colors ${isHighlighted ? "bg-emerald-400/10 ring-1 ring-emerald-400/40" : "hover:bg-white/[0.02]"}`}>
                       <td className="py-3 pr-4 font-mono text-sm text-white">{rule.subdomain}</td>
                       <td className="py-3 pr-4 text-sm">
                         {isEditing ? (
