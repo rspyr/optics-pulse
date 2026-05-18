@@ -517,7 +517,8 @@ export default function AdminTenants() {
               </div>
               <SecretInput field="googleAdsDeveloperToken" label="Developer Token" />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+              <SecretInput field="googleAdsClientId" label="OAuth Client ID" />
               <SecretInput field="googleAdsClientSecret" label="OAuth Client Secret" />
               <SecretInput field="googleAdsRefreshToken" label="Refresh Token (auto-filled on connect)" />
               <SecretInput field="googleAdsApiKey" label="Access Token (auto-filled on connect)" />
