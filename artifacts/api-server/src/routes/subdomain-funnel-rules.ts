@@ -646,6 +646,17 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
 
   invalidateSubdomainFunnelCache(tenantId);
 
+  // Clear any per-user dismissals for this (tenant, subdomain). Once a rule
+  // covers the subdomain the suggestions endpoint filters it out anyway, so
+  // the dismissal rows are dead weight; deleting them also means that if the
+  // rule is later removed, the suggestion can resurface for operators.
+  await db
+    .delete(subdomainSuggestionDismissalsTable)
+    .where(and(
+      eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
+      eq(subdomainSuggestionDismissalsTable.subdomain, normSub),
+    ));
+
   const { updatedEventCount, updatedLeadIds } = await backfillEventsForSubdomainRule(
     tenantId,
     normSub,
