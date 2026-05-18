@@ -25,6 +25,7 @@ export * from "./google-sheet-configs";
 export * from "./lead-source-aliases";
 export * from "./funnel-aliases";
 export * from "./field-mapping-rules";
+export * from "./subdomain-funnel-rules";
 export * from "./user-login-sessions";
 export * from "./podium-messages";
 export * from "./push-tokens";

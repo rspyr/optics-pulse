@@ -722,6 +722,100 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
     return !match || String(match.id) !== funnelTypeId;
   })();
 
+  // --- Subdomain → funnel mapping (Task #436) ---
+  const pageSubdomain = (() => {
+    if (!event.pageUrl) return null;
+    try {
+      let host = new URL(event.pageUrl).hostname.toLowerCase();
+      if (host.startsWith("www.")) host = host.slice(4);
+      const parts = host.split(".").filter(Boolean);
+      if (parts.length < 3) return null;
+      return parts.slice(0, parts.length - 2).join(".");
+    } catch { return null; }
+  })();
+
+  const [subdomainRule, setSubdomainRule] = useState<
+    { id: number; subdomain: string; funnelTypeId: number; funnelName: string } | null
+  >(null);
+  const [subdomainRuleLoaded, setSubdomainRuleLoaded] = useState(false);
+  const [subdomainFunnelTypeId, setSubdomainFunnelTypeId] = useState("");
+  const [subdomainEditing, setSubdomainEditing] = useState(false);
+  const [savedSubdomainCount, setSavedSubdomainCount] = useState<{ events: number; leads: number } | null>(null);
+
+  useEffect(() => {
+    if (!pageSubdomain) { setSubdomainRuleLoaded(true); return; }
+    fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const rules: Array<{ id: number; subdomain: string; funnelTypeId: number; funnelName: string }> = d.rules || [];
+        const match = rules.find(r => r.subdomain === pageSubdomain) || null;
+        setSubdomainRule(match);
+        if (match) setSubdomainFunnelTypeId(String(match.funnelTypeId));
+      })
+      .catch(() => {})
+      .finally(() => setSubdomainRuleLoaded(true));
+  }, [tenantId, pageSubdomain]);
+
+  useEffect(() => {
+    if (savedSubdomainCount !== null) {
+      const t = setTimeout(() => setSavedSubdomainCount(null), 4000);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [savedSubdomainCount]);
+
+  const saveSubdomainRule = async () => {
+    if (!pageSubdomain || !subdomainFunnelTypeId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subdomain: pageSubdomain, funnelTypeId: parseInt(subdomainFunnelTypeId) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save subdomain rule");
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+        setSavedSubdomainCount({ events, leads });
+        if (d.rule) setSubdomainRule(d.rule);
+        setSubdomainEditing(false);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
+        ]);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  const removeSubdomainRule = async () => {
+    if (!subdomainRule) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/${subdomainRule.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to remove subdomain rule");
+      } else {
+        setSubdomainRule(null);
+        setSubdomainFunnelTypeId("");
+        setSubdomainEditing(false);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
   return (
     <DetailSection title="Resolved Identity" icon={<Zap className="w-4 h-4" />}>
       {error && (
@@ -832,6 +926,73 @@ export function InlineIdentityCorrection({ tenantId, event }: { tenantId: number
             ) : null;
           })()}
         </div>
+
+        {pageSubdomain && subdomainRuleLoaded && (
+          <div className="space-y-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Subdomain</span>
+            {subdomainRule && !subdomainEditing ? (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center">
+                  <span className="font-mono text-white/60">{subdomainRule.subdomain}</span>
+                  <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
+                  <span>{subdomainRule.funnelName}</span>
+                </div>
+                <Button size="sm" variant="ghost" disabled={saving} onClick={() => setSubdomainEditing(true)} className="text-xs h-8 px-2 shrink-0">
+                  Change
+                </Button>
+                <Button size="sm" variant="ghost" disabled={saving} onClick={removeSubdomainRule} className="text-xs h-8 px-2 shrink-0 text-white/50">
+                  Undo
+                </Button>
+                {savedSubdomainCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-white/60 min-w-[80px] truncate" title={pageSubdomain}>{pageSubdomain}</span>
+                <ArrowRight className="w-3 h-3 text-white/30 shrink-0" />
+                <select
+                  value={subdomainFunnelTypeId}
+                  onChange={e => setSubdomainFunnelTypeId(e.target.value)}
+                  className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1.5 h-8"
+                >
+                  <option value="">Map to...</option>
+                  {funnelTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
+                </select>
+                {subdomainFunnelTypeId && (
+                  <Button size="sm" variant="ghost" disabled={saving} onClick={saveSubdomainRule} className="text-xs h-8 px-2 shrink-0">
+                    Save
+                  </Button>
+                )}
+                {subdomainEditing && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving}
+                    onClick={() => {
+                      setSubdomainEditing(false);
+                      setSubdomainFunnelTypeId(subdomainRule ? String(subdomainRule.funnelTypeId) : "");
+                    }}
+                    className="text-xs h-8 px-2 shrink-0 text-white/50"
+                  >
+                    Cancel
+                  </Button>
+                )}
+                {savedSubdomainCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+              </div>
+            )}
+            {savedSubdomainCount !== null && (
+              <p className="text-[10px] text-emerald-400 pl-0.5">
+                {(() => {
+                  const { events, leads } = savedSubdomainCount;
+                  if (events === 0 && leads === 0) return "Saved · Nothing else needed updating";
+                  const parts: string[] = [];
+                  if (events > 0) parts.push(`${events} past event${events === 1 ? "" : "s"}`);
+                  if (leads > 0) parts.push(`${leads} lead${leads === 1 ? "" : "s"}`);
+                  return `Saved · Updated ${parts.join(" and ")}`;
+                })()}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </DetailSection>
   );

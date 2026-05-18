@@ -13,6 +13,7 @@ import { normalizeAddress } from "../services/reconciliation";
 import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rate-limit";
 import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
+import { resolveSubdomainFunnel } from "../services/subdomain-funnel-resolver";
 import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
@@ -423,6 +424,14 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
           resolvedFunnelStr = urlAliasMatch.funnelName;
         }
       } catch {}
+    }
+
+    if (!resolvedFunnelId && pageUrl) {
+      const subdomainMatch = await resolveSubdomainFunnel(tenantId, pageUrl);
+      if (subdomainMatch) {
+        resolvedFunnelId = subdomainMatch.funnelTypeId;
+        resolvedFunnelStr = subdomainMatch.funnelName;
+      }
     }
 
     if (!resolvedFunnelId) {
