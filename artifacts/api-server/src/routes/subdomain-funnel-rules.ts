@@ -168,9 +168,14 @@ async function backfillEventsForSubdomainRule(
 //   * It is not already covered by an existing rule.
 //   * Within the last 90 days, every event whose resolved_funnel is set to a
 //     non-default value points at the same funnel (i.e. the subdomain has
-//     "only ever served one funnel"). Fell-through events (null/empty or the
-//     tenant's default funnel) are counted toward the backfill opportunity
-//     but do not count as a competing funnel signal.
+//     "only ever served one funnel" — reason: "observed"). Fell-through
+//     events (null/empty or the tenant's default funnel) are counted toward
+//     the backfill opportunity but do not count as a competing funnel signal.
+//   * OR every event on the subdomain has only ever fallen through to the
+//     default funnel AND the subdomain label heuristically matches the name
+//     of exactly one non-default tenant funnel (reason: "label-match"). This
+//     surfaces brand-new subdomains like "protect." that were never tagged
+//     correctly but clearly map to a tenant funnel by naming convention.
 //   * That funnel is enabled for the tenant.
 //   * At least 3 events were observed on the subdomain in the window, to
 //     avoid noise from one-off traffic.
@@ -248,7 +253,22 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     suggestedFunnelName: string;
     eventCount: number;
     fellThroughCount: number;
+    reason: "observed" | "label-match";
   }> = [];
+
+  // Tokenize a string into lowercase alphanumeric chunks for the label-match
+  // heuristic. We split on dots, dashes, underscores, and whitespace so that
+  // "Home Protection" and "protect" can still find each other via shared
+  // tokens / substrings.
+  const tokenize = (s: string): string[] =>
+    s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+  // Pre-tokenize tenant funnels once for the heuristic. Exclude the default
+  // funnel from heuristic matching — we never want to suggest a rule that
+  // points back at the funnel traffic is already falling through to.
+  const heuristicFunnels = tenantFunnels
+    .filter((f) => f.name.toLowerCase() !== defaultFunnelLcName)
+    .map((f) => ({ ...f, tokens: new Set(tokenize(f.name)) }));
 
   for (const [subdomain, srows] of bySub.entries()) {
     const distinctFunnels = new Map<string, number>();
@@ -266,18 +286,57 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
         distinctFunnels.set(lc, (distinctFunnels.get(lc) ?? 0) + r.cnt);
       }
     }
-    if (distinctFunnels.size !== 1) continue;
     if (total < 3) continue;
-    const [funnelLcName] = [...distinctFunnels.keys()];
-    const funnel = funnelByLcName.get(funnelLcName);
-    if (!funnel) continue;
-    suggestions.push({
-      subdomain,
-      suggestedFunnelTypeId: funnel.id,
-      suggestedFunnelName: funnel.name,
-      eventCount: total,
-      fellThroughCount: fellThrough,
-    });
+
+    if (distinctFunnels.size === 1) {
+      const [funnelLcName] = [...distinctFunnels.keys()];
+      const funnel = funnelByLcName.get(funnelLcName);
+      if (!funnel) continue;
+      suggestions.push({
+        subdomain,
+        suggestedFunnelTypeId: funnel.id,
+        suggestedFunnelName: funnel.name,
+        eventCount: total,
+        fellThroughCount: fellThrough,
+        reason: "observed",
+      });
+      continue;
+    }
+
+    // Default-funnel-only subdomain (no competing non-default signal yet).
+    // Try to infer a funnel from the subdomain label. We only suggest when
+    // exactly one tenant funnel matches, to avoid steering the operator into
+    // a wrong rule. A token (>=4 chars to avoid stop-word collisions) on
+    // either side must be a substring of the other's full name, OR the two
+    // share at least one exact token.
+    if (distinctFunnels.size === 0 && fellThrough >= 3 && heuristicFunnels.length > 0) {
+      const subTokens = tokenize(subdomain);
+      if (subTokens.length === 0) continue;
+      const matches = heuristicFunnels.filter((f) => {
+        for (const t of subTokens) {
+          if (f.tokens.has(t)) return true;
+        }
+        const fnameLc = f.name.toLowerCase();
+        for (const t of subTokens) {
+          if (t.length >= 4 && fnameLc.includes(t)) return true;
+        }
+        const subLc = subdomain.toLowerCase();
+        for (const t of f.tokens) {
+          if (t.length >= 4 && subLc.includes(t)) return true;
+        }
+        return false;
+      });
+      if (matches.length !== 1) continue;
+      const funnel = matches[0];
+      suggestions.push({
+        subdomain,
+        suggestedFunnelTypeId: funnel.id,
+        suggestedFunnelName: funnel.name,
+        eventCount: total,
+        fellThroughCount: fellThrough,
+        reason: "label-match",
+      });
+    }
   }
 
   suggestions.sort((a, b) => b.eventCount - a.eventCount);

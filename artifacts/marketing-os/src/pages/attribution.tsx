@@ -52,6 +52,7 @@ export default function Attribution() {
     suggestedFunnelName: string;
     eventCount: number;
     fellThroughCount: number;
+    reason?: "observed" | "label-match";
   };
   const [suggestions, setSuggestions] = useState<SubdomainSuggestion[]>([]);
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
@@ -236,7 +237,7 @@ export default function Attribution() {
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-sm font-medium text-white">Suggested subdomain rules</h4>
                 <span className="text-xs text-muted-foreground">
-                  Each subdomain below has only ever served one funnel in the last 90 days.
+                  Based on the last 90 days of traffic and your funnel names.
                 </span>
               </div>
               <div className="space-y-1.5">
@@ -245,17 +246,26 @@ export default function Attribution() {
                   .map(s => (
                     <div
                       key={s.subdomain}
-                      className="flex items-center gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-2"
+                      className="flex items-start gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-2"
                     >
-                      <span className="font-mono text-sm text-white/80">{s.subdomain}</span>
-                      <ArrowRight className="w-3 h-3 text-white/30 flex-shrink-0" />
-                      <span className="text-sm text-emerald-400">{s.suggestedFunnelName}</span>
-                      <span className="text-xs text-muted-foreground ml-2">
-                        {s.eventCount} event{s.eventCount === 1 ? "" : "s"}
-                        {s.fellThroughCount > 0 && (
-                          <> · {s.fellThroughCount} would be re-tagged</>
-                        )}
-                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="font-mono text-sm text-white/80">{s.subdomain}</span>
+                          <ArrowRight className="w-3 h-3 text-white/30 flex-shrink-0" />
+                          <span className="text-sm text-emerald-400">{s.suggestedFunnelName}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {s.eventCount} event{s.eventCount === 1 ? "" : "s"}
+                            {s.fellThroughCount > 0 && (
+                              <> · {s.fellThroughCount} would be re-tagged</>
+                            )}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/80 mt-1">
+                          {s.reason === "label-match"
+                            ? `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches "${s.suggestedFunnelName}".`
+                            : `Every tagged event on this subdomain in the last 90 days resolved to "${s.suggestedFunnelName}".`}
+                        </p>
+                      </div>
                       <div className="ml-auto flex items-center gap-2">
                         <Button
                           size="sm"
