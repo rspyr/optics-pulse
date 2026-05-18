@@ -53,6 +53,7 @@ export default function Attribution() {
     eventCount: number;
     fellThroughCount: number;
     reason?: "observed" | "label-match";
+    matchedAlias?: string;
   };
   const [suggestions, setSuggestions] = useState<SubdomainSuggestion[]>([]);
   const [hiddenSubdomains, setHiddenSubdomains] = useState<string[]>([]);
@@ -318,7 +319,9 @@ export default function Attribution() {
                         </div>
                         <p className="text-[11px] text-muted-foreground/80 mt-1">
                           {s.reason === "label-match"
-                            ? `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches "${s.suggestedFunnelName}".`
+                            ? s.matchedAlias
+                              ? `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches alias "${s.matchedAlias}" for funnel "${s.suggestedFunnelName}".`
+                              : `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches "${s.suggestedFunnelName}".`
                             : `Every tagged event on this subdomain in the last 90 days resolved to "${s.suggestedFunnelName}".`}
                         </p>
                       </div>

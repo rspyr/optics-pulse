@@ -7,6 +7,7 @@ import {
   tenantFunnelTypesTable,
   attributionEventsTable,
   leadsTable,
+  funnelAliasesTable,
 } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { invalidateSubdomainFunnelCache, extractSubdomain } from "../services/subdomain-funnel-resolver";
@@ -217,6 +218,17 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     .where(eq(tenantFunnelTypesTable.tenantId, tenantId));
   const funnelByLcName = new Map(tenantFunnels.map(f => [f.name.toLowerCase(), f]));
 
+  const aliasRows = await db
+    .select({ alias: funnelAliasesTable.alias, funnelTypeId: funnelAliasesTable.funnelTypeId })
+    .from(funnelAliasesTable)
+    .where(eq(funnelAliasesTable.tenantId, tenantId));
+  const aliasesByFunnelId = new Map<number, string[]>();
+  for (const a of aliasRows) {
+    const arr = aliasesByFunnelId.get(a.funnelTypeId) ?? [];
+    arr.push(a.alias);
+    aliasesByFunnelId.set(a.funnelTypeId, arr);
+  }
+
   const existingRules = await db
     .select({ subdomain: subdomainFunnelRulesTable.subdomain })
     .from(subdomainFunnelRulesTable)
@@ -280,6 +292,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     eventCount: number;
     fellThroughCount: number;
     reason: "observed" | "label-match";
+    matchedAlias?: string;
   }> = [];
 
   // Tokenize a string into lowercase alphanumeric chunks for the label-match
@@ -292,9 +305,27 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
   // Pre-tokenize tenant funnels once for the heuristic. Exclude the default
   // funnel from heuristic matching — we never want to suggest a rule that
   // points back at the funnel traffic is already falling through to.
+  // We also fold in tenant-configured funnel aliases as additional match
+  // surfaces, since aliases (e.g. "protection", "shield") are often richer
+  // signal than the canonical funnel name.
   const heuristicFunnels = tenantFunnels
     .filter((f) => f.name.toLowerCase() !== defaultFunnelLcName)
-    .map((f) => ({ ...f, tokens: new Set(tokenize(f.name)) }));
+    .map((f) => {
+      const aliases = aliasesByFunnelId.get(f.id) ?? [];
+      const nameTokens = tokenize(f.name);
+      const aliasTokenMap = new Map<string, string>();
+      for (const alias of aliases) {
+        for (const t of tokenize(alias)) {
+          if (!aliasTokenMap.has(t)) aliasTokenMap.set(t, alias);
+        }
+      }
+      return {
+        ...f,
+        tokens: new Set(nameTokens),
+        aliases,
+        aliasTokenMap,
+      };
+    });
 
   for (const [subdomain, srows] of bySub.entries()) {
     const distinctFunnels = new Map<string, number>();
@@ -338,22 +369,57 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     if (distinctFunnels.size === 0 && fellThrough >= 3 && heuristicFunnels.length > 0) {
       const subTokens = tokenize(subdomain);
       if (subTokens.length === 0) continue;
-      const matches = heuristicFunnels.filter((f) => {
+      const subLc = subdomain.toLowerCase();
+      // For each candidate funnel, find why it matched (if at all). A name
+      // match wins over an alias match for explanation purposes; if only an
+      // alias matched, we surface which alias it was.
+      type MatchInfo = { funnel: (typeof heuristicFunnels)[number]; matchedAlias?: string };
+      const matches: MatchInfo[] = [];
+      for (const f of heuristicFunnels) {
+        let nameMatched = false;
         for (const t of subTokens) {
-          if (f.tokens.has(t)) return true;
+          if (f.tokens.has(t)) { nameMatched = true; break; }
         }
-        const fnameLc = f.name.toLowerCase();
+        if (!nameMatched) {
+          const fnameLc = f.name.toLowerCase();
+          for (const t of subTokens) {
+            if (t.length >= 4 && fnameLc.includes(t)) { nameMatched = true; break; }
+          }
+        }
+        if (!nameMatched) {
+          for (const t of f.tokens) {
+            if (t.length >= 4 && subLc.includes(t)) { nameMatched = true; break; }
+          }
+        }
+        if (nameMatched) {
+          matches.push({ funnel: f });
+          continue;
+        }
+        // Try alias matches with the same heuristic.
+        let aliasMatch: string | undefined;
         for (const t of subTokens) {
-          if (t.length >= 4 && fnameLc.includes(t)) return true;
+          const a = f.aliasTokenMap.get(t);
+          if (a) { aliasMatch = a; break; }
         }
-        const subLc = subdomain.toLowerCase();
-        for (const t of f.tokens) {
-          if (t.length >= 4 && subLc.includes(t)) return true;
+        if (!aliasMatch) {
+          for (const alias of f.aliases) {
+            const aliasLc = alias.toLowerCase();
+            for (const t of subTokens) {
+              if (t.length >= 4 && aliasLc.includes(t)) { aliasMatch = alias; break; }
+            }
+            if (aliasMatch) break;
+            for (const t of tokenize(alias)) {
+              if (t.length >= 4 && subLc.includes(t)) { aliasMatch = alias; break; }
+            }
+            if (aliasMatch) break;
+          }
         }
-        return false;
-      });
+        if (aliasMatch) {
+          matches.push({ funnel: f, matchedAlias: aliasMatch });
+        }
+      }
       if (matches.length !== 1) continue;
-      const funnel = matches[0];
+      const { funnel, matchedAlias } = matches[0];
       suggestions.push({
         subdomain,
         suggestedFunnelTypeId: funnel.id,
@@ -361,6 +427,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
         eventCount: total,
         fellThroughCount: fellThrough,
         reason: "label-match",
+        ...(matchedAlias ? { matchedAlias } : {}),
       });
     }
   }
