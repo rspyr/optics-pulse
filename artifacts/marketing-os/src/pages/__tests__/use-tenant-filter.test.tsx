@@ -53,15 +53,19 @@ describe("useTenantFilter — auto-default & override behavior", () => {
     vi.unstubAllGlobals();
   });
 
-  it("auto-picks the first tenant when no selection has been made yet", async () => {
+  it("does NOT auto-pick a tenant on first visit — operator must choose explicitly", async () => {
+    // Regression: silent auto-pick was making the SCOPE chip jump to a
+    // random tenant on navigation. We now leave the global selection at
+    // null and let the page render a 'pick a tenant' prompt.
     mockTenantsFetch([{ id: 11, name: "Acme" }, { id: 22, name: "Beta" }]);
     let latest: ReturnType<typeof useTenantFilter> | null = null;
     render(<Harness onState={(s) => { latest = s; }} />);
 
     await waitFor(() => {
-      expect(authState.setSelectedTenantId).toHaveBeenCalledWith(11);
+      expect(latest).not.toBeNull();
+      expect(latest!.tenants).toHaveLength(2);
     });
-    expect(latest!.tenants).toHaveLength(2);
+    expect(authState.setSelectedTenantId).not.toHaveBeenCalled();
   });
 
   it("does NOT auto-pick when the operator explicitly chose 'All Tenants'", async () => {

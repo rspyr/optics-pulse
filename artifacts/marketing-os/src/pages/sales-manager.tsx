@@ -213,11 +213,12 @@ function useActivityFeed(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   const fetchFeed = useCallback(async () => {
+    // Don't fetch the activity feed without a tenant in scope — the
+    // unscoped variant would return agency-wide data, which contradicts
+    // the "operator must pick a tenant explicitly" policy.
+    if (!tenantId) { setActivities([]); setLoading(false); return; }
     try {
-      const url = tenantId
-        ? `${API_BASE}/sales-manager/activity-feed?tenantId=${tenantId}`
-        : `${API_BASE}/sales-manager/activity-feed`;
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/sales-manager/activity-feed?tenantId=${tenantId}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setActivities(data.activities);
@@ -227,9 +228,10 @@ function useActivityFeed(tenantId: number | null) {
 
   useEffect(() => {
     fetchFeed();
+    if (!tenantId) return;
     const interval = setInterval(fetchFeed, 10000);
     return () => clearInterval(interval);
-  }, [fetchFeed]);
+  }, [fetchFeed, tenantId]);
 
   return { activities, loading, refetch: fetchFeed };
 }
@@ -4164,30 +4166,28 @@ function SpiffsAuditTab({ tenantId, funnels, timezone }: { tenantId: number | nu
 }
 
 export default function SalesManager() {
-  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
+  const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId } = useAuth();
   const [tab, setTab] = useState<Tab>("dashboard");
   const [includePreBooked, setIncludePreBooked] = useState(false);
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
-
-  const setSelectedTenantId = useCallback((id: number | null) => {
-    setSelectedTenantIdLocal(id);
-    setGlobalTenantId(id);
-  }, [setGlobalTenantId]);
 
   useEffect(() => {
+    if (!isAgency) return;
     fetch(`${API_BASE}/tenants`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
           setTenants(data.map((t: { id: number; name: string; timezone?: string }) => ({ id: t.id, name: t.name, timezone: t.timezone })));
-          if (isAgency && !selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
         }
       })
       .catch(() => {});
   }, [isAgency]);
 
-  const effectiveTenantId = isAgency ? selectedTenantId : (user?.tenantId ?? null);
+  // The Tenant <Select> on this page mirrors the global SCOPE chip in the
+  // header. We deliberately don't auto-pick a tenant here — that was making
+  // the chip "jump" on navigation. Operator must pick one explicitly.
+  const selectedTenantId = isAgency ? globalTenantId : (user?.tenantId ?? null);
+  const effectiveTenantId = selectedTenantId;
   const isClientUser = !isAgency && user?.role === "client_user";
 
   const tenantTz = tenants.find(t => t.id === effectiveTenantId)?.timezone || "America/New_York";
@@ -4246,6 +4246,16 @@ export default function SalesManager() {
         </PremiumCard>
       )}
 
+      {isAgency && !selectedTenantId && (
+        <PremiumCard className="p-6 text-center">
+          <p className="text-sm text-white/60">
+            Select a tenant above (or in the header SCOPE chip) to view the Sales Manager Hub.
+          </p>
+        </PremiumCard>
+      )}
+
+      {(!isAgency || selectedTenantId) && (
+      <>
       <div className="flex items-center gap-1 border-b border-white/5 pb-0 overflow-x-auto">
         {tabs.map(t => (
           <button
@@ -4306,6 +4316,8 @@ export default function SalesManager() {
           <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

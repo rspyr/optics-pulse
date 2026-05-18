@@ -72,6 +72,28 @@ function getClientNav(isAdmin: boolean, leaderboardVisible: boolean) {
   return base;
 }
 
+// Routes where the global tenant SCOPE chip has no effect — the page
+// either operates across all tenants (e.g. tenant/user management) or
+// has no tenant dimension at all (leaderboards, automation rules,
+// agency-wide training/scripts). Hide the chip there so the operator
+// isn't tricked into thinking it filters the view.
+const SCOPE_CHIP_HIDDEN_ROUTES: string[] = [
+  "/leaderboards",
+  "/admin/tenants",
+  "/admin/users",
+  "/automation",
+  "/admin/funnels",
+  "/admin/scripts",
+  "/admin/training",
+  "/admin/change-logs",
+];
+
+function isScopeChipHidden(pathname: string): boolean {
+  return SCOPE_CHIP_HIDDEN_ROUTES.some(
+    (r) => pathname === r || pathname.startsWith(`${r}/`),
+  );
+}
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = React.useState(false);
@@ -80,6 +102,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const leaderboardVisible = user?.leaderboardConfig?.visible ?? false;
   const navItems = isAgency ? AGENCY_NAV : getClientNav(user?.role === "client_admin", leaderboardVisible);
+  const showScopeChip = isAgency && !isScopeChipHidden(location);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -163,7 +186,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="relative z-10 min-h-full">
           {isAgency && (
             <div className="flex items-center justify-end gap-3 px-6 md:px-10 pt-4">
-              <TenantScopeChip />
+              {showScopeChip && <TenantScopeChip />}
               <NotificationBell />
             </div>
           )}

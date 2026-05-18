@@ -12,19 +12,15 @@ export interface TenantOption {
 /**
  * Tenant filter hook shared by every admin surface that scopes itself by
  * tenant. Reads from / writes to the global persisted selection in
- * `AuthContext` so that picking a tenant in /internal also scopes
- * /attribution, /admin/tenants, etc., and "All Tenants" (null) propagates
- * everywhere — including across page reloads.
+ * `AuthContext` so the header SCOPE chip and any per-page TENANT dropdown
+ * always show the same value — including across navigation and full page
+ * reloads.
  *
- * Auto-default behavior:
- * - If the operator has never made a selection (`tenantSelectionMade === false`),
- *   per-tenant operational pages (/pulse, /clients, etc.) auto-pick the first
- *   tenant from the list so they have something to render.
- * - If the operator explicitly chose "All Tenants" (`selectedTenantId === null`
- *   && `tenantSelectionMade === true`), we leave it null — pages that genuinely
- *   support an agency-wide view (Attribution events, Agency God View) will
- *   render that view; per-tenant pages can still prompt the operator to pick
- *   a tenant.
+ * No silent auto-pick: if the operator has not chosen a tenant, the page
+ * receives `null` (= All Tenants) and is responsible for showing a "select
+ * a tenant" prompt where a single-tenant context is required. We never
+ * mutate the global selection on the operator's behalf — that's what was
+ * causing the chip to swap to a random tenant on navigation.
  *
  * Passing `tenantIdOverride` pins this instance to a specific tenant (used by
  * embeds like the per-tenant settings panel) and also updates the global
@@ -36,7 +32,6 @@ export function useTenantFilter(tenantIdOverride?: number) {
     isAgency,
     selectedTenantId: globalTenantId,
     setSelectedTenantId: setGlobalTenantId,
-    tenantSelectionMade,
   } = useAuth();
 
   const [tenants, setTenants] = useState<TenantOption[]>([]);
@@ -63,13 +58,6 @@ export function useTenantFilter(tenantIdOverride?: number) {
             timezone: t.timezone,
           }));
           setTenants(mapped);
-          // First-time visit only: pick the first tenant so per-tenant pages
-          // have something to render. We deliberately skip this if the
-          // operator has explicitly chosen "All Tenants" — that choice must
-          // propagate to every admin surface.
-          if (!tenantSelectionMade && globalTenantId == null && mapped.length > 0) {
-            setGlobalTenantId(mapped[0].id);
-          }
         }
       })
       .catch(() => {});

@@ -3161,15 +3161,23 @@ export default function Leads() {
         <PremiumCard className="p-4 mb-6">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
+            <Select value={localTenantId != null ? String(localTenantId) : undefined} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
               <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
-                <SelectValue />
+                <SelectValue placeholder="Select tenant…" />
               </SelectTrigger>
               <SelectContent>
                 {tenants.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && !localTenantId && (
+        <PremiumCard className="p-6 mb-6 text-center">
+          <p className="text-sm text-white/60">
+            Select a tenant above (or in the header SCOPE chip) to view the Pulse queue.
+          </p>
         </PremiumCard>
       )}
 
