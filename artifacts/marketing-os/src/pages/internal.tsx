@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useAuth } from "@/components/auth-context";
 import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation, useListTenants } from "@workspace/api-client-react";
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
@@ -16,20 +17,11 @@ export default function Internal() {
   const startDate = monthStart.toISOString().split("T")[0];
   const endDate = now.toISOString().split("T")[0];
 
-  const TENANT_FILTER_STORAGE_KEY = "agencyGodView.tenantId";
-  const [globalTenantId, setGlobalTenantIdState] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    const raw = window.localStorage.getItem(TENANT_FILTER_STORAGE_KEY);
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  });
-  const setGlobalTenantId = useCallback((id: number | null) => {
-    setGlobalTenantIdState(id);
-    if (typeof window === "undefined") return;
-    if (id == null) window.localStorage.removeItem(TENANT_FILTER_STORAGE_KEY);
-    else window.localStorage.setItem(TENANT_FILTER_STORAGE_KEY, String(id));
-  }, []);
+  // The tenant filter lives in AuthContext so the same selection scopes
+  // /attribution, /admin/tenants, and any other admin surface — and survives
+  // page reloads via shared localStorage. "All Tenants" is represented as
+  // `null` and restores the agency-wide view everywhere.
+  const { selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
 
   const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate, tenantId: globalTenantId ?? undefined });
   const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus(globalTenantId ? { tenantId: globalTenantId } : undefined);

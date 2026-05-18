@@ -9,28 +9,45 @@ export interface TenantOption {
   timezone?: string;
 }
 
+/**
+ * Tenant filter hook shared by every admin surface that scopes itself by
+ * tenant. Reads from / writes to the global persisted selection in
+ * `AuthContext` so that picking a tenant in /internal also scopes
+ * /attribution, /admin/tenants, etc., and "All Tenants" (null) propagates
+ * everywhere — including across page reloads.
+ *
+ * Auto-default behavior:
+ * - If the operator has never made a selection (`tenantSelectionMade === false`),
+ *   per-tenant operational pages (/pulse, /clients, etc.) auto-pick the first
+ *   tenant from the list so they have something to render.
+ * - If the operator explicitly chose "All Tenants" (`selectedTenantId === null`
+ *   && `tenantSelectionMade === true`), we leave it null — pages that genuinely
+ *   support an agency-wide view (Attribution events, Agency God View) will
+ *   render that view; per-tenant pages can still prompt the operator to pick
+ *   a tenant.
+ *
+ * Passing `tenantIdOverride` pins this instance to a specific tenant (used by
+ * embeds like the per-tenant settings panel) and also updates the global
+ * selection so navigating away keeps that tenant in scope.
+ */
 export function useTenantFilter(tenantIdOverride?: number) {
-  const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
+  const {
+    user,
+    isAgency,
+    selectedTenantId: globalTenantId,
+    setSelectedTenantId: setGlobalTenantId,
+    tenantSelectionMade,
+  } = useAuth();
 
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [localTenantId, setLocalTenantId] = useState<number | null>(
-    tenantIdOverride ?? globalTenantId ?? user?.tenantId ?? null
-  );
 
   useEffect(() => {
-    if (!tenantIdOverride && globalTenantId !== null && globalTenantId !== localTenantId) {
-      setLocalTenantId(globalTenantId);
-    }
-  }, [globalTenantId, tenantIdOverride]);
-
-  useEffect(() => {
-    if (isAgency && tenantIdOverride) {
+    if (isAgency && tenantIdOverride && tenantIdOverride !== globalTenantId) {
       setGlobalTenantId(tenantIdOverride);
     }
-  }, [isAgency, tenantIdOverride, setGlobalTenantId]);
+  }, [isAgency, tenantIdOverride, globalTenantId, setGlobalTenantId]);
 
   const setSelectedTenantId = useCallback((id: number | null) => {
-    setLocalTenantId(id);
     setGlobalTenantId(id);
   }, [setGlobalTenantId]);
 
@@ -46,24 +63,26 @@ export function useTenantFilter(tenantIdOverride?: number) {
             timezone: t.timezone,
           }));
           setTenants(mapped);
-          setLocalTenantId(prev => {
-            if (prev !== null) return prev;
-            if (mapped.length > 0) return mapped[0].id;
-            return null;
-          });
+          // First-time visit only: pick the first tenant so per-tenant pages
+          // have something to render. We deliberately skip this if the
+          // operator has explicitly chosen "All Tenants" — that choice must
+          // propagate to every admin surface.
+          if (!tenantSelectionMade && globalTenantId == null && mapped.length > 0) {
+            setGlobalTenantId(mapped[0].id);
+          }
         }
       })
       .catch(() => {});
+    // We intentionally only depend on `isAgency` to keep this a one-shot fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAgency]);
 
-  useEffect(() => {
-    if (isAgency && localTenantId !== null && localTenantId !== globalTenantId) {
-      setGlobalTenantId(localTenantId);
-    }
-  }, [isAgency, localTenantId, globalTenantId, setGlobalTenantId]);
+  // `localTenantId` is kept for backwards compat with existing callers that
+  // bind a <Select> to it. It mirrors the persisted global selection.
+  const localTenantId = tenantIdOverride ?? globalTenantId;
 
   const effectiveTenantId = tenantIdOverride
-    ?? (isAgency ? localTenantId : (user?.tenantId ?? null));
+    ?? (isAgency ? globalTenantId : (user?.tenantId ?? null));
 
   return {
     tenants,

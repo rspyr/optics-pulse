@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useListTenants, useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
+import { useAuth } from "@/components/auth-context";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -135,10 +136,26 @@ function CopyableUrl({ url }: { url: string }) {
 }
 
 export default function AdminTenants() {
-  const { data: tenants, isLoading, refetch } = useListTenants();
+  const { data: allTenants, isLoading, refetch } = useListTenants();
   const createTenant = useCreateTenant();
   const updateTenant = useUpdateTenant();
   const deleteTenant = useDeleteTenant();
+
+  // Honor the agency-wide tenant scope. When the operator has picked a
+  // specific tenant from /internal (or anywhere else), narrow the list here to
+  // that one row so the page acts like a per-tenant detail view. "All Tenants"
+  // (null) restores the full list.
+  const { selectedTenantId: globalTenantId, setSelectedTenantId } = useAuth();
+  const tenants = useMemo(() => {
+    if (!allTenants) return allTenants;
+    if (globalTenantId == null) return allTenants;
+    return allTenants.filter((t) => (t as unknown as { id: number }).id === globalTenantId);
+  }, [allTenants, globalTenantId]);
+  const scopedTenantName = useMemo(() => {
+    if (globalTenantId == null) return null;
+    const match = allTenants?.find((t) => (t as unknown as { id: number }).id === globalTenantId);
+    return (match as unknown as { name?: string } | undefined)?.name ?? `Tenant #${globalTenantId}`;
+  }, [allTenants, globalTenantId]);
 
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
@@ -674,6 +691,25 @@ export default function AdminTenants() {
           Add Tenant
         </button>
       </header>
+
+      {scopedTenantName && (
+        <PremiumCard className="p-3 border-primary/30 bg-primary/[0.04]">
+          <div className="flex items-center gap-3 flex-wrap text-sm">
+            <span className="text-xs text-white/40 uppercase tracking-wider">Scoped to</span>
+            <span className="font-medium text-white">{scopedTenantName}</span>
+            <span className="text-xs text-white/40">
+              — only this tenant is shown. The Agency God View tenant filter is driving this scope.
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedTenantId(null)}
+              className="ml-auto text-xs text-primary hover:text-primary/80 underline decoration-dotted"
+            >
+              Show all tenants
+            </button>
+          </div>
+        </PremiumCard>
+      )}
 
       {showCreate && (
         <PremiumCard className="p-6">

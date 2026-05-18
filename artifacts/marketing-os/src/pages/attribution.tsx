@@ -198,16 +198,25 @@ export default function Attribution() {
         <PremiumCard className="p-4">
           <div className="flex items-center gap-3">
             <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
+            <Select
+              value={localTenantId != null ? String(localTenantId) : "all"}
+              onValueChange={v => setSelectedTenantId(v === "all" ? null : parseInt(v))}
+            >
               <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="all">All Tenants</SelectItem>
                 {tenants.map(t => (
                   <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {localTenantId == null && (
+              <span className="text-[11px] text-white/40">
+                Ingestion Mode &amp; Funnel Aliases tabs require a specific tenant.
+              </span>
+            )}
           </div>
         </PremiumCard>
       )}
