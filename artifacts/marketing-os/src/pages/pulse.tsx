@@ -309,7 +309,14 @@ function useHudStats(tenantId?: number | null, isAgency?: boolean, csrId?: numbe
     } catch {}
   }, [tenantId, shouldFetch, csrId, tf]);
   useEffect(() => {
-    if (!shouldFetch) return;
+    if (!shouldFetch) {
+      setStats({
+        callsMadeToday: 0, bookingsToday: 0, bookingRate: 0, commission: 0,
+        newLeadsToday: 0, avgSpeedToLead: 0, soldToday: 0,
+        bonusTier: "none", bonusThreshold: 30, nextBonusAt: 30,
+      });
+      return;
+    }
     fetchStats();
     const i = setInterval(fetchStats, 10000);
     return () => clearInterval(i);
@@ -341,7 +348,11 @@ function useLeadsHubQueue(tenantId?: number | null, isAgency?: boolean, csrId?: 
   }, [tenantId, shouldFetch, csrId]);
 
   useEffect(() => {
-    if (!shouldFetch) return;
+    if (!shouldFetch) {
+      setData({ newLeads: [], callbacks: [], reengagement: [], oldLeads: [], recentlyBooked: [], total: 0 });
+      setLoading(false);
+      return;
+    }
     fetchQueue();
     const i = setInterval(fetchQueue, 15000);
     return () => clearInterval(i);
@@ -355,7 +366,7 @@ function useArchive(tenantId?: number | null, filters?: Record<string, string>) 
   const [loading, setLoading] = useState(false);
 
   const fetchArchive = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId) { setData({ leads: [], total: 0 }); setLoading(false); return; }
     setLoading(true);
     try {
       const params = new URLSearchParams({ tenantId: String(tenantId) });
@@ -520,7 +531,7 @@ function ContactFlags({ preferences }: { preferences?: string[] | null }) {
 function useFunnelTypes(tenantId?: number | null) {
   const [funnelMap, setFunnelMap] = useState<Record<number, string>>({});
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId) { setFunnelMap({}); return; }
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/funnel-types?tenantId=${tenantId}`, { credentials: "include" });

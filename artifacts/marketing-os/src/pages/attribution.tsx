@@ -82,9 +82,19 @@ export default function Attribution() {
 
   const queryClient = useQueryClient();
 
-  const { data } = useListAttributionEvents({
-    ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
-  });
+  // Don't issue the cross-tenant "give me everything" fetch when the operator
+  // hasn't picked a tenant — agency users get a "select a tenant" prompt
+  // below instead.
+  const listEventsParams = effectiveTenantId ? { tenantId: effectiveTenantId } : undefined;
+  const { data } = useListAttributionEvents(
+    listEventsParams,
+    {
+      query: {
+        enabled: !isAgency || effectiveTenantId != null,
+        queryKey: getListAttributionEventsQueryKey(listEventsParams),
+      },
+    },
+  );
 
   type SubdomainSuggestion = {
     subdomain: string;
@@ -327,6 +337,14 @@ export default function Attribution() {
               </span>
             )}
           </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && effectiveTenantId == null && (
+        <PremiumCard className="p-6">
+          <p className="text-sm text-white/50">
+            Select a tenant above (or in the header SCOPE chip) to view attribution events.
+          </p>
         </PremiumCard>
       )}
 

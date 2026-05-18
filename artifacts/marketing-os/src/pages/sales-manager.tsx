@@ -133,7 +133,7 @@ function useFunnelTypes(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   const fetchFunnels = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setFunnels([]); setLoading(false); return; }
     try {
       const res = await fetch(`${API_BASE}/tenants/${tenantId}/funnel-types`, { credentials: "include" });
       if (res.ok) {
@@ -153,7 +153,7 @@ function useStats(tenantId: number | null, startDate: string, endDate: string, f
   const [loading, setLoading] = useState(true);
 
   const fetchStats = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setStats(null); setLoading(false); return; }
     try {
       const params = new URLSearchParams({ tenantId: String(tenantId), startDate, endDate });
       if (funnelId) params.set("funnelId", String(funnelId));
@@ -173,7 +173,7 @@ function useCsrs(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   const fetchCsrs = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setCsrs([]); setLoading(false); return; }
     try {
       const res = await fetch(`${API_BASE}/leads-hub/csrs?tenantId=${tenantId}`, { credentials: "include" });
       if (res.ok) {
@@ -193,7 +193,7 @@ function useRoutingConfigs(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   const fetchConfigs = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setConfigs([]); setLoading(false); return; }
     try {
       const res = await fetch(`${API_BASE}/leads-hub/routing-config?tenantId=${tenantId}`, { credentials: "include" });
       if (res.ok) {
@@ -2128,7 +2128,7 @@ function useSpiffConfig(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setConfig({ default: 20, byFunnel: {} }); setLoading(false); return; }
     fetch(`${API_BASE}/sales-manager/spiff-config?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => { if (data?.spiffConfig) setConfig(data.spiffConfig); })
@@ -2844,7 +2844,7 @@ function useSheetConfigs(tenantId: number | null) {
   const [loading, setLoading] = useState(true);
 
   const fetchConfigs = useCallback(async () => {
-    if (!tenantId) { setLoading(false); return; }
+    if (!tenantId) { setConfigs([]); setLoading(false); return; }
     try {
       const res = await fetch(`${API_BASE}/tenants/${tenantId}/sheet-configs`, { credentials: "include" });
       if (res.ok) {
@@ -3548,7 +3548,7 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   const [sectionExpanded, setSectionExpanded] = useState(false);
 
   const fetchAliases = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId) { setGroups([]); setLoading(false); return; }
     try {
       const url = `${API_BASE}/lead-source-aliases?tenantId=${tenantId}`;
       const res = await fetch(url, { credentials: "include" });
@@ -4002,7 +4002,7 @@ function SpiffsAuditTab({ tenantId, funnels, timezone }: { tenantId: number | nu
   const [endDate, setEndDate] = useState<string>("");
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId) { setCsrs([]); return; }
     fetch(`${API_BASE}/sales-manager/team?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => {
@@ -4012,7 +4012,7 @@ function SpiffsAuditTab({ tenantId, funnels, timezone }: { tenantId: number | nu
   }, [tenantId]);
 
   const fetchAudit = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId) { setLeads([]); setTotalSpiff(0); setLoading(false); return; }
     setLoading(true);
     try {
       const params = new URLSearchParams();

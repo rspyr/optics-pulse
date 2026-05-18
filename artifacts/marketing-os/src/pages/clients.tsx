@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining } from "@workspace/api-client-react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useListChangeLogs, useListLeads, useGetDashboardBenchmarks, useGetContextualTraining, getGetDashboardOverviewQueryKey, getGetSpendRevenueChartQueryKey, getListChangeLogsQueryKey, getListLeadsQueryKey } from "@workspace/api-client-react";
 import type { TrainingItem, TrainingContextualResponseMetrics } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -108,8 +108,12 @@ function ChangeLogPopover({ log, onClose }: { log: { title: string; description:
 }
 
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { tenants, localTenantId, effectiveTenantId: rawEffectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter(tenantIdOverride);
-  const effectiveTenantId = rawEffectiveTenantId ?? 1;
+  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter(tenantIdOverride);
+  // No silent fallback to a default tenant id — when the operator hasn't picked
+  // a tenant (agency in "All Tenants" scope), we must NOT issue tenant-scoped
+  // fetches that would otherwise leak data from an arbitrary tenant (the old
+  // `?? 1` default fetched tenant #1's metrics, leads, change logs, etc.).
+  const hasTenant = effectiveTenantId != null;
 
   const [dateRange, setDateRange] = useState<DateRange>("30");
   const [roiMode, setRoiMode] = useState<"roas" | "allcosts">("roas");
@@ -131,28 +135,29 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const { startDate, endDate } = parseDateRange(dateRange);
 
-  const { data: rawOverview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview({
-    tenantId: effectiveTenantId,
-    startDate,
-    endDate,
-  });
+  const overviewParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate };
+  const { data: rawOverview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview(
+    overviewParams,
+    { query: { enabled: hasTenant, queryKey: getGetDashboardOverviewQueryKey(overviewParams) } },
+  );
 
-  const { data: rawChartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart({
-    tenantId: effectiveTenantId,
-    startDate,
-    endDate,
-  });
+  const chartParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate };
+  const { data: rawChartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart(
+    chartParams,
+    { query: { enabled: hasTenant, queryKey: getGetSpendRevenueChartQueryKey(chartParams) } },
+  );
 
-  const { data: rawChangeLogs } = useListChangeLogs({
-    tenantId: effectiveTenantId,
-    startDate,
-    endDate,
-  });
+  const changeLogsParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate };
+  const { data: rawChangeLogs } = useListChangeLogs(
+    changeLogsParams,
+    { query: { enabled: hasTenant, queryKey: getListChangeLogsQueryKey(changeLogsParams) } },
+  );
 
-  const { data: rawLeadsData } = useListLeads({
-    tenantId: effectiveTenantId,
-    limit: 500,
-  });
+  const leadsParams = { tenantId: effectiveTenantId ?? 0, limit: 500 };
+  const { data: rawLeadsData } = useListLeads(
+    leadsParams,
+    { query: { enabled: hasTenant, queryKey: getListLeadsQueryKey(leadsParams) } },
+  );
 
   const { data: rawBenchmarkData } = useGetDashboardBenchmarks({
     startDate,
@@ -249,7 +254,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   }, [chartDaily, changeLogs, roiMode, agencyFee, dateRange]);
 
   const handleNlSubmit = useCallback(async () => {
-    if (!nlQuery.trim() || nlLoading) return;
+    if (!nlQuery.trim() || nlLoading || effectiveTenantId == null) return;
     setNlLoading(true);
     setNlError(null);
     try {
@@ -470,6 +475,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
         </PremiumCard>
       )}
 
+      {!hasTenant && (
+        <PremiumCard className="p-6">
+          <p className="text-sm text-white/50">
+            Select a tenant above (or in the header SCOPE chip) to view the Client Portal.
+          </p>
+        </PremiumCard>
+      )}
+
+      {hasTenant && (
+      <>
       <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Client Portal</GradientHeading>
@@ -971,6 +986,8 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           </div>
         </div>
       </PremiumCard>
+      </>
+      )}
     </div>
   );
 }
