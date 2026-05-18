@@ -38,7 +38,7 @@ export default function Attribution() {
   const [filterFunnel, setFilterFunnel] = useState<string>("all");
   const [filterDateRange, setFilterDateRange] = useState<string>("all");
   const [searchText, setSearchText] = useState("");
-  const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases">("events");
+  const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
 
   const { data } = useListAttributionEvents({
     ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
@@ -154,6 +154,7 @@ export default function Attribution() {
         <TabButton active={activeTab === "events"} onClick={() => setActiveTab("events")} icon={<Target className="w-4 h-4" />} label="Events" />
         <TabButton active={activeTab === "ingestion"} onClick={() => setActiveTab("ingestion")} icon={<Settings2 className="w-4 h-4" />} label="Ingestion Mode" />
         <TabButton active={activeTab === "funnel-aliases"} onClick={() => setActiveTab("funnel-aliases")} icon={<Brain className="w-4 h-4" />} label="Funnel Aliases" />
+        <TabButton active={activeTab === "subdomain-rules"} onClick={() => setActiveTab("subdomain-rules")} icon={<Globe className="w-4 h-4" />} label="Subdomain Rules" />
       </div>
 
       {activeTab === "events" && (
@@ -328,6 +329,10 @@ export default function Attribution() {
 
       {activeTab === "funnel-aliases" && effectiveTenantId && (
         <FunnelAliasesPanel tenantId={effectiveTenantId} />
+      )}
+
+      {activeTab === "subdomain-rules" && effectiveTenantId && (
+        <SubdomainRulesPanel tenantId={effectiveTenantId} />
       )}
 
       <Sheet open={selectedEventId != null} onOpenChange={(open) => { if (!open) setSelectedEventId(null); }}>
@@ -1489,6 +1494,264 @@ function FunnelAliasesPanel({ tenantId }: { tenantId: number }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </PremiumCard>
+    </div>
+  );
+}
+
+interface SubdomainRule {
+  id: number;
+  subdomain: string;
+  funnelTypeId: number;
+  funnelName: string;
+  createdAt?: string;
+}
+
+function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
+  const [rules, setRules] = useState<SubdomainRule[]>([]);
+  const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [newSubdomain, setNewSubdomain] = useState("");
+  const [newFunnelId, setNewFunnelId] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editFunnelId, setEditFunnelId] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [rRes, fRes] = await Promise.all([
+        fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${tenantId}`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" }),
+      ]);
+      const rData = await rRes.json();
+      const fData = await fRes.json();
+      setRules(rData.rules || []);
+      setFunnelTypes(fData.funnelTypes || fData || []);
+    } catch {
+      setError("Failed to load subdomain rules");
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    setLoading(true);
+    loadAll().finally(() => setLoading(false));
+  }, [loadAll]);
+
+  const addRule = async () => {
+    const sub = newSubdomain.trim().toLowerCase().replace(/^www\./, "");
+    if (!sub || !newFunnelId) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to add rule");
+      } else {
+        setNewSubdomain("");
+        setNewFunnelId("");
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setAdding(false);
+  };
+
+  const startEdit = (rule: SubdomainRule) => {
+    setEditingId(rule.id);
+    setEditFunnelId(String(rule.funnelTypeId));
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditFunnelId("");
+  };
+
+  const saveEdit = async (rule: SubdomainRule) => {
+    if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
+      cancelEdit();
+      return;
+    }
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to update rule");
+      } else {
+        cancelEdit();
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setSavingEdit(false);
+  };
+
+  const confirmDelete = async (id: number) => {
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to delete rule");
+      } else {
+        setPendingDeleteId(null);
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setDeleting(false);
+  };
+
+  if (loading) {
+    return <PremiumCard className="p-8"><p className="text-muted-foreground text-sm">Loading...</p></PremiumCard>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <PremiumCard className="p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-medium text-white mb-1">Subdomain → Funnel Rules</h3>
+          <p className="text-sm text-muted-foreground">
+            When form field and alias matching can't resolve a funnel, fall back to the page's subdomain.
+            For example, <span className="font-mono text-white/70">repair</span> on{" "}
+            <span className="font-mono text-white/70">repair.acme.com</span> routes to your Repair funnel.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          <Input
+            placeholder="subdomain (e.g. repair)"
+            value={newSubdomain}
+            onChange={e => setNewSubdomain(e.target.value)}
+            className="max-w-[220px] bg-white/5 border-white/10 text-sm font-mono"
+          />
+          <ArrowRight className="w-4 h-4 text-white/30" />
+          <Select value={newFunnelId} onValueChange={setNewFunnelId}>
+            <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm">
+              <SelectValue placeholder="Select funnel type" />
+            </SelectTrigger>
+            <SelectContent>
+              {funnelTypes.map(ft => (
+                <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={addRule}
+            disabled={adding || !newSubdomain.trim() || !newFunnelId}
+          >
+            {adding ? "Adding..." : "Add Rule"}
+          </Button>
+        </div>
+
+        {error && (
+          <div className="mb-4 text-xs text-red-400 bg-red-400/5 border border-red-400/20 rounded-md px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        {rules.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No subdomain rules configured yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Subdomain</th>
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Funnel</th>
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider w-[1%]"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {rules.map(rule => {
+                  const isEditing = editingId === rule.id;
+                  const isPendingDelete = pendingDeleteId === rule.id;
+                  return (
+                    <tr key={rule.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-3 pr-4 font-mono text-sm text-white">{rule.subdomain}</td>
+                      <td className="py-3 pr-4 text-sm">
+                        {isEditing ? (
+                          <Select value={editFunnelId} onValueChange={setEditFunnelId}>
+                            <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm h-8">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {funnelTypes.map(ft => (
+                                <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-white/80">{rule.funnelName}</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 whitespace-nowrap">
+                        {isEditing ? (
+                          <div className="flex gap-1 justify-end">
+                            <Button size="sm" variant="ghost" disabled={savingEdit} onClick={() => saveEdit(rule)} className="h-7 px-2 text-xs">
+                              {savingEdit ? "Saving..." : "Save"}
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={savingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : isPendingDelete ? (
+                          <div className="flex gap-1 justify-end items-center">
+                            <span className="text-xs text-amber-400/80 mr-1">Delete?</span>
+                            <Button size="sm" variant="ghost" disabled={deleting} onClick={() => confirmDelete(rule.id)} className="h-7 px-2 text-xs text-red-400">
+                              {deleting ? "Deleting..." : "Yes, delete"}
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={deleting} onClick={() => setPendingDeleteId(null)} className="h-7 px-2 text-xs text-white/50">
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 justify-end">
+                            <Button size="sm" variant="ghost" onClick={() => startEdit(rule)} className="h-7 px-2 text-xs">
+                              Edit
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setPendingDeleteId(rule.id)} className="h-7 px-2 text-xs text-white/50 hover:text-red-400">
+                              Delete
+                            </Button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </PremiumCard>
