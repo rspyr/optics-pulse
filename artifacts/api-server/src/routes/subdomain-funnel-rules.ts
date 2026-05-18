@@ -51,11 +51,13 @@ async function backfillEventsForSubdomainRule(
   subdomain: string,
   funnelTypeId: number,
   canonicalFunnelName: string,
+  priorFunnelName: string | null = null,
   options: { dryRun?: boolean } = {},
 ): Promise<{ updatedEventCount: number; updatedLeadIds: number[] }> {
   const dryRun = options.dryRun === true;
   const normSub = subdomain.toLowerCase().trim();
   if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [] };
+  const priorLc = priorFunnelName?.toLowerCase() ?? null;
 
   // Identify default funnel name to know which "fell-through" rows to claim.
   const [defaultAssoc] = await db
@@ -102,13 +104,19 @@ async function backfillEventsForSubdomainRule(
 
   const eligibleIds: number[] = [];
   const leadIdSet = new Set<number>();
+  const newLc = canonicalFunnelName.toLowerCase();
   for (const r of rows) {
     const cur = (r.resolved_funnel ?? "").trim();
+    const curLc = cur.toLowerCase();
     const isFellThrough =
       !cur ||
-      (defaultFunnelName !== null && cur.toLowerCase() === defaultFunnelName.toLowerCase());
-    if (!isFellThrough) continue;
-    if (cur.toLowerCase() === canonicalFunnelName.toLowerCase()) continue;
+      (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
+    // When re-pointing an existing rule, also reclaim events that
+    // previously matched the prior rule's funnel — those rows were
+    // attributed by this same subdomain rule and should follow it.
+    const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
+    if (!isFellThrough && !isPriorRuleMatch) continue;
+    if (curLc === newLc) continue;
     eligibleIds.push(r.id);
     if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
   }
@@ -140,10 +148,12 @@ async function backfillEventsForSubdomainRule(
     const toUpdate: number[] = [];
     for (const l of leads) {
       const cur = (l.leadType ?? "").trim();
+      const curLc = cur.toLowerCase();
       const isFellThrough =
         !cur ||
-        (defaultFunnelName !== null && cur.toLowerCase() === defaultFunnelName.toLowerCase());
-      if (!isFellThrough && cur.toLowerCase() !== canonicalFunnelName.toLowerCase()) continue;
+        (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
+      const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
+      if (!isFellThrough && !isPriorRuleMatch && curLc !== newLc) continue;
       if (cur === canonicalFunnelName && l.funnelId === funnelTypeId) continue;
       toUpdate.push(l.id);
     }
@@ -554,6 +564,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     normSub,
     numericFunnelTypeId,
     canonicalName,
+    null,
     { dryRun: true },
   );
 
@@ -622,11 +633,19 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
 
   let ruleId: number;
   let created: boolean;
+  let priorFunnelName: string | null = null;
   if (existing.length > 0) {
     if (existing[0].funnelTypeId === numericFunnelTypeId) {
       ruleId = existing[0].id;
       created = false;
     } else {
+      // Look up the prior funnel's canonical name so the backfill can also
+      // reclaim events that previously matched the OLD rule's funnel.
+      const [priorFunnel] = await db
+        .select({ name: funnelTypesTable.name })
+        .from(funnelTypesTable)
+        .where(eq(funnelTypesTable.id, existing[0].funnelTypeId));
+      priorFunnelName = priorFunnel?.name ?? null;
       const [updated] = await db
         .update(subdomainFunnelRulesTable)
         .set({ funnelTypeId: numericFunnelTypeId })
@@ -662,6 +681,7 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     normSub,
     numericFunnelTypeId,
     funnelType.name,
+    priorFunnelName,
   );
 
   res.json({

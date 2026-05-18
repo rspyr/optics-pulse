@@ -329,6 +329,7 @@ describe("POST /subdomain-funnel-rules", () => {
     selectRowsQueue.push([{ id: 5 }]); // tenant assoc
     selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]); // funnel type
     selectRowsQueue.push([{ id: 7, tenantId: 42, subdomain: "protect", funnelTypeId: 9 }]); // existing
+    selectRowsQueue.push([{ name: "Old Funnel" }]); // prior funnel name lookup
     selectRowsQueue.push([{ funnelName: "Protection Plan" }]); // default funnel for backfill
     executeRowsQueue.push([]);
     updateReturningQueue.push([{ id: 7 }]); // update().set().where().returning()
@@ -479,5 +480,189 @@ describe("DELETE /subdomain-funnel-rules/:id", () => {
     expect(deleteCalls).toHaveLength(1);
     expect(deleteCalls[0].table).toBe("subdomainFunnelRulesTable");
     expect(JSON.stringify(deleteCalls[0].whereArgs)).toContain("123");
+  });
+
+  // Pinning down current behavior: removing a subdomain rule does NOT
+  // retroactively unwind past attribution events or leads that were
+  // resolved by it. The delete handler only touches the rules table and
+  // invalidates the resolver cache. If we ever decide to also revert past
+  // events on delete, this test will fail and force a deliberate change.
+  it("does NOT backfill / revert past attribution events or leads on delete", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 123, tenantId: 42, subdomain: "protect", funnelTypeId: 5 }]);
+
+    const res = await sendJson("DELETE", "/subdomain-funnel-rules/123");
+    expect(res.status).toBe(200);
+
+    // No attribution_events / leads updates.
+    expect(updateCalls.some((c) => c.table === "attributionEventsTable")).toBe(false);
+    expect(updateCalls.some((c) => c.table === "leadsTable")).toBe(false);
+    // No SQL execute() (the backfill candidate query) is issued either.
+    expect(executeCalls.length).toBe(0);
+    // Only the rules table is deleted from.
+    expect(deleteCalls).toHaveLength(1);
+    expect(deleteCalls[0].table).toBe("subdomainFunnelRulesTable");
+  });
+});
+
+// When an existing subdomain rule is re-pointed to a different funnel via
+// POST, the backfill should touch:
+//   * events that fell through to null / the tenant default funnel, AND
+//   * events that previously matched the SAME rule (resolved_funnel ==
+//     the prior rule's funnel name) — those rows were attributed by this
+//     same subdomain rule and must follow it to the new funnel.
+// It should NOT touch events resolved by an unrelated explicit funnel
+// (alias / funnel field match) or events already on the new funnel.
+describe("POST /subdomain-funnel-rules — re-pointing an existing rule", () => {
+  it("updates the rule's funnelTypeId and backfills fell-through + previously-matched events", async () => {
+    await setupApp("client_admin", 42);
+    // tenant assoc lookup → ok
+    selectRowsQueue.push([{ id: 5 }]);
+    // new funnel type
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]);
+    // existing rule already points at a DIFFERENT funnel (9 = "Old Funnel")
+    selectRowsQueue.push([
+      { id: 7, tenantId: 42, subdomain: "protect", funnelTypeId: 9 },
+    ]);
+    // prior funnel name lookup (so the backfill knows what to reclaim)
+    selectRowsQueue.push([{ name: "Old Funnel" }]);
+    // tenant default funnel for backfill
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]);
+    // returning() for the rule update
+    updateReturningQueue.push([{ id: 7 }]);
+    // Candidate events on this subdomain. Mix of:
+    //   - fell-through (null / default)        → SHOULD be updated
+    //   - previously matched the old rule      → SHOULD be updated
+    //   - unrelated explicit funnel            → must NOT be updated
+    //   - already matches the new funnel       → must NOT be updated
+    executeRowsQueue.push([
+      { id: 401, created_lead_id: null, resolved_funnel: null },
+      { id: 402, created_lead_id: null, resolved_funnel: "Default Funnel" },
+      { id: 403, created_lead_id: null, resolved_funnel: "Old Funnel" },
+      { id: 404, created_lead_id: null, resolved_funnel: "BOGO Smart Furnace" },
+      { id: 405, created_lead_id: null, resolved_funnel: "Protection Plan" },
+    ]);
+
+    const res = await sendJson("POST", "/subdomain-funnel-rules", {
+      subdomain: "protect",
+      funnelTypeId: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(false);
+
+    // Rule row was updated to the new funnel, not inserted again.
+    expect(insertCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(false);
+    const ruleUpdate = updateCalls.find((c) => c.table === "subdomainFunnelRulesTable");
+    expect(ruleUpdate).toBeDefined();
+    expect(ruleUpdate!.set.funnelTypeId).toBe(5);
+
+    // Fell-through + previously-matched-this-rule events are reclaimed.
+    expect(res.json.updatedEventCount).toBe(3);
+    const eventUpdate = updateCalls.find((c) => c.table === "attributionEventsTable");
+    expect(eventUpdate).toBeDefined();
+    expect(eventUpdate!.set.resolvedFunnel).toBe("Protection Plan");
+    const flat = JSON.stringify(eventUpdate!.whereArgs);
+    expect(flat).toContain("401");
+    expect(flat).toContain("402");
+    expect(flat).toContain("403");
+    // Unrelated explicit funnel and already-correct funnel must NOT be in
+    // the update set.
+    expect(flat).not.toContain("404");
+    expect(flat).not.toContain("405");
+  });
+
+  it("also re-points leads created from fell-through and previously-matched events", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 5 }]);
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]);
+    selectRowsQueue.push([
+      { id: 7, tenantId: 42, subdomain: "protect", funnelTypeId: 9 },
+    ]);
+    selectRowsQueue.push([{ name: "Old Funnel" }]); // prior funnel name
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]); // tenant default
+    updateReturningQueue.push([{ id: 7 }]);
+    executeRowsQueue.push([
+      { id: 501, created_lead_id: 9001, resolved_funnel: null },
+      { id: 502, created_lead_id: 9002, resolved_funnel: "Old Funnel" },
+      { id: 503, created_lead_id: 9003, resolved_funnel: "Some Explicit Funnel" },
+    ]);
+    // Lead snapshot — fell-through and old-rule leads should both be
+    // propagated; the explicit-funnel lead is left alone.
+    selectRowsQueue.push([
+      { id: 9001, leadType: null, funnelId: null },
+      { id: 9002, leadType: "Old Funnel", funnelId: 9 },
+      { id: 9003, leadType: "Some Explicit Funnel", funnelId: 12 },
+    ]);
+
+    const res = await sendJson("POST", "/subdomain-funnel-rules", {
+      subdomain: "protect",
+      funnelTypeId: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.updatedEventCount).toBe(2);
+    expect(res.json.updatedLeadCount).toBe(2);
+    const leadUpd = updateCalls.find((c) => c.table === "leadsTable");
+    expect(leadUpd).toBeDefined();
+    expect(leadUpd!.set.leadType).toBe("Protection Plan");
+    expect(leadUpd!.set.funnelId).toBe(5);
+    const flat = JSON.stringify(leadUpd!.whereArgs);
+    expect(flat).toContain("9001");
+    expect(flat).toContain("9002");
+    expect(flat).not.toContain("9003");
+  });
+
+  it("re-points without any candidate events (no event update issued)", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 5 }]);
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]);
+    selectRowsQueue.push([
+      { id: 7, tenantId: 42, subdomain: "protect", funnelTypeId: 9 },
+    ]);
+    selectRowsQueue.push([{ name: "Old Funnel" }]); // prior funnel name
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]);
+    updateReturningQueue.push([{ id: 7 }]);
+    executeRowsQueue.push([]); // no candidates
+
+    const res = await sendJson("POST", "/subdomain-funnel-rules", {
+      subdomain: "protect",
+      funnelTypeId: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(false);
+    expect(res.json.updatedEventCount).toBe(0);
+    expect(res.json.updatedLeadCount).toBe(0);
+    // Rule row was still updated.
+    const ruleUpdate = updateCalls.find((c) => c.table === "subdomainFunnelRulesTable");
+    expect(ruleUpdate?.set.funnelTypeId).toBe(5);
+    // No event/lead update fires.
+    expect(updateCalls.some((c) => c.table === "attributionEventsTable")).toBe(false);
+    expect(updateCalls.some((c) => c.table === "leadsTable")).toBe(false);
+  });
+
+  it("re-pointing to the same funnel is a no-op for the rule row (no update or insert)", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 5 }]);
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]);
+    // Existing rule already points at the SAME funnel.
+    selectRowsQueue.push([
+      { id: 7, tenantId: 42, subdomain: "protect", funnelTypeId: 5 },
+    ]);
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]);
+    executeRowsQueue.push([]);
+
+    const res = await sendJson("POST", "/subdomain-funnel-rules", {
+      subdomain: "protect",
+      funnelTypeId: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(false);
+    expect((res.json.rule as Record<string, unknown>).id).toBe(7);
+    // No insert, no update to the rules table.
+    expect(insertCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(false);
+    expect(updateCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(false);
   });
 });
