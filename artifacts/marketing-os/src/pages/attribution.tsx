@@ -58,6 +58,7 @@ export default function Attribution() {
   const [hiddenSubdomains, setHiddenSubdomains] = useState<string[]>([]);
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<string | null>(null);
   const [suggestionToast, setSuggestionToast] = useState<string | null>(null);
+  const [showHiddenList, setShowHiddenList] = useState(false);
 
   const refetchSuggestions = useCallback(() => {
     if (!effectiveTenantId) {
@@ -115,6 +116,24 @@ export default function Attribution() {
         body: "{}",
       });
     } finally {
+      refetchSuggestions();
+    }
+  }, [effectiveTenantId, refetchSuggestions]);
+
+  const undoSingleDismissal = useCallback(async (subdomain: string) => {
+    if (!effectiveTenantId) return;
+    // Optimistic: remove from hidden list immediately.
+    setHiddenSubdomains(prev => prev.filter(s => s !== subdomain));
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/suggestions/undo-dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subdomain }),
+      });
+      if (!res.ok) refetchSuggestions();
+      else refetchSuggestions();
+    } catch {
       refetchSuggestions();
     }
   }, [effectiveTenantId, refetchSuggestions]);
@@ -325,17 +344,44 @@ export default function Attribution() {
                   ))}
               </div>
               {hiddenSubdomains.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {hiddenSubdomains.length} hidden suggestion{hiddenSubdomains.length === 1 ? "" : "s"}
-                  {" · "}
-                  <button
-                    type="button"
-                    className="underline hover:text-white/70 transition-colors"
-                    onClick={undoAllDismissals}
-                  >
-                    Show
-                  </button>
-                </p>
+                <div className="text-xs text-muted-foreground space-y-1.5">
+                  <p>
+                    <button
+                      type="button"
+                      className="underline hover:text-white/70 transition-colors"
+                      onClick={() => setShowHiddenList(v => !v)}
+                    >
+                      {hiddenSubdomains.length} hidden suggestion{hiddenSubdomains.length === 1 ? "" : "s"}
+                    </button>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="underline hover:text-white/70 transition-colors"
+                      onClick={undoAllDismissals}
+                    >
+                      Show all
+                    </button>
+                  </p>
+                  {showHiddenList && (
+                    <ul className="space-y-1 pl-1">
+                      {hiddenSubdomains.map(sub => (
+                        <li
+                          key={sub}
+                          className="flex items-center gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-1.5"
+                        >
+                          <span className="font-mono text-xs text-white/70 flex-1 min-w-0 truncate">{sub}</span>
+                          <button
+                            type="button"
+                            className="text-xs text-muted-foreground hover:text-white/80 transition-colors px-1"
+                            onClick={() => undoSingleDismissal(sub)}
+                          >
+                            Restore
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
               {suggestionToast && (
                 <p className="text-xs text-emerald-300/80">{suggestionToast}</p>
