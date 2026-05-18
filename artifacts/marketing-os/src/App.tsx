@@ -26,6 +26,7 @@ import AdminChangeLogs from "@/pages/admin-change-logs";
 import AdminFunnels from "@/pages/admin-funnels";
 import AdminScripts from "@/pages/admin-scripts";
 import SalesManager from "@/pages/sales-manager";
+import Privacy from "@/pages/privacy";
 
 import soehneExtra from '@assets/soehne-extrafett_1773849837050.woff2';
 import soehneDrei from '@assets/soehne-dreiviertelfett_1773849837042.woff2';
@@ -77,6 +78,10 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
 function AuthenticatedRoutes() {
   const { user, loading, isAgency } = useAuth();
   const [location] = useLocation();
+
+  if (location === "/privacy") {
+    return <Privacy />;
+  }
 
   if (loading) {
     return <LoadingScreen />;
