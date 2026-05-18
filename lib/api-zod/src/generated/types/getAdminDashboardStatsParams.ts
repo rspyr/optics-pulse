@@ -9,4 +9,8 @@
 export type GetAdminDashboardStatsParams = {
   startDate?: string;
   endDate?: string;
+  /**
+   * When set, the returned `tenants` list is filtered to this tenant. `agencyAverages` is always computed across all active tenants for benchmarking.
+   */
+  tenantId?: number;
 };

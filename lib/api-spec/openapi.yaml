@@ -1118,6 +1118,12 @@ paths:
           schema:
             type: string
 
+        - name: tenantId
+          in: query
+          description: When set, the returned `tenants` list is filtered to this tenant. `agencyAverages` is always computed across all active tenants for benchmarking.
+          schema:
+            type: integer
+
       responses:
         "200":
           description: Admin dashboard stats with agency averages

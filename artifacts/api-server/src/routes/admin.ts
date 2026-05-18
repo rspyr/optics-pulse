@@ -212,7 +212,11 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
   try {
     const startDate = req.query.startDate as string | undefined;
     const endDate = req.query.endDate as string | undefined;
+    const filterTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
 
+    // Always load all active tenants so `agencyAverages` remains a stable
+    // benchmark across the whole agency, even when the caller is scoping
+    // the displayed `tenants` list to a single client.
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
 
     const tenantStats = [];
@@ -296,8 +300,12 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
     const agencyAvgRoas = totalAgencySpend > 0 ? Math.round((totalAgencyRevenue / totalAgencySpend) * 100) / 100 : 0;
     const agencyAvgBookingRate = totalAgencyLeads > 0 ? Math.round((totalAgencyBookedLeads / totalAgencyLeads) * 100 * 10) / 10 : 0;
 
+    const filteredTenantStats = filterTenantId
+      ? tenantStats.filter((t) => t.tenantId === filterTenantId)
+      : tenantStats;
+
     res.json({
-      tenants: tenantStats,
+      tenants: filteredTenantStats,
       agencyAverages: {
         cpl: agencyAvgCpl,
         roas: agencyAvgRoas,

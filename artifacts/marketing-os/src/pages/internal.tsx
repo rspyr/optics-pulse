@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation } from "@workspace/api-client-react";
+import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation, useListTenants } from "@workspace/api-client-react";
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
@@ -16,9 +16,40 @@ export default function Internal() {
   const startDate = monthStart.toISOString().split("T")[0];
   const endDate = now.toISOString().split("T")[0];
 
-  const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate });
-  const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus();
+  const TENANT_FILTER_STORAGE_KEY = "agencyGodView.tenantId";
+  const [globalTenantId, setGlobalTenantIdState] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem(TENANT_FILTER_STORAGE_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
+  const setGlobalTenantId = useCallback((id: number | null) => {
+    setGlobalTenantIdState(id);
+    if (typeof window === "undefined") return;
+    if (id == null) window.localStorage.removeItem(TENANT_FILTER_STORAGE_KEY);
+    else window.localStorage.setItem(TENANT_FILTER_STORAGE_KEY, String(id));
+  }, []);
+
+  const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate, tenantId: globalTenantId ?? undefined });
+  const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus(globalTenantId ? { tenantId: globalTenantId } : undefined);
   const reconMutation = useRunReconciliation();
+  // Unfiltered tenant list for the global selector — `data.tenants` collapses
+  // to a single row when a tenant is selected, so we can't drive the dropdown
+  // off of it.
+  const { data: allTenants } = useListTenants();
+  const tenantOptions = useMemo(() => {
+    return (allTenants ?? [])
+      .filter((t) => t.isActive !== false)
+      .map((t) => ({ id: t.id, name: t.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allTenants]);
+  const selectedTenantName = useMemo(() => {
+    if (!globalTenantId) return null;
+    return tenantOptions.find((t) => t.id === globalTenantId)?.name
+      ?? data?.tenants?.[0]?.tenantName
+      ?? null;
+  }, [globalTenantId, tenantOptions, data?.tenants]);
 
   const [sortKey, setSortKey] = useState<SortKey>("roas");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -59,7 +90,9 @@ export default function Internal() {
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncLoading, setSyncLoading] = useState(false);
-  const [syncTenantId, setSyncTenantId] = useState<number | null>(null);
+  // Alias for clarity in the sync/backfill code paths — the global tenant
+  // filter at the top of the page drives every per-tenant action.
+  const syncTenantId = globalTenantId;
   const [backfillDays, setBackfillDays] = useState<Record<string, string>>({});
   const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
 
@@ -271,6 +304,28 @@ export default function Internal() {
   }
 
   const avg = data?.agencyAverages;
+  // When a tenant is selected, the four stat cards show that tenant's totals.
+  // When unfiltered ("All Tenants") they show agency-wide aggregates. We always
+  // keep `avg` as the unfiltered agency baseline so the Benchmarking section
+  // below still has a stable comparison.
+  const filteredTenantRow = globalTenantId ? data?.tenants?.[0] : null;
+  const headlineStats = globalTenantId
+    ? filteredTenantRow
+      ? {
+          totalSpend: filteredTenantRow.mtdSpend,
+          totalRevenue: filteredTenantRow.mtdRevenue,
+          roas: filteredTenantRow.roas,
+          totalLeads: filteredTenantRow.totalLeads,
+        }
+      : { totalSpend: 0, totalRevenue: 0, roas: 0, totalLeads: 0 }
+    : avg
+    ? {
+        totalSpend: avg.totalSpend,
+        totalRevenue: avg.totalRevenue,
+        roas: avg.roas,
+        totalLeads: avg.totalLeads,
+      }
+    : null;
 
   return (
     <div className="space-y-6">
@@ -279,7 +334,24 @@ export default function Internal() {
           <GradientHeading className="text-3xl md:text-4xl mb-2">Agency God View</GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-wide">CROSS-CLIENT COMMAND CENTER</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 bg-card border border-white/10 rounded-lg px-3 py-1">
+            <Users className="w-4 h-4 text-muted-foreground" />
+            <Select
+              value={globalTenantId != null ? String(globalTenantId) : "all"}
+              onValueChange={(v) => setGlobalTenantId(v === "all" ? null : Number(v))}
+            >
+              <SelectTrigger className="bg-transparent border-0 text-white text-sm w-auto min-w-[160px] focus:outline-none focus:ring-0 px-0 py-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Tenants</SelectItem>
+                {tenantOptions.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex items-center gap-2 bg-card border border-white/10 rounded-lg px-3 py-2">
             <Filter className="w-4 h-4 text-muted-foreground" />
             <input
@@ -294,35 +366,35 @@ export default function Internal() {
         </div>
       </header>
 
-      {avg && (
+      {headlineStats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <PremiumCard className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <DollarSign className="w-4 h-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Agency Spend</span>
+              <span className="text-xs text-muted-foreground uppercase tracking-wider">{selectedTenantName ? `${selectedTenantName} Spend` : "Agency Spend"}</span>
             </div>
-            <p className="text-2xl font-display text-white">{formatCurrency(avg.totalSpend)}</p>
+            <p className="text-2xl font-display text-white">{formatCurrency(headlineStats.totalSpend)}</p>
           </PremiumCard>
           <PremiumCard className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <BarChart3 className="w-4 h-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Agency Revenue</span>
+              <span className="text-xs text-muted-foreground uppercase tracking-wider">{selectedTenantName ? `${selectedTenantName} Revenue` : "Agency Revenue"}</span>
             </div>
-            <p className="text-2xl font-display text-white">{formatCurrency(avg.totalRevenue)}</p>
+            <p className="text-2xl font-display text-white">{formatCurrency(headlineStats.totalRevenue)}</p>
           </PremiumCard>
           <PremiumCard className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Target className="w-4 h-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Avg ROAS</span>
+              <span className="text-xs text-muted-foreground uppercase tracking-wider">{selectedTenantName ? "ROAS" : "Avg ROAS"}</span>
             </div>
-            <p className="text-2xl font-display text-white">{avg.roas.toFixed(2)}x</p>
+            <p className="text-2xl font-display text-white">{headlineStats.roas.toFixed(2)}x</p>
           </PremiumCard>
           <PremiumCard className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Users className="w-4 h-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground uppercase tracking-wider">Total Leads</span>
             </div>
-            <p className="text-2xl font-display text-white">{avg.totalLeads}</p>
+            <p className="text-2xl font-display text-white">{headlineStats.totalLeads}</p>
           </PremiumCard>
         </div>
       )}
@@ -342,7 +414,7 @@ export default function Internal() {
             )}
             <button
               onClick={() => {
-                reconMutation.mutate({ data: {} }, {
+                reconMutation.mutate({ data: globalTenantId ? { tenantId: globalTenantId } : {} }, {
                   onSuccess: () => refetchRecon(),
                 });
               }}
@@ -425,19 +497,6 @@ export default function Internal() {
             <h3 className="font-display text-lg text-white">Integration Sync Status</h3>
           </div>
           <div className="flex items-center gap-3">
-            {data?.tenants && data.tenants.length > 0 && (
-              <Select value={syncTenantId != null ? String(syncTenantId) : "all"} onValueChange={(v) => setSyncTenantId(v === "all" ? null : Number(v))}>
-                <SelectTrigger className="bg-background/50 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:ring-2 focus:ring-primary/50 w-auto min-w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Tenants</SelectItem>
-                  {data.tenants.map((t) => (
-                    <SelectItem key={t.tenantId} value={String(t.tenantId)}>{t.tenantName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
             <button onClick={fetchSyncStatus} className="text-xs text-muted-foreground hover:text-white flex items-center gap-1 transition-colors">
               <RefreshCw className="w-3 h-3" /> Refresh
             </button>

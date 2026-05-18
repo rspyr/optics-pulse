@@ -1865,6 +1865,12 @@ export const GetAdminLeaderboardResponse = zod.object({
 export const GetAdminDashboardStatsQueryParams = zod.object({
   startDate: zod.coerce.string().optional(),
   endDate: zod.coerce.string().optional(),
+  tenantId: zod.coerce
+    .number()
+    .optional()
+    .describe(
+      "When set, the returned `tenants` list is filtered to this tenant. `agencyAverages` is always computed across all active tenants for benchmarking.",
+    ),
 });
 
 export const GetAdminDashboardStatsResponse = zod.object({
