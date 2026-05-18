@@ -569,7 +569,13 @@ export default function Attribution() {
       )}
 
       {activeTab === "subdomain-rules" && effectiveTenantId && (
-        <SubdomainRulesPanel tenantId={effectiveTenantId} />
+        <SubdomainRulesPanel
+          tenantId={effectiveTenantId}
+          onOpenEvent={(id) => {
+            setActiveTab("events");
+            setSelectedEventId(id);
+          }}
+        />
       )}
 
       <Sheet open={selectedEventId != null} onOpenChange={(open) => { if (!open) setSelectedEventId(null); }}>
@@ -1746,14 +1752,86 @@ interface SubdomainRule {
   createdAt?: string;
 }
 
+interface PreviewSampleEvent {
+  id: number;
+  pageUrl: string | null;
+  resolvedFunnel: string | null;
+  createdLeadId: number | null;
+  createdAt: string | null;
+}
+
 interface PreviewCounts {
   updatedEventCount: number;
   updatedLeadCount: number;
   conflictingEventCount: number;
   matchedEventCount: number;
+  eligibleSample: PreviewSampleEvent[];
+  conflictingSample: PreviewSampleEvent[];
 }
 
-function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
+function PreviewSampleList({
+  title,
+  tone,
+  events,
+  totalCount,
+  onOpenEvent,
+}: {
+  title: string;
+  tone: "eligible" | "conflict";
+  events: PreviewSampleEvent[];
+  totalCount: number;
+  onOpenEvent?: (eventId: number) => void;
+}) {
+  if (events.length === 0) return null;
+  const headerColor = tone === "eligible" ? "text-emerald-300/90" : "text-amber-300/90";
+  const more = Math.max(0, totalCount - events.length);
+  return (
+    <div className="mt-2 border-t border-white/5 pt-2 space-y-1">
+      <div className={`text-[10px] uppercase tracking-wider ${headerColor}`}>
+        {title} ({Math.min(events.length, totalCount).toLocaleString()}
+        {more > 0 ? ` of ${totalCount.toLocaleString()}` : ""})
+      </div>
+      <ul className="space-y-0.5">
+        {events.map(ev => {
+          let path = ev.pageUrl || "—";
+          try { if (ev.pageUrl) path = new URL(ev.pageUrl).pathname || "/"; } catch {}
+          const clickable = !!onOpenEvent;
+          return (
+            <li key={ev.id}>
+              <button
+                type="button"
+                onClick={clickable ? () => onOpenEvent!(ev.id) : undefined}
+                disabled={!clickable}
+                className={`w-full text-left flex items-center gap-2 font-mono text-[11px] py-0.5 px-1 rounded ${clickable ? "hover:bg-white/[0.04] cursor-pointer" : "cursor-default"}`}
+                title={ev.pageUrl || ""}
+              >
+                <span className="text-white/70 truncate max-w-[260px]">{path}</span>
+                <span className="text-white/30">·</span>
+                <span className="text-white/50 truncate max-w-[140px]">
+                  {ev.resolvedFunnel || <span className="text-white/30">unresolved</span>}
+                </span>
+                {ev.createdLeadId != null && (
+                  <span className="ml-auto text-cyan-400/80 text-[10px]">lead #{ev.createdLeadId}</span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {more > 0 && (
+        <div className="text-[10px] text-white/40">+ {more.toLocaleString()} more not shown</div>
+      )}
+    </div>
+  );
+}
+
+function SubdomainRulesPanel({
+  tenantId,
+  onOpenEvent,
+}: {
+  tenantId: number;
+  onOpenEvent?: (eventId: number) => void;
+}) {
   const [rules, setRules] = useState<SubdomainRule[]>([]);
   const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1828,6 +1906,8 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
           updatedLeadCount: d.updatedLeadCount ?? 0,
           conflictingEventCount: d.conflictingEventCount ?? 0,
           matchedEventCount: d.matchedEventCount ?? 0,
+          eligibleSample: d.eligibleSample ?? [],
+          conflictingSample: d.conflictingSample ?? [],
         });
       }
     } catch {
@@ -1911,6 +1991,8 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
           updatedLeadCount: d.updatedLeadCount ?? 0,
           conflictingEventCount: d.conflictingEventCount ?? 0,
           matchedEventCount: d.matchedEventCount ?? 0,
+          eligibleSample: d.eligibleSample ?? [],
+          conflictingSample: d.conflictingSample ?? [],
         });
       }
     } catch {
@@ -2075,6 +2157,20 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
                 No historical events match this subdomain yet — the rule will apply to new traffic only.
               </div>
             )}
+            <PreviewSampleList
+              title="Sample events that would be re-tagged"
+              tone="eligible"
+              events={addPreview.eligibleSample}
+              totalCount={addPreview.updatedEventCount}
+              onOpenEvent={onOpenEvent}
+            />
+            <PreviewSampleList
+              title="Sample events left alone (conflicting funnel)"
+              tone="conflict"
+              events={addPreview.conflictingSample}
+              totalCount={addPreview.conflictingEventCount}
+              onOpenEvent={onOpenEvent}
+            />
           </div>
         )}
 
@@ -2139,6 +2235,20 @@ function SubdomainRulesPanel({ tenantId }: { tenantId: number }) {
                                     ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event" : "events"} already on a different funnel — left alone.
                                   </div>
                                 )}
+                                <PreviewSampleList
+                                  title="Sample events that would be re-tagged"
+                                  tone="eligible"
+                                  events={editPreview.eligibleSample}
+                                  totalCount={editPreview.updatedEventCount}
+                                  onOpenEvent={onOpenEvent}
+                                />
+                                <PreviewSampleList
+                                  title="Sample events left alone (conflicting funnel)"
+                                  tone="conflict"
+                                  events={editPreview.conflictingSample}
+                                  totalCount={editPreview.conflictingEventCount}
+                                  onOpenEvent={onOpenEvent}
+                                />
                               </div>
                             )}
                           </div>

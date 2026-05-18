@@ -54,10 +54,10 @@ async function backfillEventsForSubdomainRule(
   canonicalFunnelName: string,
   priorFunnelName: string | null = null,
   options: { dryRun?: boolean } = {},
-): Promise<{ updatedEventCount: number; updatedLeadIds: number[] }> {
+): Promise<{ updatedEventCount: number; updatedLeadIds: number[]; eligibleEventIds: number[] }> {
   const dryRun = options.dryRun === true;
   const normSub = subdomain.toLowerCase().trim();
-  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [] };
+  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [] };
   const priorLc = priorFunnelName?.toLowerCase() ?? null;
 
   // Identify default funnel name to know which "fell-through" rows to claim.
@@ -172,7 +172,7 @@ async function backfillEventsForSubdomainRule(
     }
   }
 
-  return { updatedEventCount: eligibleIds.length, updatedLeadIds };
+  return { updatedEventCount: eligibleIds.length, updatedLeadIds, eligibleEventIds: eligibleIds };
 }
 
 // Suggest subdomain → funnel rules from historical attribution events.
@@ -615,7 +615,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
   }>;
 
   const canonicalName = funnelType.name;
-  let conflictingEventCount = 0;
+  const conflictingIds: number[] = [];
   for (const r of allRows) {
     const cur = (r.resolved_funnel ?? "").trim();
     if (!cur) continue;
@@ -623,10 +623,10 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
       defaultFunnelName !== null && cur.toLowerCase() === defaultFunnelName.toLowerCase();
     if (isDefault) continue;
     if (cur.toLowerCase() === canonicalName.toLowerCase()) continue;
-    conflictingEventCount += 1;
+    conflictingIds.push(r.id);
   }
 
-  const { updatedEventCount, updatedLeadIds } = await backfillEventsForSubdomainRule(
+  const { updatedEventCount, updatedLeadIds, eligibleEventIds } = await backfillEventsForSubdomainRule(
     tenantId,
     normSub,
     numericFunnelTypeId,
@@ -635,14 +635,68 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     { dryRun: true },
   );
 
+  const SAMPLE_LIMIT = 10;
+  const sampleIds = Array.from(
+    new Set([...eligibleEventIds.slice(0, SAMPLE_LIMIT), ...conflictingIds.slice(0, SAMPLE_LIMIT)]),
+  );
+
+  type SampleEvent = {
+    id: number;
+    pageUrl: string | null;
+    resolvedFunnel: string | null;
+    createdLeadId: number | null;
+    createdAt: string | null;
+  };
+  let sampleById = new Map<number, SampleEvent>();
+  if (sampleIds.length > 0) {
+    const sampleRows = await db
+      .select({
+        id: attributionEventsTable.id,
+        pageUrl: attributionEventsTable.pageUrl,
+        resolvedFunnel: attributionEventsTable.resolvedFunnel,
+        createdLeadId: attributionEventsTable.createdLeadId,
+        createdAt: attributionEventsTable.createdAt,
+      })
+      .from(attributionEventsTable)
+      .where(and(
+        eq(attributionEventsTable.tenantId, tenantId),
+        inArray(attributionEventsTable.id, sampleIds),
+      ));
+    sampleById = new Map(
+      sampleRows.map((r) => [
+        r.id,
+        {
+          id: r.id,
+          pageUrl: r.pageUrl ?? null,
+          resolvedFunnel: r.resolvedFunnel ?? null,
+          createdLeadId: r.createdLeadId ?? null,
+          createdAt: r.createdAt instanceof Date
+            ? r.createdAt.toISOString()
+            : (typeof r.createdAt === "string" ? new Date(r.createdAt).toISOString() : null),
+        },
+      ]),
+    );
+  }
+
+  const eligibleSample = eligibleEventIds
+    .slice(0, SAMPLE_LIMIT)
+    .map((id) => sampleById.get(id))
+    .filter((e): e is SampleEvent => !!e);
+  const conflictingSample = conflictingIds
+    .slice(0, SAMPLE_LIMIT)
+    .map((id) => sampleById.get(id))
+    .filter((e): e is SampleEvent => !!e);
+
   res.json({
     subdomain: normSub,
     funnelTypeId: numericFunnelTypeId,
     funnelName: canonicalName,
     updatedEventCount,
     updatedLeadCount: updatedLeadIds.length,
-    conflictingEventCount,
+    conflictingEventCount: conflictingIds.length,
     matchedEventCount: allRows.length,
+    eligibleSample,
+    conflictingSample,
   });
 });
 
