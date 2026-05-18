@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip as UiTooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/components/auth-context";
+import { useTenants } from "@/hooks/use-tenants";
 import {
   Users, Phone, MessageSquare, TrendingUp,
   Loader2, Award, Clock, Zap, AlertTriangle, Lightbulb,
@@ -117,7 +118,6 @@ interface CoachingInsight {
   value?: number;
 }
 
-interface TenantOption { id: number; name: string; timezone?: string; }
 
 function formatInTz(dateStr: string | Date, tz: string, opts?: Intl.DateTimeFormatOptions): string {
   const d = typeof dateStr === "string" ? new Date(dateStr) : dateStr;
@@ -4169,25 +4169,7 @@ export default function SalesManager() {
   const { user, isAgency, selectedTenantId: globalTenantId, setSelectedTenantId } = useAuth();
   const [tab, setTab] = useState<Tab>("dashboard");
   const [includePreBooked, setIncludePreBooked] = useState(false);
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [tenantsLoading, setTenantsLoading] = useState<boolean>(isAgency);
-
-  useEffect(() => {
-    if (!isAgency) {
-      setTenantsLoading(false);
-      return;
-    }
-    setTenantsLoading(true);
-    fetch(`${API_BASE}/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setTenants(data.map((t: { id: number; name: string; timezone?: string }) => ({ id: t.id, name: t.name, timezone: t.timezone })));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTenantsLoading(false));
-  }, [isAgency]);
+  const { tenants, tenantsLoading } = useTenants();
 
   // The Tenant <Select> on this page mirrors the global SCOPE chip in the
   // header. We deliberately don't auto-pick a tenant here — that was making

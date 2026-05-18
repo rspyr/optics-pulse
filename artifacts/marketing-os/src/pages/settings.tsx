@@ -5,12 +5,11 @@ import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, 
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
+import { useTenants } from "@/hooks/use-tenants";
 import { useGetPodiumUsers, useLinkPodiumUser } from "@workspace/api-client-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
-
-interface TenantOption { id: number; name: string; }
 
 interface PodiumUserEntry {
   uid: string;
@@ -217,20 +216,12 @@ export default function Settings() {
   const { user, isAgency, selectedTenantId, setSelectedTenantId, effectiveTenantId } = useAuth();
   const isClientUser = user?.role === "client_user";
   const tenantId = effectiveTenantId;
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const { tenants, tenantsLoading } = useTenants();
 
   useEffect(() => {
     if (!isAgency) return;
-    fetch(`${API}/api/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setTenants(data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name })));
-          if (!selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
-        }
-      })
-      .catch(() => {});
-  }, [isAgency]);
+    if (!selectedTenantId && tenants.length > 0) setSelectedTenantId(tenants[0].id);
+  }, [isAgency, selectedTenantId, tenants, setSelectedTenantId]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
@@ -498,7 +489,17 @@ export default function Settings() {
         </PremiumCard>
       )}
 
-      {isAgency && !tenantId && (
+      {isAgency && !tenantId && tenantsLoading && (
+        <PremiumCard className="p-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && !tenantId && !tenantsLoading && (
         <PremiumCard>
           <p className="text-center text-muted-foreground py-8">Select a tenant above to manage settings.</p>
         </PremiumCard>

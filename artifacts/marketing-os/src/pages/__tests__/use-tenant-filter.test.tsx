@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { render as rtlRender, act, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
+
+function render(ui: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 const authState = vi.hoisted(() => ({
   selectedTenantId: null as number | null,

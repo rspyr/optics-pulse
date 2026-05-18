@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { render as rtlRender, act, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 
 import { AuthProvider, useAuth } from "@/components/auth-context";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
+
+function render(ui: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 // Simulates three admin surfaces sharing the same AuthContext provider —
 // /internal (drives the picker via useAuth), /attribution and /admin/tenants

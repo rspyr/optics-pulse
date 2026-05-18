@@ -1,40 +1,32 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 import { GradientHeading, PremiumCard } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
+import { useTenants } from "@/hooks/use-tenants";
 import ScriptManagement from "@/components/script-management";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
-const API = import.meta.env.VITE_API_URL || "";
-
-interface TenantOption {
-  id: number;
-  name: string;
-}
-
 export default function AdminScripts() {
-  const { user, isAgency, setSelectedTenantId: setGlobalTenantId } = useAuth();
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantIdLocal] = useState<number | null>(user?.tenantId ?? null);
+  const {
+    user,
+    isAgency,
+    selectedTenantId: globalTenantId,
+    setSelectedTenantId: setGlobalTenantId,
+  } = useAuth();
+  const { tenants, tenantsLoading } = useTenants();
 
   const setSelectedTenantId = useCallback((id: number | null) => {
-    setSelectedTenantIdLocal(id);
     setGlobalTenantId(id);
   }, [setGlobalTenantId]);
 
   useEffect(() => {
     if (!isAgency) return;
-    fetch(`${API}/api/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setTenants(data.map((t: { id: number; name: string }) => ({ id: t.id, name: t.name })));
-          if (!selectedTenantId && data.length > 0) setSelectedTenantId(data[0].id);
-        }
-      })
-      .catch(() => {});
-  }, [isAgency]);
+    if (globalTenantId == null && tenants.length > 0) {
+      setSelectedTenantId(tenants[0].id);
+    }
+  }, [isAgency, globalTenantId, tenants, setSelectedTenantId]);
 
-  const effectiveTenantId = isAgency ? selectedTenantId : user?.tenantId ?? null;
+  const selectedTenantId = isAgency ? globalTenantId : user?.tenantId ?? null;
+  const effectiveTenantId = selectedTenantId;
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -63,12 +55,24 @@ export default function AdminScripts() {
         </PremiumCard>
       )}
 
+      {isAgency && !effectiveTenantId && tenantsLoading && (
+        <PremiumCard className="p-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      )}
+
       {effectiveTenantId ? (
         <ScriptManagement key={effectiveTenantId} tenantId={effectiveTenantId} />
       ) : (
-        <PremiumCard className="p-8 text-center">
-          <p className="text-white/40">Select a tenant to manage scripts</p>
-        </PremiumCard>
+        !tenantsLoading && (
+          <PremiumCard className="p-8 text-center">
+            <p className="text-white/40">Select a tenant to manage scripts</p>
+          </PremiumCard>
+        )
       )}
     </div>
   );

@@ -1,13 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 import { useAuth } from "@/components/auth-context";
+import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 
-const API_BASE = import.meta.env.VITE_API_URL || "/api";
-
-export interface TenantOption {
-  id: number;
-  name: string;
-  timezone?: string;
-}
+export type { TenantOption };
 
 /**
  * Tenant filter hook shared by every admin surface that scopes itself by
@@ -15,6 +10,10 @@ export interface TenantOption {
  * `AuthContext` so the header SCOPE chip and any per-page TENANT dropdown
  * always show the same value — including across navigation and full page
  * reloads.
+ *
+ * The tenant list itself is fetched once per session by the shared
+ * `useTenants` hook (deduped + cached by react-query) so every consumer
+ * sees the same loading flag and we don't refetch `/api/tenants` per page.
  *
  * No silent auto-pick: if the operator has not chosen a tenant, the page
  * receives `null` (= All Tenants) and is responsible for showing a "select
@@ -34,8 +33,7 @@ export function useTenantFilter(tenantIdOverride?: number) {
     setSelectedTenantId: setGlobalTenantId,
   } = useAuth();
 
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [tenantsLoading, setTenantsLoading] = useState<boolean>(isAgency);
+  const { tenants, tenantsLoading } = useTenants();
 
   useEffect(() => {
     if (isAgency && tenantIdOverride && tenantIdOverride !== globalTenantId) {
@@ -46,30 +44,6 @@ export function useTenantFilter(tenantIdOverride?: number) {
   const setSelectedTenantId = useCallback((id: number | null) => {
     setGlobalTenantId(id);
   }, [setGlobalTenantId]);
-
-  useEffect(() => {
-    if (!isAgency) {
-      setTenantsLoading(false);
-      return;
-    }
-    setTenantsLoading(true);
-    fetch(`${API_BASE}/tenants`, { credentials: "include" })
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const mapped = data.map((t: { id: number; name: string; timezone?: string }) => ({
-            id: t.id,
-            name: t.name,
-            timezone: t.timezone,
-          }));
-          setTenants(mapped);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTenantsLoading(false));
-    // We intentionally only depend on `isAgency` to keep this a one-shot fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAgency]);
 
   // `localTenantId` is kept for backwards compat with existing callers that
   // bind a <Select> to it. It mirrors the persisted global selection.
