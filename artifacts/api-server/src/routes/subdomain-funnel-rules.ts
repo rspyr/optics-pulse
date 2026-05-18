@@ -826,6 +826,112 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
   });
 });
 
+// Revert: when a rule is removed with ?revertEvents=true, re-resolve historical
+// attribution events on the rule's subdomain whose resolved_funnel currently
+// equals the (deleted) rule's funnel name back to the tenant's default funnel,
+// and propagate that change to any leads created from those events whose
+// lead_type still mirrors the rule's funnel. Same guardrails as the create-
+// time backfill: never clobber an event/lead that has since been retagged to
+// a different, unrelated funnel.
+async function revertEventsForSubdomainRule(
+  tenantId: number,
+  subdomain: string,
+  ruleFunnelName: string,
+): Promise<{ updatedEventCount: number; updatedLeadIds: number[] }> {
+  const normSub = subdomain.toLowerCase().trim();
+  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [] };
+  const ruleLc = ruleFunnelName.toLowerCase();
+
+  // Tenant's default funnel — destination for the revert.
+  const [defaultAssoc] = await db
+    .select({ funnelId: funnelTypesTable.id, funnelName: funnelTypesTable.name })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
+    .orderBy(tenantFunnelTypesTable.funnelTypeId)
+    .limit(1);
+  const defaultFunnelName = defaultAssoc?.funnelName ?? null;
+  const defaultFunnelId = defaultAssoc?.funnelId ?? null;
+
+  const hostExpr = sql`regexp_replace(
+    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    '^www\\.', ''
+  )`;
+
+  const candidates = await db.execute(sql`
+    WITH parsed AS (
+      SELECT
+        ae.id,
+        ae.created_lead_id,
+        ae.resolved_funnel,
+        string_to_array(${hostExpr}, '.') AS parts
+      FROM attribution_events ae
+      WHERE ae.tenant_id = ${tenantId}
+        AND ae.page_url IS NOT NULL
+    )
+    SELECT id, created_lead_id, resolved_funnel
+    FROM parsed
+    WHERE array_length(parts, 1) >= 3
+      AND array_to_string(parts[1:array_length(parts, 1) - 2], '.') = ${normSub}
+  `);
+
+  const rows = (candidates.rows ?? []) as Array<{
+    id: number;
+    created_lead_id: number | null;
+    resolved_funnel: string | null;
+  }>;
+
+  const eligibleIds: number[] = [];
+  const leadIdSet = new Set<number>();
+  for (const r of rows) {
+    const cur = (r.resolved_funnel ?? "").trim();
+    if (!cur) continue;
+    if (cur.toLowerCase() !== ruleLc) continue;
+    eligibleIds.push(r.id);
+    if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
+  }
+
+  if (eligibleIds.length > 0) {
+    await db
+      .update(attributionEventsTable)
+      .set({ resolvedFunnel: defaultFunnelName })
+      .where(and(
+        eq(attributionEventsTable.tenantId, tenantId),
+        inArray(attributionEventsTable.id, eligibleIds),
+      ));
+  }
+
+  const updatedLeadIds: number[] = [];
+  if (leadIdSet.size > 0) {
+    const leadIds = Array.from(leadIdSet);
+    const leads = await db
+      .select({ id: leadsTable.id, leadType: leadsTable.leadType, funnelId: leadsTable.funnelId })
+      .from(leadsTable)
+      .where(and(
+        eq(leadsTable.tenantId, tenantId),
+        inArray(leadsTable.id, leadIds),
+      ));
+    const toUpdate: number[] = [];
+    for (const l of leads) {
+      const cur = (l.leadType ?? "").trim();
+      if (cur.toLowerCase() !== ruleLc) continue;
+      toUpdate.push(l.id);
+    }
+    if (toUpdate.length > 0) {
+      await db
+        .update(leadsTable)
+        .set({ leadType: defaultFunnelName, funnelId: defaultFunnelId, updatedAt: new Date() })
+        .where(and(
+          eq(leadsTable.tenantId, tenantId),
+          inArray(leadsTable.id, toUpdate),
+        ));
+      updatedLeadIds.push(...toUpdate);
+    }
+  }
+
+  return { updatedEventCount: eligibleIds.length, updatedLeadIds };
+}
+
 router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) {
@@ -848,8 +954,37 @@ router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
   });
   if (!access.ok) return;
 
+  const revertEvents = String(req.query.revertEvents ?? "").toLowerCase() === "true";
+
+  // If the caller asked for a revert, look up the rule's funnel name BEFORE
+  // deleting the row so we know which events/leads to unwind.
+  let ruleFunnelName: string | null = null;
+  if (revertEvents) {
+    const [funnel] = await db
+      .select({ name: funnelTypesTable.name })
+      .from(funnelTypesTable)
+      .where(eq(funnelTypesTable.id, existing.funnelTypeId));
+    ruleFunnelName = funnel?.name ?? null;
+  }
+
   await db.delete(subdomainFunnelRulesTable).where(eq(subdomainFunnelRulesTable.id, id));
   invalidateSubdomainFunnelCache(existing.tenantId);
+
+  if (revertEvents && ruleFunnelName) {
+    const { updatedEventCount, updatedLeadIds } = await revertEventsForSubdomainRule(
+      existing.tenantId,
+      existing.subdomain,
+      ruleFunnelName,
+    );
+    res.json({
+      success: true,
+      reverted: true,
+      updatedEventCount,
+      updatedLeadCount: updatedLeadIds.length,
+    });
+    return;
+  }
+
   res.json({ success: true });
 });
 

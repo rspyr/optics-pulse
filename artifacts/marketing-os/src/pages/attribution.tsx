@@ -1985,6 +1985,7 @@ function SubdomainRulesPanel({
   const [editForceOverride, setEditForceOverride] = useState(false);
 
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [pendingDeleteRevert, setPendingDeleteRevert] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const [savedMessage, setSavedMessage] = useState<{
@@ -2197,7 +2198,10 @@ function SubdomainRulesPanel({
     setDeleting(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/${id}`, {
+      const qs = new URLSearchParams();
+      if (pendingDeleteRevert) qs.set("revertEvents", "true");
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/${id}${suffix}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -2206,6 +2210,7 @@ function SubdomainRulesPanel({
         setError(d.error || "Failed to delete rule");
       } else {
         setPendingDeleteId(null);
+        setPendingDeleteRevert(false);
         await loadAll();
       }
     } catch {
@@ -2482,21 +2487,35 @@ function SubdomainRulesPanel({
                             )}
                           </div>
                         ) : isPendingDelete ? (
-                          <div className="flex gap-1 justify-end items-center">
-                            <span className="text-xs text-amber-400/80 mr-1">Delete?</span>
-                            <Button size="sm" variant="ghost" disabled={deleting} onClick={() => confirmDelete(rule.id)} className="h-7 px-2 text-xs text-red-400">
-                              {deleting ? "Deleting..." : "Yes, delete"}
-                            </Button>
-                            <Button size="sm" variant="ghost" disabled={deleting} onClick={() => setPendingDeleteId(null)} className="h-7 px-2 text-xs text-white/50">
-                              Cancel
-                            </Button>
+                          <div className="flex flex-col gap-1 items-end">
+                            <label className="flex items-center gap-1.5 text-xs text-white/70 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={pendingDeleteRevert}
+                                onChange={(e) => setPendingDeleteRevert(e.target.checked)}
+                                disabled={deleting}
+                                className="h-3 w-3 accent-amber-400"
+                              />
+                              Also revert past events tagged{" "}
+                              <span className="font-mono text-white/80">{rule.funnelName}</span> on{" "}
+                              <span className="font-mono text-white/80">{rule.subdomain}</span> back to the tenant default
+                            </label>
+                            <div className="flex gap-1 justify-end items-center">
+                              <span className="text-xs text-amber-400/80 mr-1">Delete?</span>
+                              <Button size="sm" variant="ghost" disabled={deleting} onClick={() => confirmDelete(rule.id)} className="h-7 px-2 text-xs text-red-400">
+                                {deleting ? "Deleting..." : pendingDeleteRevert ? "Yes, delete & revert" : "Yes, delete"}
+                              </Button>
+                              <Button size="sm" variant="ghost" disabled={deleting} onClick={() => { setPendingDeleteId(null); setPendingDeleteRevert(false); }} className="h-7 px-2 text-xs text-white/50">
+                                Cancel
+                              </Button>
+                            </div>
                           </div>
                         ) : (
                           <div className="flex gap-1 justify-end">
                             <Button size="sm" variant="ghost" onClick={() => startEdit(rule)} className="h-7 px-2 text-xs">
                               Edit
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setPendingDeleteId(rule.id)} className="h-7 px-2 text-xs text-white/50 hover:text-red-400">
+                            <Button size="sm" variant="ghost" onClick={() => { setPendingDeleteId(rule.id); setPendingDeleteRevert(false); }} className="h-7 px-2 text-xs text-white/50 hover:text-red-400">
                               Delete
                             </Button>
                           </div>

@@ -494,17 +494,19 @@ describe("DELETE /subdomain-funnel-rules/:id", () => {
     expect(JSON.stringify(deleteCalls[0].whereArgs)).toContain("123");
   });
 
-  // Pinning down current behavior: removing a subdomain rule does NOT
-  // retroactively unwind past attribution events or leads that were
-  // resolved by it. The delete handler only touches the rules table and
-  // invalidates the resolver cache. If we ever decide to also revert past
-  // events on delete, this test will fail and force a deliberate change.
-  it("does NOT backfill / revert past attribution events or leads on delete", async () => {
+  // Default behavior (no ?revertEvents flag): removing a subdomain rule does
+  // NOT retroactively unwind past attribution events or leads that were
+  // resolved by it. Only the rules row is removed and the resolver cache is
+  // invalidated.
+  it("does NOT backfill / revert past attribution events or leads on delete by default", async () => {
     await setupApp("client_admin", 42);
     selectRowsQueue.push([{ id: 123, tenantId: 42, subdomain: "protect", funnelTypeId: 5 }]);
 
     const res = await sendJson("DELETE", "/subdomain-funnel-rules/123");
     expect(res.status).toBe(200);
+    expect(res.json.success).toBe(true);
+    expect(res.json.reverted).toBeUndefined();
+    expect(res.json.updatedEventCount).toBeUndefined();
 
     // No attribution_events / leads updates.
     expect(updateCalls.some((c) => c.table === "attributionEventsTable")).toBe(false);
@@ -514,6 +516,90 @@ describe("DELETE /subdomain-funnel-rules/:id", () => {
     // Only the rules table is deleted from.
     expect(deleteCalls).toHaveLength(1);
     expect(deleteCalls[0].table).toBe("subdomainFunnelRulesTable");
+  });
+
+  // ?revertEvents=true opt-in: re-resolve attribution events on the rule's
+  // subdomain that still carry the (deleted) rule's funnel name back to the
+  // tenant default, and propagate that change to any leads created from
+  // those events whose lead_type still mirrors the rule's funnel.
+  it("reverts past events + leads when ?revertEvents=true is set", async () => {
+    await setupApp("client_admin", 42);
+    // rule lookup
+    selectRowsQueue.push([{ id: 123, tenantId: 42, subdomain: "protect", funnelTypeId: 5 }]);
+    // rule funnel name lookup (revert path)
+    selectRowsQueue.push([{ name: "Protection Plan" }]);
+    // tenant default (revert destination)
+    selectRowsQueue.push([{ funnelId: 1, funnelName: "Default Funnel" }]);
+    // candidate events on this subdomain
+    executeRowsQueue.push([
+      { id: 701, created_lead_id: 8001, resolved_funnel: "Protection Plan" },
+      { id: 702, created_lead_id: null, resolved_funnel: "protection plan" }, // case-insensitive
+      { id: 703, created_lead_id: 8003, resolved_funnel: "Some Other Funnel" }, // unrelated — left alone
+      { id: 704, created_lead_id: null, resolved_funnel: null }, // already fell through — left alone
+    ]);
+    // lead snapshot — only 8001 still mirrors the rule's funnel
+    selectRowsQueue.push([
+      { id: 8001, leadType: "Protection Plan", funnelId: 5 },
+    ]);
+
+    const res = await sendJson("DELETE", "/subdomain-funnel-rules/123?revertEvents=true");
+    expect(res.status).toBe(200);
+    expect(res.json.success).toBe(true);
+    expect(res.json.reverted).toBe(true);
+    expect(res.json.updatedEventCount).toBe(2);
+    expect(res.json.updatedLeadCount).toBe(1);
+
+    // Rule row was still deleted.
+    expect(deleteCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(true);
+
+    // Event update touches ONLY the two matching events, setting them back
+    // to the tenant default name.
+    const eventUpd = updateCalls.find((c) => c.table === "attributionEventsTable");
+    expect(eventUpd).toBeDefined();
+    expect(eventUpd!.set.resolvedFunnel).toBe("Default Funnel");
+    const eFlat = JSON.stringify(eventUpd!.whereArgs);
+    expect(eFlat).toContain("701");
+    expect(eFlat).toContain("702");
+    expect(eFlat).not.toContain("703");
+    expect(eFlat).not.toContain("704");
+
+    // Lead update points the matching lead back to the tenant default funnel.
+    const leadUpd = updateCalls.find((c) => c.table === "leadsTable");
+    expect(leadUpd).toBeDefined();
+    expect(leadUpd!.set.leadType).toBe("Default Funnel");
+    expect(leadUpd!.set.funnelId).toBe(1);
+    expect(leadUpd!.set.updatedAt).toBeInstanceOf(Date);
+    expect(JSON.stringify(leadUpd!.whereArgs)).toContain("8001");
+  });
+
+  it("reverts with zero matching events still succeeds and reports zero counts", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 123, tenantId: 42, subdomain: "protect", funnelTypeId: 5 }]);
+    selectRowsQueue.push([{ name: "Protection Plan" }]);
+    selectRowsQueue.push([{ funnelId: 1, funnelName: "Default Funnel" }]);
+    executeRowsQueue.push([]); // no candidates
+
+    const res = await sendJson("DELETE", "/subdomain-funnel-rules/123?revertEvents=true");
+    expect(res.status).toBe(200);
+    expect(res.json.reverted).toBe(true);
+    expect(res.json.updatedEventCount).toBe(0);
+    expect(res.json.updatedLeadCount).toBe(0);
+    // Rule still deleted, but no event/lead writes.
+    expect(deleteCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(true);
+    expect(updateCalls.some((c) => c.table === "attributionEventsTable")).toBe(false);
+    expect(updateCalls.some((c) => c.table === "leadsTable")).toBe(false);
+  });
+
+  it("ignores ?revertEvents=false and skips the revert path", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ id: 123, tenantId: 42, subdomain: "protect", funnelTypeId: 5 }]);
+
+    const res = await sendJson("DELETE", "/subdomain-funnel-rules/123?revertEvents=false");
+    expect(res.status).toBe(200);
+    expect(res.json.success).toBe(true);
+    expect(res.json.reverted).toBeUndefined();
+    expect(executeCalls.length).toBe(0);
+    expect(updateCalls.some((c) => c.table === "attributionEventsTable")).toBe(false);
   });
 });
 
