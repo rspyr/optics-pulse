@@ -23,7 +23,9 @@ export function TenantScopeChip() {
   });
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [highlightIndex, setHighlightIndex] = useState(0);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const tenantOptions = useMemo(() => {
     const all = allTenants ?? [];
@@ -70,6 +72,56 @@ export function TenantScopeChip() {
     const id = window.setTimeout(() => searchRef.current?.focus(), 50);
     return () => window.clearTimeout(id);
   }, [open]);
+
+  const totalItems = 1 + filteredOptions.length;
+
+  useEffect(() => {
+    setHighlightIndex(0);
+  }, [query, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = itemRefs.current[highlightIndex];
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightIndex, open, filteredOptions]);
+
+  const commitSelection = (idx: number) => {
+    if (idx === 0) {
+      setSelectedTenantId(null);
+    } else {
+      const t = filteredOptions[idx - 1];
+      if (!t) return;
+      setSelectedTenantId(t.id);
+    }
+    setOpen(false);
+    setQuery("");
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIndex((i) => (totalItems === 0 ? 0 : (i + 1) % totalItems));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIndex((i) => (totalItems === 0 ? 0 : (i - 1 + totalItems) % totalItems));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      commitSelection(highlightIndex);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      setQuery("");
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setHighlightIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setHighlightIndex(Math.max(0, totalItems - 1));
+    }
+  };
 
   if (!isAgency) return null;
 
@@ -128,13 +180,21 @@ export function TenantScopeChip() {
             placeholder="Search tenants…"
             data-testid="tenant-scope-search"
             className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-primary/50"
-            onKeyDown={(e) => e.stopPropagation()}
+            onKeyDown={handleSearchKeyDown}
           />
         </div>
         <DropdownMenuItem
+          ref={(el) => {
+            itemRefs.current[0] = el as HTMLDivElement | null;
+          }}
           data-testid="tenant-scope-reset"
-          onSelect={() => setSelectedTenantId(null)}
-          className="flex items-center gap-2 cursor-pointer"
+          onSelect={() => commitSelection(0)}
+          onMouseEnter={() => setHighlightIndex(0)}
+          data-highlighted-kb={highlightIndex === 0 ? "true" : undefined}
+          className={cn(
+            "flex items-center gap-2 cursor-pointer",
+            highlightIndex === 0 && "bg-white/10",
+          )}
         >
           <Globe2 className="w-4 h-4 text-white/60" />
           <span className="flex-1">All Tenants</span>
@@ -147,23 +207,35 @@ export function TenantScopeChip() {
               No tenants match
             </div>
           ) : (
-            filteredOptions.map((t) => (
-              <DropdownMenuItem
-                key={t.id}
-                data-testid={`tenant-scope-option-${t.id}`}
-                onSelect={() => setSelectedTenantId(t.id)}
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <Building2 className="w-4 h-4 text-white/50" />
-                <span className="flex-1 truncate">
-                  {t.name}
-                  {t.inactive ? (
-                    <span className="ml-1 text-white/40">(inactive)</span>
-                  ) : null}
-                </span>
-                {selectedTenantId === t.id ? <Check className="w-4 h-4 text-primary" /> : null}
-              </DropdownMenuItem>
-            ))
+            filteredOptions.map((t, i) => {
+              const idx = i + 1;
+              const isHighlighted = highlightIndex === idx;
+              return (
+                <DropdownMenuItem
+                  key={t.id}
+                  ref={(el) => {
+                    itemRefs.current[idx] = el as HTMLDivElement | null;
+                  }}
+                  data-testid={`tenant-scope-option-${t.id}`}
+                  onSelect={() => commitSelection(idx)}
+                  onMouseEnter={() => setHighlightIndex(idx)}
+                  data-highlighted-kb={isHighlighted ? "true" : undefined}
+                  className={cn(
+                    "flex items-center gap-2 cursor-pointer",
+                    isHighlighted && "bg-white/10",
+                  )}
+                >
+                  <Building2 className="w-4 h-4 text-white/50" />
+                  <span className="flex-1 truncate">
+                    {t.name}
+                    {t.inactive ? (
+                      <span className="ml-1 text-white/40">(inactive)</span>
+                    ) : null}
+                  </span>
+                  {selectedTenantId === t.id ? <Check className="w-4 h-4 text-primary" /> : null}
+                </DropdownMenuItem>
+              );
+            })
           )}
         </div>
         {!isAll ? (
