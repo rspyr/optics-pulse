@@ -192,11 +192,11 @@ export default function Internal() {
   };
 
   const triggerSync = async (integration: string) => {
-    const targetTenantId = syncTenantId || data?.tenants?.[0]?.tenantId;
-    if (!targetTenantId) {
-      toast({ title: "Pick a tenant first", description: "Use the tenant selector above to choose which tenant to sync.", variant: "destructive" });
+    if (!syncTenantId) {
+      toast({ title: "Pick a tenant first", description: "Manual sync runs against a single tenant — choose one from the tenant selector at the top of the page.", variant: "destructive" });
       return;
     }
+    const targetTenantId = syncTenantId;
     setSyncLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
@@ -683,11 +683,12 @@ export default function Internal() {
                 })()}
                 <button
                   onClick={() => triggerSync(integ)}
-                  disabled={syncLoading || (!syncTenantId && (!data?.tenants || data.tenants.length === 0))}
+                  disabled={syncLoading || !syncTenantId}
+                  title={!syncTenantId ? "Pick a tenant from the selector at the top of the page" : undefined}
                   className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
                 >
                   {syncLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                  Sync {syncTenantId ? "" : "(All)"}
+                  Sync now
                 </button>
               </div>
             );
