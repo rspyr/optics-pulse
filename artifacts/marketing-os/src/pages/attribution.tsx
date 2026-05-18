@@ -2062,6 +2062,10 @@ function SubdomainRulesPanel({
   const [pendingDeleteRevert, setPendingDeleteRevert] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Two banner shapes share this slot: a "saved" message (subdomain rule
+  // create/update, optionally with an undo affordance for force-override
+  // saves) and a "reverted" message (rule delete with revert-past-events).
+  // Discriminated by `kind` so the renderer can pick the right copy.
   const [savedMessage, setSavedMessage] = useState<
     | {
         kind?: "saved";
@@ -2069,6 +2073,8 @@ function SubdomainRulesPanel({
         funnelName: string;
         events: number;
         leads: number;
+        undo?: { batchId: string; expiresAt: number };
+        reverted?: { events: number; leads: number };
       }
     | {
         kind: "reverted";
@@ -2078,12 +2084,35 @@ function SubdomainRulesPanel({
       }
     | null
   >(null);
+  const [undoing, setUndoing] = useState(false);
+  const [, setNowTick] = useState(0);
 
   useEffect(() => {
     if (savedMessage === null) return;
-    const t = setTimeout(() => setSavedMessage(null), 6000);
+    // If we're offering an undo, keep the banner up until the window expires
+    // (plus a brief grace period). If we've already reverted, fade after 4s.
+    // Otherwise (incl. delete-revert banner) fall back to the 6s auto-hide.
+    let timeout: number;
+    if (savedMessage.kind === "reverted") {
+      timeout = 6000;
+    } else if (savedMessage.reverted) {
+      timeout = 4000;
+    } else if (savedMessage.undo) {
+      timeout = Math.max(0, savedMessage.undo.expiresAt - Date.now()) + 500;
+    } else {
+      timeout = 6000;
+    }
+    const t = setTimeout(() => setSavedMessage(null), timeout);
     return () => clearTimeout(t);
   }, [savedMessage]);
+
+  // Drive a 1s tick while an undo window is open so the countdown stays fresh.
+  const activeUndo = savedMessage && savedMessage.kind !== "reverted" ? savedMessage.undo : undefined;
+  useEffect(() => {
+    if (!activeUndo) return;
+    const i = setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => clearInterval(i);
+  }, [activeUndo]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -2173,6 +2202,14 @@ function SubdomainRulesPanel({
           funnelName,
           events: d.updatedEventCount ?? 0,
           leads: d.updatedLeadCount ?? 0,
+          undo: d.undoBatchId
+            ? {
+                batchId: d.undoBatchId,
+                // Prefer the server-authoritative expiry; fall back to a 30s
+                // local window only if the server didn't send one.
+                expiresAt: typeof d.undoExpiresAt === "number" ? d.undoExpiresAt : Date.now() + 30_000,
+              }
+            : undefined,
         });
         setNewSubdomain("");
         setNewFunnelId("");
@@ -2268,6 +2305,12 @@ function SubdomainRulesPanel({
           funnelName,
           events: d.updatedEventCount ?? 0,
           leads: d.updatedLeadCount ?? 0,
+          undo: d.undoBatchId
+            ? {
+                batchId: d.undoBatchId,
+                expiresAt: typeof d.undoExpiresAt === "number" ? d.undoExpiresAt : Date.now() + 30_000,
+              }
+            : undefined,
         });
         cancelEdit();
         await loadAll();
@@ -2276,6 +2319,44 @@ function SubdomainRulesPanel({
       setError("Network error");
     }
     setSavingEdit(false);
+  };
+
+  const doUndo = async () => {
+    if (!savedMessage || savedMessage.kind === "reverted" || !savedMessage.undo) return;
+    const current = savedMessage;
+    const undo = current.undo!;
+    if (Date.now() > undo.expiresAt) {
+      setSavedMessage(null);
+      return;
+    }
+    setUndoing(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/subdomain-funnel-rules/undo/${encodeURIComponent(undo.batchId)}?tenantId=${tenantId}`,
+        { method: "POST", credentials: "include" },
+      );
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to undo");
+      } else {
+        setSavedMessage({
+          kind: "saved",
+          subdomain: current.subdomain,
+          funnelName: current.funnelName,
+          events: current.events,
+          leads: current.leads,
+          reverted: {
+            events: d.revertedEventCount ?? 0,
+            leads: d.revertedLeadCount ?? 0,
+          },
+        });
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setUndoing(false);
   };
 
   const confirmDelete = async (id: number) => {
@@ -2460,10 +2541,38 @@ function SubdomainRulesPanel({
           </div>
         )}
         {savedMessage && savedMessage.kind !== "reverted" && (
-          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2">
-            Saved <span className="font-mono">{savedMessage.subdomain}</span> → {savedMessage.funnelName}.
-            Updated {savedMessage.events.toLocaleString()} {savedMessage.events === 1 ? "event" : "events"}
-            {savedMessage.leads > 0 && <> and {savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"}</>}.
+          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2 flex items-center justify-between gap-3">
+            {savedMessage.reverted ? (
+              <span>
+                Reverted <span className="font-mono">{savedMessage.subdomain}</span> →{" "}
+                restored {savedMessage.reverted.events.toLocaleString()}{" "}
+                {savedMessage.reverted.events === 1 ? "event" : "events"}
+                {savedMessage.reverted.leads > 0 && (
+                  <> and {savedMessage.reverted.leads.toLocaleString()} {savedMessage.reverted.leads === 1 ? "lead" : "leads"}</>
+                )}{" "}to their previous funnel.
+              </span>
+            ) : (
+              <span>
+                Saved <span className="font-mono">{savedMessage.subdomain}</span> → {savedMessage.funnelName}.
+                Updated {savedMessage.events.toLocaleString()} {savedMessage.events === 1 ? "event" : "events"}
+                {savedMessage.leads > 0 && <> and {savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"}</>}.
+              </span>
+            )}
+            {savedMessage.undo && !savedMessage.reverted && (() => {
+              const secondsLeft = Math.max(0, Math.ceil((savedMessage.undo.expiresAt - Date.now()) / 1000));
+              if (secondsLeft <= 0) return null;
+              return (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={doUndo}
+                  disabled={undoing}
+                  className="h-7 px-2 text-xs text-emerald-200 hover:text-white hover:bg-emerald-500/20 shrink-0"
+                >
+                  {undoing ? "Undoing..." : `Undo (${secondsLeft}s)`}
+                </Button>
+              );
+            })()}
           </div>
         )}
 

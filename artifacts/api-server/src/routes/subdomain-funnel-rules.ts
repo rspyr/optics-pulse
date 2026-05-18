@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import {
   db,
@@ -47,6 +48,9 @@ function normalizeSubdomain(raw: string): string {
 // matches and shouldn't be overwritten by a coarser subdomain rule.
 //
 // Returns counts so the UI can show "Saved · Updated N past events".
+type PriorEventValue = { id: number; resolvedFunnel: string | null };
+type PriorLeadValue = { id: number; leadType: string | null; funnelId: number | null };
+
 async function backfillEventsForSubdomainRule(
   tenantId: number,
   subdomain: string,
@@ -54,11 +58,17 @@ async function backfillEventsForSubdomainRule(
   canonicalFunnelName: string,
   priorFunnelName: string | null = null,
   options: { dryRun?: boolean; forceOverride?: boolean } = {},
-): Promise<{ updatedEventCount: number; updatedLeadIds: number[]; eligibleEventIds: number[] }> {
+): Promise<{
+  updatedEventCount: number;
+  updatedLeadIds: number[];
+  eligibleEventIds: number[];
+  priorEventValues: PriorEventValue[];
+  priorLeadValues: PriorLeadValue[];
+}> {
   const dryRun = options.dryRun === true;
   const forceOverride = options.forceOverride === true;
   const normSub = subdomain.toLowerCase().trim();
-  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [] };
+  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [], priorEventValues: [], priorLeadValues: [] };
   const priorLc = priorFunnelName?.toLowerCase() ?? null;
 
   // Identify default funnel name to know which "fell-through" rows to claim.
@@ -105,6 +115,7 @@ async function backfillEventsForSubdomainRule(
   }>;
 
   const eligibleIds: number[] = [];
+  const priorEventValues: PriorEventValue[] = [];
   const leadIdSet = new Set<number>();
   const newLc = canonicalFunnelName.toLowerCase();
   for (const r of rows) {
@@ -120,6 +131,7 @@ async function backfillEventsForSubdomainRule(
     if (curLc === newLc) continue;
     if (!isFellThrough && !isPriorRuleMatch && !forceOverride) continue;
     eligibleIds.push(r.id);
+    priorEventValues.push({ id: r.id, resolvedFunnel: r.resolved_funnel });
     if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
   }
 
@@ -138,6 +150,7 @@ async function backfillEventsForSubdomainRule(
   // (null/empty/default). Don't clobber leads that already have a distinct
   // funnel from another correction path.
   const updatedLeadIds: number[] = [];
+  const priorLeadValues: PriorLeadValue[] = [];
   if (leadIdSet.size > 0) {
     const leadIds = Array.from(leadIdSet);
     const leads = await db
@@ -159,6 +172,7 @@ async function backfillEventsForSubdomainRule(
       if (isCanonical && l.funnelId === funnelTypeId) continue;
       if (!isFellThrough && !isPriorRuleMatch && !isCanonical && !forceOverride) continue;
       toUpdate.push(l.id);
+      priorLeadValues.push({ id: l.id, leadType: l.leadType ?? null, funnelId: l.funnelId ?? null });
     }
     if (toUpdate.length > 0) {
       if (!dryRun) {
@@ -174,7 +188,43 @@ async function backfillEventsForSubdomainRule(
     }
   }
 
-  return { updatedEventCount: eligibleIds.length, updatedLeadIds, eligibleEventIds: eligibleIds };
+  return {
+    updatedEventCount: eligibleIds.length,
+    updatedLeadIds,
+    eligibleEventIds: eligibleIds,
+    priorEventValues,
+    priorLeadValues,
+  };
+}
+
+// In-memory undo batches captured when a force-override save re-tags events
+// that were already attributed to a different funnel. Operators have a short
+// window from the UI (30s) to undo the move; we keep batches around for a
+// little longer server-side so a request that races with the UI countdown
+// still resolves cleanly. Restarts drop these — operators only ever see a
+// fresh banner after a save, so an expired/missing batch surfaces the same as
+// "window passed".
+type UndoBatch = {
+  tenantId: number;
+  subdomain: string;
+  createdAt: number;
+  events: PriorEventValue[];
+  leads: PriorLeadValue[];
+};
+const undoBatches = new Map<string, UndoBatch>();
+// The UI exposes a 30s undo window. We keep the server-side batch alive for a
+// few extra seconds so a click that races the countdown still resolves, but
+// no longer than that — undo via direct API replay should not outlive the
+// visible affordance.
+const UNDO_WINDOW_MS = 30 * 1000;
+const UNDO_GRACE_MS = 5 * 1000;
+const UNDO_TTL_MS = UNDO_WINDOW_MS + UNDO_GRACE_MS;
+
+function pruneUndoBatches() {
+  const now = Date.now();
+  for (const [k, v] of undoBatches.entries()) {
+    if (now - v.createdAt > UNDO_TTL_MS) undoBatches.delete(k);
+  }
 }
 
 // Suggest subdomain → funnel rules from historical attribution events.
@@ -802,7 +852,7 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
       eq(subdomainSuggestionDismissalsTable.subdomain, normSub),
     ));
 
-  const { updatedEventCount, updatedLeadIds } = await backfillEventsForSubdomainRule(
+  const { updatedEventCount, updatedLeadIds, priorEventValues, priorLeadValues } = await backfillEventsForSubdomainRule(
     tenantId,
     normSub,
     numericFunnelTypeId,
@@ -810,6 +860,22 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     priorFunnelName,
     { forceOverride: forceOverride === true },
   );
+
+  // If the operator opted into force-override and we actually moved rows that
+  // were on a different funnel, mint an undo batch so the success banner can
+  // offer a one-click rollback for a short window.
+  let undoBatchId: string | null = null;
+  if (forceOverride === true && (priorEventValues.length > 0 || priorLeadValues.length > 0)) {
+    pruneUndoBatches();
+    undoBatchId = randomUUID();
+    undoBatches.set(undoBatchId, {
+      tenantId,
+      subdomain: normSub,
+      createdAt: Date.now(),
+      events: priorEventValues,
+      leads: priorLeadValues,
+    });
+  }
 
   res.json({
     rule: {
@@ -823,6 +889,76 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     updatedEventCount,
     updatedLeadCount: updatedLeadIds.length,
     forceOverride: forceOverride === true,
+    undoBatchId,
+    // Authoritative expiry the UI should display/enforce (window only —
+    // server holds the batch a few seconds longer to absorb click latency).
+    undoExpiresAt: undoBatchId ? Date.now() + UNDO_WINDOW_MS : null,
+  });
+});
+
+// Roll back a force-override save by restoring the prior resolved_funnel on
+// affected events and the prior lead_type / funnel_id on affected leads.
+// Single-use: the batch is consumed once applied.
+router.post("/subdomain-funnel-rules/undo/:batchId", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+  const batchId = req.params.batchId;
+  pruneUndoBatches();
+  const batch = undoBatches.get(batchId);
+  if (!batch || batch.tenantId !== tenantId) {
+    res.status(404).json({ error: "Undo window has expired" });
+    return;
+  }
+
+  // Group prior event values by resolved_funnel so we can issue one UPDATE
+  // per distinct prior value instead of one per row.
+  const eventsByPrior = new Map<string, number[]>();
+  for (const e of batch.events) {
+    const key = e.resolvedFunnel === null ? "\0null" : `v:${e.resolvedFunnel}`;
+    const arr = eventsByPrior.get(key) ?? [];
+    arr.push(e.id);
+    eventsByPrior.set(key, arr);
+  }
+  for (const [key, ids] of eventsByPrior.entries()) {
+    const value = key === "\0null" ? null : key.slice(2);
+    await db
+      .update(attributionEventsTable)
+      .set({ resolvedFunnel: value })
+      .where(and(
+        eq(attributionEventsTable.tenantId, tenantId),
+        inArray(attributionEventsTable.id, ids),
+      ));
+  }
+
+  const leadsByPrior = new Map<string, number[]>();
+  for (const l of batch.leads) {
+    const key = `${l.leadType ?? "\0null"}::${l.funnelId ?? "\0null"}`;
+    const arr = leadsByPrior.get(key) ?? [];
+    arr.push(l.id);
+    leadsByPrior.set(key, arr);
+  }
+  for (const [, ids] of leadsByPrior.entries()) {
+    const sample = batch.leads.find((l) => ids.includes(l.id))!;
+    await db
+      .update(leadsTable)
+      .set({ leadType: sample.leadType, funnelId: sample.funnelId, updatedAt: new Date() })
+      .where(and(
+        eq(leadsTable.tenantId, tenantId),
+        inArray(leadsTable.id, ids),
+      ));
+  }
+
+  undoBatches.delete(batchId);
+  invalidateSubdomainFunnelCache(tenantId);
+
+  res.json({
+    success: true,
+    revertedEventCount: batch.events.length,
+    revertedLeadCount: batch.leads.length,
+    subdomain: batch.subdomain,
   });
 });
 
