@@ -4170,9 +4170,14 @@ export default function SalesManager() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [includePreBooked, setIncludePreBooked] = useState(false);
   const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState<boolean>(isAgency);
 
   useEffect(() => {
-    if (!isAgency) return;
+    if (!isAgency) {
+      setTenantsLoading(false);
+      return;
+    }
+    setTenantsLoading(true);
     fetch(`${API_BASE}/tenants`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
@@ -4180,7 +4185,8 @@ export default function SalesManager() {
           setTenants(data.map((t: { id: number; name: string; timezone?: string }) => ({ id: t.id, name: t.name, timezone: t.timezone })));
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setTenantsLoading(false));
   }, [isAgency]);
 
   // The Tenant <Select> on this page mirrors the global SCOPE chip in the
@@ -4246,7 +4252,17 @@ export default function SalesManager() {
         </PremiumCard>
       )}
 
-      {isAgency && !selectedTenantId && (
+      {isAgency && !selectedTenantId && tenantsLoading && (
+        <PremiumCard className="p-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && !selectedTenantId && !tenantsLoading && (
         <PremiumCard className="p-6 text-center">
           <p className="text-sm text-white/60">
             Select a tenant above (or in the header SCOPE chip) to view the Sales Manager Hub.

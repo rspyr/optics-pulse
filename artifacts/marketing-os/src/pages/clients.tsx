@@ -108,7 +108,7 @@ function ChangeLogPopover({ log, onClose }: { log: { title: string; description:
 }
 
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter(tenantIdOverride);
+  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter(tenantIdOverride);
   // No silent fallback to a default tenant id — when the operator hasn't picked
   // a tenant (agency in "All Tenants" scope), we must NOT issue tenant-scoped
   // fetches that would otherwise leak data from an arbitrary tenant (the old
@@ -475,7 +475,17 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
         </PremiumCard>
       )}
 
-      {!hasTenant && (
+      {!hasTenant && isAgency && tenantsLoading && (
+        <PremiumCard className="p-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      )}
+
+      {!hasTenant && !(isAgency && tenantsLoading) && (
         <PremiumCard className="p-6">
           <p className="text-sm text-white/50">
             Select a tenant above (or in the header SCOPE chip) to view the Client Portal.

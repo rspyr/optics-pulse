@@ -2708,7 +2708,7 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
 }
 
 export default function Leads() {
-  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency } = useTenantFilter();
+  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter();
   const { user } = useAuth();
   const isAdmin = user?.role === "client_admin" || user?.role === "super_admin" || user?.role === "agency_user";
   const isClientUser = user?.role === "client_user";
@@ -3184,7 +3184,17 @@ export default function Leads() {
         </PremiumCard>
       )}
 
-      {isAgency && !localTenantId && (
+      {isAgency && !localTenantId && tenantsLoading && (
+        <PremiumCard className="p-6 mb-6">
+          <div className="animate-pulse space-y-3">
+            <div className="h-4 w-1/3 bg-white/10 rounded" />
+            <div className="h-3 w-1/2 bg-white/5 rounded" />
+            <div className="h-3 w-2/5 bg-white/5 rounded" />
+          </div>
+        </PremiumCard>
+      )}
+
+      {isAgency && !localTenantId && !tenantsLoading && (
         <PremiumCard className="p-6 mb-6 text-center">
           <p className="text-sm text-white/60">
             Select a tenant above (or in the header SCOPE chip) to view the Pulse queue.

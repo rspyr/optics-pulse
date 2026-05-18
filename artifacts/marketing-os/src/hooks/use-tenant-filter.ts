@@ -35,6 +35,7 @@ export function useTenantFilter(tenantIdOverride?: number) {
   } = useAuth();
 
   const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState<boolean>(isAgency);
 
   useEffect(() => {
     if (isAgency && tenantIdOverride && tenantIdOverride !== globalTenantId) {
@@ -47,7 +48,11 @@ export function useTenantFilter(tenantIdOverride?: number) {
   }, [setGlobalTenantId]);
 
   useEffect(() => {
-    if (!isAgency) return;
+    if (!isAgency) {
+      setTenantsLoading(false);
+      return;
+    }
+    setTenantsLoading(true);
     fetch(`${API_BASE}/tenants`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
@@ -60,7 +65,8 @@ export function useTenantFilter(tenantIdOverride?: number) {
           setTenants(mapped);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setTenantsLoading(false));
     // We intentionally only depend on `isAgency` to keep this a one-shot fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAgency]);
@@ -74,6 +80,7 @@ export function useTenantFilter(tenantIdOverride?: number) {
 
   return {
     tenants,
+    tenantsLoading,
     localTenantId,
     effectiveTenantId,
     setSelectedTenantId,
