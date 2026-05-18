@@ -150,6 +150,8 @@ export default function AdminTenants() {
   const [editTab, setEditTab] = useState<EditTab>("integrations");
   const [googleAdsConnecting, setGoogleAdsConnecting] = useState(false);
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [googleAdsSyncing, setGoogleAdsSyncing] = useState(false);
+  const [googleAdsSyncMessage, setGoogleAdsSyncMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [loadedConfig, setLoadedConfig] = useState<Record<string, string>>({});
@@ -235,6 +237,30 @@ export default function AdminTenants() {
       setGoogleAdsOAuthMessage({ type: "error", text: "Network error starting OAuth flow" });
     } finally {
       setGoogleAdsConnecting(false);
+    }
+  };
+
+  const handleGoogleAdsSyncNow = async (tenantId: number) => {
+    setGoogleAdsSyncing(true);
+    setGoogleAdsSyncMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/integrations/sync/google_ads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        setGoogleAdsSyncMessage({ type: "error", text: json.error || `HTTP ${res.status}` });
+      } else {
+        setGoogleAdsSyncMessage({ type: "success", text: `Synced ${json.synced ?? json.records ?? 0} campaign-day rows` });
+        refetch();
+      }
+    } catch (e) {
+      setGoogleAdsSyncMessage({ type: "error", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setGoogleAdsSyncing(false);
     }
   };
 
@@ -483,20 +509,40 @@ export default function AdminTenants() {
               {editId && (() => {
                 const gaReady = fieldReady("googleAdsClientId") && fieldReady("googleAdsClientSecret");
                 const gaConnected = isSaved("googleAdsRefreshToken");
+                const gaCustomerIdReady = fieldReady("googleAdsCustomerId");
+                const gaDevTokenReady = fieldReady("googleAdsDeveloperToken");
                 const missing: string[] = [];
                 if (!fieldReady("googleAdsClientId")) missing.push("OAuth Client ID");
                 if (!fieldReady("googleAdsClientSecret")) missing.push("OAuth Client Secret");
+                const syncTitle = !gaConnected
+                  ? "Connect Google Ads first"
+                  : !gaCustomerIdReady
+                    ? "Save a Customer ID first"
+                    : !gaDevTokenReady
+                      ? "Save a Developer Token first"
+                      : "Run a one-off Google Ads sync now (also runs hourly)";
                 return (
-                  <button
-                    type="button"
-                    onClick={() => handleConnectGoogleAds(editId)}
-                    disabled={googleAdsConnecting || !gaReady}
-                    title={gaReady ? "" : `Save ${missing.join(" and ")} first, then click to authorize`}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
-                  >
-                    {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
-                    {gaConnected ? "Reconnect Google Ads" : "Connect Google Ads"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleGoogleAdsSyncNow(editId)}
+                      disabled={googleAdsSyncing || googleAdsConnecting || !gaConnected || !gaCustomerIdReady || !gaDevTokenReady}
+                      title={syncTitle}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {googleAdsSyncing ? "Syncing…" : "Sync now"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleConnectGoogleAds(editId)}
+                      disabled={googleAdsConnecting || !gaReady}
+                      title={gaReady ? "" : `Save ${missing.join(" and ")} first, then click to authorize`}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border border-yellow-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+                    >
+                      {googleAdsConnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
+                      {gaConnected ? "Reconnect Google Ads" : "Connect Google Ads"}
+                    </button>
+                  </div>
                 );
               })()}
             </div>
@@ -504,6 +550,11 @@ export default function AdminTenants() {
               <div className={`mb-3 p-3 rounded-lg text-xs ${googleAdsOAuthMessage.type === "success" ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"}`}>
                 {googleAdsOAuthMessage.type === "success" ? <CheckCircle className="w-3.5 h-3.5 inline mr-1.5" /> : <XCircle className="w-3.5 h-3.5 inline mr-1.5" />}
                 {googleAdsOAuthMessage.text}
+              </div>
+            )}
+            {googleAdsSyncMessage && (
+              <div className={`mb-3 text-xs ${googleAdsSyncMessage.type === "success" ? "text-emerald-400" : "text-red-400"}`}>
+                {googleAdsSyncMessage.text}
               </div>
             )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
