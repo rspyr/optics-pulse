@@ -55,30 +55,69 @@ export default function Attribution() {
     reason?: "observed" | "label-match";
   };
   const [suggestions, setSuggestions] = useState<SubdomainSuggestion[]>([]);
-  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [hiddenSubdomains, setHiddenSubdomains] = useState<string[]>([]);
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<string | null>(null);
   const [suggestionToast, setSuggestionToast] = useState<string | null>(null);
 
   const refetchSuggestions = useCallback(() => {
     if (!effectiveTenantId) {
       setSuggestions([]);
+      setHiddenSubdomains([]);
       return;
     }
     fetch(`${API_BASE}/api/subdomain-funnel-rules/suggestions?tenantId=${effectiveTenantId}`, {
       credentials: "include",
     })
-      .then(r => (r.ok ? r.json() : { suggestions: [] }))
-      .then(d => setSuggestions(d.suggestions || []))
-      .catch(() => setSuggestions([]));
+      .then(r => (r.ok ? r.json() : { suggestions: [], hiddenSubdomains: [] }))
+      .then(d => {
+        setSuggestions(d.suggestions || []);
+        setHiddenSubdomains(d.hiddenSubdomains || []);
+      })
+      .catch(() => {
+        setSuggestions([]);
+        setHiddenSubdomains([]);
+      });
   }, [effectiveTenantId]);
 
   useEffect(() => {
     refetchSuggestions();
   }, [refetchSuggestions]);
 
-  useEffect(() => {
-    setDismissedSuggestions(new Set());
-  }, [effectiveTenantId]);
+  const dismissSuggestion = useCallback(async (subdomain: string) => {
+    if (!effectiveTenantId) return;
+    // Optimistic: drop from visible list and add to hidden list immediately.
+    setSuggestions(prev => prev.filter(s => s.subdomain !== subdomain));
+    setHiddenSubdomains(prev => (prev.includes(subdomain) ? prev : [...prev, subdomain]));
+    try {
+      const res = await fetch(`${API_BASE}/api/subdomain-funnel-rules/suggestions/dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subdomain }),
+      });
+      // Non-2xx (e.g. 400/403 from missing session/tenant context) means the
+      // dismissal wasn't persisted; re-sync with the server so a refresh
+      // doesn't surprise the user by bringing the suggestion back.
+      if (!res.ok) refetchSuggestions();
+    } catch {
+      // Network error — fall back to a refetch so the UI matches server state.
+      refetchSuggestions();
+    }
+  }, [effectiveTenantId, refetchSuggestions]);
+
+  const undoAllDismissals = useCallback(async () => {
+    if (!effectiveTenantId) return;
+    try {
+      await fetch(`${API_BASE}/api/subdomain-funnel-rules/suggestions/undo-dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    } finally {
+      refetchSuggestions();
+    }
+  }, [effectiveTenantId, refetchSuggestions]);
 
   const acceptSuggestion = useCallback(async (s: SubdomainSuggestion) => {
     if (!effectiveTenantId) return;
@@ -229,7 +268,7 @@ export default function Attribution() {
         <TabButton active={activeTab === "subdomain-rules"} onClick={() => setActiveTab("subdomain-rules")} icon={<Globe className="w-4 h-4" />} label="Subdomain Rules" />
       </div>
 
-      {activeTab === "events" && suggestions.filter(s => !dismissedSuggestions.has(s.subdomain)).length > 0 && (
+      {activeTab === "events" && (suggestions.length > 0 || hiddenSubdomains.length > 0) && (
         <PremiumCard className="p-4 border-amber-400/20 bg-amber-400/[0.03]">
           <div className="flex items-start gap-3">
             <Lightbulb className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
@@ -241,9 +280,7 @@ export default function Attribution() {
                 </span>
               </div>
               <div className="space-y-1.5">
-                {suggestions
-                  .filter(s => !dismissedSuggestions.has(s.subdomain))
-                  .map(s => (
+                {suggestions.map(s => (
                     <div
                       key={s.subdomain}
                       className="flex items-start gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-2"
@@ -279,11 +316,7 @@ export default function Attribution() {
                         <button
                           type="button"
                           className="text-xs text-muted-foreground hover:text-white/70 transition-colors px-1"
-                          onClick={() => setDismissedSuggestions(prev => {
-                            const next = new Set(prev);
-                            next.add(s.subdomain);
-                            return next;
-                          })}
+                          onClick={() => dismissSuggestion(s.subdomain)}
                         >
                           Dismiss
                         </button>
@@ -291,6 +324,19 @@ export default function Attribution() {
                     </div>
                   ))}
               </div>
+              {hiddenSubdomains.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {hiddenSubdomains.length} hidden suggestion{hiddenSubdomains.length === 1 ? "" : "s"}
+                  {" · "}
+                  <button
+                    type="button"
+                    className="underline hover:text-white/70 transition-colors"
+                    onClick={undoAllDismissals}
+                  >
+                    Show
+                  </button>
+                </p>
+              )}
               {suggestionToast && (
                 <p className="text-xs text-emerald-300/80">{suggestionToast}</p>
               )}

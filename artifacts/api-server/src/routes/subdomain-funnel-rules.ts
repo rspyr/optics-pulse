@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import {
   db,
   subdomainFunnelRulesTable,
+  subdomainSuggestionDismissalsTable,
   funnelTypesTable,
   tenantFunnelTypesTable,
   attributionEventsTable,
@@ -185,9 +186,10 @@ async function backfillEventsForSubdomainRule(
 router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
-    res.json({ suggestions: [] });
+    res.json({ suggestions: [], hiddenSubdomains: [] });
     return;
   }
+  const userId = req.session.userId ?? null;
 
   const [defaultAssoc] = await db
     .select({ funnelName: funnelTypesTable.name })
@@ -210,6 +212,20 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     .from(subdomainFunnelRulesTable)
     .where(eq(subdomainFunnelRulesTable.tenantId, tenantId));
   const ruled = new Set(existingRules.map(r => r.subdomain.toLowerCase()));
+
+  // Per-user dismissals (task #448). We compute suggestions normally, then
+  // partition into visible vs hidden so the UI can render an "N hidden — show"
+  // affordance without a second round-trip.
+  const dismissedRows = userId
+    ? await db
+        .select({ subdomain: subdomainSuggestionDismissalsTable.subdomain })
+        .from(subdomainSuggestionDismissalsTable)
+        .where(and(
+          eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
+          eq(subdomainSuggestionDismissalsTable.userId, userId),
+        ))
+    : [];
+  const dismissed = new Set(dismissedRows.map(r => r.subdomain.toLowerCase()));
 
   const hostExpr = sql`regexp_replace(
     lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
@@ -340,7 +356,81 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
   }
 
   suggestions.sort((a, b) => b.eventCount - a.eventCount);
-  res.json({ suggestions });
+
+  const visible = suggestions.filter(s => !dismissed.has(s.subdomain.toLowerCase()));
+  const hiddenSubdomains = suggestions
+    .filter(s => dismissed.has(s.subdomain.toLowerCase()))
+    .map(s => s.subdomain);
+
+  res.json({ suggestions: visible, hiddenSubdomains });
+});
+
+// Persist a per-(tenant, user) dismissal so a suggestion stays hidden across
+// refreshes. We accept any subdomain string (normalized) — even if it isn't
+// currently in the suggestions list — so the UI can dismiss optimistically.
+router.post("/subdomain-funnel-rules/suggestions/dismiss", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  const userId = req.session.userId ?? null;
+  if (!tenantId || !userId) {
+    res.status(400).json({ error: "No tenant or user context" });
+    return;
+  }
+  const { subdomain } = req.body as { subdomain?: string };
+  if (!subdomain || typeof subdomain !== "string") {
+    res.status(400).json({ error: "subdomain is required" });
+    return;
+  }
+  const normSub = normalizeSubdomain(subdomain);
+  if (!normSub) {
+    res.status(400).json({ error: "subdomain cannot be empty" });
+    return;
+  }
+
+  await db
+    .insert(subdomainSuggestionDismissalsTable)
+    .values({ tenantId, userId, subdomain: normSub })
+    .onConflictDoNothing({
+      target: [
+        subdomainSuggestionDismissalsTable.tenantId,
+        subdomainSuggestionDismissalsTable.userId,
+        subdomainSuggestionDismissalsTable.subdomain,
+      ],
+    });
+
+  res.json({ success: true });
+});
+
+// Undo dismissals. With no body, clears every dismissal this user has for the
+// current tenant (the "show N hidden" link). With a `subdomain`, clears just
+// that one.
+router.post("/subdomain-funnel-rules/suggestions/undo-dismiss", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  const userId = req.session.userId ?? null;
+  if (!tenantId || !userId) {
+    res.status(400).json({ error: "No tenant or user context" });
+    return;
+  }
+  const { subdomain } = (req.body ?? {}) as { subdomain?: string };
+
+  if (subdomain && typeof subdomain === "string") {
+    const normSub = normalizeSubdomain(subdomain);
+    await db
+      .delete(subdomainSuggestionDismissalsTable)
+      .where(and(
+        eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
+        eq(subdomainSuggestionDismissalsTable.userId, userId),
+        eq(subdomainSuggestionDismissalsTable.subdomain, normSub),
+      ));
+  } else {
+    await db
+      .delete(subdomainSuggestionDismissalsTable)
+      .where(and(
+        eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
+        eq(subdomainSuggestionDismissalsTable.userId, userId),
+      ));
+  }
+
+  res.json({ success: true });
 });
 
 router.get("/subdomain-funnel-rules", async (req, res) => {
