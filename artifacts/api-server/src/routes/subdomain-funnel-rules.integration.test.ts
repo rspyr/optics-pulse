@@ -225,22 +225,21 @@ async function latestEventResolvedFunnel(tenantId: number): Promise<string | nul
 
 describe("subdomain rule → /collect/submit (real Postgres)", () => {
   it("seeds a rule and the next submit resolves the funnel from the subdomain", async () => {
-    // Seed the rule directly. The POST route also runs a backfill query
-    // whose coverage belongs to a separate task ("Cover backfill
-    // behavior when subdomain rules are deleted or re-pointed"); we
-    // stay focused here on the read path: resolver → cache → submit.
-    const { resolveSubdomainFunnel, invalidateSubdomainFunnelCache } =
+    // Create the rule through the live POST route so this test also
+    // regression-covers the route's backfill query — a prior bug aliased
+    // attribution_events as `ae` in a CTE but referenced the unaliased
+    // table name in the host-extraction expression, causing Postgres
+    // to return "invalid reference to FROM-clause entry" and the POST
+    // to 500. Going through the route here keeps that fix honest.
+    const { resolveSubdomainFunnel } =
       await import("../services/subdomain-funnel-resolver");
-    await db.insert(subdomainFunnelRulesTable).values({
-      tenantId: fx.tenantId,
-      funnelTypeId: fx.targetFunnelId,
+    const createRes = await postJson(app, "/subdomain-funnel-rules", {
       subdomain: fx.subdomain,
+      funnelTypeId: fx.targetFunnelId,
     });
-    // The resolver may have cached an empty rule map from an earlier
-    // call in this process — invalidate so the next submit sees the
-    // freshly-inserted rule. The DELETE-test below proves the route
-    // does this invalidation itself.
-    invalidateSubdomainFunnelCache(fx.tenantId);
+    expect(createRes.status).toBe(200);
+    expect(createRes.json.created).toBe(true);
+    expect((createRes.json.rule as { funnelTypeId: number }).funnelTypeId).toBe(fx.targetFunnelId);
 
     // Sanity: the resolver agrees the seeded rule is reachable from
     // the same page_url shape the submit will send. If this fails, the

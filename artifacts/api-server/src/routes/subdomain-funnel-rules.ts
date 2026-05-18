@@ -76,7 +76,7 @@ async function backfillEventsForSubdomainRule(
   //  - subdomain = everything before the last 2 labels
   // Implemented as a CTE so we can index into the resulting array per row.
   const hostExpr = sql`regexp_replace(
-    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
     '^www\\.', ''
   )`;
 
@@ -250,7 +250,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
   const dismissed = new Set(dismissedRows.map(r => r.subdomain.toLowerCase()));
 
   const hostExpr = sql`regexp_replace(
-    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
     '^www\\.', ''
   )`;
 
@@ -582,7 +582,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
   // non-fall-through funnel — those would be skipped by the actual backfill
   // and represent a "conflict" the operator should know about.
   const hostExpr = sql`regexp_replace(
-    lower(substring(${attributionEventsTable.pageUrl} from '^https?://([^/?#]+)')),
+    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
     '^www\\.', ''
   )`;
   const [defaultAssoc] = await db
