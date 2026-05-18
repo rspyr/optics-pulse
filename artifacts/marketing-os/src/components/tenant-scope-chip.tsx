@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Building2, Check, ChevronDown, Globe2, X } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
-import { useListTenants } from "@workspace/api-client-react";
+import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -18,9 +18,7 @@ const shortcutLabel = isMac ? "⌘K" : "Ctrl+K";
 
 export function TenantScopeChip() {
   const { isAgency, selectedTenantId, setSelectedTenantId } = useAuth();
-  const { data: allTenants } = useListTenants({
-    query: { enabled: isAgency, queryKey: ["listTenants"] },
-  });
+  const { tenants: allTenants } = useTenants<TenantOption & { isActive?: boolean }>();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightIndex, setHighlightIndex] = useState(0);
