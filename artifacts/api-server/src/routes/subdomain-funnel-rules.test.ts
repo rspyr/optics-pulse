@@ -49,6 +49,18 @@ vi.mock("@workspace/db", () => {
       funnelId: "funnelId",
       updatedAt: "updatedAt",
     },
+    funnelAliasesTable: {
+      __name: "funnelAliasesTable",
+      tenantId: "tenantId",
+      funnelTypeId: "funnelTypeId",
+      alias: "alias",
+    },
+    subdomainSuggestionDismissalsTable: {
+      __name: "subdomainSuggestionDismissalsTable",
+      tenantId: "tenantId",
+      userId: "userId",
+      subdomain: "subdomain",
+    },
   };
 
   function makeTerminal(rows: unknown[]) {
@@ -666,3 +678,80 @@ describe("POST /subdomain-funnel-rules — re-pointing an existing rule", () => 
     expect(updateCalls.some((c) => c.table === "subdomainFunnelRulesTable")).toBe(false);
   });
 });
+
+// The label-match heuristic also considers funnel aliases. We pin down the
+// alias-driven match path here:
+//   * a subdomain that only matches via an alias surfaces as `label-match`
+//     with `matchedAlias` populated,
+//   * if two funnels each match (via different aliases), the suggestion is
+//     dropped for ambiguity, and
+//   * when both the canonical name and an alias would match the same
+//     funnel, the canonical match wins and `matchedAlias` is not set.
+describe("GET /subdomain-funnel-rules/suggestions — alias-driven label-match", () => {
+  it("suggests via an alias when the subdomain matches only through the alias", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]); // defaultAssoc
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]); // tenantFunnels
+    selectRowsQueue.push([{ alias: "shield", funnelTypeId: 5 }]); // aliasRows
+    selectRowsQueue.push([]); // existingRules
+    executeRowsQueue.push([
+      { subdomain: "shield", resolved_funnel: "Default Funnel", cnt: 5 },
+    ]);
+
+    const res = await sendJson("GET", "/subdomain-funnel-rules/suggestions");
+    expect(res.status).toBe(200);
+    const suggestions = res.json.suggestions as Array<Record<string, unknown>>;
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({
+      subdomain: "shield",
+      suggestedFunnelTypeId: 5,
+      suggestedFunnelName: "Protection Plan",
+      reason: "label-match",
+      matchedAlias: "shield",
+    });
+  });
+
+  it("produces no suggestion when two funnels each match via different aliases (ambiguity)", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]);
+    selectRowsQueue.push([
+      { id: 5, name: "Service Alpha" },
+      { id: 6, name: "Service Beta" },
+    ]);
+    selectRowsQueue.push([
+      { alias: "promo", funnelTypeId: 5 },
+      { alias: "deals", funnelTypeId: 6 },
+    ]);
+    selectRowsQueue.push([]); // existingRules
+    executeRowsQueue.push([
+      { subdomain: "promo-deals", resolved_funnel: "Default Funnel", cnt: 4 },
+    ]);
+
+    const res = await sendJson("GET", "/subdomain-funnel-rules/suggestions");
+    expect(res.status).toBe(200);
+    expect(res.json.suggestions).toEqual([]);
+  });
+
+  it("prefers canonical-name match over alias match in the explanation", async () => {
+    await setupApp("client_admin", 42);
+    selectRowsQueue.push([{ funnelName: "Default Funnel" }]);
+    selectRowsQueue.push([{ id: 5, name: "Protection Plan" }]);
+    // Alias would also match "protection", but the canonical funnel name
+    // already contains the token "protection" so the name match must win
+    // and matchedAlias must not be set.
+    selectRowsQueue.push([{ alias: "protection", funnelTypeId: 5 }]);
+    selectRowsQueue.push([]);
+    executeRowsQueue.push([
+      { subdomain: "protection", resolved_funnel: "Default Funnel", cnt: 6 },
+    ]);
+
+    const res = await sendJson("GET", "/subdomain-funnel-rules/suggestions");
+    expect(res.status).toBe(200);
+    const suggestions = res.json.suggestions as Array<Record<string, unknown>>;
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].reason).toBe("label-match");
+    expect(suggestions[0].suggestedFunnelTypeId).toBe(5);
+    expect(suggestions[0]).not.toHaveProperty("matchedAlias");
+  });
+});
+
