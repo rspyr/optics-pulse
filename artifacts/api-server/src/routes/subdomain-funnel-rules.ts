@@ -53,9 +53,10 @@ async function backfillEventsForSubdomainRule(
   funnelTypeId: number,
   canonicalFunnelName: string,
   priorFunnelName: string | null = null,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; forceOverride?: boolean } = {},
 ): Promise<{ updatedEventCount: number; updatedLeadIds: number[]; eligibleEventIds: number[] }> {
   const dryRun = options.dryRun === true;
+  const forceOverride = options.forceOverride === true;
   const normSub = subdomain.toLowerCase().trim();
   if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [] };
   const priorLc = priorFunnelName?.toLowerCase() ?? null;
@@ -116,8 +117,8 @@ async function backfillEventsForSubdomainRule(
     // previously matched the prior rule's funnel — those rows were
     // attributed by this same subdomain rule and should follow it.
     const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
-    if (!isFellThrough && !isPriorRuleMatch) continue;
     if (curLc === newLc) continue;
+    if (!isFellThrough && !isPriorRuleMatch && !forceOverride) continue;
     eligibleIds.push(r.id);
     if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
   }
@@ -154,8 +155,9 @@ async function backfillEventsForSubdomainRule(
         !cur ||
         (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
       const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
-      if (!isFellThrough && !isPriorRuleMatch && curLc !== newLc) continue;
-      if (cur === canonicalFunnelName && l.funnelId === funnelTypeId) continue;
+      const isCanonical = curLc === newLc;
+      if (isCanonical && l.funnelId === funnelTypeId) continue;
+      if (!isFellThrough && !isPriorRuleMatch && !isCanonical && !forceOverride) continue;
       toUpdate.push(l.id);
     }
     if (toUpdate.length > 0) {
@@ -540,9 +542,10 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     return;
   }
 
-  const { subdomain, funnelTypeId } = req.body as {
+  const { subdomain, funnelTypeId, forceOverride } = req.body as {
     subdomain?: string;
     funnelTypeId?: number | string;
+    forceOverride?: boolean;
   };
   if (!subdomain || typeof subdomain !== "string" || !funnelTypeId) {
     res.status(400).json({ error: "subdomain and funnelTypeId are required" });
@@ -632,7 +635,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     numericFunnelTypeId,
     canonicalName,
     null,
-    { dryRun: true },
+    { dryRun: true, forceOverride: forceOverride === true },
   );
 
   const SAMPLE_LIMIT = 10;
@@ -697,6 +700,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     matchedEventCount: allRows.length,
     eligibleSample,
     conflictingSample,
+    forceOverride: forceOverride === true,
   });
 });
 
@@ -707,9 +711,10 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     return;
   }
 
-  const { subdomain, funnelTypeId } = req.body as {
+  const { subdomain, funnelTypeId, forceOverride } = req.body as {
     subdomain?: string;
     funnelTypeId?: number | string;
+    forceOverride?: boolean;
   };
   if (!subdomain || typeof subdomain !== "string" || !funnelTypeId) {
     res.status(400).json({ error: "subdomain and funnelTypeId are required" });
@@ -803,6 +808,7 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     numericFunnelTypeId,
     funnelType.name,
     priorFunnelName,
+    { forceOverride: forceOverride === true },
   );
 
   res.json({
@@ -816,6 +822,7 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     created,
     updatedEventCount,
     updatedLeadCount: updatedLeadIds.length,
+    forceOverride: forceOverride === true,
   });
 });
 

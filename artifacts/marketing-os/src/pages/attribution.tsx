@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
 import { formatFieldValue } from "@/lib/format-field-value";
@@ -1974,12 +1975,14 @@ function SubdomainRulesPanel({
   const [adding, setAdding] = useState(false);
   const [addPreview, setAddPreview] = useState<PreviewCounts | null>(null);
   const [previewingAdd, setPreviewingAdd] = useState(false);
+  const [addForceOverride, setAddForceOverride] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editFunnelId, setEditFunnelId] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [editPreview, setEditPreview] = useState<PreviewCounts | null>(null);
   const [previewingEdit, setPreviewingEdit] = useState(false);
+  const [editForceOverride, setEditForceOverride] = useState(false);
 
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -2017,7 +2020,7 @@ function SubdomainRulesPanel({
     loadAll().finally(() => setLoading(false));
   }, [loadAll]);
 
-  const previewAdd = async () => {
+  const previewAdd = async (force = false) => {
     const sub = newSubdomain.trim().toLowerCase().replace(/^www\./, "");
     if (!sub || !newFunnelId) return;
     setPreviewingAdd(true);
@@ -2027,7 +2030,7 @@ function SubdomainRulesPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId) }),
+        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId), forceOverride: force }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2048,7 +2051,17 @@ function SubdomainRulesPanel({
     setPreviewingAdd(false);
   };
 
-  const cancelAddPreview = () => setAddPreview(null);
+  const toggleAddForceOverride = async (checked: boolean) => {
+    setAddForceOverride(checked);
+    if (addPreview) {
+      await previewAdd(checked);
+    }
+  };
+
+  const cancelAddPreview = () => {
+    setAddPreview(null);
+    setAddForceOverride(false);
+  };
 
   const addRule = async () => {
     const sub = newSubdomain.trim().toLowerCase().replace(/^www\./, "");
@@ -2060,7 +2073,7 @@ function SubdomainRulesPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId) }),
+        body: JSON.stringify({ subdomain: sub, funnelTypeId: Number(newFunnelId), forceOverride: addForceOverride }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -2079,6 +2092,7 @@ function SubdomainRulesPanel({
         setNewSubdomain("");
         setNewFunnelId("");
         setAddPreview(null);
+        setAddForceOverride(false);
         await loadAll();
       }
     } catch {
@@ -2091,6 +2105,7 @@ function SubdomainRulesPanel({
     setEditingId(rule.id);
     setEditFunnelId(String(rule.funnelTypeId));
     setEditPreview(null);
+    setEditForceOverride(false);
     setError(null);
   };
 
@@ -2098,9 +2113,10 @@ function SubdomainRulesPanel({
     setEditingId(null);
     setEditFunnelId("");
     setEditPreview(null);
+    setEditForceOverride(false);
   };
 
-  const previewEdit = async (rule: SubdomainRule) => {
+  const previewEdit = async (rule: SubdomainRule, force = false) => {
     if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
       cancelEdit();
       return;
@@ -2112,7 +2128,7 @@ function SubdomainRulesPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId) }),
+        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId), forceOverride: force }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2133,6 +2149,13 @@ function SubdomainRulesPanel({
     setPreviewingEdit(false);
   };
 
+  const toggleEditForceOverride = async (rule: SubdomainRule, checked: boolean) => {
+    setEditForceOverride(checked);
+    if (editPreview) {
+      await previewEdit(rule, checked);
+    }
+  };
+
   const saveEdit = async (rule: SubdomainRule) => {
     if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
       cancelEdit();
@@ -2145,7 +2168,7 @@ function SubdomainRulesPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId) }),
+        body: JSON.stringify({ subdomain: rule.subdomain, funnelTypeId: Number(editFunnelId), forceOverride: editForceOverride }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -2211,14 +2234,14 @@ function SubdomainRulesPanel({
           <Input
             placeholder="subdomain (e.g. repair)"
             value={newSubdomain}
-            onChange={e => { setNewSubdomain(e.target.value); setAddPreview(null); }}
+            onChange={e => { setNewSubdomain(e.target.value); setAddPreview(null); setAddForceOverride(false); }}
             disabled={!!addPreview}
             className="max-w-[220px] bg-white/5 border-white/10 text-sm font-mono"
           />
           <ArrowRight className="w-4 h-4 text-white/30" />
           <Select
             value={newFunnelId}
-            onValueChange={(v) => { setNewFunnelId(v); setAddPreview(null); }}
+            onValueChange={(v) => { setNewFunnelId(v); setAddPreview(null); setAddForceOverride(false); }}
             disabled={!!addPreview}
           >
             <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm">
@@ -2255,7 +2278,7 @@ function SubdomainRulesPanel({
             <Button
               variant="outline"
               size="sm"
-              onClick={previewAdd}
+              onClick={() => previewAdd(false)}
               disabled={previewingAdd || !newSubdomain.trim() || !newFunnelId}
             >
               {previewingAdd ? "Previewing..." : "Preview"}
@@ -2278,11 +2301,31 @@ function SubdomainRulesPanel({
               )}
               .
             </div>
-            {addPreview.conflictingEventCount > 0 && (
+            {addPreview.conflictingEventCount > 0 && !addForceOverride && (
               <div className="text-amber-300/90">
                 ⚠ {addPreview.conflictingEventCount.toLocaleString()} matching{" "}
                 {addPreview.conflictingEventCount === 1 ? "event is" : "events are"} already attributed to a different funnel and will be left alone.
               </div>
+            )}
+            {addPreview.conflictingEventCount > 0 && addForceOverride && (
+              <div className="text-amber-300/90">
+                Force-override on: those {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                {addPreview.conflictingEventCount === 1 ? "event" : "events"} will be re-tagged too.
+              </div>
+            )}
+            {(addPreview.conflictingEventCount > 0 || addForceOverride) && (
+              <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
+                <Checkbox
+                  checked={addForceOverride}
+                  onCheckedChange={(c) => toggleAddForceOverride(c === true)}
+                  disabled={previewingAdd}
+                  className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                />
+                <span className="text-white/70">
+                  Also re-tag the {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                  {addPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
+                </span>
+              </label>
             )}
             {addPreview.matchedEventCount === 0 && (
               <div className="text-white/40">
@@ -2349,7 +2392,7 @@ function SubdomainRulesPanel({
                       <td className="py-3 pr-4 text-sm">
                         {isEditing ? (
                           <div className="space-y-2">
-                            <Select value={editFunnelId} onValueChange={(v) => { setEditFunnelId(v); setEditPreview(null); }}>
+                            <Select value={editFunnelId} onValueChange={(v) => { setEditFunnelId(v); setEditPreview(null); setEditForceOverride(false); }}>
                               <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm h-8">
                                 <SelectValue />
                               </SelectTrigger>
@@ -2369,10 +2412,30 @@ function SubdomainRulesPanel({
                                     <> &middot; <span className="text-emerald-300 font-medium">{editPreview.updatedLeadCount.toLocaleString()}</span> {editPreview.updatedLeadCount === 1 ? "lead" : "leads"}</>
                                   )}
                                 </div>
-                                {editPreview.conflictingEventCount > 0 && (
+                                {editPreview.conflictingEventCount > 0 && !editForceOverride && (
                                   <div className="text-amber-300/90">
                                     ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event" : "events"} already on a different funnel — left alone.
                                   </div>
+                                )}
+                                {editPreview.conflictingEventCount > 0 && editForceOverride && (
+                                  <div className="text-amber-300/90">
+                                    Force-override on: {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                    {editPreview.conflictingEventCount === 1 ? "event" : "events"} on a different funnel will also be re-tagged.
+                                  </div>
+                                )}
+                                {(editPreview.conflictingEventCount > 0 || editForceOverride) && (
+                                  <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
+                                    <Checkbox
+                                      checked={editForceOverride}
+                                      onCheckedChange={(c) => toggleEditForceOverride(rule, c === true)}
+                                      disabled={previewingEdit}
+                                      className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                                    />
+                                    <span className="text-white/70">
+                                      Also re-tag the {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                      {editPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
+                                    </span>
+                                  </label>
                                 )}
                                 <PreviewSampleList
                                   title="Sample events that would be re-tagged"
