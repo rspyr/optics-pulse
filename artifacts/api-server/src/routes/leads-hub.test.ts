@@ -149,6 +149,11 @@ vi.mock("../services/integrations/podium-api", () => ({
   syncPodiumConversationAssignment: vi.fn(),
 }));
 
+vi.mock("../services/podium-sync-jobs", () => ({
+  enqueueSyncPodiumConversationAssignment: vi.fn().mockResolvedValue({ id: 1 }),
+  registerPodiumSyncJobHandlers: vi.fn(),
+}));
+
 // Stub the heavy services that sales-manager.ts pulls in transitively so the
 // router import doesn't need a real DB.
 vi.mock("../services/coaching-insights", () => ({

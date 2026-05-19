@@ -231,6 +231,11 @@ vi.mock("../services/integrations/podium-api", () => ({
   syncPodiumConversationAssignment: vi.fn(),
 }));
 
+vi.mock("../services/podium-sync-jobs", () => ({
+  enqueueSyncPodiumConversationAssignment: vi.fn().mockResolvedValue({ id: 1 }),
+  registerPodiumSyncJobHandlers: vi.fn(),
+}));
+
 vi.mock("../services/integrations/podium-auth", () => ({
   isPodiumConnected: vi.fn().mockResolvedValue(false),
 }));

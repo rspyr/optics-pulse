@@ -19,6 +19,7 @@ import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
 import { auditUsersWithoutTenant } from "./services/broken-account-audit";
 import { startBackgroundJobWorker } from "./services/background-jobs";
 import { registerReDeriveJobHandlers } from "./services/re-derive-jobs";
+import { registerPodiumSyncJobHandlers } from "./services/podium-sync-jobs";
 
 const rawPort = process.env["PORT"];
 
@@ -92,6 +93,7 @@ async function startServer() {
     startStaleInstallMonitor();
     startTrackerRetentionCron();
     registerReDeriveJobHandlers();
+    registerPodiumSyncJobHandlers();
     startBackgroundJobWorker().catch((err) =>
       console.error("[background-jobs] failed to start:", err),
     );

@@ -11,7 +11,7 @@ import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim, isStickyTerminalAtRest } from "../services/auto-pass-scheduler";
-import { syncPodiumConversationAssignment } from "../services/integrations/podium-api";
+import { enqueueSyncPodiumConversationAssignment } from "../services/podium-sync-jobs";
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { recordLeadStatusChange } from "../services/lead-status-history";
@@ -1067,7 +1067,11 @@ router.post("/leads-hub/:leadId/transfer", async (req, res) => {
 
   cancelAutoPass(leadId);
 
-  syncPodiumConversationAssignment(leadId, targetCsrId).catch(() => {});
+  await enqueueSyncPodiumConversationAssignment({
+    leadId,
+    targetCsrId,
+    tenantId: lead.tenantId,
+  });
 
   emitLeadUpdated(lead.tenantId, updated as unknown as Record<string, unknown>);
   res.json({ lead: updated });
@@ -1171,7 +1175,11 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
 
   for (const lead of updatedLeads) {
     cancelAutoPass(lead.id);
-    syncPodiumConversationAssignment(lead.id, targetCsrId).catch(() => {});
+    await enqueueSyncPodiumConversationAssignment({
+      leadId: lead.id,
+      targetCsrId,
+      tenantId,
+    });
     emitLeadUpdated(tenantId, lead as unknown as Record<string, unknown>);
   }
 
