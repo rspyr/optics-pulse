@@ -1,10 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-vi.mock("@workspace/api-client-react", () => ({
-  useListAttributionEvents: vi.fn(),
-  useGetAttributionEvent: vi.fn(),
-}));
+vi.mock("@workspace/api-client-react", async () => {
+  const actual = await vi.importActual<typeof import("@workspace/api-client-react")>(
+    "@workspace/api-client-react",
+  );
+  return {
+    ...actual,
+    useListAttributionEvents: vi.fn(),
+    useGetAttributionEvent: vi.fn(),
+  };
+});
 
 vi.mock("@/hooks/use-tenant-filter", () => ({
   useTenantFilter: vi.fn(() => ({ tenantId: 1, tenantName: "Test" })),
@@ -18,7 +25,24 @@ vi.mock("@/components/ui/select", () => ({
   SelectValue: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-import { InlineFieldCorrection, FormFieldsList } from "../attribution";
+const { sonnerToastMock } = vi.hoisted(() => ({
+  sonnerToastMock: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+vi.mock("sonner", () => ({
+  toast: sonnerToastMock,
+}));
+
+const { useOptionalLeadNotificationMock } = vi.hoisted(() => ({
+  useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
+}));
+vi.mock("@/contexts/lead-notification-context", () => ({
+  useOptionalLeadNotification: useOptionalLeadNotificationMock,
+}));
+
+import { InlineFieldCorrection, EditableAutoDetectedFields, FormFieldsList } from "../attribution";
 import type { AttributionEvent } from "@workspace/api-client-react";
 
 function makeEvent(formFields: Record<string, unknown>): AttributionEvent {
@@ -142,5 +166,372 @@ describe("FormFieldsList — captured value rendering in Form Data section", () 
 
     const { container: c3 } = render(<FormFieldsList formFields={{ _internal: "x" }} />);
     expect(c3.firstChild).toBeNull();
+  });
+});
+
+// Shared scaffolding for the rule-rederive-complete subscription tests below.
+type RederiveEmitFn = (data: {
+  tenantId?: number;
+  pageUrlPattern: string;
+  formIdentifier: string;
+  leadsChanged: number;
+  hitLimit: boolean;
+  maxLeads: number;
+}) => void;
+
+function setupRederiveNotification(): {
+  emit: RederiveEmitFn;
+  unsubscribe: ReturnType<typeof vi.fn>;
+} {
+  const listeners = new Set<RederiveEmitFn>();
+  const unsubscribe = vi.fn();
+  const onRuleRederiveComplete = vi.fn((cb: RederiveEmitFn) => {
+    listeners.add(cb);
+    return () => {
+      listeners.delete(cb);
+      unsubscribe();
+    };
+  });
+  useOptionalLeadNotificationMock.mockReturnValue({ onRuleRederiveComplete });
+  return {
+    emit: (data) => listeners.forEach((cb) => cb(data)),
+    unsubscribe,
+  };
+}
+
+describe("InlineFieldCorrection — rule-rederive-complete subscription", () => {
+  beforeEach(() => {
+    sonnerToastMock.success.mockReset();
+    sonnerToastMock.error.mockReset();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  async function openAndSave(fieldName: string) {
+    // Click the row to start correcting that field.
+    const fieldSpan = screen.getByText(fieldName);
+    const chipButton = fieldSpan.closest("button");
+    if (!chipButton) throw new Error("chip button not found");
+    await act(async () => {
+      fireEvent.click(chipButton);
+    });
+    // Select a mapping target.
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "phone" } });
+    });
+    // Click Save.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    });
+  }
+
+  it("surfaces a 'historical leads re-derived' hint + sonner toast when a matching event arrives", async () => {
+    const { emit } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+
+    await act(async () => {
+      openAndSave("field_3");
+    });
+    // Let the save promise resolve.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 7,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+
+    await waitFor(() => {
+      expect(sonnerToastMock.success).toHaveBeenCalledWith("7 historical leads re-derived");
+      expect(screen.getByText("7 historical leads re-derived")).toBeInTheDocument();
+    });
+  });
+
+  it("ignores events for a different scope (different page or form)", async () => {
+    const { emit } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+
+    await act(async () => {
+      openAndSave("field_3");
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Wrong tenant.
+    emit({
+      tenantId: 999,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    // Wrong pageUrlPattern.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/other",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    // Wrong formIdentifier.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "other-form",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sonnerToastMock.success).not.toHaveBeenCalled();
+    expect(screen.queryByText(/historical leads? re-derived/)).not.toBeInTheDocument();
+  });
+
+  it("cleans up the listener after the 30s timeout and ignores a late matching event", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { emit, unsubscribe } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+
+    await openAndSave("field_3");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_001);
+    });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 9,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sonnerToastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("does not register a listener when the notification context is not mounted (no-op)", async () => {
+    // useOptionalLeadNotificationMock default returns null in beforeEach.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+
+    await act(async () => {
+      openAndSave("field_3");
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No crash, no re-derive toast — the panel just degrades gracefully.
+    expect(sonnerToastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("EditableAutoDetectedFields — rule-rederive-complete subscription", () => {
+  beforeEach(() => {
+    sonnerToastMock.success.mockReset();
+    sonnerToastMock.error.mockReset();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  function renderWithClient(ui: React.ReactNode) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  }
+
+  function makeAutoDetectedEvent(): AttributionEvent {
+    return {
+      id: 9,
+      pageUrl: "https://example.com/contact",
+      formId: "contact-form-1",
+      formName: null,
+      detectedMappings: { field_3: { mapsTo: "phone", method: "value_pattern" } },
+    } as unknown as AttributionEvent;
+  }
+
+  async function saveOverride() {
+    // Click the chip to enter edit mode.
+    fireEvent.click(screen.getByText("phone"));
+    // Select a new mapping value (default first option is fine; pick email explicitly).
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "email" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("surfaces the 'N historical leads re-derived' toast + hint on a matching event", async () => {
+    const { emit } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    renderWithClient(<EditableAutoDetectedFields tenantId={42} event={makeAutoDetectedEvent()} />);
+    await saveOverride();
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 3,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+
+    await waitFor(() => {
+      expect(sonnerToastMock.success).toHaveBeenCalledWith("3 historical leads re-derived");
+    });
+    expect(screen.getByText("3 historical leads re-derived")).toBeInTheDocument();
+  });
+
+  it("ignores non-matching scopes", async () => {
+    const { emit } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    renderWithClient(<EditableAutoDetectedFields tenantId={42} event={makeAutoDetectedEvent()} />);
+    await saveOverride();
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/different",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 4,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "other-form",
+      leadsChanged: 4,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sonnerToastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the listener after 30s and ignores late events", async () => {
+    const { emit, unsubscribe } = setupRederiveNotification();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ rule: { id: 1 } }),
+    }));
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderWithClient(<EditableAutoDetectedFields tenantId={42} event={makeAutoDetectedEvent()} />);
+    await saveOverride();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_001);
+    });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 10,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sonnerToastMock.success).not.toHaveBeenCalled();
   });
 });

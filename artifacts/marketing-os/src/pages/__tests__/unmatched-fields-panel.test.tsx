@@ -12,6 +12,13 @@ vi.mock("sonner", () => ({
   toast: toastMock,
 }));
 
+const { useOptionalLeadNotificationMock } = vi.hoisted(() => ({
+  useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
+}));
+vi.mock("@/contexts/lead-notification-context", () => ({
+  useOptionalLeadNotification: useOptionalLeadNotificationMock,
+}));
+
 import {
   __resetLearnedSuggestionsCacheForTests,
   deriveMappingScope,
@@ -2317,5 +2324,273 @@ describe("UnmatchedFieldsPanel", () => {
         dateNowSpy.mockRestore();
       }
     });
+  });
+});
+
+describe("UnmatchedFieldsPanel — rule-rederive-complete subscription", () => {
+  type EmitFn = (data: {
+    tenantId?: number;
+    pageUrlPattern: string;
+    formIdentifier: string;
+    leadsChanged: number;
+    hitLimit: boolean;
+    maxLeads: number;
+  }) => void;
+
+  function setupNotification(): {
+    emit: EmitFn;
+    onRuleRederiveComplete: ReturnType<typeof vi.fn>;
+    unsubscribe: ReturnType<typeof vi.fn>;
+  } {
+    const listeners = new Set<EmitFn>();
+    const unsubscribe = vi.fn();
+    const onRuleRederiveComplete = vi.fn((cb: EmitFn) => {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+        unsubscribe();
+      };
+    });
+    useOptionalLeadNotificationMock.mockReturnValue({ onRuleRederiveComplete });
+    return {
+      emit: (data) => listeners.forEach((cb) => cb(data)),
+      onRuleRederiveComplete,
+      unsubscribe,
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    toastMock.success.mockReset();
+    toastMock.error.mockReset();
+    vi.spyOn(global, "fetch").mockReset();
+    __resetLearnedSuggestionsCacheForTests();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    __resetLearnedSuggestionsCacheForTests();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  it("surfaces a 'N historical leads re-derived' toast when a matching event arrives after save", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { emit } = setupNotification();
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    toastMock.success.mockClear();
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 12,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+
+    await waitFor(() => {
+      expect(toastMock.success).toHaveBeenCalledWith("12 historical leads re-derived");
+    });
+  });
+
+  it("uses the singular noun and appends a capped suffix when hitLimit is true", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { emit } = setupNotification();
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    toastMock.success.mockClear();
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 1,
+      hitLimit: true,
+      maxLeads: 500,
+    });
+
+    await waitFor(() => {
+      expect(toastMock.success).toHaveBeenCalledWith("1+ (capped at 500) historical lead re-derived");
+    });
+  });
+
+  it("ignores rule-rederive events whose scope (tenant/page/form) does not match this panel", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { emit } = setupNotification();
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    toastMock.success.mockClear();
+
+    // Different tenant.
+    emit({
+      tenantId: 999,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    // Different pageUrlPattern.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/different",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    // Different formIdentifier.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "some-other-form",
+      leadsChanged: 5,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+
+    // Give listeners a chance to run.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toastMock.success).not.toHaveBeenCalled();
+
+    // The listener is still registered for THIS scope — a subsequent matching
+    // event should still fire.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 7,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await waitFor(() => {
+      expect(toastMock.success).toHaveBeenCalledWith("7 historical leads re-derived");
+    });
+  });
+
+  it("does not toast when a matching event reports zero leads changed", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { emit } = setupNotification();
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    toastMock.success.mockClear();
+
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 0,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the listener after the 30s timeout, so a late event no longer fires", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { emit, unsubscribe } = setupNotification();
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+    toastMock.success.mockClear();
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    // Advance past the 30s listener-cleanup window.
+    await act(async () => {
+      vi.advanceTimersByTime(30_001);
+    });
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    // A late event for this exact scope should now be ignored — the listener
+    // was already torn down.
+    emit({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form-1",
+      leadsChanged: 9,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("does not register a listener when the notification context is not mounted", async () => {
+    // useOptionalLeadNotificationMock defaults to returning null in beforeEach.
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    // Save still succeeds end-to-end — the panel just degrades to "no
+    // historical re-derive indicator", which is exactly the contract
+    // useOptionalLeadNotification is designed to provide.
+    await screen.findByText(/mapped → phone/);
+    expect(toastMock.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Mapped "field_3" → phone/),
+    );
   });
 });

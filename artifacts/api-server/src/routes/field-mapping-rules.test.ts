@@ -23,10 +23,33 @@ vi.mock("@workspace/db", () => ({
     })),
   },
   fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
+  attributionEventsTable: { createdLeadId: Symbol("createdLeadId"), tenantId: Symbol("tenantId") },
 }));
 
 vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
+}));
+
+const { emitRuleRederiveCompleteMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
+  emitRuleRederiveCompleteMock: vi.fn(),
+  reDeriveLeadsForRuleScopeMock: vi.fn(),
+  reDeriveLeadFunnelMock: vi.fn(),
+  enqueueReDeriveLeadsForRuleScopeMock: vi.fn(),
+}));
+
+vi.mock("../socket", () => ({
+  emitRuleRederiveComplete: emitRuleRederiveCompleteMock,
+}));
+
+vi.mock("../services/re-derive-lead-funnel", () => ({
+  reDeriveLeadsForRuleScope: reDeriveLeadsForRuleScopeMock,
+  reDeriveLeadFunnel: reDeriveLeadFunnelMock,
+}));
+
+vi.mock("../services/re-derive-jobs", () => ({
+  enqueueReDeriveLeadsForRuleScope: enqueueReDeriveLeadsForRuleScopeMock,
+  REDERIVE_LEADS_FOR_RULE_SCOPE: "rederive_leads_for_rule_scope",
+  registerReDeriveJobHandlers: vi.fn(),
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -42,6 +65,11 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   vi.resetModules();
   insertCalls.length = 0;
   selectRowsQueue = [];
+  emitRuleRederiveCompleteMock.mockReset();
+  reDeriveLeadsForRuleScopeMock.mockReset();
+  reDeriveLeadFunnelMock.mockReset();
+  enqueueReDeriveLeadsForRuleScopeMock.mockReset();
+  enqueueReDeriveLeadsForRuleScopeMock.mockResolvedValue({ id: 1 });
   const mod = await import("./field-mapping-rules");
   app = express();
   app.use(express.json());
@@ -228,6 +256,73 @@ describe("POST /field-mapping-rules", () => {
     });
     expect(res.status).toBe(403);
     expect(insertCalls.length).toBe(0);
+  });
+
+  it("enqueues a rederive-leads-for-rule-scope background job with the request's scope (so the job handler can emit rule-rederive-complete after fan-out)", async () => {
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "ac-breakdown-prevention",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    expect(res.status).toBe(200);
+
+    expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
+    expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledWith({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "ac-breakdown-prevention",
+      excludeLeadId: null,
+    });
+
+    // The route itself must NOT emit the socket event — that's the job
+    // handler's responsibility, and the handler is mocked out here.
+    expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues with excludeLeadId resolved from attributionEventId so the open lead isn't re-derived twice", async () => {
+    // First select in route is the duplicate-rule lookup -> empty (insert path).
+    // Second select is the attribution-event lookup for createdLeadId.
+    selectRowsQueue = [
+      [],
+      [{ createdLeadId: 77, tenantId: 42 }],
+    ];
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: false });
+
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/quote",
+      formIdentifier: "quote-form",
+      fieldName: "field_9",
+      mapsTo: "email",
+      attributionEventId: 1234,
+    });
+    expect(res.status).toBe(200);
+
+    expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
+    expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledWith({
+      tenantId: 42,
+      pageUrlPattern: "/quote",
+      formIdentifier: "quote-form",
+      excludeLeadId: 77,
+    });
+  });
+
+  it("still returns 200 when enqueueing the rederive job fails (failure is logged, save is not undone)", async () => {
+    enqueueReDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("queue full"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    expect(res.status).toBe(200);
+    expect((res.json as { rule: unknown }).rule).toBeTruthy();
+    expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
+    expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("rejects unknown mapsTo targets", async () => {
