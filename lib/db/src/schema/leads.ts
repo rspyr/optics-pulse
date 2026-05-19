@@ -39,6 +39,12 @@ export const leadsTable = pgTable("leads", {
   dayInSequence: integer("day_in_sequence").notNull().default(1),
   contactPreferences: jsonb("contact_preferences").$type<string[]>().default([]),
   callbackAt: timestamp("callback_at"),
+  // Marker used by the callback scheduler to track whether a reminder
+  // has already been fired for the current `callbackAt`. INVARIANT: any
+  // code path that writes `callbackAt` MUST also set this column to
+  // null in the same update so a rescheduled callback re-arms the
+  // reminder (the scheduler only fires when
+  // `callbackNotifiedAt IS NULL` or `callbackNotifiedAt < callbackAt`).
   callbackNotifiedAt: timestamp("callback_notified_at"),
   revisitDate: date("revisit_date"),
   deadReason: text("dead_reason"),

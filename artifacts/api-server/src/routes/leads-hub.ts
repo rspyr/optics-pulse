@@ -471,6 +471,7 @@ router.post("/leads-hub/action", async (req, res) => {
     if (callbackAt) {
       updates.hubStatus = "call_back";
       updates.callbackAt = new Date(callbackAt);
+      updates.callbackNotifiedAt = null;
       // A previously-booked lead being moved into call_back is an
       // implicit un-book. Reset the booking cache so the lead exits
       // the {booked, sold} aggregate window used by
@@ -535,6 +536,7 @@ router.post("/leads-hub/action", async (req, res) => {
   if (callbackAt && !deadReason && !req.body.appointmentSet) {
     updates.hubStatus = "call_back";
     updates.callbackAt = new Date(callbackAt);
+    updates.callbackNotifiedAt = null;
     // Catch-all un-book: any callback transition (spoke, text=yes, or
     // any other result combo with callbackAt set) moves a booked/sold
     // lead into call_back/contacted. Resetting here covers the
@@ -813,6 +815,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
   } else if (callResult === "spoke_with_customer" && spokeResult === "call_back" && callbackAt) {
     leadUpdates.hubStatus = "call_back";
     leadUpdates.callbackAt = new Date(callbackAt);
+    leadUpdates.callbackNotifiedAt = null;
     leadUpdates.status = "contacted";
     // Editing a previously-booked attempt into a call-back un-books the
     // lead. Mirror the deadReason rollback and fully reset the booking
@@ -826,12 +829,14 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     leadUpdates.disposition = "booked";
     leadUpdates.bookedByCsrId = userId;
     leadUpdates.callbackAt = null;
+    leadUpdates.callbackNotifiedAt = null;
     if (!lead.bookedAt) leadUpdates.bookedAt = new Date();
   } else if (deadReason) {
     leadUpdates.hubStatus = "dead";
     leadUpdates.status = "lost";
     leadUpdates.deadReason = deadReason;
     leadUpdates.callbackAt = null;
+    leadUpdates.callbackNotifiedAt = null;
     // Editing a past attempt into a dead state effectively un-books a
     // previously-booked lead. Mirror the POST handler's un-book path and
     // fully reset the booking cache (disposition, bookedByCsrId,
@@ -841,6 +846,7 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     resetBookingCache(leadUpdates, lead);
   } else if (callbackAt === null && spokeResult !== "call_back") {
     leadUpdates.callbackAt = null;
+    leadUpdates.callbackNotifiedAt = null;
   }
 
   if (Object.keys(leadUpdates).length > 1) {

@@ -45,6 +45,7 @@ export async function handleResubmission(
     updates.status = "new";
     updates.dayInSequence = 1;
     updates.callbackAt = null;
+    updates.callbackNotifiedAt = null;
     updates.deadReason = null;
   }
 
