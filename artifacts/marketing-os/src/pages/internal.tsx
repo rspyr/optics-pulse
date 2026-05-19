@@ -69,6 +69,8 @@ export default function Internal() {
     backfillStatus?: Record<string, {
       status: string;
       recordsProcessed: number;
+      syncLogId?: number;
+      cancelRequested?: boolean;
       progress: string | null;
       progressDetail?: {
         raw: string;
@@ -133,6 +135,30 @@ export default function Internal() {
     const id = setInterval(() => { fetchSyncStatus(); }, 3000);
     return () => clearInterval(id);
   }, [anyBackfillRunning, anyBackfillBusy, fetchSyncStatus]);
+
+  const [cancellingLogIds, setCancellingLogIds] = useState<Record<number, boolean>>({});
+
+  const cancelBackfill = async (integ: string, logId: number) => {
+    if (!logId) return;
+    if (!confirm(`Cancel the running ${integ} backfill? Rows already synced will be kept.`)) return;
+    setCancellingLogIds((s) => ({ ...s, [logId]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/api/integrations/sync-logs/${logId}/cancel`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
+      } else {
+        toast({ title: "Cancel requested", description: "The run will stop after the current batch finishes." });
+      }
+    } catch (err) {
+      toast({ title: "Cancel failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      fetchSyncStatus();
+    }
+  };
 
   const triggerBackfill = (integ: string) => {
     const meta = BACKFILL_INTEGRATIONS[integ];
@@ -590,7 +616,23 @@ export default function Internal() {
                         <span className="text-xs font-medium text-white/80">Historical backfill</span>
                         {bf ? (
                           bf.status === "running" ? (
-                            <span className="flex items-center gap-1 text-[11px] text-blue-400"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
+                            <span className="flex items-center gap-2 text-[11px] text-blue-400">
+                              <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
+                              {bf.syncLogId && (
+                                bf.cancelRequested || cancellingLogIds[bf.syncLogId] ? (
+                                  <span className="text-amber-400">Cancelling…</span>
+                                ) : (
+                                  <button
+                                    onClick={() => cancelBackfill(integ, bf.syncLogId!)}
+                                    className="text-[10px] px-1.5 py-0.5 rounded border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors"
+                                  >
+                                    Cancel
+                                  </button>
+                                )
+                              )}
+                            </span>
+                          ) : bf.status === "cancelled" ? (
+                            <span className="flex items-center gap-1 text-[11px] text-amber-300"><XCircle className="w-3 h-3" /> Cancelled</span>
                           ) : bf.errorDetail?.partial ? (
                             <span className="flex items-center gap-1 text-[11px] text-amber-400"><AlertTriangle className="w-3 h-3" /> Partial</span>
                           ) : bf.status === "completed" ? (

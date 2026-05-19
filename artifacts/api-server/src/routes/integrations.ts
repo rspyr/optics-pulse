@@ -126,6 +126,35 @@ router.post("/integrations/service_titan/backfill", requireRole("super_admin", "
   res.json({ success: true, ...result });
 });
 
+// Flip the cooperative cancel flag on a running backfill sync log. The
+// long-running backfill polls this flag at chunk boundaries + after every
+// batch and unwinds gracefully, completing the row with status='cancelled'
+// and whatever rows have already landed (no rollback — partial data is
+// useful). 404 if the log doesn't exist; 409 if the run already finished.
+router.post("/integrations/sync-logs/:id/cancel", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const logId = Number(req.params.id);
+  if (!Number.isFinite(logId) || logId <= 0) {
+    res.status(400).json({ error: "Invalid sync log id" });
+    return;
+  }
+  const [log] = await db.select()
+    .from(integrationSyncLogsTable)
+    .where(eq(integrationSyncLogsTable.id, logId))
+    .limit(1);
+  if (!log) {
+    res.status(404).json({ error: "Sync log not found" });
+    return;
+  }
+  if (log.status !== "running") {
+    res.status(409).json({ error: `Sync log is not running (status=${log.status})` });
+    return;
+  }
+  await db.update(integrationSyncLogsTable)
+    .set({ cancelRequested: true })
+    .where(eq(integrationSyncLogsTable.id, logId));
+  res.json({ success: true, logId, message: "Cancel requested — run will stop after the current batch" });
+});
+
 router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const tenantCond = tenantId ? eq(integrationSyncLogsTable.tenantId, tenantId) : undefined;
@@ -342,6 +371,12 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
   const backfillStatus: Record<string, {
     status: string;
     recordsProcessed: number;
+    /** Sync log row id — used by the UI to POST to `/sync-logs/:id/cancel`. */
+    syncLogId: number;
+    /** True after a user clicked Cancel and before the run has flipped to
+     *  the terminal `cancelled` status. Lets the UI swap the button to a
+     *  "Cancelling…" pending state. */
+    cancelRequested: boolean;
     progress: string | null;
     /** Structured chunk progress when the writer most recently stashed a
      *  `chunk N/M: …` string. Null when the message can't be parsed (e.g.
@@ -435,6 +470,8 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       backfillStatus[integ] = {
         status: log.status,
         recordsProcessed: log.recordsProcessed,
+        syncLogId: log.id,
+        cancelRequested: log.cancelRequested === true,
         progress: progressString,
         progressDetail,
         errorDetail,

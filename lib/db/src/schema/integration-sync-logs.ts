@@ -21,6 +21,12 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   progressWindowEnd: text("progress_window_end"),
   errorCode: text("error_code"),
   partial: boolean("partial").notNull().default(false),
+  // Cooperative cancel signal for long-running backfills. The HTTP cancel
+  // route flips this to `true`; the backfill loop polls it at chunk
+  // boundaries + after each batch and exits gracefully, completing the row
+  // with status='cancelled' and the in-flight `recordsProcessed`. The
+  // scheduled 15-min sync ignores this flag — short runs don't need cancel.
+  cancelRequested: boolean("cancel_requested").notNull().default(false),
   metadata: jsonb("metadata"),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),

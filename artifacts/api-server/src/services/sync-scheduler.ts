@@ -1459,6 +1459,27 @@ export async function backfillServiceTitanJobs(
 
     let totalSynced = 0;
     let currentChunkIdx = 0;
+    let cancelledAt: { chunkIdx: number; rows: number } | null = null;
+
+    // Throw-to-unwind sentinel: the only way to stop `fetchCompletedJobs`
+    // mid-page-walk is to make `processJobBatch` throw. The outer try/catch
+    // distinguishes this from a real upstream error by checking
+    // `cancelledAt`.
+    class BackfillCancelled extends Error {
+      constructor() { super("backfill cancelled"); this.name = "BackfillCancelled"; }
+    }
+
+    async function checkCancel(): Promise<boolean> {
+      try {
+        const [row] = await db.select({ cancel: integrationSyncLogsTable.cancelRequested })
+          .from(integrationSyncLogsTable)
+          .where(eq(integrationSyncLogsTable.id, syncLog.id))
+          .limit(1);
+        return row?.cancel === true;
+      } catch {
+        return false;
+      }
+    }
 
     async function processJobBatch(stJobs: STJob[]) {
       for (const stJob of stJobs) {
@@ -1535,10 +1556,25 @@ export async function backfillServiceTitanJobs(
           console.warn(`[Backfill] ServiceTitan tenant ${tenantId}: in-flight progress write failed`, (progressErr as Error).message);
         }
       }
+
+      // Cooperative cancel check: poll the sync log row after each batch. If
+      // the cancel route flipped the flag, throw to unwind out of
+      // `fetchCompletedJobs`. The outer chunk loop catches this and marks
+      // the run as cancelled instead of errored.
+      if (await checkCancel()) {
+        cancelledAt = { chunkIdx: currentChunkIdx, rows: totalSynced };
+        throw new BackfillCancelled();
+      }
     }
 
     try {
       for (let i = 0; i < chunks.length; i++) {
+        // Cancel check at chunk boundary — cheap and frequent enough that a
+        // user clicking Cancel sees a response within seconds, not minutes.
+        if (await checkCancel()) {
+          cancelledAt = { chunkIdx: i, rows: totalSynced };
+          break;
+        }
         currentChunkIdx = i;
         const { since, before } = chunks[i];
         await updateSyncLogChunkProgress(
@@ -1552,9 +1588,25 @@ export async function backfillServiceTitanJobs(
         await fetchCompletedJobs(stConfig, since, processJobBatch, before);
       }
     } catch (innerErr) {
-      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
-      throw innerErr;
+      // BackfillCancelled is an expected unwind path, not a partial failure.
+      if (innerErr instanceof BackfillCancelled) {
+        // fall through to the cancelled-completion path below
+      } else {
+        const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+        try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
+        throw innerErr;
+      }
+    }
+
+    if (cancelledAt) {
+      await completeSyncLog(syncLog.id, "cancelled", totalSynced, `Cancelled by operator after chunk ${cancelledAt.chunkIdx + 1}/${chunks.length} (${totalSynced} rows synced)`);
+      console.log(`[Backfill] ServiceTitan tenant ${tenantId}: cancelled after ${totalSynced} jobs (chunk ${cancelledAt.chunkIdx + 1}/${chunks.length})`);
+      if (totalSynced > 0) {
+        try { await matchJobsToLeads(tenantId); } catch (err) {
+          console.error(`[Backfill] ServiceTitan post-cancel lead match failed for tenant ${tenantId}:`, (err as Error).message);
+        }
+      }
+      return { synced: totalSynced, chunks: cancelledAt.chunkIdx, error: "cancelled" };
     }
 
     await completeSyncLog(syncLog.id, "completed", totalSynced);
