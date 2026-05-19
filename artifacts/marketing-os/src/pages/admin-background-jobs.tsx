@@ -76,6 +76,9 @@ export default function AdminBackgroundJobs() {
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [retrying, setRetrying] = useState<Record<number, boolean>>({});
   const [cancelling, setCancelling] = useState<Record<number, boolean>>({});
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [bulkCancelling, setBulkCancelling] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string>("");
   const inFlightRef = useRef(false);
 
   const fetchJobs = useCallback(async (opts: { silent?: boolean } = {}) => {
@@ -199,6 +202,101 @@ export default function AdminBackgroundJobs() {
   const types = data?.types ?? [];
   const statusCounts = data?.statusCounts ?? {};
 
+  // Selection is meaningful only for pending rows — only those can be cancelled.
+  const pendingJobs = jobs.filter((j) => j.status === "pending");
+  const selectedIds = pendingJobs.map((j) => j.id).filter((id) => selected[id]);
+  const allPendingSelected = pendingJobs.length > 0 && selectedIds.length === pendingJobs.length;
+  const somePendingSelected = selectedIds.length > 0 && !allPendingSelected;
+
+  // Drop selections that no longer correspond to a visible pending row (e.g.
+  // after a refresh moves them out of `pending`). Avoids stale ids leaking
+  // into the bulk request.
+  useEffect(() => {
+    setSelected((prev) => {
+      const visible = new Set(pendingJobs.map((j) => j.id));
+      let changed = false;
+      const next: Record<number, boolean> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const idNum = Number(k);
+        if (v && visible.has(idNum)) {
+          next[idNum] = true;
+        } else if (v) {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // pendingJobs identity changes per render; key off the data snapshot.
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleSelect = (id: number) =>
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[id]) delete next[id];
+      else next[id] = true;
+      return next;
+    });
+
+  const toggleSelectAll = () => {
+    if (allPendingSelected) {
+      setSelected({});
+    } else {
+      const next: Record<number, boolean> = {};
+      for (const j of pendingJobs) next[j.id] = true;
+      setSelected(next);
+    }
+  };
+
+  const runBulkCancel = async (
+    scope: { ids?: number[]; type?: string },
+    confirmMessage: string,
+  ) => {
+    if (!window.confirm(confirmMessage)) return;
+    setBulkCancelling(true);
+    setBulkNotice("");
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/background-jobs/bulk-cancel`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scope),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || `Request failed (${res.status})`);
+      }
+      const n = typeof body.cancelledCount === "number" ? body.cancelledCount : 0;
+      setBulkNotice(
+        n === 0
+          ? "No pending jobs matched — nothing was cancelled."
+          : `Cancelled ${n} pending job${n === 1 ? "" : "s"}.`,
+      );
+      setSelected({});
+      await fetchJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to bulk-cancel jobs");
+    } finally {
+      setBulkCancelling(false);
+    }
+  };
+
+  const handleBulkCancelSelected = () => {
+    if (selectedIds.length === 0) return;
+    void runBulkCancel(
+      { ids: selectedIds },
+      `Cancel ${selectedIds.length} selected pending job${selectedIds.length === 1 ? "" : "s"}? This cannot be undone.`,
+    );
+  };
+
+  const handleBulkCancelByType = () => {
+    if (typeFilter === "all") return;
+    void runBulkCancel(
+      { type: typeFilter },
+      `Cancel ALL pending jobs of type "${typeFilter}"? This cannot be undone.`,
+    );
+  };
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -262,6 +360,45 @@ export default function AdminBackgroundJobs() {
         </div>
       </PremiumCard>
 
+      {(selectedIds.length > 0 || (typeFilter !== "all" && (statusCounts.pending ?? 0) > 0)) && (
+        <PremiumCard className="p-3 flex flex-col md:flex-row md:items-center gap-3">
+          <div className="text-sm text-white">
+            {selectedIds.length > 0
+              ? `${selectedIds.length} pending job${selectedIds.length === 1 ? "" : "s"} selected`
+              : `Bulk cancel by filter`}
+          </div>
+          <div className="flex flex-wrap gap-2 md:ml-auto">
+            {selectedIds.length > 0 && (
+              <button
+                onClick={handleBulkCancelSelected}
+                disabled={bulkCancelling}
+                className="inline-flex items-center gap-1 bg-red-500/20 hover:bg-red-500/30 disabled:opacity-50 text-red-100 px-3 py-1.5 rounded text-xs transition-colors"
+              >
+                <Ban className="w-3 h-3" />
+                {bulkCancelling ? "Cancelling..." : `Cancel ${selectedIds.length} selected`}
+              </button>
+            )}
+            {typeFilter !== "all" && (statusCounts.pending ?? 0) > 0 && (
+              <button
+                onClick={handleBulkCancelByType}
+                disabled={bulkCancelling}
+                className="inline-flex items-center gap-1 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-100 px-3 py-1.5 rounded text-xs transition-colors border border-red-500/30"
+                title={`Cancels every pending job of type "${typeFilter}", even rows not on this page`}
+              >
+                <Ban className="w-3 h-3" />
+                {bulkCancelling ? "Cancelling..." : `Cancel all pending of "${typeFilter}"`}
+              </button>
+            )}
+          </div>
+        </PremiumCard>
+      )}
+
+      {bulkNotice && (
+        <PremiumCard className="p-3 border border-emerald-500/30 bg-emerald-500/5 text-emerald-100 text-sm">
+          {bulkNotice}
+        </PremiumCard>
+      )}
+
       {error && (
         <PremiumCard className="p-4 border border-red-500/30 bg-red-500/5 text-red-200 text-sm">
           {error}
@@ -279,6 +416,19 @@ export default function AdminBackgroundJobs() {
               <thead>
                 <tr className="border-b border-white/5 bg-background/50">
                   <th className="p-3 w-8"></th>
+                  <th className="p-3 w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all pending jobs"
+                      checked={allPendingSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = somePendingSelected;
+                      }}
+                      onChange={toggleSelectAll}
+                      disabled={pendingJobs.length === 0}
+                      className="accent-red-400"
+                    />
+                  </th>
                   <th className="p-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">ID</th>
                   <th className="p-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Type</th>
                   <th className="p-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
@@ -304,6 +454,17 @@ export default function AdminBackgroundJobs() {
                           >
                             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                           </button>
+                        </td>
+                        <td className="p-3">
+                          {job.status === "pending" ? (
+                            <input
+                              type="checkbox"
+                              aria-label={`Select job ${job.id}`}
+                              checked={!!selected[job.id]}
+                              onChange={() => toggleSelect(job.id)}
+                              className="accent-red-400"
+                            />
+                          ) : null}
                         </td>
                         <td className="p-3 font-mono text-xs text-white">{job.id}</td>
                         <td className="p-3 text-sm text-white">{job.type}</td>
@@ -344,7 +505,7 @@ export default function AdminBackgroundJobs() {
                       {isOpen && (
                         <tr className="bg-background/40">
                           <td></td>
-                          <td colSpan={9} className="p-4">
+                          <td colSpan={10} className="p-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                               <div>
                                 <div className="text-muted-foreground uppercase tracking-wider mb-1">Tenant ID</div>

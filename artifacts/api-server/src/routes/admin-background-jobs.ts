@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, backgroundJobsTable } from "@workspace/db";
-import { and, desc, eq, count, SQL } from "drizzle-orm";
+import { and, desc, eq, count, inArray, isNull, SQL } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
@@ -166,6 +166,112 @@ router.post("/admin/background-jobs/:id/cancel", ...agencyOnly, async (req, res)
     res.json({ job: updatedRows[0] });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to cancel job";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Bulk-cancel many pending jobs in one call. Cancels any rows whose status is
+ * still `pending` and that match the provided scope. Scope can be a list of
+ * ids, a job type, and/or a tenant id (use `null` to match jobs with no
+ * tenant). At least one of `ids`, `type`, or `tenantId` (including `null`)
+ * must be supplied — refusing an empty body avoids accidentally cancelling
+ * the entire pending queue. In-progress, completed, failed, and
+ * already-cancelled jobs are left untouched by the conditional update.
+ */
+router.post("/admin/background-jobs/bulk-cancel", ...agencyOnly, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as {
+      ids?: unknown;
+      type?: unknown;
+      tenantId?: unknown;
+    };
+
+    let ids: number[] | undefined;
+    if (body.ids !== undefined) {
+      if (!Array.isArray(body.ids)) {
+        res.status(400).json({ error: "ids must be an array of integers" });
+        return;
+      }
+      ids = [];
+      for (const raw of body.ids) {
+        const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+        if (!Number.isInteger(n) || n <= 0) {
+          res.status(400).json({ error: "ids must contain positive integers" });
+          return;
+        }
+        ids.push(n);
+      }
+      // De-dup; cap at a sane batch size to bound the UPDATE.
+      ids = Array.from(new Set(ids));
+      if (ids.length === 0) {
+        res.status(400).json({ error: "ids must not be empty" });
+        return;
+      }
+      if (ids.length > 1000) {
+        res.status(400).json({ error: "ids may contain at most 1000 entries per call" });
+        return;
+      }
+    }
+
+    let type: string | undefined;
+    if (body.type !== undefined && body.type !== null && body.type !== "") {
+      if (typeof body.type !== "string") {
+        res.status(400).json({ error: "type must be a string" });
+        return;
+      }
+      type = body.type;
+    }
+
+    // tenantId is tri-state: omitted (no filter), null (match untenanted
+    // jobs), or a positive integer.
+    let tenantFilter: { kind: "none" } | { kind: "null" } | { kind: "id"; id: number } = { kind: "none" };
+    if (Object.prototype.hasOwnProperty.call(body, "tenantId")) {
+      if (body.tenantId === null) {
+        tenantFilter = { kind: "null" };
+      } else {
+        const n = typeof body.tenantId === "number" ? body.tenantId : parseInt(String(body.tenantId), 10);
+        if (!Number.isInteger(n) || n <= 0) {
+          res.status(400).json({ error: "tenantId must be a positive integer or null" });
+          return;
+        }
+        tenantFilter = { kind: "id", id: n };
+      }
+    }
+
+    if (!ids && !type && tenantFilter.kind === "none") {
+      res.status(400).json({ error: "Provide at least one of ids, type, or tenantId" });
+      return;
+    }
+
+    const conditions: SQL[] = [eq(backgroundJobsTable.status, "pending")];
+    if (ids) conditions.push(inArray(backgroundJobsTable.id, ids));
+    if (type) conditions.push(eq(backgroundJobsTable.type, type));
+    if (tenantFilter.kind === "null") {
+      conditions.push(isNull(backgroundJobsTable.tenantId));
+    } else if (tenantFilter.kind === "id") {
+      conditions.push(eq(backgroundJobsTable.tenantId, tenantFilter.id));
+    }
+
+    const now = new Date();
+    const updatedRows = await db
+      .update(backgroundJobsTable)
+      .set({
+        status: "cancelled",
+        completedAt: now,
+        updatedAt: now,
+        lockedAt: null,
+        lockedBy: null,
+      })
+      .where(and(...conditions))
+      .returning({ id: backgroundJobsTable.id });
+
+    res.json({
+      cancelledCount: updatedRows.length,
+      cancelledIds: updatedRows.map((r) => r.id),
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to bulk-cancel jobs";
     res.status(500).json({ error: msg });
   }
 });
