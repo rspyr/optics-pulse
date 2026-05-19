@@ -419,6 +419,11 @@ type SelectedLeadsRederiveSnapshot = {
   // the final outcome via the REST endpoint.
   status: "running" | "complete" | "failed" | "cancelled";
   failedLeadIds?: number[];
+  // Leads that were queued for re-derive but never processed because the
+  // operator cancelled mid-run. Only populated on `cancelled` snapshots so
+  // a reconnecting client can resolve the "X leads skipped" line and the
+  // "Re-derive the rest" action without re-fetching the original payload.
+  skippedLeadIds?: number[];
   // Per-lead failure reason map, populated on `complete` when one or more
   // leads failed. Mirrors the `failedLeadIds` array so the sheet can surface
   // *why* each specific lead failed without re-fetching server logs. Kept in
@@ -472,7 +477,7 @@ function recordSelectedLeadsRederiveTerminal(
   patch:
     | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; failedLeadErrors: Record<number, string> }
     | { status: "failed"; tenantId: number; total: number; reason: string }
-    | { status: "cancelled"; tenantId: number; total: number; processed: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[] },
+    | { status: "cancelled"; tenantId: number; total: number; processed: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; skippedLeadIds: number[] },
 ) {
   if (jobId == null) return;
   const prev = selectedLeadsRederiveProgressByJobId.get(jobId);
@@ -521,6 +526,7 @@ function recordSelectedLeadsRederiveTerminal(
       failed: patch.failed,
       changed: patch.changed,
       failedLeadIds: patch.failedLeadIds,
+      skippedLeadIds: patch.skippedLeadIds,
       updatedAt: new Date().toISOString(),
       status: "cancelled",
     };
@@ -589,8 +595,14 @@ export function emitSelectedLeadsRederiveCancelled(
     failed: number;
     changed: number;
     failedLeadIds: number[];
+    // The leads that were queued but never reached before cancel — used by
+    // the sheet to render "X leads skipped" and offer a one-click
+    // "Re-derive the rest" without making the operator re-select rows.
+    // Optional for back-compat with callers that haven't been updated yet.
+    skippedLeadIds?: number[];
   },
 ) {
+  const skippedLeadIds = data.skippedLeadIds ?? [];
   recordSelectedLeadsRederiveTerminal(data.jobId, {
     status: "cancelled",
     tenantId,
@@ -600,9 +612,10 @@ export function emitSelectedLeadsRederiveCancelled(
     failed: data.failed,
     changed: data.changed,
     failedLeadIds: data.failedLeadIds,
+    skippedLeadIds,
   });
   if (io) {
-    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-cancelled", { ...data, tenantId });
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-cancelled", { ...data, skippedLeadIds, tenantId });
     console.log(
       `[Socket.IO] Emitted selected-leads-rederive-cancelled for tenant-${tenantId} (` +
       `job=${data.jobId ?? "?"} processed=${data.processed}/${data.total} ` +

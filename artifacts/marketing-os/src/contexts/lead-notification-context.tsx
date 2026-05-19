@@ -135,6 +135,11 @@ export interface SelectedLeadsRederiveCancelledData {
   failed: number;
   changed: number;
   failedLeadIds: number[];
+  // Leads that were queued but never reached before the operator cancelled.
+  // Lets the pending-leads sheet offer a one-click "Re-derive the rest"
+  // action without forcing the operator to re-select the same rows. Optional
+  // for back-compat with older server builds that only emit the counts.
+  skippedLeadIds?: number[];
 }
 
 type SelectedLeadsRederiveCancelledCallback = (data: SelectedLeadsRederiveCancelledData) => void;

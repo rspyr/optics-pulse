@@ -294,6 +294,13 @@ function registerSelectedLeadsHandler(): void {
         maybeEmitProgress(processed, false);
       }
       if (cancelled) {
+        // The leads we never got to before the cancel checkpoint fired.
+        // Surfacing the explicit ID list (rather than just a count) lets
+        // the sheet offer a one-click "Re-derive the rest" without making
+        // the operator re-select the same rows. `processed` is the index
+        // of the next-to-run lead at the moment we broke out of the loop,
+        // so the tail from there is exactly the skipped subset.
+        const skippedLeadIds = args.leadIds.slice(processed);
         // Emit a terminal `cancelled` event so the sheet can render the
         // "Cancelled at X/Y leads" state with the partial counts. We
         // return normally (don't throw) so background-jobs doesn't flip
@@ -309,11 +316,12 @@ function registerSelectedLeadsHandler(): void {
             failed,
             changed,
             failedLeadIds,
+            skippedLeadIds,
           });
         } catch (emitErr) {
           console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveCancelled failed:", emitErr);
         }
-        return { total, processed, succeeded, failed, changed, failedLeadIds, cancelled: true };
+        return { total, processed, succeeded, failed, changed, failedLeadIds, skippedLeadIds, cancelled: true };
       }
       // Final tick — guarantees the bar reads N/N before the complete event
       // (and any reconnect-fetch landing in the gap sees the final counts).

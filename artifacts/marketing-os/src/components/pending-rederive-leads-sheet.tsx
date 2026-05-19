@@ -94,6 +94,11 @@ type BulkResult =
         failed: number;
         changed: number;
         failedLeadIds: number[];
+        // Leads that were queued but never reached before cancel. Drives
+        // the "X leads skipped" line and the "Re-derive the rest" button so
+        // the operator can re-queue just the unprocessed tail without
+        // re-selecting rows from the list.
+        skippedLeadIds: number[];
       };
     };
 
@@ -327,6 +332,7 @@ export function PendingRederiveLeadsSheet({
                 failed: data.failed,
                 changed: data.changed,
                 failedLeadIds: data.failedLeadIds,
+                skippedLeadIds: data.skippedLeadIds ?? [],
               },
             }
           : prev,
@@ -386,6 +392,7 @@ export function PendingRederiveLeadsSheet({
           failed: number;
           changed: number;
           failedLeadIds?: number[];
+          skippedLeadIds?: number[];
           failedLeadErrors?: Record<number, string>;
           reason?: string;
         } | null) => {
@@ -433,6 +440,7 @@ export function PendingRederiveLeadsSheet({
                       failed: d.failed,
                       changed: d.changed,
                       failedLeadIds: d.failedLeadIds ?? [],
+                      skippedLeadIds: d.skippedLeadIds ?? [],
                     },
                   }
                 : prev,
@@ -705,21 +713,57 @@ export function PendingRederiveLeadsSheet({
                 </p>
               )}
               {bulkResult?.mode === "queued" && bulkResult.jobCancelled && (
-                <p
-                  className="text-xs text-amber-300"
+                <div
+                  className="space-y-1.5"
                   data-testid="pending-leads-bulk-cancelled"
                 >
-                  Cancelled at {bulkResult.jobCancelled.processed}/{bulkResult.total} leads
-                  {" "}· {bulkResult.jobCancelled.succeeded} succeeded
-                  {bulkResult.jobCancelled.changed > 0 && (
-                    <> · {bulkResult.jobCancelled.changed} updated</>
+                  <p className="text-xs text-amber-300">
+                    Cancelled at {bulkResult.jobCancelled.processed}/{bulkResult.total} leads
+                    {" "}· {bulkResult.jobCancelled.succeeded} succeeded
+                    {bulkResult.jobCancelled.changed > 0 && (
+                      <> · {bulkResult.jobCancelled.changed} updated</>
+                    )}
+                    {bulkResult.jobCancelled.failed > 0 && (
+                      <span className="text-red-400">
+                        {" "}· {bulkResult.jobCancelled.failed} failed
+                      </span>
+                    )}
+                    {bulkResult.jobCancelled.skippedLeadIds.length > 0 && (
+                      <> · {bulkResult.jobCancelled.skippedLeadIds.length} skipped</>
+                    )}
+                  </p>
+                  {bulkResult.jobCancelled.skippedLeadIds.length > 0 && (
+                    <div className="flex items-start gap-2">
+                      <p
+                        className="text-[11px] text-white/60 flex-1 break-words"
+                        data-testid="pending-leads-bulk-skipped-ids"
+                        title={bulkResult.jobCancelled.skippedLeadIds.join(", ")}
+                      >
+                        Skipped lead IDs:{" "}
+                        <span className="text-white/80">
+                          {bulkResult.jobCancelled.skippedLeadIds.slice(0, 10).join(", ")}
+                          {bulkResult.jobCancelled.skippedLeadIds.length > 10 && (
+                            <> …+{bulkResult.jobCancelled.skippedLeadIds.length - 10} more</>
+                          )}
+                        </span>
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={submitting}
+                        onClick={() =>
+                          bulkResult.jobCancelled &&
+                          submitRederive(bulkResult.jobCancelled.skippedLeadIds)
+                        }
+                        data-testid="pending-leads-bulk-rederive-rest"
+                        className="h-6 text-[11px] px-2 shrink-0"
+                      >
+                        {submitting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                        Re-derive the rest
+                      </Button>
+                    </div>
                   )}
-                  {bulkResult.jobCancelled.failed > 0 && (
-                    <span className="text-red-400">
-                      {" "}· {bulkResult.jobCancelled.failed} failed
-                    </span>
-                  )}
-                </p>
+                </div>
               )}
               {bulkResult?.mode === "queued" && bulkResult.jobError && (
                 <div
