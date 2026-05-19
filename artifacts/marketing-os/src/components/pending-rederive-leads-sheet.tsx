@@ -205,6 +205,62 @@ export function PendingRederiveLeadsSheet({
         if (cancelled) return;
         setLoading(false);
       });
+
+    // Restore the most recent cancelled-job snapshot for this scope so an
+    // operator who closed the sheet after cancelling can pick the action
+    // back up ("Re-derive the rest", skipped IDs, partial counts) without
+    // having to re-select rows from the pending list. The snapshot only
+    // lives in server memory for ~10 minutes — once it's gone we fall back
+    // to the normal "no result yet" state (404 is the expected path).
+    const snapshotParams = new URLSearchParams({
+      tenantId: String(tenantId),
+      pageUrlPattern,
+      formIdentifier,
+    });
+    fetch(
+      `${API_BASE}/api/field-mapping-rules/cancelled-rederive-snapshot?${snapshotParams.toString()}`,
+      { credentials: "include" },
+    )
+      .then(async (res) => {
+        if (res.status === 404) return null;
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then((d: {
+        jobId?: number;
+        total?: number;
+        processed?: number;
+        succeeded?: number;
+        failed?: number;
+        changed?: number;
+        failedLeadIds?: number[];
+        skippedLeadIds?: number[];
+        status?: string;
+      } | null) => {
+        if (cancelled || !d) return;
+        if (d.status !== "cancelled") return;
+        // Only restore when the operator hasn't already started a new
+        // bulk submit in this open — guard against the snapshot fetch
+        // racing the initial-load reset and the operator's next click.
+        setBulkResult((prev) => {
+          if (prev) return prev;
+          return {
+            mode: "queued",
+            total: d.total ?? 0,
+            jobId: d.jobId ?? null,
+            jobCancelled: {
+              processed: d.processed ?? 0,
+              succeeded: d.succeeded ?? 0,
+              failed: d.failed ?? 0,
+              changed: d.changed ?? 0,
+              failedLeadIds: d.failedLeadIds ?? [],
+              skippedLeadIds: d.skippedLeadIds ?? [],
+            },
+          };
+        });
+      })
+      .catch(() => { /* best-effort restore; falls back to normal state */ });
+
     return () => { cancelled = true; };
   }, [open, tenantId, pageUrlPattern, formIdentifier, excludeLeadId]);
 
@@ -563,6 +619,11 @@ export function PendingRederiveLeadsSheet({
         body: JSON.stringify({
           tenantId,
           leadIds,
+          // Thread the rule scope through so the queued job's terminal
+          // snapshot is discoverable by scope on sheet re-open (used to
+          // restore a cancelled job's "Re-derive the rest" affordance).
+          pageUrlPattern,
+          formIdentifier,
         }),
       });
       const d = await res.json().catch(() => ({}));

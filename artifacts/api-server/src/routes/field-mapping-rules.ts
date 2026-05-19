@@ -10,7 +10,12 @@ import {
   REDERIVE_SELECTED_LEADS,
 } from "../services/re-derive-jobs";
 import { mapReDeriveErrorForOperator } from "../services/re-derive-error-messages";
-import { emitRuleRederiveFailed, emitSelectedLeadsRederiveCancelled, getSelectedLeadsRederiveProgress } from "../socket";
+import {
+  emitRuleRederiveFailed,
+  emitSelectedLeadsRederiveCancelled,
+  findLatestCancelledSelectedLeadsRederiveSnapshotForScope,
+  getSelectedLeadsRederiveProgress,
+} from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
@@ -143,7 +148,15 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
     res.status(400).json({ error: "tenantId is required" });
     return;
   }
-  const rawLeadIds = (req.body as { leadIds?: unknown })?.leadIds;
+  const body = (req.body ?? {}) as { leadIds?: unknown; pageUrlPattern?: unknown; formIdentifier?: unknown };
+  const rawLeadIds = body.leadIds;
+  // Optional rule scope passed through from the pending-leads sheet. We
+  // thread it into the job payload so the terminal snapshot can be looked
+  // up by scope on sheet re-open ("restore cancelled state" affordance).
+  // Missing values are tolerated — the worst case is that re-opening the
+  // sheet won't restore an in-flight/cancelled job that wasn't tagged.
+  const pageUrlPattern = typeof body.pageUrlPattern === "string" ? body.pageUrlPattern : undefined;
+  const formIdentifier = typeof body.formIdentifier === "string" ? body.formIdentifier : undefined;
   if (!Array.isArray(rawLeadIds) || rawLeadIds.length === 0) {
     res.status(400).json({ error: "leadIds must be a non-empty array" });
     return;
@@ -170,7 +183,12 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
 
   if (leadIds.length > BULK_REDERIVE_SYNC_THRESHOLD) {
     try {
-      const job = await enqueueReDeriveSelectedLeads({ tenantId, leadIds });
+      const job = await enqueueReDeriveSelectedLeads({
+        tenantId,
+        leadIds,
+        pageUrlPattern,
+        formIdentifier,
+      });
       res.json({ mode: "queued", total: leadIds.length, jobId: job?.id ?? null });
     } catch (err) {
       console.error("[field-mapping-rules.rederive-leads] enqueue failed:", err);
@@ -296,7 +314,11 @@ router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) =>
   const wasPending = existing.status === "pending";
   if (wasPending) {
     try {
-      const payload = (cancelledRow.payload ?? {}) as { leadIds?: unknown };
+      const payload = (cancelledRow.payload ?? {}) as {
+        leadIds?: unknown;
+        pageUrlPattern?: unknown;
+        formIdentifier?: unknown;
+      };
       const leadIds = Array.isArray(payload.leadIds)
         ? (payload.leadIds.filter((id) => typeof id === "number") as number[])
         : [];
@@ -308,6 +330,17 @@ router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) =>
         failed: 0,
         changed: 0,
         failedLeadIds: [],
+        // Even though the handler never ran, surface the *full* leadIds list
+        // as "skipped" so the sheet's "Re-derive the rest" affordance can
+        // re-queue them on demand instead of leaving the operator to
+        // re-select rows.
+        skippedLeadIds: leadIds,
+        // Forward the scope so the cancelled snapshot is discoverable by
+        // the sheet on re-open. Both fields are optional on older job rows
+        // that pre-date the scope-threading; the snapshot just won't be
+        // restorable by scope in that case.
+        pageUrlPattern: typeof payload.pageUrlPattern === "string" ? payload.pageUrlPattern : undefined,
+        formIdentifier: typeof payload.formIdentifier === "string" ? payload.formIdentifier : undefined,
       });
     } catch (e) {
       console.error("[field-mapping-rules:cancel] emit pending-cancel event failed:", e);
@@ -315,6 +348,38 @@ router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) =>
   }
 
   res.json({ job: cancelledRow });
+});
+
+/**
+ * Returns the most recent terminal `cancelled` snapshot (within the in-memory
+ * TTL) for the given rule scope. Lets the pending-leads sheet restore the
+ * "Cancelled at X/Y leads" + "Re-derive the rest" state when the operator
+ * re-opens the sheet after a cancel — without this, the skipped subset only
+ * lived in component state and was lost on close. 404 once the snapshot
+ * expires so the sheet falls back to its normal "no result yet" state.
+ */
+router.get("/field-mapping-rules/cancelled-rederive-snapshot", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const pageUrlPattern = typeof req.query.pageUrlPattern === "string" ? req.query.pageUrlPattern : "";
+  const formIdentifier = typeof req.query.formIdentifier === "string" ? req.query.formIdentifier : "";
+  if (!pageUrlPattern || !formIdentifier) {
+    res.status(400).json({ error: "pageUrlPattern and formIdentifier are required" });
+    return;
+  }
+  const snapshot = findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
+    tenantId,
+    pageUrlPattern,
+    formIdentifier,
+  );
+  if (!snapshot) {
+    res.status(404).json({ error: "No cancelled snapshot for this scope" });
+    return;
+  }
+  res.json(snapshot);
 });
 
 router.get("/field-mapping-rules/rederive-job-progress", async (req, res) => {

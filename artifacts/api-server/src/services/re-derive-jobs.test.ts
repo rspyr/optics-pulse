@@ -373,13 +373,18 @@ describe("re-derive-jobs selected-leads handler — cancel flow", () => {
       failed: 0,
       changed: 2,
       failedLeadIds: [],
+      // The tail of leads the cancel checkpoint never reached — drives the
+      // sheet's "Re-derive the rest" affordance.
+      skippedLeadIds: [3, 4, 5],
       cancelled: true,
     });
 
     // Cancelled event fires with the partial counts so the sheet can render
-    // "Cancelled at 2/5 leads" instead of waiting on a timeout.
+    // "Cancelled at 2/5 leads" instead of waiting on a timeout. We assert
+    // with objectContaining so optional fields (scope, etc.) can be added
+    // to the contract without churning every cancel-flow test.
     expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledTimes(1);
-    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, {
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, expect.objectContaining({
       jobId: 999,
       total: 5,
       processed: 2,
@@ -387,7 +392,8 @@ describe("re-derive-jobs selected-leads handler — cancel flow", () => {
       failed: 0,
       changed: 2,
       failedLeadIds: [],
-    });
+      skippedLeadIds: [3, 4, 5],
+    }));
 
     // The terminal `complete` and `failed` events must NOT fire for a cancel —
     // the row is in a `cancelled` terminal state already.
@@ -413,6 +419,8 @@ describe("re-derive-jobs selected-leads handler — cancel flow", () => {
       failed: 0,
       changed: 0,
       failedLeadIds: [],
+      // Whole payload is skipped when the cancel fires before any iteration.
+      skippedLeadIds: [10, 20, 30],
       cancelled: true,
     });
     expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, expect.objectContaining({

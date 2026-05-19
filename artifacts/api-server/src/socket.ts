@@ -431,6 +431,14 @@ type SelectedLeadsRederiveSnapshot = {
   // inside the terminal TTL still recovers the reasons via the REST endpoint.
   failedLeadErrors?: Record<number, string>;
   reason?: string;
+  // Rule scope the bulk re-derive was kicked off against. Populated when the
+  // route forwards it through the job payload so the pending-leads sheet can
+  // look up the most recent terminal snapshot by scope on re-open (e.g. to
+  // restore the "Cancelled at X/Y leads" + "Re-derive the rest" state after
+  // an operator closed the sheet and came back). Optional for back-compat
+  // with older callers that didn't thread scope through.
+  pageUrlPattern?: string;
+  formIdentifier?: string;
 };
 
 const selectedLeadsRederiveProgressByJobId = new Map<number, SelectedLeadsRederiveSnapshot>();
@@ -444,6 +452,39 @@ export function getSelectedLeadsRederiveProgress(jobId: number) {
   return selectedLeadsRederiveProgressByJobId.get(jobId) ?? null;
 }
 
+/**
+ * Find the most recent terminal `cancelled` snapshot for the given rule
+ * scope. Drives the pending-leads sheet's "restore on re-open" behavior:
+ * when the operator cancels a bulk re-derive then closes the sheet, the
+ * sheet looks up the snapshot by scope on re-open so the "Cancelled at X/Y
+ * leads" state and the "Re-derive the rest" action are still available
+ * until the snapshot's TTL expires. Returns null when no matching cancelled
+ * snapshot is in memory.
+ *
+ * Scoped by tenant so an operator can only observe their own tenant's
+ * cancelled state. Snapshots without a `pageUrlPattern` / `formIdentifier`
+ * (older payloads that didn't thread scope through) are intentionally
+ * skipped — they can't be safely matched and would otherwise leak across
+ * scopes.
+ */
+export function findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): SelectedLeadsRederiveSnapshot | null {
+  let best: SelectedLeadsRederiveSnapshot | null = null;
+  for (const snap of selectedLeadsRederiveProgressByJobId.values()) {
+    if (snap.status !== "cancelled") continue;
+    if (snap.tenantId !== tenantId) continue;
+    if (snap.pageUrlPattern !== pageUrlPattern) continue;
+    if (snap.formIdentifier !== formIdentifier) continue;
+    if (!best || Date.parse(snap.updatedAt) > Date.parse(best.updatedAt)) {
+      best = snap;
+    }
+  }
+  return best;
+}
+
 export function emitSelectedLeadsRederiveProgress(
   tenantId: number,
   data: {
@@ -453,6 +494,8 @@ export function emitSelectedLeadsRederiveProgress(
     succeeded: number;
     failed: number;
     changed: number;
+    pageUrlPattern?: string;
+    formIdentifier?: string;
   },
 ) {
   const snapshot: SelectedLeadsRederiveSnapshot = {
@@ -465,6 +508,8 @@ export function emitSelectedLeadsRederiveProgress(
     changed: data.changed,
     updatedAt: new Date().toISOString(),
     status: "running",
+    pageUrlPattern: data.pageUrlPattern,
+    formIdentifier: data.formIdentifier,
   };
   selectedLeadsRederiveProgressByJobId.set(data.jobId, snapshot);
   if (io) {
@@ -477,7 +522,7 @@ function recordSelectedLeadsRederiveTerminal(
   patch:
     | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; failedLeadErrors: Record<number, string> }
     | { status: "failed"; tenantId: number; total: number; reason: string }
-    | { status: "cancelled"; tenantId: number; total: number; processed: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; skippedLeadIds: number[] },
+    | { status: "cancelled"; tenantId: number; total: number; processed: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; skippedLeadIds: number[]; pageUrlPattern?: string; formIdentifier?: string },
 ) {
   if (jobId == null) return;
   const prev = selectedLeadsRederiveProgressByJobId.get(jobId);
@@ -529,6 +574,12 @@ function recordSelectedLeadsRederiveTerminal(
       skippedLeadIds: patch.skippedLeadIds,
       updatedAt: new Date().toISOString(),
       status: "cancelled",
+      // Prefer the scope from the cancel emit; fall back to whatever was
+      // recorded by an earlier progress tick so a cancel that didn't carry
+      // scope (e.g. older callers) still inherits it from the running
+      // snapshot it overwrites.
+      pageUrlPattern: patch.pageUrlPattern ?? base.pageUrlPattern,
+      formIdentifier: patch.formIdentifier ?? base.formIdentifier,
     };
   }
   selectedLeadsRederiveProgressByJobId.set(jobId, next);
@@ -600,6 +651,12 @@ export function emitSelectedLeadsRederiveCancelled(
     // "Re-derive the rest" without making the operator re-select rows.
     // Optional for back-compat with callers that haven't been updated yet.
     skippedLeadIds?: number[];
+    // Rule scope the job was kicked off against. Threaded through so the
+    // terminal snapshot can be looked up by scope on sheet re-open. Optional
+    // for back-compat — older callers that don't set these just lose the
+    // restore-on-reopen affordance for their cancelled jobs.
+    pageUrlPattern?: string;
+    formIdentifier?: string;
   },
 ) {
   const skippedLeadIds = data.skippedLeadIds ?? [];
@@ -613,6 +670,8 @@ export function emitSelectedLeadsRederiveCancelled(
     changed: data.changed,
     failedLeadIds: data.failedLeadIds,
     skippedLeadIds,
+    pageUrlPattern: data.pageUrlPattern,
+    formIdentifier: data.formIdentifier,
   });
   if (io) {
     io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-cancelled", { ...data, skippedLeadIds, tenantId });

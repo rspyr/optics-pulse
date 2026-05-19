@@ -189,6 +189,13 @@ export const REDERIVE_SELECTED_LEADS = "rederive_selected_leads";
 interface ReDeriveSelectedPayload {
   tenantId: number;
   leadIds: number[];
+  // Rule scope the operator was viewing when they kicked off the bulk
+  // re-derive. Threaded through the snapshot so the pending-leads sheet can
+  // restore a cancelled job's "Re-derive the rest" state on re-open. Optional
+  // — when missing, the snapshot just won't be discoverable by scope (older
+  // jobs / callers that haven't been updated).
+  pageUrlPattern?: string;
+  formIdentifier?: string;
 }
 
 function parseSelectedPayload(p: Record<string, unknown>): ReDeriveSelectedPayload {
@@ -203,7 +210,14 @@ function parseSelectedPayload(p: Record<string, unknown>): ReDeriveSelectedPaylo
       `Invalid payload for ${REDERIVE_SELECTED_LEADS}: ${JSON.stringify(p)}`,
     );
   }
-  return { tenantId, leadIds: leadIds as number[] };
+  const pageUrlPattern = p["pageUrlPattern"];
+  const formIdentifier = p["formIdentifier"];
+  return {
+    tenantId,
+    leadIds: leadIds as number[],
+    pageUrlPattern: typeof pageUrlPattern === "string" ? pageUrlPattern : undefined,
+    formIdentifier: typeof formIdentifier === "string" ? formIdentifier : undefined,
+  };
 }
 
 /**
@@ -253,6 +267,8 @@ function registerSelectedLeadsHandler(): void {
           succeeded,
           failed,
           changed,
+          pageUrlPattern: args.pageUrlPattern,
+          formIdentifier: args.formIdentifier,
         });
       } catch (emitErr) {
         console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveProgress failed:", emitErr);
@@ -318,6 +334,8 @@ function registerSelectedLeadsHandler(): void {
             changed,
             failedLeadIds,
             skippedLeadIds,
+            pageUrlPattern: args.pageUrlPattern,
+            formIdentifier: args.formIdentifier,
           });
         } catch (emitErr) {
           console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveCancelled failed:", emitErr);
@@ -364,9 +382,18 @@ function registerSelectedLeadsHandler(): void {
 }
 
 export async function enqueueReDeriveSelectedLeads(args: ReDeriveSelectedPayload) {
+  // Build the payload explicitly so the serialized job row only carries the
+  // fields the handler knows about (no stray closure state, no `undefined`
+  // entries that would round-trip oddly through JSON).
+  const payload: Record<string, unknown> = {
+    tenantId: args.tenantId,
+    leadIds: args.leadIds,
+  };
+  if (typeof args.pageUrlPattern === "string") payload.pageUrlPattern = args.pageUrlPattern;
+  if (typeof args.formIdentifier === "string") payload.formIdentifier = args.formIdentifier;
   return enqueueJob(
     REDERIVE_SELECTED_LEADS,
-    args as unknown as Record<string, unknown>,
+    payload,
     { tenantId: args.tenantId, maxAttempts: 1 },
   );
 }
