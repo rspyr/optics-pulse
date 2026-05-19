@@ -183,9 +183,22 @@ export function PendingRederiveLeadsSheet({
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-      setBulkResult(d as BulkResult);
-      // Keep selection so the operator can see which rows the result refers
-      // to (failed ones are highlighted via `failedIds`).
+      const result = d as BulkResult;
+      setBulkResult(result);
+      // After a sync re-derive, the succeeded leads are no longer "pending"
+      // for this rule scope — drop them from the visible list so the sheet
+      // reflects the new state. Failed ones stay (highlighted via
+      // `failedIds`) so the operator can retry them, and the selection is
+      // narrowed to just the failed rows so a retry click re-submits the
+      // right subset.
+      if (result.mode === "sync") {
+        const submittedIds = Array.from(selected);
+        const failedSet = new Set(result.failedLeadIds);
+        setLeads((prev) =>
+          prev.filter((l) => !submittedIds.includes(l.id) || failedSet.has(l.id)),
+        );
+        setSelected(new Set(submittedIds.filter((id) => failedSet.has(id))));
+      }
     } catch (e) {
       setBulkError(e instanceof Error ? e.message : "Failed to re-derive selected leads");
     } finally {
