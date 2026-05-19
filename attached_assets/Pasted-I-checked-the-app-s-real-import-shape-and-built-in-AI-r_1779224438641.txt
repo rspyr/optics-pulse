@@ -1,0 +1,120 @@
+I checked the app’s real import shape and built-in AI rules. Copy/paste this into another AI:
+
+```text
+You are generating a clean FunctionFlow import JSON file using the FlowCanvas JSON format.
+
+My diagram request:
+[PASTE WHAT I WANT DIAGRAMMED HERE]
+
+Return only valid JSON. No Markdown. No code fence. No explanation. No comments. No trailing commas.
+
+The JSON must use this top-level shape:
+{
+  "name": "Clear diagram name",
+  "nodes": [],
+  "edges": []
+}
+
+Allowed node types:
+- "section": group/container
+- "process": real action, step, state, or decision
+- "sticky": assumption, risk, note, open question
+- "label": heading or lane title
+- "image": only if I explicitly ask for an image
+
+Do not use anchor nodes.
+
+Every node must have:
+{
+  "id": "unique_lowercase_id",
+  "type": "process",
+  "position": { "x": 160, "y": 160 },
+  "data": {},
+  "style": { "width": 192, "height": 80 }
+}
+
+Process node rules:
+- data.label is required.
+- Keep labels short enough to fit, usually 2-6 words.
+- Use shape "rectangle" for normal steps.
+- Use shape "rounded" for start/end.
+- Use shape "diamond" for decisions only.
+- Allowed shapes: "rectangle", "rounded", "ellipse", "diamond", "triangle", "invertedTriangle", "parallelogram".
+- Use data.color from: "#ffffff", "#dbeafe", "#dcfce7", "#fef9c3", "#fee2e2", "#f3e8ff", "#ffedd5", "#f1f5f9".
+- Use data.textColor: "#18181a".
+- If the node belongs inside a section, include data.sectionId with the section id.
+
+Example process node:
+{
+  "id": "n_01_capture_request",
+  "type": "process",
+  "position": { "x": 160, "y": 192 },
+  "data": {
+    "label": "Capture request",
+    "shape": "rectangle",
+    "color": "#ffffff",
+    "textColor": "#18181a",
+    "sectionId": "sec_intake"
+  },
+  "style": { "width": 192, "height": 80 }
+}
+
+Section rules:
+- Sections are real containers.
+- Every related node must sit fully inside its section.
+- Use at least 64px left/right/bottom padding and about 88px top padding for the section title.
+- Put child node ids in data.childNodeIds.
+- Also put the matching section id on each child node’s data.sectionId.
+- Give sections zIndex: -10.
+- Use section colors from: "#eff6ff", "#f0fdf4", "#fefce8", "#fff1f2", "#faf5ff", "#fff7ed", "#f8fafc", "#f0f9ff".
+
+Layout rules:
+- Prefer left-to-right flows for sequences.
+- Use top-to-bottom layout for details, exceptions, or supporting notes.
+- Align connected steps evenly.
+- Use at least 128px horizontal gap between process nodes.
+- Use at least 96px vertical gap between parallel lanes.
+- Use at least 120px between sibling sections.
+- Avoid overlaps between nodes, labels, section headers, and connector labels.
+- Keep coordinates and sizes clean, preferably multiples of 16.
+- If a section contains five horizontal steps, make the section wide enough for all five steps plus padding.
+- Keep diagrams compact and readable. Do not create unnecessary nodes.
+
+Edge rules:
+- Every edge source and target must match real node ids.
+- Use type: "flow".
+- Use data.direction: "forward", "backward", "bidirectional", or "undirected".
+- Use data.edgeStyle: "solid", "dashed", or "dotted".
+- If an edge has a label, keep it short, usually 1-3 words.
+- If an edge has a label, put it in both edge.label and edge.data.label.
+- Label decision branches, for example "Yes", "No", "Approved", "Rejected".
+- Avoid dense cross-section connections unless they are important handoffs.
+
+Example edge:
+{
+  "id": "e_capture_to_validate",
+  "type": "flow",
+  "source": "n_01_capture_request",
+  "target": "n_02_validate_request",
+  "label": "Submit",
+  "data": {
+    "direction": "forward",
+    "edgeStyle": "solid",
+    "label": "Submit"
+  }
+}
+
+Before returning, self-check:
+- The output is parseable JSON.
+- There are no comments or Markdown fences.
+- Every id is unique.
+- Every edge source/target exists.
+- Every section childNodeId exists.
+- Every child node listed in a section also has matching data.sectionId.
+- No related node sits outside its section.
+- No nodes visually overlap.
+- Labels are short and readable.
+- The diagram is clean, practical, and easy to scan.
+
+Return only the final JSON object.
+```
