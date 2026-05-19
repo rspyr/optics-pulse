@@ -151,6 +151,26 @@ router.post("/field-mapping-rules", async (req, res) => {
     return;
   }
 
+  // Mirror the guards in `reDeriveLeadsForRuleScope` so an obviously-bad shape
+  // (zero/negative/non-integer tenantId, non-string or empty pageUrlPattern /
+  // formIdentifier) is rejected at the request boundary before we insert the
+  // rule or enqueue a re-derive job. Otherwise the job would be created,
+  // throw `NonRetryableReDeriveError` in the handler, and burn a
+  // `rule-rederive-failed` notification on a request that never had a chance
+  // of succeeding.
+  if (!Number.isInteger(tenantId) || tenantId <= 0) {
+    res.status(400).json({ error: "Invalid tenantId" });
+    return;
+  }
+  if (typeof pageUrlPattern !== "string" || pageUrlPattern.length === 0) {
+    res.status(400).json({ error: "pageUrlPattern must be a non-empty string" });
+    return;
+  }
+  if (typeof formIdentifier !== "string" || formIdentifier.length === 0) {
+    res.status(400).json({ error: "formIdentifier must be a non-empty string" });
+    return;
+  }
+
   if (!VALID_MAPS_TO_SET.has(mapsTo)) {
     res.status(400).json({ error: `mapsTo must be one of: ${VALID_MAPS_TO.join(", ")}` });
     return;

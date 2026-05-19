@@ -350,6 +350,58 @@ describe("POST /field-mapping-rules", () => {
     errSpy.mockRestore();
   });
 
+  it.each([
+    {
+      name: "empty pageUrlPattern",
+      body: { pageUrlPattern: "", formIdentifier: "form1", fieldName: "field_3", mapsTo: "phone" },
+    },
+    {
+      name: "non-string pageUrlPattern",
+      body: { pageUrlPattern: 123, formIdentifier: "form1", fieldName: "field_3", mapsTo: "phone" },
+    },
+    {
+      name: "empty formIdentifier",
+      body: { pageUrlPattern: "/contact", formIdentifier: "", fieldName: "field_3", mapsTo: "phone" },
+    },
+    {
+      name: "non-string formIdentifier",
+      body: { pageUrlPattern: "/contact", formIdentifier: 7, fieldName: "field_3", mapsTo: "phone" },
+    },
+  ])("rejects bad inputs ($name) with 4xx before enqueueing a rederive job", async ({ body }) => {
+    const res = await postJson(app, "/field-mapping-rules", body);
+    expect(res.status).toBe(400);
+    expect(insertCalls.length).toBe(0);
+    expect(enqueueReDeriveLeadsForRuleScopeMock).not.toHaveBeenCalled();
+    expect(emitRuleRederiveFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects zero/negative tenantId with 4xx before enqueueing a rederive job", async () => {
+    await setupApp("super_admin", 0);
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "form1",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    // tenantId 0 is falsy -> hits the "No tenant context" guard first.
+    expect(res.status).toBe(400);
+    expect(insertCalls.length).toBe(0);
+    expect(enqueueReDeriveLeadsForRuleScopeMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-integer tenantId (e.g. NaN from a malformed ?tenantId query) with 4xx before enqueueing", async () => {
+    await setupApp("super_admin", Number.NaN as unknown as number);
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "form1",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    expect(res.status).toBe(400);
+    expect(insertCalls.length).toBe(0);
+    expect(enqueueReDeriveLeadsForRuleScopeMock).not.toHaveBeenCalled();
+  });
+
   it("rejects unknown mapsTo targets", async () => {
     const res = await postJson(app, "/field-mapping-rules", {
       pageUrlPattern: "/contact",
