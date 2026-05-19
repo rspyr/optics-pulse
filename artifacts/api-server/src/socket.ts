@@ -417,7 +417,7 @@ type SelectedLeadsRederiveSnapshot = {
   // terminal states held for SELECTED_LEADS_REDERIVE_TERMINAL_TTL_MS so a
   // client that reconnected after the socket event fired can still observe
   // the final outcome via the REST endpoint.
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "cancelled";
   failedLeadIds?: number[];
   // Per-lead failure reason map, populated on `complete` when one or more
   // leads failed. Mirrors the `failedLeadIds` array so the sheet can surface
@@ -471,7 +471,8 @@ function recordSelectedLeadsRederiveTerminal(
   jobId: number | null,
   patch:
     | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; failedLeadErrors: Record<number, string> }
-    | { status: "failed"; tenantId: number; total: number; reason: string },
+    | { status: "failed"; tenantId: number; total: number; reason: string }
+    | { status: "cancelled"; tenantId: number; total: number; processed: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[] },
 ) {
   if (jobId == null) return;
   const prev = selectedLeadsRederiveProgressByJobId.get(jobId);
@@ -486,29 +487,44 @@ function recordSelectedLeadsRederiveTerminal(
     updatedAt: new Date().toISOString(),
     status: "running",
   };
-  const next: SelectedLeadsRederiveSnapshot =
-    patch.status === "complete"
-      ? {
-          ...base,
-          tenantId: patch.tenantId,
-          total: patch.total,
-          processed: patch.total,
-          succeeded: patch.succeeded,
-          failed: patch.failed,
-          changed: patch.changed,
-          failedLeadIds: patch.failedLeadIds,
-          failedLeadErrors: patch.failedLeadErrors,
-          updatedAt: new Date().toISOString(),
-          status: "complete",
-        }
-      : {
-          ...base,
-          tenantId: patch.tenantId,
-          total: patch.total,
-          reason: patch.reason,
-          updatedAt: new Date().toISOString(),
-          status: "failed",
-        };
+  let next: SelectedLeadsRederiveSnapshot;
+  if (patch.status === "complete") {
+    next = {
+      ...base,
+      tenantId: patch.tenantId,
+      total: patch.total,
+      processed: patch.total,
+      succeeded: patch.succeeded,
+      failed: patch.failed,
+      changed: patch.changed,
+      failedLeadIds: patch.failedLeadIds,
+      failedLeadErrors: patch.failedLeadErrors,
+      updatedAt: new Date().toISOString(),
+      status: "complete",
+    };
+  } else if (patch.status === "failed") {
+    next = {
+      ...base,
+      tenantId: patch.tenantId,
+      total: patch.total,
+      reason: patch.reason,
+      updatedAt: new Date().toISOString(),
+      status: "failed",
+    };
+  } else {
+    next = {
+      ...base,
+      tenantId: patch.tenantId,
+      total: patch.total,
+      processed: patch.processed,
+      succeeded: patch.succeeded,
+      failed: patch.failed,
+      changed: patch.changed,
+      failedLeadIds: patch.failedLeadIds,
+      updatedAt: new Date().toISOString(),
+      status: "cancelled",
+    };
+  }
   selectedLeadsRederiveProgressByJobId.set(jobId, next);
   const existingTimer = selectedLeadsRederiveTerminalTimers.get(jobId);
   if (existingTimer) clearTimeout(existingTimer);
@@ -552,6 +568,45 @@ export function emitSelectedLeadsRederiveComplete(
       `[Socket.IO] Emitted selected-leads-rederive-complete for tenant-${tenantId} (` +
       `job=${data.jobId ?? "?"} total=${data.total} succeeded=${data.succeeded} ` +
       `failed=${data.failed} changed=${data.changed})`,
+    );
+  }
+}
+
+/**
+ * Emits the terminal `selected-leads-rederive-cancelled` event when an
+ * operator cancels an in-flight bulk re-derive. Mirrors the complete/failed
+ * shape so the pending-leads sheet can render a "Cancelled at X/Y leads"
+ * state with the already-succeeded counts preserved, and so a reconnecting
+ * client can resolve the bar via the REST snapshot endpoint.
+ */
+export function emitSelectedLeadsRederiveCancelled(
+  tenantId: number,
+  data: {
+    jobId: number | null;
+    total: number;
+    processed: number;
+    succeeded: number;
+    failed: number;
+    changed: number;
+    failedLeadIds: number[];
+  },
+) {
+  recordSelectedLeadsRederiveTerminal(data.jobId, {
+    status: "cancelled",
+    tenantId,
+    total: data.total,
+    processed: data.processed,
+    succeeded: data.succeeded,
+    failed: data.failed,
+    changed: data.changed,
+    failedLeadIds: data.failedLeadIds,
+  });
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-cancelled", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted selected-leads-rederive-cancelled for tenant-${tenantId} (` +
+      `job=${data.jobId ?? "?"} processed=${data.processed}/${data.total} ` +
+      `succeeded=${data.succeeded} failed=${data.failed} changed=${data.changed})`,
     );
   }
 }

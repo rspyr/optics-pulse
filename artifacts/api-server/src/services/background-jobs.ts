@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { db, backgroundJobsTable, pool } from "@workspace/db";
 import type { BackgroundJob } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 /**
  * Durable background-job runner backed by Postgres.
@@ -152,7 +152,14 @@ async function claimOne(): Promise<BackgroundJob | null> {
 }
 
 async function markCompleted(jobId: number, result: unknown): Promise<void> {
-  await db
+  // Only flip status when the row is still `in_progress`. If the cancel
+  // endpoint flipped it to `cancelled` mid-run, we want to preserve that
+  // terminal state — but we still record the partial `result` so the
+  // operator UI can see "succeeded X out of Y before cancel". Doing this
+  // as two statements (status flip vs. result/completedAt update) lets the
+  // happy path stay a single UPDATE while the cancel path silently no-ops
+  // the status flip without clobbering the cancelled row.
+  const flipped = await db
     .update(backgroundJobsTable)
     .set({
       status: "completed",
@@ -162,7 +169,34 @@ async function markCompleted(jobId: number, result: unknown): Promise<void> {
       lockedBy: null,
       result: (result ?? null) as unknown as Record<string, unknown>,
     })
+    .where(and(eq(backgroundJobsTable.id, jobId), eq(backgroundJobsTable.status, "in_progress")))
+    .returning({ id: backgroundJobsTable.id });
+  if (flipped.length === 0) {
+    // Row is already terminal (almost always: cancelled mid-run). Keep the
+    // partial result around without changing status.
+    await db
+      .update(backgroundJobsTable)
+      .set({
+        result: (result ?? null) as unknown as Record<string, unknown>,
+        updatedAt: new Date(),
+      })
+      .where(eq(backgroundJobsTable.id, jobId));
+  }
+}
+
+/**
+ * Returns `true` when the `background_jobs` row for `jobId` is currently in
+ * a terminal `cancelled` state. Used by long-running handlers (e.g. the
+ * selected-leads bulk re-derive) as a per-lead cancellation checkpoint so
+ * an operator clicking "Cancel" mid-run can short-circuit the loop instead
+ * of waiting for the whole batch to finish.
+ */
+export async function isJobCancelled(jobId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ status: backgroundJobsTable.status })
+    .from(backgroundJobsTable)
     .where(eq(backgroundJobsTable.id, jobId));
+  return row?.status === "cancelled";
 }
 
 async function markRetryOrFailed(
@@ -174,6 +208,9 @@ async function markRetryOrFailed(
 
   const decision = decideRetryOrFail(job.attempts, job.maxAttempts);
   if (decision.outcome === "failed") {
+    // Same protection as `markCompleted`: don't stomp on a row already
+    // flipped to `cancelled` (or any other terminal state) by an out-of-band
+    // status change while the handler was running.
     await db
       .update(backgroundJobsTable)
       .set({
@@ -184,7 +221,7 @@ async function markRetryOrFailed(
         updatedAt: new Date(),
         completedAt: new Date(),
       })
-      .where(eq(backgroundJobsTable.id, job.id));
+      .where(and(eq(backgroundJobsTable.id, job.id), eq(backgroundJobsTable.status, "in_progress")));
     return "failed";
   }
 
@@ -198,7 +235,7 @@ async function markRetryOrFailed(
       lockedBy: null,
       updatedAt: new Date(),
     })
-    .where(eq(backgroundJobsTable.id, job.id));
+    .where(and(eq(backgroundJobsTable.id, job.id), eq(backgroundJobsTable.status, "in_progress")));
   return "retry";
 }
 

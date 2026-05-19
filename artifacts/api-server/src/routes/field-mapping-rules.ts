@@ -1,11 +1,15 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, fieldMappingRulesTable, attributionEventsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, fieldMappingRulesTable, attributionEventsTable, backgroundJobsTable } from "@workspace/db";
+import { eq, and, inArray } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
-import { enqueueReDeriveLeadsForRuleScope, enqueueReDeriveSelectedLeads } from "../services/re-derive-jobs";
-import { emitRuleRederiveFailed, getSelectedLeadsRederiveProgress } from "../socket";
+import {
+  enqueueReDeriveLeadsForRuleScope,
+  enqueueReDeriveSelectedLeads,
+  REDERIVE_SELECTED_LEADS,
+} from "../services/re-derive-jobs";
+import { emitRuleRederiveFailed, emitSelectedLeadsRederiveCancelled, getSelectedLeadsRederiveProgress } from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
@@ -213,6 +217,105 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
  * existed). The snapshot is tenant-scoped — operators can only read
  * progress for their own tenant.
  */
+/**
+ * Cancel an in-flight bulk re-derive job. Flips the `background_jobs` row
+ * to `cancelled` so the handler's per-lead checkpoint short-circuits at its
+ * next iteration. The handler then emits `selected-leads-rederive-cancelled`
+ * with the partial counts so the sheet can render the terminal state.
+ *
+ * Unlike the admin cancel endpoint, this accepts both `pending` and
+ * `in_progress` rows — operators clicking "Cancel" while the bar is moving
+ * are explicitly asking to stop a running job, not just dequeue a waiting
+ * one. Already-terminal jobs return 409 so the UI can refresh state.
+ *
+ * Tenant-scoped: the job's `tenant_id` must match the operator's tenant,
+ * and the type must be `rederive_selected_leads` (we don't want this
+ * endpoint flipping arbitrary jobs).
+ */
+router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const jobId = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(jobId) || jobId <= 0) {
+    res.status(400).json({ error: "Invalid job id" });
+    return;
+  }
+
+  // Read the row first so we can tell whether it was `pending` or
+  // `in_progress` before we flip it — that determines whether a handler will
+  // ever emit a terminal event. We still rely on the conditional UPDATE
+  // below to make the flip atomic; the read is just for branching after.
+  const [existing] = await db
+    .select()
+    .from(backgroundJobsTable)
+    .where(eq(backgroundJobsTable.id, jobId));
+  if (!existing || existing.tenantId !== tenantId || existing.type !== REDERIVE_SELECTED_LEADS) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  // Atomic conditional update — only flip rows that are still pending or
+  // in_progress. If 0 rows match, the row raced to a terminal state between
+  // our read and our write; return 409 so the UI can refresh.
+  const updatedRows = await db
+    .update(backgroundJobsTable)
+    .set({
+      status: "cancelled",
+      completedAt: new Date(),
+      updatedAt: new Date(),
+      lockedAt: null,
+      lockedBy: null,
+    })
+    .where(and(
+      eq(backgroundJobsTable.id, jobId),
+      eq(backgroundJobsTable.tenantId, tenantId),
+      eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+      inArray(backgroundJobsTable.status, ["pending", "in_progress"]),
+    ))
+    .returning();
+
+  if (updatedRows.length === 0) {
+    res.status(409).json({
+      error: `Job already ${existing.status}; cannot cancel`,
+      status: existing.status,
+    });
+    return;
+  }
+
+  // If the job was still `pending` when we flipped it, no handler will ever
+  // run — and therefore no handler will ever emit the cancelled socket event
+  // or write the terminal snapshot. Emit it from here so the sheet can
+  // resolve to "Cancelled at 0/N leads" immediately instead of waiting on the
+  // 5-minute safety timeout. For `in_progress` jobs the handler's per-lead
+  // checkpoint emits the event itself with the real partial counts.
+  const cancelledRow = updatedRows[0];
+  const wasPending = existing.status === "pending";
+  if (wasPending) {
+    try {
+      const payload = (cancelledRow.payload ?? {}) as { leadIds?: unknown };
+      const leadIds = Array.isArray(payload.leadIds)
+        ? (payload.leadIds.filter((id) => typeof id === "number") as number[])
+        : [];
+      emitSelectedLeadsRederiveCancelled(tenantId, {
+        jobId: cancelledRow.id,
+        total: leadIds.length,
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        changed: 0,
+        failedLeadIds: [],
+      });
+    } catch (e) {
+      console.error("[field-mapping-rules:cancel] emit pending-cancel event failed:", e);
+    }
+  }
+
+  res.json({ job: cancelledRow });
+});
+
 router.get("/field-mapping-rules/rederive-job-progress", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {

@@ -1,4 +1,4 @@
-import { enqueueJob, registerJobHandler } from "./background-jobs";
+import { enqueueJob, isJobCancelled, registerJobHandler } from "./background-jobs";
 import {
   reDeriveLeadsForRuleScope,
   countPendingRederiveLeadsForRuleScope,
@@ -7,6 +7,7 @@ import {
 import {
   emitRuleRederiveComplete,
   emitRuleRederiveFailed,
+  emitSelectedLeadsRederiveCancelled,
   emitSelectedLeadsRederiveComplete,
   emitSelectedLeadsRederiveFailed,
   emitSelectedLeadsRederiveProgress,
@@ -256,12 +257,29 @@ function registerSelectedLeadsHandler(): void {
         console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveProgress failed:", emitErr);
       }
     };
+    let cancelled = false;
     try {
       // Initial 0/total tick so the sheet renders the bar immediately
       // (rather than waiting for the first chunk to complete).
       maybeEmitProgress(0, true);
       let processed = 0;
       for (const leadId of args.leadIds) {
+        // Cooperative cancellation checkpoint. The cancel endpoint flips
+        // the `background_jobs` row to `cancelled`; we poll its status
+        // before each per-lead re-derive so an operator clicking "Cancel"
+        // mid-run can short-circuit the loop instead of waiting it out.
+        // A failure of the cancel check is silent — the next iteration
+        // will retry, and worst case the job runs to completion.
+        if (jobId != null) {
+          try {
+            if (await isJobCancelled(jobId)) {
+              cancelled = true;
+              break;
+            }
+          } catch (cancelCheckErr) {
+            console.error("[re-derive-jobs:selected] isJobCancelled check failed:", cancelCheckErr);
+          }
+        }
         try {
           const r = await reDeriveLeadFunnel(args.tenantId, leadId);
           succeeded++;
@@ -274,6 +292,28 @@ function registerSelectedLeadsHandler(): void {
         }
         processed++;
         maybeEmitProgress(processed, false);
+      }
+      if (cancelled) {
+        // Emit a terminal `cancelled` event so the sheet can render the
+        // "Cancelled at X/Y leads" state with the partial counts. We
+        // return normally (don't throw) so background-jobs doesn't flip
+        // the row to `failed` — the cancel endpoint already set status to
+        // `cancelled`, and `markCompleted` no-ops the status flip when
+        // the row is already terminal.
+        try {
+          emitSelectedLeadsRederiveCancelled(args.tenantId, {
+            jobId,
+            total,
+            processed,
+            succeeded,
+            failed,
+            changed,
+            failedLeadIds,
+          });
+        } catch (emitErr) {
+          console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveCancelled failed:", emitErr);
+        }
+        return { total, processed, succeeded, failed, changed, failedLeadIds, cancelled: true };
       }
       // Final tick — guarantees the bar reads N/N before the complete event
       // (and any reconnect-fetch landing in the gap sees the final counts).

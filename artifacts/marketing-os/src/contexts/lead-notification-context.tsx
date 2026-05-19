@@ -126,6 +126,19 @@ export interface SelectedLeadsRederiveFailedData {
 
 type SelectedLeadsRederiveFailedCallback = (data: SelectedLeadsRederiveFailedData) => void;
 
+export interface SelectedLeadsRederiveCancelledData {
+  tenantId?: number;
+  jobId: number | null;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  changed: number;
+  failedLeadIds: number[];
+}
+
+type SelectedLeadsRederiveCancelledCallback = (data: SelectedLeadsRederiveCancelledData) => void;
+
 interface LeadNotificationContextType {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
@@ -145,6 +158,7 @@ interface LeadNotificationContextType {
   onSelectedLeadsRederiveComplete: (cb: SelectedLeadsRederiveCompleteCallback) => () => void;
   onSelectedLeadsRederiveFailed: (cb: SelectedLeadsRederiveFailedCallback) => () => void;
   onSelectedLeadsRederiveProgress: (cb: SelectedLeadsRederiveProgressCallback) => () => void;
+  onSelectedLeadsRederiveCancelled: (cb: SelectedLeadsRederiveCancelledCallback) => () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -180,6 +194,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const selectedLeadsRederiveListenersRef = useRef<Set<SelectedLeadsRederiveCompleteCallback>>(new Set());
   const selectedLeadsRederiveFailedListenersRef = useRef<Set<SelectedLeadsRederiveFailedCallback>>(new Set());
   const selectedLeadsRederiveProgressListenersRef = useRef<Set<SelectedLeadsRederiveProgressCallback>>(new Set());
+  const selectedLeadsRederiveCancelledListenersRef = useRef<Set<SelectedLeadsRederiveCancelledCallback>>(new Set());
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
@@ -395,6 +410,12 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         try { cb(data); } catch (e) { console.warn("[LeadNotification] selected-leads-rederive-progress callback error:", e); }
       });
     });
+    socket.on("selected-leads-rederive-cancelled", (data: SelectedLeadsRederiveCancelledData) => {
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      selectedLeadsRederiveCancelledListenersRef.current.forEach(cb => {
+        try { cb(data); } catch (e) { console.warn("[LeadNotification] selected-leads-rederive-cancelled callback error:", e); }
+      });
+    });
     socket.on("callback-due", (data: CallbackDueData) => {
       if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
@@ -506,8 +527,13 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     return () => { selectedLeadsRederiveProgressListenersRef.current.delete(cb); };
   }, []);
 
+  const registerOnSelectedLeadsRederiveCancelled = useCallback((cb: SelectedLeadsRederiveCancelledCallback) => {
+    selectedLeadsRederiveCancelledListenersRef.current.add(cb);
+    return () => { selectedLeadsRederiveCancelledListenersRef.current.delete(cb); };
+  }, []);
+
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete, onRuleRederiveFailed: registerOnRuleRederiveFailed, onSelectedLeadsRederiveComplete: registerOnSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed: registerOnSelectedLeadsRederiveFailed, onSelectedLeadsRederiveProgress: registerOnSelectedLeadsRederiveProgress }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete, onRuleRederiveFailed: registerOnRuleRederiveFailed, onSelectedLeadsRederiveComplete: registerOnSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed: registerOnSelectedLeadsRederiveFailed, onSelectedLeadsRederiveProgress: registerOnSelectedLeadsRederiveProgress, onSelectedLeadsRederiveCancelled: registerOnSelectedLeadsRederiveCancelled }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>

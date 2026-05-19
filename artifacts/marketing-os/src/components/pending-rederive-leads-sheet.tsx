@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, ExternalLink } from "lucide-react";
+import { Loader2, ExternalLink, X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -83,6 +83,18 @@ type BulkResult =
       // Set when a `selected-leads-rederive-failed` event arrives (or the
       // safety timeout elapses without any event). Surfaces a retry button.
       jobError?: string;
+      // Set when an operator cancels the in-flight job via the Cancel
+      // button (or the cancelled event/snapshot arrives via reconnect).
+      // Holds the partial counts at the moment of cancellation so the
+      // sheet can render "Cancelled at X/Y leads" with succeeded counts
+      // preserved.
+      jobCancelled?: {
+        processed: number;
+        succeeded: number;
+        failed: number;
+        changed: number;
+        failedLeadIds: number[];
+      };
     };
 
 function fmtName(l: PendingLead) {
@@ -130,10 +142,12 @@ export function PendingRederiveLeadsSheet({
   const [submitting, setSubmitting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const {
     onSelectedLeadsRederiveComplete,
     onSelectedLeadsRederiveFailed,
     onSelectedLeadsRederiveProgress,
+    onSelectedLeadsRederiveCancelled,
     onReconnect,
   } = useLeadNotification();
   // Safety timeout for the queued path — if no socket event arrives within
@@ -221,6 +235,9 @@ export function PendingRederiveLeadsSheet({
     if (bulkResult?.mode === "queued" && bulkResult.jobResult) {
       return new Set(bulkResult.jobResult.failedLeadIds);
     }
+    if (bulkResult?.mode === "queued" && bulkResult.jobCancelled) {
+      return new Set(bulkResult.jobCancelled.failedLeadIds);
+    }
     return new Set<number>();
   }, [bulkResult]);
 
@@ -236,7 +253,10 @@ export function PendingRederiveLeadsSheet({
   }, [bulkResult]);
 
   const isJobRunning =
-    bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError;
+    bulkResult?.mode === "queued" &&
+    !bulkResult.jobResult &&
+    !bulkResult.jobError &&
+    !bulkResult.jobCancelled;
 
   const bulkResultMode = bulkResult?.mode;
   const bulkResultJobId = bulkResult?.mode === "queued" ? bulkResult.jobId : null;
@@ -294,6 +314,24 @@ export function PendingRederiveLeadsSheet({
           : prev,
       );
     });
+    const unsubCancelled = onSelectedLeadsRederiveCancelled((data) => {
+      if (targetJobId != null && data.jobId !== targetJobId) return;
+      clearTimer();
+      setBulkResult((prev) =>
+        prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+          ? {
+              ...prev,
+              jobCancelled: {
+                processed: data.processed,
+                succeeded: data.succeeded,
+                failed: data.failed,
+                changed: data.changed,
+                failedLeadIds: data.failedLeadIds,
+              },
+            }
+          : prev,
+      );
+    });
     const unsubComplete = onSelectedLeadsRederiveComplete((data) => {
       if (targetJobId != null && data.jobId !== targetJobId) return;
       clearTimer();
@@ -342,7 +380,7 @@ export function PendingRederiveLeadsSheet({
           return res.json();
         })
         .then((d: {
-          status?: "running" | "complete" | "failed";
+          status?: "running" | "complete" | "failed" | "cancelled";
           processed: number;
           succeeded: number;
           failed: number;
@@ -383,6 +421,24 @@ export function PendingRederiveLeadsSheet({
             );
             return;
           }
+          if (d.status === "cancelled") {
+            clearTimer();
+            setBulkResult((prev) =>
+              prev?.mode === "queued" && !prev.jobResult && !prev.jobError && !prev.jobCancelled
+                ? {
+                    ...prev,
+                    jobCancelled: {
+                      processed: d.processed,
+                      succeeded: d.succeeded,
+                      failed: d.failed,
+                      changed: d.changed,
+                      failedLeadIds: d.failedLeadIds ?? [],
+                    },
+                  }
+                : prev,
+            );
+            return;
+          }
           setBulkResult((prev) =>
             prev?.mode === "queued" && !prev.jobResult && !prev.jobError
               ? {
@@ -408,10 +464,42 @@ export function PendingRederiveLeadsSheet({
       unsubProgress();
       unsubComplete();
       unsubFailed();
+      unsubCancelled();
       unsubReconnect();
       clearTimer();
     };
-  }, [isJobRunning, bulkResultMode, bulkResultJobId, tenantId, onSelectedLeadsRederiveProgress, onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed, onReconnect]);
+  }, [isJobRunning, bulkResultMode, bulkResultJobId, tenantId, onSelectedLeadsRederiveProgress, onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed, onSelectedLeadsRederiveCancelled, onReconnect]);
+
+  async function cancelRunningJob() {
+    if (bulkResult?.mode !== "queued" || bulkResult.jobId == null) return;
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      const url = `${API_BASE}/api/field-mapping-rules/rederive-jobs/${bulkResult.jobId}/cancel?tenantId=${encodeURIComponent(String(tenantId))}`;
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        // 409 ("already terminal") is benign — the job finished between the
+        // operator clicking Cancel and the request landing. The complete /
+        // failed event handlers will resolve the bar; nothing to do here.
+        if (res.status !== 409) {
+          throw new Error(d.error || `HTTP ${res.status}`);
+        }
+      }
+      // The terminal state is set by the `selected-leads-rederive-cancelled`
+      // socket event (or REST snapshot) so a manager who cancels from a
+      // different tab also sees the cancelled outcome. We don't optimistically
+      // flip state here — that would diverge from the server's view if the
+      // job had already completed by the time the cancel request landed.
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : "Failed to cancel job");
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   async function submitRederive(leadIdsOverride?: number[]) {
     const leadIds = leadIdsOverride ?? Array.from(selected);
@@ -551,22 +639,41 @@ export function PendingRederiveLeadsSheet({
                   )}
                 </p>
               )}
-              {bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError && (
+              {bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError && !bulkResult.jobCancelled && (
                 <div
                   className="space-y-1.5"
                   data-testid="pending-leads-bulk-result"
                 >
-                  <p className="text-xs text-white/80 flex items-center gap-2">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    {bulkResult.progress
-                      ? `Re-derived ${bulkResult.progress.processed}/${bulkResult.total} leads…`
-                      : `Re-deriving ${bulkResult.total} leads in the background…`}
-                    {bulkResult.progress && bulkResult.progress.failed > 0 && (
-                      <span className="text-red-400">
-                        · {bulkResult.progress.failed} failed
+                  <div className="flex items-start gap-2">
+                    <p className="text-xs text-white/80 flex items-center gap-2 flex-1 min-w-0">
+                      <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                      <span className="truncate">
+                        {bulkResult.progress
+                          ? `Re-derived ${bulkResult.progress.processed}/${bulkResult.total} leads…`
+                          : `Re-deriving ${bulkResult.total} leads in the background…`}
+                        {bulkResult.progress && bulkResult.progress.failed > 0 && (
+                          <span className="text-red-400">
+                            {" "}· {bulkResult.progress.failed} failed
+                          </span>
+                        )}
                       </span>
+                    </p>
+                    {bulkResult.jobId != null && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={cancelling}
+                        onClick={cancelRunningJob}
+                        data-testid="pending-leads-bulk-cancel"
+                        className="h-6 text-[11px] px-2 text-white/70 hover:text-white"
+                      >
+                        {cancelling
+                          ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                          : <X className="w-3 h-3 mr-1" />}
+                        Cancel
+                      </Button>
                     )}
-                  </p>
+                  </div>
                   <Progress
                     value={
                       bulkResult.total > 0
@@ -593,6 +700,23 @@ export function PendingRederiveLeadsSheet({
                   {bulkResult.jobResult.failed > 0 && (
                     <span className="text-red-400">
                       {" "}· {bulkResult.jobResult.failed} failed
+                    </span>
+                  )}
+                </p>
+              )}
+              {bulkResult?.mode === "queued" && bulkResult.jobCancelled && (
+                <p
+                  className="text-xs text-amber-300"
+                  data-testid="pending-leads-bulk-cancelled"
+                >
+                  Cancelled at {bulkResult.jobCancelled.processed}/{bulkResult.total} leads
+                  {" "}· {bulkResult.jobCancelled.succeeded} succeeded
+                  {bulkResult.jobCancelled.changed > 0 && (
+                    <> · {bulkResult.jobCancelled.changed} updated</>
+                  )}
+                  {bulkResult.jobCancelled.failed > 0 && (
+                    <span className="text-red-400">
+                      {" "}· {bulkResult.jobCancelled.failed} failed
                     </span>
                   )}
                 </p>
