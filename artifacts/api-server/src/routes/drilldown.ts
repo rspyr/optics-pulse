@@ -1,7 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable } from "@workspace/db";
-import { eq, and, gte, lte, desc, SQL, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, desc, SQL, inArray, sql } from "drizzle-orm";
 import { resolveListTenantScope } from "../lib/tenant-scope";
+
+// Matches the date expression used by /api/dashboard/spend-revenue so the
+// drilldown returns the same jobs that the chart's revenue bar aggregated.
+const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
+const jobRevenueExpr = sql<number>`COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})`;
 
 const router: IRouter = Router();
 
@@ -41,19 +46,32 @@ router.get("/drilldown/jobs", async (req, res) => {
   const status = req.query.status as string | undefined;
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   const offset = req.query.offset ? Number(req.query.offset) : 0;
+  // When `useJobDate=true`, filter by COALESCE(invoiceDate, completedAt, createdAt)
+  // so the drilldown matches the same date bucketing the Command Center chart uses.
+  const useJobDate = req.query.useJobDate === "true";
+  // sort=revenue → biggest invoice first (for "what made up this revenue bar?" UX).
+  const sortBy = req.query.sort === "revenue" ? "revenue" : "date";
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];
   if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
-  if (startDate) conditions.push(gte(jobsTable.createdAt, new Date(startDate)));
-  if (endDate) conditions.push(lte(jobsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
+  if (useJobDate) {
+    // Match /dashboard/spend-revenue exactly: `<= new Date(endDate)` (midnight)
+    // so the drilldown totals reconcile with the chart/card totals.
+    if (startDate) conditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
+    if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
+  } else {
+    if (startDate) conditions.push(gte(jobsTable.createdAt, new Date(startDate)));
+    if (endDate) conditions.push(lte(jobsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
+  }
   if (status) conditions.push(eq(jobsTable.status, status as "pending" | "in_progress" | "completed" | "cancelled"));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const orderBy = sortBy === "revenue" ? desc(jobRevenueExpr) : desc(jobsTable.createdAt);
   const jobs = await db.select().from(jobsTable).where(where)
-    .orderBy(desc(jobsTable.createdAt)).limit(limit).offset(offset);
+    .orderBy(orderBy).limit(limit).offset(offset);
 
   res.json(jobs);
 });
