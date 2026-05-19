@@ -1,6 +1,6 @@
 import { db, leadsTable } from "@workspace/db";
 import { and, lte, isNotNull, ne, asc } from "drizzle-orm";
-import { sendPushToUser } from "./push-notifications";
+import { enqueueSendPushToUser } from "./push-notification-jobs";
 import { emitCallbackDue } from "../socket";
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -52,12 +52,14 @@ async function checkDueCallbacks() {
         const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "Unknown";
         const phone = lead.phone || "";
 
-        await sendPushToUser(
-          lead.assignedCsrId,
-          "Callback Due",
-          `${name}${phone ? ` - ${phone}` : ""} is ready for a callback`,
-          { type: "callback", leadId: lead.id, intent: "open-lead" },
-        );
+        await enqueueSendPushToUser({
+          userId: lead.assignedCsrId,
+          title: "Callback Due",
+          body: `${name}${phone ? ` - ${phone}` : ""} is ready for a callback`,
+          data: { type: "callback", leadId: lead.id, intent: "open-lead" },
+          tenantId: lead.tenantId,
+          source: "callback-scheduler",
+        });
 
         emitCallbackDue(lead.tenantId, {
           leadId: lead.id,
