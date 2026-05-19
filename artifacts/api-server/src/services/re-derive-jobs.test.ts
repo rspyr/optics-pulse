@@ -1,26 +1,50 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, countPendingRederiveLeadsForRuleScopeMock, registerJobHandlerMock } = vi.hoisted(() => ({
+const {
+  emitRuleRederiveCompleteMock,
+  emitRuleRederiveFailedMock,
+  emitSelectedLeadsRederiveCancelledMock,
+  emitSelectedLeadsRederiveCompleteMock,
+  emitSelectedLeadsRederiveFailedMock,
+  emitSelectedLeadsRederiveProgressMock,
+  reDeriveLeadsForRuleScopeMock,
+  reDeriveLeadFunnelMock,
+  countPendingRederiveLeadsForRuleScopeMock,
+  registerJobHandlerMock,
+  isJobCancelledMock,
+} = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
+  emitSelectedLeadsRederiveCancelledMock: vi.fn(),
+  emitSelectedLeadsRederiveCompleteMock: vi.fn(),
+  emitSelectedLeadsRederiveFailedMock: vi.fn(),
+  emitSelectedLeadsRederiveProgressMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
+  reDeriveLeadFunnelMock: vi.fn(),
   countPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   registerJobHandlerMock: vi.fn(),
+  isJobCancelledMock: vi.fn(),
 }));
 
 vi.mock("../socket", () => ({
   emitRuleRederiveComplete: emitRuleRederiveCompleteMock,
   emitRuleRederiveFailed: emitRuleRederiveFailedMock,
+  emitSelectedLeadsRederiveCancelled: emitSelectedLeadsRederiveCancelledMock,
+  emitSelectedLeadsRederiveComplete: emitSelectedLeadsRederiveCompleteMock,
+  emitSelectedLeadsRederiveFailed: emitSelectedLeadsRederiveFailedMock,
+  emitSelectedLeadsRederiveProgress: emitSelectedLeadsRederiveProgressMock,
 }));
 
 vi.mock("./re-derive-lead-funnel", () => ({
   reDeriveLeadsForRuleScope: reDeriveLeadsForRuleScopeMock,
+  reDeriveLeadFunnel: reDeriveLeadFunnelMock,
   countPendingRederiveLeadsForRuleScope: countPendingRederiveLeadsForRuleScopeMock,
 }));
 
 vi.mock("./background-jobs", () => ({
   registerJobHandler: registerJobHandlerMock,
   enqueueJob: vi.fn(),
+  isJobCancelled: isJobCancelledMock,
 }));
 
 type Handler = (payload: Record<string, unknown>) => Promise<unknown>;
@@ -31,7 +55,12 @@ async function loadHandler(): Promise<Handler> {
   vi.resetModules();
   emitRuleRederiveCompleteMock.mockReset();
   emitRuleRederiveFailedMock.mockReset();
+  emitSelectedLeadsRederiveCancelledMock.mockReset();
+  emitSelectedLeadsRederiveCompleteMock.mockReset();
+  emitSelectedLeadsRederiveFailedMock.mockReset();
+  emitSelectedLeadsRederiveProgressMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
+  reDeriveLeadFunnelMock.mockReset();
   countPendingRederiveLeadsForRuleScopeMock.mockReset();
   countPendingRederiveLeadsForRuleScopeMock.mockResolvedValue({
     pendingLeads: 7,
@@ -40,6 +69,8 @@ async function loadHandler(): Promise<Handler> {
     lastAttemptedAt: "2026-05-19T00:00:00.000Z",
   });
   registerJobHandlerMock.mockReset();
+  isJobCancelledMock.mockReset();
+  isJobCancelledMock.mockResolvedValue(false);
   sleepCalls.length = 0;
 
   const mod = await import("./re-derive-jobs");
@@ -52,6 +83,21 @@ async function loadHandler(): Promise<Handler> {
   );
   expect(call).toBeDefined();
   return call![1] as Handler;
+}
+
+type HandlerWithCtx = (
+  payload: Record<string, unknown>,
+  ctx?: { job?: { id: number } },
+) => Promise<unknown>;
+
+async function loadSelectedHandler(): Promise<HandlerWithCtx> {
+  // loadHandler resets all mocks and re-registers all job handlers
+  await loadHandler();
+  const call = registerJobHandlerMock.mock.calls.find(
+    (c: unknown[]) => c[0] === "rederive_selected_leads",
+  );
+  expect(call).toBeDefined();
+  return call![1] as HandlerWithCtx;
 }
 
 describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out finishes", () => {
@@ -296,6 +342,140 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     });
 
     expect(result).toEqual({ leadsChanged: 3, hitLimit: false, maxLeads: 500 });
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+});
+
+describe("re-derive-jobs selected-leads handler — cancel flow", () => {
+  it("short-circuits the loop on mid-run cancel, emits cancelled with partial counts, and does NOT emit complete", async () => {
+    const handler = await loadSelectedHandler();
+    // 5 leads in payload; cancel flips to true before iteration #3 (i.e. after
+    // 2 leads have been processed).
+    let calls = 0;
+    isJobCancelledMock.mockImplementation(async () => {
+      calls++;
+      return calls > 2;
+    });
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: true });
+
+    const result = await handler(
+      { tenantId: 42, leadIds: [1, 2, 3, 4, 5] },
+      { job: { id: 999 } },
+    );
+
+    // Only the 2 leads processed before the cancel checkpoint flipped
+    expect(reDeriveLeadFunnelMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      total: 5,
+      processed: 2,
+      succeeded: 2,
+      failed: 0,
+      changed: 2,
+      failedLeadIds: [],
+      cancelled: true,
+    });
+
+    // Cancelled event fires with the partial counts so the sheet can render
+    // "Cancelled at 2/5 leads" instead of waiting on a timeout.
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledTimes(1);
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, {
+      jobId: 999,
+      total: 5,
+      processed: 2,
+      succeeded: 2,
+      failed: 0,
+      changed: 2,
+      failedLeadIds: [],
+    });
+
+    // The terminal `complete` and `failed` events must NOT fire for a cancel —
+    // the row is in a `cancelled` terminal state already.
+    expect(emitSelectedLeadsRederiveCompleteMock).not.toHaveBeenCalled();
+    expect(emitSelectedLeadsRederiveFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("cancel before the first lead returns 0/N partial counts and includes no successes", async () => {
+    const handler = await loadSelectedHandler();
+    isJobCancelledMock.mockResolvedValue(true);
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: true });
+
+    const result = await handler(
+      { tenantId: 42, leadIds: [10, 20, 30] },
+      { job: { id: 7 } },
+    );
+
+    expect(reDeriveLeadFunnelMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      total: 3,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      changed: 0,
+      failedLeadIds: [],
+      cancelled: true,
+    });
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, expect.objectContaining({
+      jobId: 7,
+      total: 3,
+      processed: 0,
+      succeeded: 0,
+    }));
+    expect(emitSelectedLeadsRederiveCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it("when no jobId is in ctx, the cancel checkpoint is skipped and the loop runs to completion (sync path)", async () => {
+    const handler = await loadSelectedHandler();
+    // Even if isJobCancelled would return true, it shouldn't be consulted
+    // when there's no jobId — there's no row to cancel.
+    isJobCancelledMock.mockResolvedValue(true);
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: false });
+
+    const result = await handler({ tenantId: 42, leadIds: [1, 2] });
+
+    expect(isJobCancelledMock).not.toHaveBeenCalled();
+    expect(reDeriveLeadFunnelMock).toHaveBeenCalledTimes(2);
+    expect(emitSelectedLeadsRederiveCancelledMock).not.toHaveBeenCalled();
+    expect(emitSelectedLeadsRederiveCompleteMock).toHaveBeenCalledTimes(1);
+    expect((result as { cancelled?: boolean }).cancelled).toBeUndefined();
+  });
+
+  it("a transient failure of the isJobCancelled check is swallowed (logged) and the loop keeps going", async () => {
+    const handler = await loadSelectedHandler();
+    isJobCancelledMock.mockRejectedValueOnce(new Error("db blip")).mockResolvedValue(false);
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: false });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await handler(
+      { tenantId: 42, leadIds: [1, 2] },
+      { job: { id: 5 } },
+    );
+
+    expect(reDeriveLeadFunnelMock).toHaveBeenCalledTimes(2);
+    expect((result as { cancelled?: boolean }).cancelled).toBeUndefined();
+    expect(emitSelectedLeadsRederiveCancelledMock).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("a socket-emit failure on the cancelled event is logged but does not turn the job into a thrown failure", async () => {
+    const handler = await loadSelectedHandler();
+    isJobCancelledMock.mockResolvedValue(true);
+    emitSelectedLeadsRederiveCancelledMock.mockImplementationOnce(() => {
+      throw new Error("socket down");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await handler(
+      { tenantId: 42, leadIds: [1] },
+      { job: { id: 8 } },
+    );
+
+    expect((result as { cancelled?: boolean }).cancelled).toBe(true);
+    // We do NOT fall through to emitting `complete` after a cancel, even when
+    // the cancelled emit itself errors — the row is in a terminal cancelled
+    // state and the sheet's timeout will recover.
+    expect(emitSelectedLeadsRederiveCompleteMock).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });

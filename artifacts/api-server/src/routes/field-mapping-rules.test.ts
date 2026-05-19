@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const insertCalls: Array<{ values: Record<string, unknown> }> = [];
 let selectRowsQueue: Array<unknown[]> = [];
+const updateCalls: Array<{ setValues: Record<string, unknown> | null; whereArgs: unknown[] | null; returnedRows: unknown[] }> = [];
+let updateReturningQueue: Array<unknown[]> = [];
 
 vi.mock("@workspace/db", () => ({
   db: {
@@ -21,28 +23,62 @@ vi.mock("@workspace/db", () => ({
         };
       }),
     })),
+    update: vi.fn().mockImplementation(() => {
+      const call: { setValues: Record<string, unknown> | null; whereArgs: unknown[] | null; returnedRows: unknown[] } = {
+        setValues: null,
+        whereArgs: null,
+        returnedRows: [],
+      };
+      updateCalls.push(call);
+      const chain: Record<string, unknown> = {};
+      chain.set = vi.fn().mockImplementation((vals: Record<string, unknown>) => {
+        call.setValues = vals;
+        return chain;
+      });
+      chain.where = vi.fn().mockImplementation((...args: unknown[]) => {
+        call.whereArgs = args;
+        return chain;
+      });
+      chain.returning = vi.fn().mockImplementation(() => {
+        const next = updateReturningQueue.length > 0 ? updateReturningQueue.shift()! : [];
+        call.returnedRows = next;
+        return Promise.resolve(next);
+      });
+      return chain;
+    }),
   },
   fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
   attributionEventsTable: { createdLeadId: Symbol("createdLeadId"), tenantId: Symbol("tenantId") },
+  backgroundJobsTable: {
+    id: { __col: "id" },
+    tenantId: { __col: "tenantId" },
+    type: { __col: "type" },
+    status: { __col: "status" },
+  },
 }));
 
 vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
 }));
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLeadsRederiveCancelledMock, getSelectedLeadsRederiveProgressMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock, enqueueReDeriveSelectedLeadsMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
+  emitSelectedLeadsRederiveCancelledMock: vi.fn(),
+  getSelectedLeadsRederiveProgressMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
   reDeriveLeadFunnelMock: vi.fn(),
   countPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   listPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   enqueueReDeriveLeadsForRuleScopeMock: vi.fn(),
+  enqueueReDeriveSelectedLeadsMock: vi.fn(),
 }));
 
 vi.mock("../socket", () => ({
   emitRuleRederiveComplete: emitRuleRederiveCompleteMock,
   emitRuleRederiveFailed: emitRuleRederiveFailedMock,
+  emitSelectedLeadsRederiveCancelled: emitSelectedLeadsRederiveCancelledMock,
+  getSelectedLeadsRederiveProgress: getSelectedLeadsRederiveProgressMock,
 }));
 
 vi.mock("../services/re-derive-lead-funnel", () => ({
@@ -54,13 +90,16 @@ vi.mock("../services/re-derive-lead-funnel", () => ({
 
 vi.mock("../services/re-derive-jobs", () => ({
   enqueueReDeriveLeadsForRuleScope: enqueueReDeriveLeadsForRuleScopeMock,
+  enqueueReDeriveSelectedLeads: enqueueReDeriveSelectedLeadsMock,
   REDERIVE_LEADS_FOR_RULE_SCOPE: "rederive_leads_for_rule_scope",
+  REDERIVE_SELECTED_LEADS: "rederive_selected_leads",
   registerReDeriveJobHandlers: vi.fn(),
 }));
 
 vi.mock("drizzle-orm", () => ({
-  eq: vi.fn((...args: unknown[]) => args),
-  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((col: unknown, val: unknown) => ({ __op: "eq", col, val })),
+  and: vi.fn((...args: unknown[]) => ({ __op: "and", args })),
+  inArray: vi.fn((col: unknown, vals: unknown[]) => ({ __op: "inArray", col, vals })),
 }));
 
 import express, { type Request, type Response, type NextFunction } from "express";
@@ -71,8 +110,13 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   vi.resetModules();
   insertCalls.length = 0;
   selectRowsQueue = [];
+  updateCalls.length = 0;
+  updateReturningQueue = [];
   emitRuleRederiveCompleteMock.mockReset();
   emitRuleRederiveFailedMock.mockReset();
+  emitSelectedLeadsRederiveCancelledMock.mockReset();
+  getSelectedLeadsRederiveProgressMock.mockReset();
+  enqueueReDeriveSelectedLeadsMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   reDeriveLeadFunnelMock.mockReset();
   countPendingRederiveLeadsForRuleScopeMock.mockReset();
@@ -429,5 +473,142 @@ describe("POST /field-mapping-rules", () => {
     expect(res.status).toBe(400);
     expect((res.json.error as string)).toContain("mapsTo must be one of");
     expect(insertCalls.length).toBe(0);
+  });
+});
+
+describe("POST /field-mapping-rules/rederive-jobs/:id/cancel", () => {
+  beforeEach(async () => {
+    await setupApp("agency_user", 42);
+  });
+
+  function whereContains(args: unknown[] | null, value: unknown): boolean {
+    if (!args) return false;
+    for (const a of args) {
+      if (!a || typeof a !== "object") continue;
+      const op = (a as { __op?: string }).__op;
+      if (op === "eq" && (a as { val: unknown }).val === value) return true;
+      if (op === "inArray") {
+        const vals = (a as { vals: unknown[] }).vals;
+        if (Array.isArray(vals) && vals.includes(value)) return true;
+      }
+      if (op === "and") {
+        if (whereContains((a as { args: unknown[] }).args, value)) return true;
+      }
+    }
+    return false;
+  }
+
+  it("returns 400 when the :id path param is not a positive integer", async () => {
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/not-a-number/cancel", {});
+    expect(res.status).toBe(400);
+    expect(res.json.error).toMatch(/job id/i);
+  });
+
+  it("returns 404 when the job belongs to a different tenant (tenant scoping)", async () => {
+    // Row exists but tenantId differs from session tenant (42).
+    selectRowsQueue.push([
+      { id: 555, tenantId: 99, type: "rederive_selected_leads", status: "in_progress", payload: { leadIds: [1, 2] } },
+    ]);
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(404);
+    // Must NOT have attempted any UPDATE — the row isn't ours to touch.
+    expect(updateCalls).toHaveLength(0);
+    expect(emitSelectedLeadsRederiveCancelledMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the job exists but is the wrong type (don't let this endpoint cancel arbitrary jobs)", async () => {
+    selectRowsQueue.push([
+      { id: 555, tenantId: 42, type: "some_other_job", status: "in_progress", payload: {} },
+    ]);
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(404);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("returns 404 when the row doesn't exist", async () => {
+    selectRowsQueue.push([]);
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(404);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("returns 409 when the row is already terminal (raced to completed/failed/cancelled between read and write)", async () => {
+    // Read says in_progress, but the conditional UPDATE matches 0 rows
+    // because something else flipped it terminal between the SELECT and the
+    // UPDATE. We expect 409 + the current status so the UI can refresh.
+    selectRowsQueue.push([
+      { id: 555, tenantId: 42, type: "rederive_selected_leads", status: "completed", payload: { leadIds: [1, 2] } },
+    ]);
+    updateReturningQueue.push([]); // 0 rows flipped — already terminal
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(409);
+    expect(res.json.status).toBe("completed");
+    expect(res.json.error).toMatch(/already completed/i);
+    // We do not emit the cancelled event for an already-terminal row.
+    expect(emitSelectedLeadsRederiveCancelledMock).not.toHaveBeenCalled();
+  });
+
+  it("happy path: flips status=cancelled for tenant-owned in_progress row, returns 200, and does NOT emit a pending-cancel event (handler emits with real partial counts)", async () => {
+    const existing = { id: 555, tenantId: 42, type: "rederive_selected_leads", status: "in_progress", payload: { leadIds: [1, 2, 3] } };
+    selectRowsQueue.push([existing]);
+    updateReturningQueue.push([{ ...existing, status: "cancelled" }]);
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(200);
+    expect((res.json as { job: { id: number; status: string } }).job).toMatchObject({
+      id: 555,
+      status: "cancelled",
+    });
+
+    // Exactly one UPDATE issued, with status=cancelled, tenant-scoped, and
+    // gated on status IN (pending, in_progress) so we don't stomp terminal rows.
+    expect(updateCalls).toHaveLength(1);
+    const upd = updateCalls[0];
+    expect(upd.setValues).toMatchObject({ status: "cancelled" });
+    expect(whereContains(upd.whereArgs, 555)).toBe(true);
+    expect(whereContains(upd.whereArgs, 42)).toBe(true);
+    expect(whereContains(upd.whereArgs, "rederive_selected_leads")).toBe(true);
+    expect(whereContains(upd.whereArgs, "pending")).toBe(true);
+    expect(whereContains(upd.whereArgs, "in_progress")).toBe(true);
+
+    // For an in_progress row the handler will emit the cancelled event itself
+    // with real partial counts — the route must NOT pre-emit a 0/N tick.
+    expect(emitSelectedLeadsRederiveCancelledMock).not.toHaveBeenCalled();
+  });
+
+  it("when the row was still pending (no handler will ever run), the route itself emits a 0/N cancelled event so the sheet resolves immediately", async () => {
+    const existing = { id: 555, tenantId: 42, type: "rederive_selected_leads", status: "pending", payload: { leadIds: [10, 20, 30] } };
+    selectRowsQueue.push([existing]);
+    updateReturningQueue.push([{ ...existing, status: "cancelled" }]);
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(200);
+
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledTimes(1);
+    expect(emitSelectedLeadsRederiveCancelledMock).toHaveBeenCalledWith(42, {
+      jobId: 555,
+      total: 3,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      changed: 0,
+      failedLeadIds: [],
+    });
+  });
+
+  it("a socket-emit failure on the pending-cancel path is logged but the route still returns 200", async () => {
+    const existing = { id: 555, tenantId: 42, type: "rederive_selected_leads", status: "pending", payload: { leadIds: [1] } };
+    selectRowsQueue.push([existing]);
+    updateReturningQueue.push([{ ...existing, status: "cancelled" }]);
+    emitSelectedLeadsRederiveCancelledMock.mockImplementationOnce(() => { throw new Error("socket down"); });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await postJson(app, "/field-mapping-rules/rederive-jobs/555/cancel", {});
+    expect(res.status).toBe(200);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

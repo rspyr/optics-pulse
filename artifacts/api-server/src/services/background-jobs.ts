@@ -151,7 +151,7 @@ async function claimOne(): Promise<BackgroundJob | null> {
   }
 }
 
-async function markCompleted(jobId: number, result: unknown): Promise<void> {
+export async function markCompleted(jobId: number, result: unknown): Promise<void> {
   // Only flip status when the row is still `in_progress`. If the cancel
   // endpoint flipped it to `cancelled` mid-run, we want to preserve that
   // terminal state — but we still record the partial `result` so the
@@ -199,7 +199,7 @@ export async function isJobCancelled(jobId: number): Promise<boolean> {
   return row?.status === "cancelled";
 }
 
-async function markRetryOrFailed(
+export async function markRetryOrFailed(
   job: BackgroundJob,
   err: unknown,
 ): Promise<"retry" | "failed"> {
