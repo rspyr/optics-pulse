@@ -220,6 +220,32 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     return { synced: 0, error: errorMessage };
   }
 
+  // Delta-sync window: only pull jobs modified since the last successful run
+  // (with a small overlap buffer so we never miss in-flight edits). Without
+  // this the scheduled sync calls `fetchCompletedJobs` with no date filter,
+  // which under the raised 500-page safety cap can mean pulling up to 50,000
+  // jobs every 15 minutes per tenant — expensive on the ServiceTitan API
+  // quota and a guaranteed source of contention with manual backfills.
+  // Fall back to a 30-day window for tenants that have never synced (or
+  // whose last log was wiped) so we still bound the work to a sane size;
+  // operators run an explicit Backfill for full history sweeps.
+  const [lastJobsSync] = await db.select({ completedAt: integrationSyncLogsTable.completedAt })
+    .from(integrationSyncLogsTable)
+    .where(and(
+      eq(integrationSyncLogsTable.tenantId, tenantId),
+      eq(integrationSyncLogsTable.integration, "service_titan"),
+      eq(integrationSyncLogsTable.syncType, "jobs"),
+      eq(integrationSyncLogsTable.status, "completed"),
+    ))
+    .orderBy(desc(integrationSyncLogsTable.completedAt))
+    .limit(1);
+  const OVERLAP_MS = 30 * 60 * 1000;
+  const FALLBACK_WINDOW_MS = 30 * 86400000;
+  const sinceMs = lastJobsSync?.completedAt
+    ? lastJobsSync.completedAt.getTime() - OVERLAP_MS
+    : Date.now() - FALLBACK_WINDOW_MS;
+  const modifiedOnOrAfter = new Date(sinceMs).toISOString();
+
   try {
     const stConfig = {
       clientId: config.serviceTitanClientId,
@@ -287,10 +313,10 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       }
     }
 
-    await fetchCompletedJobs(stConfig, undefined, processJobBatch);
+    await fetchCompletedJobs(stConfig, modifiedOnOrAfter, processJobBatch);
 
     await completeSyncLog(syncLog.id, "completed", synced);
-    console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId}`);
+    console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId} (modifiedOnOrAfter=${modifiedOnOrAfter})`);
 
     try {
       await Promise.all([
@@ -1432,6 +1458,7 @@ export async function backfillServiceTitanJobs(
     }
 
     let totalSynced = 0;
+    let currentChunkIdx = 0;
 
     async function processJobBatch(stJobs: STJob[]) {
       for (const stJob of stJobs) {
@@ -1488,10 +1515,31 @@ export async function backfillServiceTitanJobs(
         }
         totalSynced++;
       }
+
+      // Flush in-flight progress so the Internal-page progress card ticks up
+      // as each ~500-job batch lands instead of staying at the chunk-start
+      // snapshot for 5-10 minutes per chunk. Best-effort: never let a sync
+      // log write failure abort the batch loop.
+      if (chunks.length > 0 && currentChunkIdx < chunks.length) {
+        const { since, before } = chunks[currentChunkIdx];
+        try {
+          await updateSyncLogChunkProgress(
+            syncLog.id,
+            totalSynced,
+            currentChunkIdx + 1,
+            chunks.length,
+            since.slice(0, 10),
+            before.slice(0, 10),
+          );
+        } catch (progressErr) {
+          console.warn(`[Backfill] ServiceTitan tenant ${tenantId}: in-flight progress write failed`, (progressErr as Error).message);
+        }
+      }
     }
 
     try {
       for (let i = 0; i < chunks.length; i++) {
+        currentChunkIdx = i;
         const { since, before } = chunks[i];
         await updateSyncLogChunkProgress(
           syncLog.id,
