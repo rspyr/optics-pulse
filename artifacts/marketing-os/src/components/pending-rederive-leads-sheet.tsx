@@ -147,6 +147,7 @@ export function PendingRederiveLeadsSheet({
   const [submitting, setSubmitting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const [skippedIdsExpanded, setSkippedIdsExpanded] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   // When set, the failed-row list is filtered to just the leads whose failure
   // reason matches this string. Driven by clicking a chip in the grouped
@@ -771,14 +772,41 @@ export function PendingRederiveLeadsSheet({
                       <p
                         className="text-[11px] text-white/60 flex-1 break-words"
                         data-testid="pending-leads-bulk-skipped-ids"
-                        title={bulkResult.jobCancelled.skippedLeadIds.join(", ")}
                       >
                         Skipped lead IDs:{" "}
                         <span className="text-white/80">
-                          {bulkResult.jobCancelled.skippedLeadIds.slice(0, 10).join(", ")}
-                          {bulkResult.jobCancelled.skippedLeadIds.length > 10 && (
-                            <> …+{bulkResult.jobCancelled.skippedLeadIds.length - 10} more</>
-                          )}
+                          {(skippedIdsExpanded
+                            ? bulkResult.jobCancelled.skippedLeadIds
+                            : bulkResult.jobCancelled.skippedLeadIds.slice(0, 10)
+                          ).map((id, i, arr) => (
+                            <span key={id}>
+                              <a
+                                href={`${API_BASE}/?leadId=${id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline"
+                                data-testid={`pending-leads-bulk-skipped-id-${id}`}
+                              >
+                                {id}
+                              </a>
+                              {i < arr.length - 1 ? ", " : ""}
+                            </span>
+                          ))}
+                          {!skippedIdsExpanded &&
+                            bulkResult.jobCancelled.skippedLeadIds.length > 10 && (
+                              <>
+                                {" "}
+                                …
+                                <button
+                                  type="button"
+                                  onClick={() => setSkippedIdsExpanded(true)}
+                                  className="text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline"
+                                  data-testid="pending-leads-bulk-skipped-ids-show-all"
+                                >
+                                  +{bulkResult.jobCancelled.skippedLeadIds.length - 10} more
+                                </button>
+                              </>
+                            )}
                         </span>
                       </p>
                       <Button
