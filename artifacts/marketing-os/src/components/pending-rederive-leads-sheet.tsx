@@ -14,6 +14,21 @@ import { useLeadNotification } from "@/contexts/lead-notification-context";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
+/**
+ * localStorage key for a per-scope "operator dismissed the restored cancelled
+ * banner" flag. Stores the cancelled jobId (or "*" when the job row pre-dates
+ * jobId-threaded snapshots) so a *new* cancellation for the same scope still
+ * surfaces a fresh banner — only the exact dismissed snapshot stays hidden.
+ * Cleared on the next enqueue for the scope.
+ */
+function cancelledBannerDismissKey(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+) {
+  return `pulse:cancelled-rederive-dismissed:${tenantId}:${pageUrlPattern}:${formIdentifier}`;
+}
+
 type PendingLead = {
   id: number;
   firstName: string;
@@ -239,6 +254,22 @@ export function PendingRederiveLeadsSheet({
       } | null) => {
         if (cancelled || !d) return;
         if (d.status !== "cancelled") return;
+        // Honor a per-scope "operator dismissed this banner" flag set via the
+        // Dismiss control on a previous open. We compare the dismissed jobId
+        // against the snapshot's jobId so a *new* cancellation for the same
+        // scope still surfaces a fresh banner. "*" matches any jobId for
+        // older job rows that pre-date jobId-threaded snapshots.
+        try {
+          const dismissed = localStorage.getItem(
+            cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
+          );
+          if (
+            dismissed &&
+            (dismissed === "*" || (d.jobId != null && Number(dismissed) === d.jobId))
+          ) {
+            return;
+          }
+        } catch { /* localStorage unavailable; fall through and restore */ }
         // Only restore when the operator hasn't already started a new
         // bulk submit in this open — guard against the snapshot fetch
         // racing the initial-load reset and the operator's next click.
@@ -600,6 +631,23 @@ export function PendingRederiveLeadsSheet({
     }
   }
 
+  /**
+   * Hide the restored cancelled banner for this scope until a new job is
+   * enqueued. Persists across sheet open/close via localStorage keyed by the
+   * cancelled jobId so a *fresh* cancellation still surfaces a banner.
+   */
+  function dismissCancelledBanner() {
+    if (bulkResult?.mode !== "queued" || !bulkResult.jobCancelled) return;
+    try {
+      localStorage.setItem(
+        cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
+        bulkResult.jobId != null ? String(bulkResult.jobId) : "*",
+      );
+    } catch { /* best-effort; clearing local state below still hides it */ }
+    setBulkResult(null);
+    setSkippedIdsExpanded(false);
+  }
+
   async function submitRederive(leadIdsOverride?: number[]) {
     const leadIds = leadIdsOverride ?? Array.from(selected);
     if (leadIds.length === 0 || submitting) return;
@@ -630,6 +678,16 @@ export function PendingRederiveLeadsSheet({
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
       const result = d as BulkResult;
       setBulkResult(result);
+      // A successful enqueue (or sync re-derive) for this scope invalidates
+      // any prior dismissal — clear the localStorage marker so the next
+      // cancellation surfaces a fresh banner instead of being silently
+      // suppressed. Only do this on success; a failed submit must not
+      // clear the dismissal of an earlier cancelled job.
+      try {
+        localStorage.removeItem(
+          cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
+        );
+      } catch { /* best-effort */ }
       // After a sync re-derive, the succeeded leads are no longer "pending"
       // for this rule scope — drop them from the visible list so the sheet
       // reflects the new state. Failed ones stay (highlighted via
@@ -813,21 +871,35 @@ export function PendingRederiveLeadsSheet({
                   className="space-y-1.5"
                   data-testid="pending-leads-bulk-cancelled"
                 >
-                  <p className="text-xs text-amber-300">
-                    Cancelled at {bulkResult.jobCancelled.processed}/{bulkResult.total} leads
-                    {" "}· {bulkResult.jobCancelled.succeeded} succeeded
-                    {bulkResult.jobCancelled.changed > 0 && (
-                      <> · {bulkResult.jobCancelled.changed} updated</>
-                    )}
-                    {bulkResult.jobCancelled.failed > 0 && (
-                      <span className="text-red-400">
-                        {" "}· {bulkResult.jobCancelled.failed} failed
-                      </span>
-                    )}
-                    {bulkResult.jobCancelled.skippedLeadIds.length > 0 && (
-                      <> · {bulkResult.jobCancelled.skippedLeadIds.length} skipped</>
-                    )}
-                  </p>
+                  <div className="flex items-start gap-2">
+                    <p className="text-xs text-amber-300 flex-1">
+                      Cancelled at {bulkResult.jobCancelled.processed}/{bulkResult.total} leads
+                      {" "}· {bulkResult.jobCancelled.succeeded} succeeded
+                      {bulkResult.jobCancelled.changed > 0 && (
+                        <> · {bulkResult.jobCancelled.changed} updated</>
+                      )}
+                      {bulkResult.jobCancelled.failed > 0 && (
+                        <span className="text-red-400">
+                          {" "}· {bulkResult.jobCancelled.failed} failed
+                        </span>
+                      )}
+                      {bulkResult.jobCancelled.skippedLeadIds.length > 0 && (
+                        <> · {bulkResult.jobCancelled.skippedLeadIds.length} skipped</>
+                      )}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={dismissCancelledBanner}
+                      data-testid="pending-leads-bulk-cancelled-dismiss"
+                      className="h-6 text-[11px] px-2 text-white/60 hover:text-white shrink-0"
+                      title="Dismiss this cancelled banner for this scope"
+                      aria-label="Dismiss cancelled banner"
+                    >
+                      <X className="w-3 h-3 mr-1" />
+                      Dismiss
+                    </Button>
+                  </div>
                   {bulkResult.jobCancelled.skippedLeadIds.length > 0 && (
                     <div className="flex items-start gap-2">
                       <p
