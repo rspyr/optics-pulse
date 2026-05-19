@@ -114,4 +114,99 @@ describe("push-notification-jobs handler", () => {
     );
     expect(sendPushToUserMock).not.toHaveBeenCalled();
   });
+
+  it("throws when the report has a top-level error (so the job is retried)", async () => {
+    const handler = await loadHandler();
+    const topLevelError = new Error("DB lookup failed");
+    sendPushToUserMock.mockResolvedValue({
+      attempted: 0,
+      succeeded: 0,
+      permanentFailures: 0,
+      transientFailures: 0,
+      topLevelError,
+    });
+
+    await expect(
+      handler({
+        target: { kind: "user", userId: 1 },
+        title: "T",
+        body: "B",
+        enqueuedAt: Date.now(),
+        source: "test-top-level",
+      }),
+    ).rejects.toBe(topLevelError);
+  });
+
+  it("throws when all deliveries hit transient failures and none succeeded", async () => {
+    const handler = await loadHandler();
+    sendPushToUserMock.mockResolvedValue({
+      attempted: 2,
+      succeeded: 0,
+      permanentFailures: 0,
+      transientFailures: 2,
+      topLevelError: null,
+    });
+
+    await expect(
+      handler({
+        target: { kind: "user", userId: 1 },
+        title: "T",
+        body: "B",
+        enqueuedAt: Date.now(),
+        source: "test-transient-only",
+      }),
+    ).rejects.toThrow(/transient/i);
+  });
+
+  it("resolves successfully when at least one device succeeded even if others failed transiently", async () => {
+    const handler = await loadHandler();
+    sendPushToUserMock.mockResolvedValue({
+      attempted: 3,
+      succeeded: 1,
+      permanentFailures: 0,
+      transientFailures: 2,
+      topLevelError: null,
+    });
+
+    const result = await handler({
+      target: { kind: "user", userId: 1 },
+      title: "T",
+      body: "B",
+      enqueuedAt: Date.now(),
+      source: "test-partial-success",
+    });
+
+    expect(result).toMatchObject({
+      attempted: 3,
+      succeeded: 1,
+      transientFailures: 2,
+      permanentFailures: 0,
+    });
+  });
+
+  it("resolves successfully when only permanent failures occurred (no retry on dead tokens)", async () => {
+    const handler = await loadHandler();
+    sendPushToUserMock.mockResolvedValue({
+      attempted: 2,
+      succeeded: 0,
+      permanentFailures: 2,
+      transientFailures: 0,
+      topLevelError: null,
+    });
+
+    const result = await handler({
+      target: { kind: "user", userId: 1 },
+      title: "T",
+      body: "B",
+      enqueuedAt: Date.now(),
+      source: "test-permanent-only",
+    });
+
+    expect(result).toMatchObject({
+      attempted: 2,
+      succeeded: 0,
+      permanentFailures: 2,
+      transientFailures: 0,
+    });
+  });
 });
