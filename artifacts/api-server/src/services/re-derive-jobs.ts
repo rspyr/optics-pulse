@@ -9,6 +9,7 @@ import {
   emitRuleRederiveFailed,
   emitSelectedLeadsRederiveComplete,
   emitSelectedLeadsRederiveFailed,
+  emitSelectedLeadsRederiveProgress,
 } from "../socket";
 
 /**
@@ -214,11 +215,47 @@ function registerSelectedLeadsHandler(): void {
   registerJobHandler(REDERIVE_SELECTED_LEADS, async (payload, ctx) => {
     const args = parseSelectedPayload(payload);
     const jobId = ctx?.job?.id ?? null;
+    const total = args.leadIds.length;
     let succeeded = 0;
     let failed = 0;
     let changed = 0;
     const failedLeadIds: number[] = [];
+    // Emit progress every N processed leads OR every PROGRESS_INTERVAL_MS,
+    // whichever comes first, so very small jobs still get an early
+    // first-chunk event (so the bar moves) but huge jobs don't spam the
+    // socket. We also always emit a final progress tick right before the
+    // complete/failed event so any reconnecting client lands on the
+    // terminal counts before the snapshot is cleared.
+    const chunkSize = Math.max(1, Math.min(25, Math.ceil(total / 20)));
+    const PROGRESS_INTERVAL_MS = 1500;
+    let lastEmittedAt = 0;
+    let lastEmittedProcessed = 0;
+    const maybeEmitProgress = (processed: number, force: boolean) => {
+      if (jobId == null) return;
+      const now = Date.now();
+      const dueByCount = processed - lastEmittedProcessed >= chunkSize;
+      const dueByTime = now - lastEmittedAt >= PROGRESS_INTERVAL_MS;
+      if (!force && !dueByCount && !dueByTime) return;
+      lastEmittedAt = now;
+      lastEmittedProcessed = processed;
+      try {
+        emitSelectedLeadsRederiveProgress(args.tenantId, {
+          jobId,
+          total,
+          processed,
+          succeeded,
+          failed,
+          changed,
+        });
+      } catch (emitErr) {
+        console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveProgress failed:", emitErr);
+      }
+    };
     try {
+      // Initial 0/total tick so the sheet renders the bar immediately
+      // (rather than waiting for the first chunk to complete).
+      maybeEmitProgress(0, true);
+      let processed = 0;
       for (const leadId of args.leadIds) {
         try {
           const r = await reDeriveLeadFunnel(args.tenantId, leadId);
@@ -229,7 +266,12 @@ function registerSelectedLeadsHandler(): void {
           failedLeadIds.push(leadId);
           console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
         }
+        processed++;
+        maybeEmitProgress(processed, false);
       }
+      // Final tick — guarantees the bar reads N/N before the complete event
+      // (and any reconnect-fetch landing in the gap sees the final counts).
+      maybeEmitProgress(total, true);
     } catch (err) {
       // Defensive: catastrophic loop failure (something other than a per-lead
       // throw, which we already catch above). Surface to the sheet so it can

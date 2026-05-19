@@ -394,6 +394,128 @@ export function emitRuleRederiveFailed(
   }
 }
 
+/**
+ * Latest progress snapshot for each in-flight bulk re-derive job, keyed by
+ * `jobId`. Lets a reconnecting client (or a sheet that mounted after the job
+ * already started) fetch the current progress instead of waiting for the
+ * next periodic event. Entries are cleared in `emitSelectedLeadsRederive{Complete,Failed}`
+ * so the map doesn't grow unboundedly; an in-memory snapshot is acceptable
+ * because the job itself is durable in `background_jobs` and the worst case
+ * on a server restart is that the progress bar resets to "running…" until
+ * the next chunk event fires.
+ */
+type SelectedLeadsRederiveSnapshot = {
+  tenantId: number;
+  jobId: number;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  changed: number;
+  updatedAt: string;
+  // Lifecycle status. `running` is the live job; `complete`/`failed` are
+  // terminal states held for SELECTED_LEADS_REDERIVE_TERMINAL_TTL_MS so a
+  // client that reconnected after the socket event fired can still observe
+  // the final outcome via the REST endpoint.
+  status: "running" | "complete" | "failed";
+  failedLeadIds?: number[];
+  reason?: string;
+};
+
+const selectedLeadsRederiveProgressByJobId = new Map<number, SelectedLeadsRederiveSnapshot>();
+const selectedLeadsRederiveTerminalTimers = new Map<number, ReturnType<typeof setTimeout>>();
+// Keep terminal snapshots around for ~10 minutes so a client that was offline
+// when the complete/failed socket event fired can still resolve its progress
+// bar by hitting the REST snapshot endpoint on reconnect.
+const SELECTED_LEADS_REDERIVE_TERMINAL_TTL_MS = 10 * 60 * 1000;
+
+export function getSelectedLeadsRederiveProgress(jobId: number) {
+  return selectedLeadsRederiveProgressByJobId.get(jobId) ?? null;
+}
+
+export function emitSelectedLeadsRederiveProgress(
+  tenantId: number,
+  data: {
+    jobId: number;
+    total: number;
+    processed: number;
+    succeeded: number;
+    failed: number;
+    changed: number;
+  },
+) {
+  const snapshot: SelectedLeadsRederiveSnapshot = {
+    tenantId,
+    jobId: data.jobId,
+    total: data.total,
+    processed: data.processed,
+    succeeded: data.succeeded,
+    failed: data.failed,
+    changed: data.changed,
+    updatedAt: new Date().toISOString(),
+    status: "running",
+  };
+  selectedLeadsRederiveProgressByJobId.set(data.jobId, snapshot);
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-progress", snapshot);
+  }
+}
+
+function recordSelectedLeadsRederiveTerminal(
+  jobId: number | null,
+  patch:
+    | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[] }
+    | { status: "failed"; tenantId: number; total: number; reason: string },
+) {
+  if (jobId == null) return;
+  const prev = selectedLeadsRederiveProgressByJobId.get(jobId);
+  const base: SelectedLeadsRederiveSnapshot = prev ?? {
+    tenantId: patch.tenantId,
+    jobId,
+    total: patch.total,
+    processed: patch.status === "complete" ? patch.total : (prev as SelectedLeadsRederiveSnapshot | undefined)?.processed ?? 0,
+    succeeded: 0,
+    failed: 0,
+    changed: 0,
+    updatedAt: new Date().toISOString(),
+    status: "running",
+  };
+  const next: SelectedLeadsRederiveSnapshot =
+    patch.status === "complete"
+      ? {
+          ...base,
+          tenantId: patch.tenantId,
+          total: patch.total,
+          processed: patch.total,
+          succeeded: patch.succeeded,
+          failed: patch.failed,
+          changed: patch.changed,
+          failedLeadIds: patch.failedLeadIds,
+          updatedAt: new Date().toISOString(),
+          status: "complete",
+        }
+      : {
+          ...base,
+          tenantId: patch.tenantId,
+          total: patch.total,
+          reason: patch.reason,
+          updatedAt: new Date().toISOString(),
+          status: "failed",
+        };
+  selectedLeadsRederiveProgressByJobId.set(jobId, next);
+  const existingTimer = selectedLeadsRederiveTerminalTimers.get(jobId);
+  if (existingTimer) clearTimeout(existingTimer);
+  const t = setTimeout(() => {
+    selectedLeadsRederiveProgressByJobId.delete(jobId);
+    selectedLeadsRederiveTerminalTimers.delete(jobId);
+  }, SELECTED_LEADS_REDERIVE_TERMINAL_TTL_MS);
+  // Don't keep the process alive for the TTL alone (matters in tests).
+  if (typeof (t as unknown as { unref?: () => void }).unref === "function") {
+    (t as unknown as { unref: () => void }).unref();
+  }
+  selectedLeadsRederiveTerminalTimers.set(jobId, t);
+}
+
 export function emitSelectedLeadsRederiveComplete(
   tenantId: number,
   data: {
@@ -405,6 +527,15 @@ export function emitSelectedLeadsRederiveComplete(
     failedLeadIds: number[];
   },
 ) {
+  recordSelectedLeadsRederiveTerminal(data.jobId, {
+    status: "complete",
+    tenantId,
+    total: data.total,
+    succeeded: data.succeeded,
+    failed: data.failed,
+    changed: data.changed,
+    failedLeadIds: data.failedLeadIds,
+  });
   if (io) {
     io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-complete", { ...data, tenantId });
     console.log(
@@ -423,6 +554,12 @@ export function emitSelectedLeadsRederiveFailed(
     reason: string;
   },
 ) {
+  recordSelectedLeadsRederiveTerminal(data.jobId, {
+    status: "failed",
+    tenantId,
+    total: data.total,
+    reason: data.reason,
+  });
   if (io) {
     io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-failed", { ...data, tenantId });
     console.log(

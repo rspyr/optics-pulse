@@ -5,7 +5,7 @@ import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { enqueueReDeriveLeadsForRuleScope, enqueueReDeriveSelectedLeads } from "../services/re-derive-jobs";
-import { emitRuleRederiveFailed } from "../socket";
+import { emitRuleRederiveFailed, getSelectedLeadsRederiveProgress } from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
@@ -197,6 +197,36 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
     changed,
     failedLeadIds,
   });
+});
+
+/**
+ * Returns the latest in-memory progress snapshot for a queued bulk
+ * re-derive job. Used by the pending-leads sheet on reconnect so the
+ * progress bar can resume without waiting for the next periodic emit.
+ * Returns 404 if no snapshot is known (job already finished or never
+ * existed). The snapshot is tenant-scoped — operators can only read
+ * progress for their own tenant.
+ */
+router.get("/field-mapping-rules/rederive-job-progress", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const jobIdRaw = req.query.jobId;
+  const jobId = typeof jobIdRaw === "string" || typeof jobIdRaw === "number"
+    ? Number(jobIdRaw)
+    : NaN;
+  if (!Number.isInteger(jobId) || jobId <= 0) {
+    res.status(400).json({ error: "jobId must be a positive integer" });
+    return;
+  }
+  const snapshot = getSelectedLeadsRederiveProgress(jobId);
+  if (!snapshot || snapshot.tenantId !== tenantId) {
+    res.status(404).json({ error: "No progress snapshot for this job" });
+    return;
+  }
+  res.json(snapshot);
 });
 
 router.get("/field-mapping-rules", async (req, res) => {

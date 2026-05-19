@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/sheet";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { useLeadNotification } from "@/contexts/lead-notification-context";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -40,6 +41,13 @@ type Props = {
   excludeLeadId?: number | null;
 };
 
+type JobProgress = {
+  processed: number;
+  succeeded: number;
+  failed: number;
+  changed: number;
+};
+
 type BulkResult =
   | {
       mode: "sync";
@@ -53,9 +61,14 @@ type BulkResult =
       mode: "queued";
       total: number;
       jobId: number | null;
+      // Periodic per-chunk progress emitted by the handler so the sheet can
+      // render a progress bar like "Re-derived 42/150 leads…" instead of an
+      // opaque spinner. Filled in by `selected-leads-rederive-progress`
+      // socket events (or by an on-mount/on-reconnect REST fetch).
+      progress?: JobProgress;
       // The background job result is filled in once the
       // `selected-leads-rederive-complete` socket event arrives. Until then
-      // the sheet shows a "Re-deriving N leads in the background…" indicator.
+      // the sheet shows a progress bar driven by `progress` above.
       jobResult?: {
         succeeded: number;
         failed: number;
@@ -112,7 +125,12 @@ export function PendingRederiveLeadsSheet({
   const [submitting, setSubmitting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
-  const { onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed } = useLeadNotification();
+  const {
+    onSelectedLeadsRederiveComplete,
+    onSelectedLeadsRederiveFailed,
+    onSelectedLeadsRederiveProgress,
+    onReconnect,
+  } = useLeadNotification();
   // Safety timeout for the queued path — if no socket event arrives within
   // this window the sheet surfaces a retry button so the operator is never
   // stuck staring at a "running…" indicator forever.
@@ -190,15 +208,23 @@ export function PendingRederiveLeadsSheet({
   const isJobRunning =
     bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError;
 
-  // Subscribe to the background job's completion/failure events so the sheet
-  // can fill in the queued result row with the final success/failure/changed
-  // counts (or surface a retry hint on failure / timeout). We filter on
-  // jobId so a concurrent bulk re-derive started elsewhere in the tenant
-  // doesn't corrupt this sheet's progress display.
+  const bulkResultMode = bulkResult?.mode;
+  const bulkResultJobId = bulkResult?.mode === "queued" ? bulkResult.jobId : null;
+
+  // Subscribe to the background job's progress/completion/failure events so
+  // the sheet can render a "Re-derived X/Y leads…" progress bar and fill in
+  // the final success/failure/changed counts (or surface a retry hint on
+  // failure / timeout). We filter on jobId so a concurrent bulk re-derive
+  // started elsewhere in the tenant doesn't corrupt this sheet's display.
+  //
+  // Dependencies are intentionally narrowed to `(isJobRunning, mode, jobId,
+  // total, tenantId, ...register callbacks)` — depending on the full
+  // `bulkResult` would re-run the effect on every progress tick (which then
+  // re-subscribes and re-fetches the snapshot needlessly).
   useEffect(() => {
     if (!isJobRunning) return;
-    if (bulkResult?.mode !== "queued") return;
-    const targetJobId = bulkResult.jobId;
+    if (bulkResultMode !== "queued") return;
+    const targetJobId = bulkResultJobId;
 
     const clearTimer = () => {
       if (queuedTimerRef.current) {
@@ -207,6 +233,37 @@ export function PendingRederiveLeadsSheet({
       }
     };
 
+    // Reset / extend the no-event safety timeout. Called whenever a progress
+    // tick arrives so a long but healthy job doesn't trip the "timed out"
+    // hint just because the whole batch takes longer than QUEUED_TIMEOUT_MS.
+    const armSafetyTimer = () => {
+      clearTimer();
+      queuedTimerRef.current = setTimeout(() => {
+        setBulkResult((prev) =>
+          prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+            ? { ...prev, jobError: "Timed out waiting for background job to finish" }
+            : prev,
+        );
+      }, QUEUED_TIMEOUT_MS);
+    };
+
+    const unsubProgress = onSelectedLeadsRederiveProgress((data) => {
+      if (targetJobId != null && data.jobId !== targetJobId) return;
+      armSafetyTimer();
+      setBulkResult((prev) =>
+        prev?.mode === "queued"
+          ? {
+              ...prev,
+              progress: {
+                processed: data.processed,
+                succeeded: data.succeeded,
+                failed: data.failed,
+                changed: data.changed,
+              },
+            }
+          : prev,
+      );
+    });
     const unsubComplete = onSelectedLeadsRederiveComplete((data) => {
       if (targetJobId != null && data.jobId !== targetJobId) return;
       clearTimer();
@@ -234,20 +291,94 @@ export function PendingRederiveLeadsSheet({
           : prev,
       );
     });
-    queuedTimerRef.current = setTimeout(() => {
-      setBulkResult((prev) =>
-        prev?.mode === "queued" && !prev.jobResult && !prev.jobError
-          ? { ...prev, jobError: "Timed out waiting for background job to finish" }
-          : prev,
-      );
-    }, QUEUED_TIMEOUT_MS);
+
+    // On (re)connect, fetch the latest in-memory progress snapshot so the
+    // bar resumes from the server's view of the world instead of staying
+    // pegged at the last tick that arrived before the disconnect. Also fired
+    // once on initial subscription so a sheet that opened after the job
+    // already started doesn't sit at 0/total until the next chunk fires.
+    const fetchProgressSnapshot = () => {
+      if (targetJobId == null) return;
+      const params = new URLSearchParams({
+        tenantId: String(tenantId),
+        jobId: String(targetJobId),
+      });
+      fetch(`${API_BASE}/api/field-mapping-rules/rederive-job-progress?${params.toString()}`, {
+        credentials: "include",
+      })
+        .then(async (res) => {
+          if (!res.ok) return null;
+          return res.json();
+        })
+        .then((d: {
+          status?: "running" | "complete" | "failed";
+          processed: number;
+          succeeded: number;
+          failed: number;
+          changed: number;
+          failedLeadIds?: number[];
+          reason?: string;
+        } | null) => {
+          if (!d) return;
+          // Terminal snapshots resolve the bar even when the client missed
+          // the live `selected-leads-rederive-{complete,failed}` socket
+          // event during a disconnect — the server keeps terminal snapshots
+          // for a short TTL precisely so this fetch can recover the outcome.
+          if (d.status === "complete") {
+            clearTimer();
+            setBulkResult((prev) =>
+              prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+                ? {
+                    ...prev,
+                    jobResult: {
+                      succeeded: d.succeeded,
+                      failed: d.failed,
+                      changed: d.changed,
+                      failedLeadIds: d.failedLeadIds ?? [],
+                    },
+                  }
+                : prev,
+            );
+            return;
+          }
+          if (d.status === "failed") {
+            clearTimer();
+            setBulkResult((prev) =>
+              prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+                ? { ...prev, jobError: d.reason || "Background job failed" }
+                : prev,
+            );
+            return;
+          }
+          setBulkResult((prev) =>
+            prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+              ? {
+                  ...prev,
+                  progress: {
+                    processed: d.processed,
+                    succeeded: d.succeeded,
+                    failed: d.failed,
+                    changed: d.changed,
+                  },
+                }
+              : prev,
+          );
+        })
+        .catch(() => { /* best-effort; next socket tick will catch us up */ });
+    };
+    fetchProgressSnapshot();
+    const unsubReconnect = onReconnect(fetchProgressSnapshot);
+
+    armSafetyTimer();
 
     return () => {
+      unsubProgress();
       unsubComplete();
       unsubFailed();
+      unsubReconnect();
       clearTimer();
     };
-  }, [isJobRunning, bulkResult, onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed]);
+  }, [isJobRunning, bulkResultMode, bulkResultJobId, tenantId, onSelectedLeadsRederiveProgress, onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed, onReconnect]);
 
   async function submitRederive(leadIdsOverride?: number[]) {
     const leadIds = leadIdsOverride ?? Array.from(selected);
@@ -353,7 +484,7 @@ export function PendingRederiveLeadsSheet({
                   size="sm"
                   variant="secondary"
                   disabled={selected.size === 0 || submitting}
-                  onClick={submitRederive}
+                  onClick={() => submitRederive()}
                   data-testid="pending-leads-rederive-selected"
                   className="h-7 text-xs"
                 >
@@ -388,13 +519,34 @@ export function PendingRederiveLeadsSheet({
                 </p>
               )}
               {bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError && (
-                <p
-                  className="text-xs text-white/80 flex items-center gap-2"
+                <div
+                  className="space-y-1.5"
                   data-testid="pending-leads-bulk-result"
                 >
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  Re-deriving {bulkResult.total} leads in the background…
-                </p>
+                  <p className="text-xs text-white/80 flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    {bulkResult.progress
+                      ? `Re-derived ${bulkResult.progress.processed}/${bulkResult.total} leads…`
+                      : `Re-deriving ${bulkResult.total} leads in the background…`}
+                    {bulkResult.progress && bulkResult.progress.failed > 0 && (
+                      <span className="text-red-400">
+                        · {bulkResult.progress.failed} failed
+                      </span>
+                    )}
+                  </p>
+                  <Progress
+                    value={
+                      bulkResult.total > 0
+                        ? Math.min(
+                            100,
+                            ((bulkResult.progress?.processed ?? 0) / bulkResult.total) * 100,
+                          )
+                        : 0
+                    }
+                    className="h-1.5"
+                    data-testid="pending-leads-bulk-progress-bar"
+                  />
+                </div>
               )}
               {bulkResult?.mode === "queued" && bulkResult.jobResult && (
                 <p

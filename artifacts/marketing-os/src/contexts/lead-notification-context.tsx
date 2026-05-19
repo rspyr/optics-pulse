@@ -98,6 +98,19 @@ export interface SelectedLeadsRederiveCompleteData {
 
 type SelectedLeadsRederiveCompleteCallback = (data: SelectedLeadsRederiveCompleteData) => void;
 
+export interface SelectedLeadsRederiveProgressData {
+  tenantId?: number;
+  jobId: number;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  changed: number;
+  updatedAt?: string;
+}
+
+type SelectedLeadsRederiveProgressCallback = (data: SelectedLeadsRederiveProgressData) => void;
+
 export interface SelectedLeadsRederiveFailedData {
   tenantId?: number;
   jobId: number | null;
@@ -125,6 +138,7 @@ interface LeadNotificationContextType {
   onRuleRederiveFailed: (cb: RuleRederiveFailedCallback) => () => void;
   onSelectedLeadsRederiveComplete: (cb: SelectedLeadsRederiveCompleteCallback) => () => void;
   onSelectedLeadsRederiveFailed: (cb: SelectedLeadsRederiveFailedCallback) => () => void;
+  onSelectedLeadsRederiveProgress: (cb: SelectedLeadsRederiveProgressCallback) => () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -159,6 +173,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const ruleRederiveFailedListenersRef = useRef<Set<RuleRederiveFailedCallback>>(new Set());
   const selectedLeadsRederiveListenersRef = useRef<Set<SelectedLeadsRederiveCompleteCallback>>(new Set());
   const selectedLeadsRederiveFailedListenersRef = useRef<Set<SelectedLeadsRederiveFailedCallback>>(new Set());
+  const selectedLeadsRederiveProgressListenersRef = useRef<Set<SelectedLeadsRederiveProgressCallback>>(new Set());
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
@@ -368,6 +383,12 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         try { cb(data); } catch (e) { console.warn("[LeadNotification] selected-leads-rederive-failed callback error:", e); }
       });
     });
+    socket.on("selected-leads-rederive-progress", (data: SelectedLeadsRederiveProgressData) => {
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      selectedLeadsRederiveProgressListenersRef.current.forEach(cb => {
+        try { cb(data); } catch (e) { console.warn("[LeadNotification] selected-leads-rederive-progress callback error:", e); }
+      });
+    });
     socket.on("callback-due", (data: CallbackDueData) => {
       if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
@@ -474,8 +495,13 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     return () => { selectedLeadsRederiveFailedListenersRef.current.delete(cb); };
   }, []);
 
+  const registerOnSelectedLeadsRederiveProgress = useCallback((cb: SelectedLeadsRederiveProgressCallback) => {
+    selectedLeadsRederiveProgressListenersRef.current.add(cb);
+    return () => { selectedLeadsRederiveProgressListenersRef.current.delete(cb); };
+  }, []);
+
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete, onRuleRederiveFailed: registerOnRuleRederiveFailed, onSelectedLeadsRederiveComplete: registerOnSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed: registerOnSelectedLeadsRederiveFailed }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete, onRuleRederiveFailed: registerOnRuleRederiveFailed, onSelectedLeadsRederiveComplete: registerOnSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed: registerOnSelectedLeadsRederiveFailed, onSelectedLeadsRederiveProgress: registerOnSelectedLeadsRederiveProgress }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>
