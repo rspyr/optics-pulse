@@ -2871,19 +2871,38 @@ export default function Leads() {
   // immediately refetch the leads-hub queue so any open lead's funnel updates
   // within ~1-2s instead of waiting for the 15s background refresh.
   useEffect(() => {
-    const onRefresh = () => { refetch(); refetchStats(); };
-    window.addEventListener("pulse:leads-refresh", onRefresh);
+    const onRefresh = (reason?: string) => {
+      if (
+        (reason === "field-mapping-updated" || reason === "subdomain-rule-created") &&
+        selectedLeadRef.current
+      ) {
+        const cur = selectedLeadRef.current;
+        pendingFunnelCheckRef.current = {
+          leadId: cur.id,
+          oldFunnelId: cur.funnelId ?? null,
+          oldLeadType: cur.leadType ?? null,
+          oldSource: cur.source ?? null,
+        };
+      }
+      refetch();
+      refetchStats();
+    };
+    const onWindowRefresh = (ev: Event) => {
+      const reason = (ev as CustomEvent)?.detail?.reason as string | undefined;
+      onRefresh(reason);
+    };
+    window.addEventListener("pulse:leads-refresh", onWindowRefresh);
     let ch: BroadcastChannel | null = null;
     try {
       if (typeof BroadcastChannel !== "undefined") {
         ch = new BroadcastChannel("pulse");
         ch.onmessage = (ev) => {
-          if (ev?.data?.type === "leads-refresh") onRefresh();
+          if (ev?.data?.type === "leads-refresh") onRefresh(ev?.data?.reason);
         };
       }
     } catch {}
     return () => {
-      window.removeEventListener("pulse:leads-refresh", onRefresh);
+      window.removeEventListener("pulse:leads-refresh", onWindowRefresh);
       if (ch) { try { ch.close(); } catch {} }
     };
   }, [refetch, refetchStats]);
@@ -2946,18 +2965,58 @@ export default function Leads() {
   }, [callbackNotification, dismissCallbackNotification]);
 
   const selectedLeadIdRef = useRef<number | null>(null);
-  useEffect(() => { selectedLeadIdRef.current = selectedLead?.id ?? null; }, [selectedLead]);
+  const selectedLeadRef = useRef<LeadData | null>(null);
+  useEffect(() => {
+    selectedLeadIdRef.current = selectedLead?.id ?? null;
+    selectedLeadRef.current = selectedLead;
+  }, [selectedLead]);
+
+  const [funnelToast, setFunnelToast] = useState<{ id: number; oldName: string; newName: string } | null>(null);
+  const funnelToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFunnelCheckRef = useRef<{ leadId: number; oldFunnelId: number | null; oldLeadType: string | null; oldSource: string | null } | null>(null);
+  const dismissFunnelToast = useCallback(() => {
+    if (funnelToastTimerRef.current) clearTimeout(funnelToastTimerRef.current);
+    setFunnelToast(null);
+  }, []);
+
   useEffect(() => {
     if (!selectedLeadIdRef.current) return;
     const allLeads = [...queueData.newLeads, ...queueData.callbacks, ...queueData.reengagement, ...queueData.oldLeads];
     const updated = allLeads.find((l: LeadData) => l.id === selectedLeadIdRef.current);
-    if (updated) setSelectedLead(updated);
-  }, [queueData]);
+    if (updated) {
+      setSelectedLead(updated);
+      const pending = pendingFunnelCheckRef.current;
+      if (pending && pending.leadId === updated.id) {
+        const funnelChanged =
+          (pending.oldFunnelId ?? null) !== (updated.funnelId ?? null) ||
+          (pending.oldLeadType ?? null) !== (updated.leadType ?? null);
+        if (funnelChanged) {
+          const newName =
+            (updated.funnelId && funnelMap[updated.funnelId]) ||
+            updated.leadType ||
+            updated.source ||
+            "—";
+          const oldName =
+            (pending.oldFunnelId && funnelMap[pending.oldFunnelId]) ||
+            pending.oldLeadType ||
+            pending.oldSource ||
+            "—";
+          if (oldName !== newName) {
+            setFunnelToast({ id: Date.now(), oldName, newName });
+            if (funnelToastTimerRef.current) clearTimeout(funnelToastTimerRef.current);
+            funnelToastTimerRef.current = setTimeout(() => setFunnelToast(null), 6000);
+          }
+        }
+        pendingFunnelCheckRef.current = null;
+      }
+    }
+  }, [queueData, funnelMap]);
 
   useEffect(() => {
     return () => {
       if (podiumNotifTimerRef.current) clearTimeout(podiumNotifTimerRef.current);
       if (callbackNotifTimerRef.current) clearTimeout(callbackNotifTimerRef.current);
+      if (funnelToastTimerRef.current) clearTimeout(funnelToastTimerRef.current);
     };
   }, []);
 
@@ -3156,6 +3215,41 @@ export default function Leads() {
                   <p className="text-xs text-white/50 mt-1 line-clamp-2">{podiumNotif.body}</p>
                 )}
                 <motion.div className="absolute bottom-0 left-0 h-0.5 bg-blue-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 15, ease: "linear" }} />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {funnelToast && (
+          <motion.div
+            key={`funnel-toast-${funnelToast.id}`}
+            initial={{ x: 400, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 400, opacity: 0 }}
+            transition={{ type: "spring", damping: 20, stiffness: 300 }}
+            style={{ top: 24 + pendingNewLeads.length * 124 + (callbackNotification ? 124 : 0) + (podiumNotif ? 124 : 0) }}
+            className="fixed right-6 z-50 w-80"
+          >
+            <div className="relative overflow-hidden rounded-xl border border-emerald-500/40 bg-gradient-to-br from-emerald-950/90 via-card/95 to-card/95 shadow-[0_0_40px_rgba(16,185,129,0.25)] backdrop-blur-xl">
+              <div className="relative p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="relative inline-flex rounded-full h-5 w-5 bg-emerald-500 items-center justify-center">
+                      <GitBranch className="w-3 h-3 text-white" />
+                    </span>
+                    <span className="text-sm font-display font-bold text-emerald-400">Funnel updated</span>
+                  </div>
+                  <button onClick={dismissFunnelToast} className="text-white/40 hover:text-white/80 p-0.5 rounded hover:bg-white/10">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-white/70">
+                  <span className="text-white/40 line-through">{funnelToast.oldName}</span>
+                  <ArrowRight className="w-3 h-3 text-emerald-400" />
+                  <span className="text-white font-medium">{funnelToast.newName}</span>
+                </div>
+                <motion.div className="absolute bottom-0 left-0 h-0.5 bg-emerald-500/60" initial={{ width: "100%" }} animate={{ width: "0%" }} transition={{ duration: 6, ease: "linear" }} />
               </div>
             </div>
           </motion.div>
