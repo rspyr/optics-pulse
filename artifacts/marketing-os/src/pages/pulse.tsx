@@ -981,6 +981,20 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
       if (res.ok) {
         setEditingId(null);
         fetchHistory();
+        // If the server re-derived a new funnel for this lead, broadcast a
+        // refresh so the open lead picks it up without waiting for the 15s
+        // queue refresh.
+        try {
+          const data = await res.clone().json().catch(() => null);
+          if (data?.leadFunnelChanged) {
+            if (typeof BroadcastChannel !== "undefined") {
+              const ch = new BroadcastChannel("pulse");
+              ch.postMessage({ type: "leads-refresh", reason: "action-edit-funnel" });
+              ch.close();
+            }
+            window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason: "action-edit-funnel" } }));
+          }
+        } catch {}
       } else {
         const err = await res.json().catch(() => ({ error: "Save failed" }));
         alert(err.error || "Save failed");
@@ -2576,7 +2590,14 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
   useEffect(() => {
     if (!selectedLead) return;
     const updated = data.leads.find(l => l.id === selectedLead.id);
-    if (updated && (updated.source !== selectedLead.source || updated.hubStatus !== selectedLead.hubStatus || updated.assignedTo !== selectedLead.assignedTo)) {
+    if (updated && (
+      updated.source !== selectedLead.source ||
+      updated.hubStatus !== selectedLead.hubStatus ||
+      updated.assignedTo !== selectedLead.assignedTo ||
+      updated.funnelId !== selectedLead.funnelId ||
+      updated.leadType !== selectedLead.leadType ||
+      updated.serviceType !== selectedLead.serviceType
+    )) {
       setSelectedLead(updated);
     }
   }, [data.leads]);
@@ -2845,6 +2866,27 @@ export default function Leads() {
   useEffect(() => {
     if (leadUpdatedSignal > 0) { refetch(); refetchStats(); }
   }, [leadUpdatedSignal, refetch, refetchStats]);
+
+  // Cross-page refresh signal: when attribution rules or field mappings change,
+  // immediately refetch the leads-hub queue so any open lead's funnel updates
+  // within ~1-2s instead of waiting for the 15s background refresh.
+  useEffect(() => {
+    const onRefresh = () => { refetch(); refetchStats(); };
+    window.addEventListener("pulse:leads-refresh", onRefresh);
+    let ch: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        ch = new BroadcastChannel("pulse");
+        ch.onmessage = (ev) => {
+          if (ev?.data?.type === "leads-refresh") onRefresh();
+        };
+      }
+    } catch {}
+    return () => {
+      window.removeEventListener("pulse:leads-refresh", onRefresh);
+      if (ch) { try { ch.close(); } catch {} }
+    };
+  }, [refetch, refetchStats]);
 
   useEffect(() => {
     if (callbackNotification) return;

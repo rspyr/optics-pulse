@@ -16,6 +16,7 @@ import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { recordLeadStatusChange } from "../services/lead-status-history";
 import { resetBookingCache } from "../services/lead-booking-cache";
+import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -856,7 +857,24 @@ router.put("/leads-hub/action/:attemptId", async (req, res) => {
     }
   }
 
-  res.json({ attempt: updated });
+  // After persisting the action edit, re-run the funnel normalizer over the
+  // lead's latest attribution event so any newly-created subdomain rule or
+  // funnel alias since ingest is reflected on the open lead immediately.
+  // Mirrors the funnel-aliases / subdomain-funnel-rules re-resolve paths.
+  let leadFunnelChanged = false;
+  let refreshedLead: typeof lead | null = null;
+  try {
+    const rederive = await reDeriveLeadFunnel(lead.tenantId, attempt.leadId);
+    if (rederive?.changed) {
+      leadFunnelChanged = true;
+      const [r] = await db.select().from(leadsTable).where(eq(leadsTable.id, attempt.leadId));
+      refreshedLead = r ?? null;
+    }
+  } catch (err) {
+    console.error("[leads-hub.action.PUT] reDeriveLeadFunnel failed:", err);
+  }
+
+  res.json({ attempt: updated, leadFunnelChanged, lead: refreshedLead });
 });
 
 router.get("/leads-hub/:leadId/history", async (req, res) => {

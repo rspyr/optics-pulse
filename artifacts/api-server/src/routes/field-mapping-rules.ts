@@ -1,8 +1,9 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, fieldMappingRulesTable } from "@workspace/db";
+import { db, fieldMappingRulesTable, attributionEventsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
+import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
 
@@ -115,7 +116,7 @@ router.post("/field-mapping-rules", async (req, res) => {
     return;
   }
 
-  const { pageUrlPattern, formIdentifier, fieldName, mapsTo, priority } = req.body;
+  const { pageUrlPattern, formIdentifier, fieldName, mapsTo, priority, attributionEventId, leadId } = req.body;
   if (!pageUrlPattern || !formIdentifier || !fieldName || !mapsTo) {
     res.status(400).json({ error: "pageUrlPattern, formIdentifier, fieldName, and mapsTo are required" });
     return;
@@ -134,28 +135,52 @@ router.post("/field-mapping-rules", async (req, res) => {
       eq(fieldMappingRulesTable.fieldName, fieldName),
     ));
 
+  let resultRule;
+  let wasUpdate = false;
   if (existing.length > 0) {
     const [updated] = await db.update(fieldMappingRulesTable)
       .set({ mapsTo, priority: priority ?? 0 })
       .where(eq(fieldMappingRulesTable.id, existing[0].id))
       .returning();
-
-    invalidateRuleCache(tenantId, pageUrlPattern);
-    res.json({ rule: updated, updated: true });
-    return;
+    resultRule = updated;
+    wasUpdate = true;
+  } else {
+    const [row] = await db.insert(fieldMappingRulesTable).values({
+      tenantId,
+      pageUrlPattern,
+      formIdentifier,
+      fieldName,
+      mapsTo,
+      priority: priority ?? 0,
+    }).returning();
+    resultRule = row;
   }
 
-  const [row] = await db.insert(fieldMappingRulesTable).values({
-    tenantId,
-    pageUrlPattern,
-    formIdentifier,
-    fieldName,
-    mapsTo,
-    priority: priority ?? 0,
-  }).returning();
-
   invalidateRuleCache(tenantId, pageUrlPattern);
-  res.json({ rule: row });
+
+  // When the operator edits a mapping from a lead/event context, immediately
+  // re-run field detection + funnel normalization for that lead so the open
+  // Pulse drawer reflects the new funnel without waiting for the next ingest.
+  let leadFunnelChanged = false;
+  let resolvedLeadId: number | null = null;
+  if (typeof leadId === "number" && Number.isFinite(leadId)) {
+    resolvedLeadId = leadId;
+  } else if (typeof attributionEventId === "number" && Number.isFinite(attributionEventId)) {
+    const [ev] = await db.select({ createdLeadId: attributionEventsTable.createdLeadId, tenantId: attributionEventsTable.tenantId })
+      .from(attributionEventsTable)
+      .where(eq(attributionEventsTable.id, attributionEventId));
+    if (ev && ev.tenantId === tenantId && ev.createdLeadId) resolvedLeadId = ev.createdLeadId;
+  }
+  if (resolvedLeadId) {
+    try {
+      const rederive = await reDeriveLeadFunnel(tenantId, resolvedLeadId);
+      if (rederive?.changed) leadFunnelChanged = true;
+    } catch (err) {
+      console.error("[field-mapping-rules.POST] reDeriveLeadFunnel failed:", err);
+    }
+  }
+
+  res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged });
 });
 
 router.delete("/field-mapping-rules/:id", async (req, res) => {

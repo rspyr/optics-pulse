@@ -208,6 +208,17 @@ export default function Attribution() {
         );
         refetchSuggestions();
         queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() });
+        // Cross-page signal so Pulse refetches the leads-hub queue and any
+        // open lead's funnel updates within ~1-2s instead of waiting for the
+        // 15s background refresh or a lead reopen.
+        try {
+          if (typeof BroadcastChannel !== "undefined") {
+            const ch = new BroadcastChannel("pulse");
+            ch.postMessage({ type: "leads-refresh", reason: "subdomain-rule-created" });
+            ch.close();
+          }
+          window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason: "subdomain-rule-created" } }));
+        } catch {}
       }
     } catch {
       setSuggestionToast("Failed to create rule");
@@ -746,27 +757,12 @@ export default function Attribution() {
                   />
                 )}
 
-                {selectedEvent.detectedMappings && (
-                  <DetailSection title="Auto-Detected Fields" icon={<Brain className="w-4 h-4" />}>
-                    <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
-                      {Object.entries(selectedEvent.detectedMappings).map(([fieldName, info]) => (
-                        <div key={fieldName} className="flex items-center justify-between gap-2 text-sm">
-                          <span className="text-muted-foreground font-mono text-xs">{fieldName}</span>
-                          <div className="flex items-center gap-2">
-                            <ArrowRight className="w-3 h-3 text-white/20" />
-                            <span className="text-white text-xs">{info.mapsTo}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                              info.method === "saved_rule" ? "bg-blue-400/10 text-blue-400" :
-                              info.method === "value_pattern" ? "bg-emerald-400/10 text-emerald-400" :
-                              "bg-amber-400/10 text-amber-400"
-                            }`}>
-                              {info.method.replace("_", " ")}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </DetailSection>
+                {selectedEvent.detectedMappings && effectiveTenantId && (
+                  <EditableAutoDetectedFields
+                    key={`auto-${selectedEvent.id}`}
+                    tenantId={effectiveTenantId}
+                    event={selectedEvent}
+                  />
                 )}
 
                 {effectiveTenantId && selectedEvent.matchLevel === "unmatched" && (
@@ -1376,6 +1372,134 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
   );
 }
 
+const FIELD_MAPPING_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"] as const;
+
+function dispatchPulseRefresh(reason: string) {
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const ch = new BroadcastChannel("pulse");
+      ch.postMessage({ type: "leads-refresh", reason });
+      ch.close();
+    }
+    window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason } }));
+  } catch {}
+}
+
+export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+  const queryClient = useQueryClient();
+  const detected = event.detectedMappings as Record<string, { mapsTo: string; method: string }> | null;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState<string | null>(null);
+
+  if (!detected) return null;
+  const entries = Object.entries(detected);
+  if (entries.length === 0) return null;
+
+  const save = async (fieldName: string, mapsTo: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      let pagePath = "*";
+      try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
+      const formIdentifier = event.formId || event.formName || "*";
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageUrlPattern: pagePath,
+          formIdentifier,
+          fieldName,
+          mapsTo,
+          attributionEventId: event.id,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save mapping");
+        return;
+      }
+      const d = await res.json().catch(() => ({}));
+      setEditing(null);
+      setSavedFlash(fieldName);
+      setTimeout(() => setSavedFlash(prev => (prev === fieldName ? null : prev)), 2000);
+      queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) });
+      queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] });
+      if (d?.leadFunnelChanged) dispatchPulseRefresh("field-mapping-updated");
+    } catch {
+      setError("Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <DetailSection title="Auto-Detected Fields" icon={<Brain className="w-4 h-4" />}>
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+      <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+        {entries.map(([fieldName, info]) => {
+          const isEditing = editing === fieldName;
+          return (
+            <div key={fieldName} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground font-mono text-xs">{fieldName}</span>
+              {isEditing ? (
+                <div className="flex items-center gap-2">
+                  <select
+                    value={draft}
+                    onChange={e => setDraft(e.target.value)}
+                    className="bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1"
+                  >
+                    {FIELD_MAPPING_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                  <Button size="sm" variant="ghost" disabled={saving || !draft} onClick={() => save(fieldName, draft)} className="text-xs h-7 px-2">
+                    {saving ? "..." : "Save"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)} className="text-xs h-7 px-2 text-muted-foreground">
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setEditing(fieldName); setDraft(info.mapsTo); setError(null); }}
+                  className="flex items-center gap-2 hover:bg-white/[0.03] rounded px-1.5 py-0.5 transition-colors"
+                  title="Click to edit this mapping"
+                >
+                  <ArrowRight className="w-3 h-3 text-white/20" />
+                  <span className="text-white text-xs">{info.mapsTo}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                    info.method === "saved_rule" ? "bg-blue-400/10 text-blue-400" :
+                    info.method === "value_pattern" ? "bg-emerald-400/10 text-emerald-400" :
+                    "bg-amber-400/10 text-amber-400"
+                  }`}>
+                    {info.method.replace("_", " ")}
+                  </span>
+                  {savedFlash === fieldName ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Edit3 className="w-3 h-3 text-white/30" />
+                  )}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-muted-foreground/70 mt-2">
+        Click any mapping to override. Saving creates a field-mapping rule, re-runs detection, and refreshes the open lead.
+      </p>
+    </DetailSection>
+  );
+}
+
 export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
   const [correcting, setCorrecting] = useState<string | null>(null);
   const [selectedMapping, setSelectedMapping] = useState("");
@@ -1407,6 +1531,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
           formIdentifier,
           fieldName,
           mapsTo,
+          attributionEventId: event.id,
         }),
       });
       if (!res.ok) {
@@ -1415,8 +1540,21 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
         setSaving(false);
         return;
       }
+      const d = await res.json().catch(() => ({}));
       setSaved(prev => [...prev, fieldName]);
       setCorrecting(null);
+      // Signal Pulse to refresh the open lead so the helper text and funnel
+      // dropdown reflect the new mapping immediately.
+      try {
+        if (d?.leadFunnelChanged) {
+          if (typeof BroadcastChannel !== "undefined") {
+            const ch = new BroadcastChannel("pulse");
+            ch.postMessage({ type: "leads-refresh", reason: "field-mapping-updated" });
+            ch.close();
+          }
+          window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason: "field-mapping-updated" } }));
+        }
+      } catch {}
     } catch {
       setError("Network error");
     }
