@@ -22,6 +22,7 @@ import {
   GitBranch,
   FileText,
   BarChart3,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -44,6 +45,7 @@ const AGENCY_NAV = [
   { href: "/automation", label: "Automation", icon: Zap },
   { href: "/admin/scripts", label: "Scripts", icon: FileText },
   { href: "/admin/change-logs", label: "Change Log", icon: ClipboardList },
+  { href: "/admin/background-jobs", label: "Background Jobs", icon: Activity },
   { href: "/admin/funnels", label: "Funnels & Scripts", icon: GitBranch },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -86,6 +88,7 @@ const SCOPE_CHIP_HIDDEN_ROUTES: string[] = [
   "/admin/scripts",
   "/admin/training",
   "/admin/change-logs",
+  "/admin/background-jobs",
 ];
 
 function isScopeChipHidden(pathname: string): boolean {

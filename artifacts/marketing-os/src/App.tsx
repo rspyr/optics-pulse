@@ -18,6 +18,7 @@ import VerifyTracker from "@/pages/verify-tracker";
 import Settings from "@/pages/settings";
 import AdminTenants from "@/pages/admin-tenants";
 import AdminUsers from "@/pages/admin-users";
+import AdminBackgroundJobs from "@/pages/admin-background-jobs";
 import AdminTraining from "@/pages/admin-training";
 import TrainingResources from "@/pages/training-resources";
 import Leaderboards from "@/pages/leaderboards";
@@ -91,7 +92,7 @@ function AuthenticatedRoutes() {
     return <Login />;
   }
 
-  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/automation", "/attribution"];
+  const agencyOnlyPaths = ["/internal", "/clients", "/admin/tenants", "/admin/users", "/admin/training", "/admin/change-logs", "/admin/funnels", "/admin/scripts", "/admin/background-jobs", "/automation", "/attribution"];
   if (!isAgency && agencyOnlyPaths.includes(location)) {
     return <ImmediateRedirect to="/" />;
   }
@@ -118,6 +119,7 @@ function AuthenticatedRoutes() {
         <Route path="/clients">{() => <AgencyGuard><Clients /></AgencyGuard>}</Route>
         <Route path="/admin/tenants">{() => <AgencyGuard><AdminTenants /></AgencyGuard>}</Route>
         <Route path="/admin/users">{() => <AgencyGuard><AdminUsers /></AgencyGuard>}</Route>
+        <Route path="/admin/background-jobs">{() => <AgencyGuard><AdminBackgroundJobs /></AgencyGuard>}</Route>
         <Route path="/admin/training">{() => <AgencyGuard><AdminTraining /></AgencyGuard>}</Route>
         <Route path="/leaderboards" component={Leaderboards} />
         <Route path="/automation">{() => <AgencyGuard><Automation /></AgencyGuard>}</Route>
