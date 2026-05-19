@@ -23,14 +23,20 @@ vi.mock("./background-jobs", () => ({
 
 type Handler = (payload: Record<string, unknown>) => Promise<unknown>;
 
+const sleepCalls: number[] = [];
+
 async function loadHandler(): Promise<Handler> {
   vi.resetModules();
   emitRuleRederiveCompleteMock.mockReset();
   emitRuleRederiveFailedMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   registerJobHandlerMock.mockReset();
+  sleepCalls.length = 0;
 
   const mod = await import("./re-derive-jobs");
+  mod.__setSleepForTests(async (ms: number) => {
+    sleepCalls.push(ms);
+  });
   mod.registerReDeriveJobHandlers();
   expect(registerJobHandlerMock).toHaveBeenCalledTimes(1);
   expect(registerJobHandlerMock.mock.calls[0][0]).toBe("rederive_leads_for_rule_scope");
@@ -95,7 +101,7 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     });
   });
 
-  it("does not emit rule-rederive-complete when the fan-out throws — the error propagates so the job is marked failed/retryable, AND emits rule-rederive-failed so the panel can show the retry hint", async () => {
+  it("does not emit rule-rederive-complete when the fan-out throws repeatedly — the error propagates so the job is marked failed/retryable, AND emits rule-rederive-failed so the panel can show the retry hint", async () => {
     const handler = await loadHandler();
     reDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("db blew up"));
 
@@ -108,6 +114,8 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
       }),
     ).rejects.toThrow("db blew up");
 
+    // 1 initial + 2 retries = 3 total attempts before giving up
+    expect(reDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(3);
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, {
@@ -115,6 +123,57 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
       formIdentifier: "contact-form",
       reason: "db blew up",
     });
+  });
+
+  it("auto-retries a transient failure and emits rule-rederive-complete (not -failed) when a later attempt succeeds", async () => {
+    const handler = await loadHandler();
+    reDeriveLeadsForRuleScopeMock
+      .mockRejectedValueOnce(new Error("transient blip"))
+      .mockResolvedValueOnce({ leadsChanged: 4, hitLimit: false, maxLeads: 500 });
+
+    const result = await handler({
+      tenantId: 42,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      excludeLeadId: null,
+    });
+
+    expect(reDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(2);
+    expect(emitRuleRederiveFailedMock).not.toHaveBeenCalled();
+    expect(emitRuleRederiveCompleteMock).toHaveBeenCalledTimes(1);
+    expect(emitRuleRederiveCompleteMock).toHaveBeenCalledWith(42, {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      leadsChanged: 4,
+      hitLimit: false,
+      maxLeads: 500,
+    });
+    expect(result).toEqual({ leadsChanged: 4, hitLimit: false, maxLeads: 500 });
+    // Backoff was actually waited (one backoff between attempt 1 -> 2)
+    expect(sleepCalls).toHaveLength(1);
+    expect(sleepCalls[0]).toBeGreaterThan(0);
+  });
+
+  it("only emits rule-rederive-failed after the final attempt, not after each interim retry", async () => {
+    const handler = await loadHandler();
+    reDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("still broken"));
+
+    await expect(
+      handler({
+        tenantId: 7,
+        pageUrlPattern: "/p",
+        formIdentifier: "f",
+        excludeLeadId: null,
+      }),
+    ).rejects.toThrow("still broken");
+
+    expect(reDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(3);
+    // Exactly one failed emit — not one per attempt
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
+    // Backoff slept between each retry pair (after attempts 1 and 2, none after final)
+    expect(sleepCalls).toHaveLength(2);
+    // Exponential: second backoff is larger than the first
+    expect(sleepCalls[1]).toBeGreaterThan(sleepCalls[0]);
   });
 
   it("swallows a socket-emit failure on the failed event so notification glitches don't mask the original error", async () => {

@@ -4,6 +4,32 @@ import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
 
 export const REDERIVE_LEADS_FOR_RULE_SCOPE = "rederive_leads_for_rule_scope";
 
+/**
+ * Number of automatic in-handler retries on transient fan-out failures
+ * before we surface `rule-rederive-failed` to the operator. Two retries
+ * means up to three total attempts per job execution.
+ *
+ * We retry inside the handler (rather than letting background-jobs do it)
+ * so the operator never sees a transient blip — background-jobs retries
+ * are slow (10s+ exponential backoff) and the panel that triggered the
+ * save would already have shown a "couldn't re-derive" error before the
+ * next outer attempt ran. To avoid stacking retries on top of the
+ * background-jobs retry policy, we enqueue with maxAttempts: 1.
+ */
+const HANDLER_MAX_RETRIES = 2;
+const HANDLER_RETRY_BASE_MS = 250;
+
+let sleepImpl: (ms: number) => Promise<void> = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+export function __setSleepForTests(impl: (ms: number) => Promise<void>): void {
+  sleepImpl = impl;
+}
+
+export function __resetSleepForTests(): void {
+  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface ReDerivePayload {
   tenantId: number;
   pageUrlPattern: string;
@@ -37,29 +63,49 @@ export function registerReDeriveJobHandlers(): void {
   registerJobHandler(REDERIVE_LEADS_FOR_RULE_SCOPE, async (payload) => {
     const args = parsePayload(payload);
     let result;
-    try {
-      result = await reDeriveLeadsForRuleScope(
-        args.tenantId,
-        args.pageUrlPattern,
-        args.formIdentifier,
-        { excludeLeadId: args.excludeLeadId },
-      );
-    } catch (err) {
-      // Surface the failure to the operator's UI so the panel that triggered
-      // the save can show a "couldn't re-derive historical leads" hint with a
-      // retry button. We still rethrow so background-jobs marks the job as
-      // failed/retryable per its own policy.
+    let lastErr: unknown;
+    let succeeded = false;
+    for (let attempt = 0; attempt <= HANDLER_MAX_RETRIES; attempt++) {
+      try {
+        result = await reDeriveLeadsForRuleScope(
+          args.tenantId,
+          args.pageUrlPattern,
+          args.formIdentifier,
+          { excludeLeadId: args.excludeLeadId },
+        );
+        succeeded = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < HANDLER_MAX_RETRIES) {
+          const delayMs = HANDLER_RETRY_BASE_MS * Math.pow(2, attempt);
+          console.warn(
+            `[re-derive-jobs] transient failure on attempt ${attempt + 1}/${HANDLER_MAX_RETRIES + 1}, retrying in ${delayMs}ms:`,
+            err,
+          );
+          await sleepImpl(delayMs);
+        }
+      }
+    }
+
+    if (!succeeded) {
+      // All in-handler retries exhausted. Surface to the operator's UI so
+      // the panel that triggered the save can show a "couldn't re-derive
+      // historical leads" hint with a retry button. We still rethrow so
+      // background-jobs marks the job failed (we enqueue with
+      // maxAttempts: 1 to prevent double-retry on top of our own).
       try {
         emitRuleRederiveFailed(args.tenantId, {
           pageUrlPattern: args.pageUrlPattern,
           formIdentifier: args.formIdentifier,
-          reason: err instanceof Error ? err.message : String(err),
+          reason: lastErr instanceof Error ? lastErr.message : String(lastErr),
         });
       } catch (emitErr) {
         console.error("[re-derive-jobs] emitRuleRederiveFailed failed:", emitErr);
       }
-      throw err;
+      throw lastErr;
     }
+
     // Notify the operator's UI so the panel that triggered the save can
     // surface a "N leads re-derived" indicator. Emit on every completion
     // (even zero) so the panel can clear its "working…" state instead of
@@ -68,9 +114,9 @@ export function registerReDeriveJobHandlers(): void {
       emitRuleRederiveComplete(args.tenantId, {
         pageUrlPattern: args.pageUrlPattern,
         formIdentifier: args.formIdentifier,
-        leadsChanged: result.leadsChanged,
-        hitLimit: result.hitLimit,
-        maxLeads: result.maxLeads,
+        leadsChanged: result!.leadsChanged,
+        hitLimit: result!.hitLimit,
+        maxLeads: result!.maxLeads,
       });
     } catch (err) {
       console.error("[re-derive-jobs] emitRuleRederiveComplete failed:", err);
@@ -83,6 +129,13 @@ export async function enqueueReDeriveLeadsForRuleScope(args: ReDerivePayload) {
   return enqueueJob(
     REDERIVE_LEADS_FOR_RULE_SCOPE,
     args as unknown as Record<string, unknown>,
-    { tenantId: args.tenantId },
+    {
+      tenantId: args.tenantId,
+      // The handler does its own in-handler retries with short exponential
+      // backoff for transient blips; we don't want background-jobs to then
+      // retry the whole job again on top of that (10s+ outer backoff would
+      // already have shown the operator a failure event).
+      maxAttempts: 1,
+    },
   );
 }
