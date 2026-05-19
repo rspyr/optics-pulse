@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { RefreshCw, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -74,9 +74,12 @@ export default function AdminBackgroundJobs() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [retrying, setRetrying] = useState<Record<number, boolean>>({});
+  const inFlightRef = useRef(false);
 
-  const fetchJobs = useCallback(async () => {
-    setError("");
+  const fetchJobs = useCallback(async (opts: { silent?: boolean } = {}) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (!opts.silent) setError("");
     const params = new URLSearchParams();
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (typeFilter !== "all") params.set("type", typeFilter);
@@ -91,16 +94,54 @@ export default function AdminBackgroundJobs() {
       }
       const body: ListResponse = await res.json();
       setData(body);
+      if (opts.silent) setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load background jobs");
+      if (!opts.silent) {
+        setError(err instanceof Error ? err.message : "Failed to load background jobs");
+      }
     } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   }, [statusFilter, typeFilter]);
 
   useEffect(() => {
     setLoading(true);
     fetchJobs();
+  }, [fetchJobs]);
+
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (intervalId !== null) return;
+      intervalId = setInterval(() => {
+        fetchJobs({ silent: true });
+      }, 5000);
+    };
+    const stop = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        fetchJobs({ silent: true });
+        start();
+      }
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [fetchJobs]);
 
   const handleRetry = async (id: number) => {
