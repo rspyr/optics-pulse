@@ -324,7 +324,18 @@ export async function fetchCompletedJobs(
     }
     page++;
 
-    if (page > 50) break;
+    // Safety cap: 500 pages × 100 = 50,000 jobs per single call.
+    // Initial backfills with wide windows can exceed the previous 5,000-job
+    // cap silently — the backfill route already chunks the timeline into
+    // 90-day windows so this only fires on pathological tenants. If we hit
+    // it, log loudly so operators see an incomplete page walk in the
+    // workflow logs instead of finding it later via missing-data symptoms.
+    if (page > 500) {
+      console.warn(
+        `[ServiceTitan] fetchCompletedJobs hit 500-page safety cap (modifiedAfter=${modifiedAfter ?? "none"}, modifiedBefore=${modifiedBefore ?? "none"}); ${totalFetched} jobs fetched so far, more remain. Narrow the window via the backfill chunker.`,
+      );
+      break;
+    }
   }
 
   if (batchJobs.length > 0) {

@@ -135,7 +135,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
 
   const tenantCondJobs = tenantId ? eq(jobsTable.tenantId, tenantId) : undefined;
 
-  const [dataSyncLogs, purgeLogs, runningLogs, outboundLogs, pendingCounts] = await Promise.all([
+  const [dataSyncLogs, purgeLogs, runningLogs, outboundLogs, pendingCounts, cumulativeTotals] = await Promise.all([
     db.select()
       .from(integrationSyncLogsTable)
       .where(tenantCond
@@ -173,7 +173,30 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       .where(tenantCondJobs
         ? and(tenantCondJobs, isNotNull(jobsTable.matchLevel))
         : isNotNull(jobsTable.matchLevel)),
+    // Cumulative records_synced per (integration, sync_type) across ALL
+    // completed runs in history. The dashboard previously showed only the
+    // latest run's count — which was misleading for incremental syncs that
+    // poll every 15min and almost always return 0 in any single window
+    // (e.g. ServiceTitan invoices showed "0 rec" even though thousands had
+    // been synced over time). We sum over the entire log table so the
+    // value reflects the true volume pulled in, not a momentary snapshot.
+    db.select({
+      integration: integrationSyncLogsTable.integration,
+      syncType: integrationSyncLogsTable.syncType,
+      totalRecords: sql<number>`COALESCE(SUM(${integrationSyncLogsTable.recordsProcessed}), 0)::int`,
+    })
+      .from(integrationSyncLogsTable)
+      .where(tenantCond
+        ? and(tenantCond, eq(integrationSyncLogsTable.status, "completed"), notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES))
+        : and(eq(integrationSyncLogsTable.status, "completed"), notInArray(integrationSyncLogsTable.syncType, MAINTENANCE_SYNC_TYPES)))
+      .groupBy(integrationSyncLogsTable.integration, integrationSyncLogsTable.syncType),
   ]);
+
+  // Index cumulative totals for fast lookup in the per-integration loop.
+  const cumulativeByKey = new Map<string, number>();
+  for (const row of cumulativeTotals as Array<{ integration: string; syncType: string; totalRecords: number | string }>) {
+    cumulativeByKey.set(`${row.integration}:${row.syncType}`, Number(row.totalRecords) || 0);
+  }
 
   const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
   const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
@@ -215,7 +238,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     state: IntegrationState;
     needsReconnect: boolean;
     reconnectReason: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -224,8 +247,14 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> = {};
-    const typeSet = new Set(integLogs.map((l) => l.syncType));
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> = {};
+    // Union of sync types: from the recent log window (latest run/status info)
+    // AND from the cumulative aggregation (which covers full history, so we
+    // still show sync types whose last run is older than the 60-row window).
+    const typeSet = new Set<string>(integLogs.map((l) => l.syncType));
+    for (const row of cumulativeTotals as Array<{ integration: string; syncType: string }>) {
+      if (row.integration === integ) typeSet.add(row.syncType);
+    }
     for (const st of typeSet) {
       const typeLogs = integLogs.filter((l) => l.syncType === st);
       const latestOfType = typeLogs[0];
@@ -233,6 +262,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         lastRun: latestOfType?.completedAt?.toISOString() || null,
         lastStatus: latestOfType?.status || "never",
         recordsProcessed: latestOfType?.recordsProcessed || 0,
+        totalRecordsProcessed: cumulativeByKey.get(`${integ}:${st}`) || 0,
       };
     }
 

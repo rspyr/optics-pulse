@@ -42,6 +42,12 @@ vi.mock("@workspace/db", () => {
         limit: vi.fn().mockImplementation(resolveResult),
         then: (r: Function) => resolveResult().then(r as (v: unknown) => unknown),
       }),
+      // groupBy is used by the cumulative-totals aggregation (no orderBy/limit
+      // follows it); make it a terminal awaitable that drains the next queued
+      // result, matching how .limit() and other thenables work.
+      groupBy: vi.fn().mockImplementation(() => ({
+        then: (r: Function) => resolveResult().then(r as (v: unknown) => unknown),
+      })),
       limit: vi.fn().mockImplementation(resolveResult),
       then: (r: Function) => resolveResult().then(r as (v: unknown) => unknown),
     };
@@ -49,6 +55,7 @@ vi.mock("@workspace/db", () => {
     chain.where = vi.fn().mockReturnValue(terminal);
     chain.orderBy = terminal.orderBy;
     chain.limit = terminal.limit;
+    chain.groupBy = terminal.groupBy;
     chain.then = terminal.then;
     return chain;
   }
@@ -182,12 +189,16 @@ function log(overrides: Partial<SyncLogRow>): SyncLogRow {
   };
 }
 
-// Enqueue the four select results the route awaits in Promise.all, in order:
-//   1. dataSyncLogs    (.limit(60))
-//   2. purgeLogs       (.limit(1))
-//   3. runningLogs     (.limit(10))
-//   4. outboundLogs    (.limit(30))
-//   5. pendingCounts   (.where() thenable, no limit)
+// Enqueue the select results the route awaits in Promise.all, in order:
+//   1. dataSyncLogs       (.limit(60))
+//   2. purgeLogs          (.limit(1))
+//   3. runningLogs        (.limit(10))
+//   4. outboundLogs       (.limit(30))
+//   5. pendingCounts      (.where() thenable, no limit)
+//   6. cumulativeTotals   (.groupBy() thenable, no limit) — sums
+//                          records_synced per (integration, sync_type) so the
+//                          UI can show full-history volume instead of just
+//                          the latest run.
 // When the route is called WITHOUT tenantId, no tenants lookup happens.
 function queueSyncStatusSelects(opts: {
   dataSyncLogs?: SyncLogRow[];
@@ -195,12 +206,14 @@ function queueSyncStatusSelects(opts: {
   runningLogs?: SyncLogRow[];
   outboundLogs?: SyncLogRow[];
   pendingCounts?: Array<{ ociPending: number; enhancedPending: number; capiPending: number }>;
+  cumulativeTotals?: Array<{ integration: string; syncType: string; totalRecords: number }>;
 }) {
   state.selectQueue.push(opts.dataSyncLogs ?? []);
   state.selectQueue.push(opts.purgeLogs ?? []);
   state.selectQueue.push(opts.runningLogs ?? []);
   state.selectQueue.push(opts.outboundLogs ?? []);
   state.selectQueue.push(opts.pendingCounts ?? [{ ociPending: 0, enhancedPending: 0, capiPending: 0 }]);
+  state.selectQueue.push(opts.cumulativeTotals ?? []);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

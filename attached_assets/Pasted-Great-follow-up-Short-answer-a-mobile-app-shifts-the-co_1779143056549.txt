@@ -1,0 +1,25 @@
+Great follow-up. Short answer: a mobile app shifts the cost/performance picture in your favor, and it actually makes Vercel an even better fit. Here's why:
+
+What changes when clients move to mobile
+Less bandwidth from your servers, not more. Today the web client ships HTML, CSS, JS bundles, and assets on every visit. A native mobile app ships the UI once through the App Store / Play Store — those bytes don't touch your hosting bill. After install, the app only pulls JSON from your API plus images/PDFs. That's a meaningful drop in egress, which was the main reason to consider Cloudflare in the first place.
+
+Traffic shape becomes API-only. Mobile clients are pure API consumers — REST/JSON, image downloads, PDF downloads, push notifications. That's exactly what serverless functions are good at, and it makes function-level cold starts even less noticeable (the app stays open, connections stay warm, users aren't loading fresh pages).
+
+You'll likely add a few new backend pieces:
+
+Push notifications (APNs for iOS, FCM for Android) — replaces or supplements your current in-app toasts for new forms, messages, missed workouts, etc.
+App Store / Play Store receipt validation if you ever monetize through the stores.
+Image/asset CDN becomes more important since mobile users are often on cellular — but both Vercel and Cloudflare handle this fine.
+Deep linking / universal links — a few static well-known files served from your domain.
+None of these change the Vercel-vs-Cloudflare calculus.
+
+The trainer side stays a web app. That's still Express + React, still benefits from Vercel's preview deploys and Next.js-style ergonomics if you ever migrate the frontend.
+
+Performance: does it get better?
+Yes, mostly because of the client, not the server:
+
+Native navigation and rendering is faster than a mobile web view.
+The app can cache data locally (SQLite, MMKV, AsyncStorage) so screens load instantly and only fetch deltas.
+You can prefetch on app open (today's workout, pending forms) so perceived latency drops.
+Your server-side performance is essentially unchanged — same Express handlers, same Neon queries, same AI calls. The function execution time for "log a meal photo" or "generate a workout PDF" is identical whether the request comes from a browser or a phone.
+

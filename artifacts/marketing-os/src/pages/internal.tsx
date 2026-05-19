@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -556,7 +556,11 @@ export default function Internal() {
                             <span className="text-muted-foreground capitalize">{type.replace(/_/g, " ")}</span>
                           </div>
                           <span className="text-right">
-                            <span>{info.recordsProcessed.toLocaleString()} rec</span>
+                            <span
+                              title={`Latest run: ${info.recordsProcessed.toLocaleString()} rec`}
+                            >
+                              {info.totalRecordsProcessed.toLocaleString()} rec
+                            </span>
                             {info.lastRun && <span className="text-white/20 ml-1.5">{new Date(info.lastRun).toLocaleDateString()}</span>}
                           </span>
                         </div>
