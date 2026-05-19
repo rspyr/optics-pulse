@@ -148,6 +148,11 @@ export function PendingRederiveLeadsSheet({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  // When set, the failed-row list is filtered to just the leads whose failure
+  // reason matches this string. Driven by clicking a chip in the grouped
+  // failure-reason summary above the list.
+  const [activeReason, setActiveReason] = useState<string | null>(null);
+  const rowRefs = useRef<Map<number, HTMLLIElement>>(new Map());
   const {
     onSelectedLeadsRederiveComplete,
     onSelectedLeadsRederiveFailed,
@@ -169,6 +174,7 @@ export function PendingRederiveLeadsSheet({
     setSelected(new Set());
     setBulkResult(null);
     setBulkError(null);
+    setActiveReason(null);
     const params = new URLSearchParams({
       tenantId: String(tenantId),
       pageUrlPattern,
@@ -256,6 +262,34 @@ export function PendingRederiveLeadsSheet({
     }
     return {};
   }, [bulkResult]);
+
+  // Group failed leads by their reason so the operator can see patterns
+  // ("12 × No matching funnel rule · 3 × Lead not found") instead of scanning
+  // identical strings on every row. Sorted by count desc, then alphabetically
+  // for deterministic ordering.
+  const UNKNOWN_REASON = "No reason reported";
+  const failureGroups = useMemo(() => {
+    if (failedIds.size === 0) return [] as { reason: string; count: number; leadIds: number[] }[];
+    const map = new Map<string, number[]>();
+    for (const id of failedIds) {
+      const reason = (failedReasons[id] ?? "").trim() || UNKNOWN_REASON;
+      const arr = map.get(reason);
+      if (arr) arr.push(id);
+      else map.set(reason, [id]);
+    }
+    return Array.from(map.entries())
+      .map(([reason, leadIds]) => ({ reason, count: leadIds.length, leadIds }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+  }, [failedIds, failedReasons]);
+
+  const reasonForLead = (id: number): string =>
+    (failedReasons[id] ?? "").trim() || UNKNOWN_REASON;
+
+  const visibleLeads = useMemo(() => {
+    if (!activeReason) return leads;
+    return leads.filter((l) => failedIds.has(l.id) && reasonForLead(l.id) === activeReason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, activeReason, failedIds, failedReasons]);
 
   const isJobRunning =
     bulkResult?.mode === "queued" &&
@@ -787,14 +821,67 @@ export function PendingRederiveLeadsSheet({
                 </div>
               )}
 
+              {failureGroups.length > 0 && (
+                <div
+                  className="flex flex-wrap gap-1.5 pt-1"
+                  data-testid="pending-leads-failure-summary"
+                >
+                  {failureGroups.map((g) => {
+                    const isActive = activeReason === g.reason;
+                    return (
+                      <button
+                        key={g.reason}
+                        type="button"
+                        onClick={() => {
+                          const next = isActive ? null : g.reason;
+                          setActiveReason(next);
+                          if (next) {
+                            const firstId = g.leadIds[0];
+                            // Defer to next frame so the filtered list has
+                            // rendered before we try to scroll into it.
+                            requestAnimationFrame(() => {
+                              const el = rowRefs.current.get(firstId);
+                              if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                            });
+                          }
+                        }}
+                        className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                          isActive
+                            ? "border-red-400/60 bg-red-500/20 text-red-100"
+                            : "border-red-500/30 bg-red-500/[0.06] text-red-300 hover:bg-red-500/10"
+                        }`}
+                        title={isActive ? "Show all failed leads" : `Show only: ${g.reason}`}
+                        data-testid={`pending-leads-failure-group-${encodeURIComponent(g.reason)}`}
+                      >
+                        {g.count} × {g.reason}
+                      </button>
+                    );
+                  })}
+                  {activeReason && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveReason(null)}
+                      className="text-[11px] px-2 py-0.5 rounded-full border border-white/15 text-white/70 hover:bg-white/5"
+                      data-testid="pending-leads-failure-group-clear"
+                    >
+                      Clear filter
+                    </button>
+                  )}
+                </div>
+              )}
+
               <ul className="space-y-1.5" data-testid="pending-leads-list">
-                {leads.map((l) => {
+                {visibleLeads.map((l) => {
                   const isSelected = selected.has(l.id);
                   const isFailed = failedIds.has(l.id);
                   const failureReason = isFailed ? failedReasons[l.id] : undefined;
                   return (
                     <li
                       key={l.id}
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(l.id, el);
+                        else rowRefs.current.delete(l.id);
+                      }}
                       className={`border rounded-md px-2.5 py-2 ${
                         isFailed
                           ? "border-red-500/40 bg-red-500/[0.04]"
