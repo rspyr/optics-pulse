@@ -235,3 +235,72 @@ describe("reDeriveLeadsForRuleScope — input validation guardrails", () => {
     expect(dbMod.db.select.mock.calls.length).toBe(before);
   });
 });
+
+describe("listPendingRederiveLeadsForRuleScope", () => {
+  beforeEach(() => {
+    selectQueue = [];
+    nextSelectIndex = 0;
+  });
+
+  it("returns the lead summary rows that pass the same scope + cutoff filter the count uses, so 'View pending leads' lines up with the failure-hint count", async () => {
+    const { listPendingRederiveLeadsForRuleScope } = await import("./re-derive-lead-funnel");
+
+    const ruleUpdatedAt = new Date("2026-05-01T00:00:00Z");
+    selectQueue.push({ rows: [{ updatedAt: ruleUpdatedAt }] }); // latestRule
+    selectQueue.push({
+      rows: [
+        { createdLeadId: 10, pageUrl: "/contact", formId: "form-1", formName: null },
+        { createdLeadId: 11, pageUrl: "/contact", formId: "form-1", formName: null },
+      ],
+    }); // events
+    selectQueue.push({
+      rows: [
+        {
+          id: 10,
+          firstName: "Ada",
+          lastName: "L.",
+          phone: "555-0001",
+          email: null,
+          funnelId: 1,
+          leadType: null,
+          serviceType: null,
+          createdAt: new Date("2026-04-20T00:00:00Z"),
+          updatedAt: new Date("2026-04-21T00:00:00Z"),
+        },
+      ],
+    }); // leads
+
+    const result = await listPendingRederiveLeadsForRuleScope(
+      42,
+      "/contact",
+      "form-1",
+    );
+
+    expect(result.leads).toHaveLength(1);
+    expect(result.leads[0].id).toBe(10);
+    expect(result.leads[0].firstName).toBe("Ada");
+    expect(result.hitLimit).toBe(false);
+    expect(result.maxLeads).toBe(200);
+  });
+
+  it("returns an empty list (not an error) when no events match the scope, so the sheet renders an empty state instead of failing", async () => {
+    const { listPendingRederiveLeadsForRuleScope } = await import("./re-derive-lead-funnel");
+
+    selectQueue.push({ rows: [{ updatedAt: new Date("2026-05-10T00:00:00Z") }] });
+    // No matching events for this scope.
+    selectQueue.push({
+      rows: [
+        { createdLeadId: 99, pageUrl: "/other", formId: "form-other", formName: null },
+      ],
+    });
+
+    const result = await listPendingRederiveLeadsForRuleScope(
+      42,
+      "/contact",
+      "form-1",
+    );
+
+    expect(result.leads).toEqual([]);
+    expect(result.hitLimit).toBe(false);
+  });
+});

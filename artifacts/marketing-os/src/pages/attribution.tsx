@@ -16,6 +16,7 @@ import { formatFieldValue } from "@/lib/format-field-value";
 import { subscribeRederiveOnce } from "@/lib/rule-rederive-subscription";
 import { formatLastAttempted } from "./unmatched-fields-panel";
 import { CapturePathBadge } from "@/components/capture-path-badge";
+import { PendingRederiveLeadsSheet } from "@/components/pending-rederive-leads-sheet";
 import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
@@ -1411,10 +1412,21 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   } | null>(null);
   const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
   const [retryingRederive, setRetryingRederive] = useState(false);
+  // Tracks whether the "View pending leads" sheet (opened from the re-derive
+  // failure hint) is currently visible — lets operators drill into the actual
+  // historical leads still pending an update after the back-fill failed.
+  const [pendingLeadsSheetOpen, setPendingLeadsSheetOpen] = useState(false);
 
   if (!detected) return null;
   const entries = Object.entries(detected);
   if (entries.length === 0) return null;
+
+  // Derived scope for the "View pending leads" sheet — same shape the save
+  // path / retry use, computed straight from the event so we can open the
+  // sheet even before the operator has made an in-session save.
+  let pendingPagePath = "*";
+  try { if (event.pageUrl) pendingPagePath = new URL(event.pageUrl).pathname || "*"; } catch {}
+  const pendingFormIdentifier = event.formId || event.formName || "*";
 
   const subscribeForScope = (pagePath: string, formIdentifier: string) => {
     setRefreshingHistorical(true);
@@ -1620,19 +1632,39 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
               </>
             )}
           </span>
-          {lastSavedRef.current && (
-            <button
-              type="button"
-              onClick={retryRederive}
-              disabled={retryingRederive}
-              data-testid="rederive-retry-button"
-              className="text-[10px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 shrink-0"
-            >
-              {retryingRederive ? "Retrying…" : "Retry"}
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {(rederiveError.pendingLeads ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setPendingLeadsSheetOpen(true)}
+                data-testid="rederive-view-pending-button"
+                className="text-[10px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15"
+              >
+                View pending leads
+              </button>
+            )}
+            {lastSavedRef.current && (
+              <button
+                type="button"
+                onClick={retryRederive}
+                disabled={retryingRederive}
+                data-testid="rederive-retry-button"
+                className="text-[10px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50"
+              >
+                {retryingRederive ? "Retrying…" : "Retry"}
+              </button>
+            )}
+          </div>
         </div>
       )}
+      <PendingRederiveLeadsSheet
+        open={pendingLeadsSheetOpen}
+        onOpenChange={setPendingLeadsSheetOpen}
+        tenantId={tenantId}
+        pageUrlPattern={pendingPagePath}
+        formIdentifier={pendingFormIdentifier}
+        excludeLeadId={event.createdLeadId ?? null}
+      />
     </DetailSection>
   );
 }
@@ -1657,6 +1689,10 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   } | null>(null);
   const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
   const [retryingRederive, setRetryingRederive] = useState(false);
+  // Tracks whether the "View pending leads" sheet (opened from the re-derive
+  // failure hint) is currently visible — lets operators drill into the actual
+  // historical leads still pending an update after the back-fill failed.
+  const [pendingLeadsSheetOpen, setPendingLeadsSheetOpen] = useState(false);
   const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
 
   const formFields = event.formFields as Record<string, unknown> | null;
@@ -1665,6 +1701,13 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const pageUrl = event.pageUrl || "";
   const formId = event.formId || "";
   const formName = event.formName || "";
+
+  // Derived scope for the "View pending leads" sheet — matches the shape used
+  // by `saveRule` / `retryRederive`, but computed straight from the event so
+  // the sheet works even before any in-session save has happened.
+  let pendingPagePath = "*";
+  try { if (pageUrl) pendingPagePath = new URL(pageUrl).pathname || "*"; } catch {}
+  const pendingFormIdentifier = formId || formName || "*";
 
   const subscribeForScope = (pagePath: string, formIdentifier: string) => {
     setRefreshingHistorical(true);
@@ -1828,19 +1871,39 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
               </>
             )}
           </span>
-          {lastSavedRef.current && (
-            <button
-              type="button"
-              onClick={retryRederive}
-              disabled={retryingRederive}
-              data-testid="rederive-retry-button"
-              className="text-[11px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 shrink-0"
-            >
-              {retryingRederive ? "Retrying…" : "Retry"}
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {(rederiveError.pendingLeads ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setPendingLeadsSheetOpen(true)}
+                data-testid="rederive-view-pending-button"
+                className="text-[11px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15"
+              >
+                View pending leads
+              </button>
+            )}
+            {lastSavedRef.current && (
+              <button
+                type="button"
+                onClick={retryRederive}
+                disabled={retryingRederive}
+                data-testid="rederive-retry-button"
+                className="text-[11px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50"
+              >
+                {retryingRederive ? "Retrying…" : "Retry"}
+              </button>
+            )}
+          </div>
         </div>
       )}
+      <PendingRederiveLeadsSheet
+        open={pendingLeadsSheetOpen}
+        onOpenChange={setPendingLeadsSheetOpen}
+        tenantId={tenantId}
+        pageUrlPattern={pendingPagePath}
+        formIdentifier={pendingFormIdentifier}
+        excludeLeadId={event.createdLeadId ?? null}
+      />
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
           <p className="text-xs text-red-400">{error}</p>

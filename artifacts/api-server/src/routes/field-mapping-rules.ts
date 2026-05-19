@@ -6,7 +6,7 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { enqueueReDeriveLeadsForRuleScope } from "../services/re-derive-jobs";
 import { emitRuleRederiveFailed } from "../socket";
-import { countPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
+import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
 
@@ -89,6 +89,32 @@ router.get("/field-mapping-rules/suggestions", async (req, res) => {
   }
 
   res.json({ suggestions });
+});
+
+// Return the list of historical leads still pending a re-derive for a given
+// (pageUrlPattern, formIdentifier) scope. Powers the "View pending leads"
+// sheet that the operator opens from the re-derive failure hint, so they can
+// drill into which specific leads still need updating after a failed fan-out.
+router.get("/field-mapping-rules/pending-rederive-leads", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const pageUrlPattern = typeof req.query.pageUrlPattern === "string" ? req.query.pageUrlPattern : "";
+  const formIdentifier = typeof req.query.formIdentifier === "string" ? req.query.formIdentifier : "";
+  if (!pageUrlPattern || !formIdentifier) {
+    res.status(400).json({ error: "pageUrlPattern and formIdentifier are required" });
+    return;
+  }
+  const excludeLeadIdRaw = req.query.excludeLeadId;
+  const excludeLeadId = typeof excludeLeadIdRaw === "string" && excludeLeadIdRaw.trim() !== ""
+    ? Number(excludeLeadIdRaw)
+    : null;
+  const result = await listPendingRederiveLeadsForRuleScope(tenantId, pageUrlPattern, formIdentifier, {
+    excludeLeadId: Number.isFinite(excludeLeadId as number) ? excludeLeadId : null,
+  });
+  res.json(result);
 });
 
 router.get("/field-mapping-rules", async (req, res) => {

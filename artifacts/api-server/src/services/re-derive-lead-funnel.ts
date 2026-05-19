@@ -220,36 +220,45 @@ export interface PendingRederiveCount {
   lastAttemptedAt: string;
 }
 
-/**
- * Count how many historical leads in the given rule scope still need to be
- * re-derived — i.e. leads whose most-recent attribution event matches
- * (pageUrlPattern, formIdentifier) and whose `leads.updatedAt` predates the
- * latest matching field-mapping rule's `createdAt`. Used to populate the
- * "~N historical leads still need updating" hint that the operator UI shows
- * next to a failed-rederive notice, so they can size up whether retrying now
- * is cheap or expensive.
- *
- * Mirrors the lookback / event-cap / lead-cap bounds of
- * `reDeriveLeadsForRuleScope` so the count reflects the same population the
- * fan-out would actually touch on a retry.
- */
-export async function countPendingRederiveLeadsForRuleScope(
+export interface PendingRederiveLeadSummary {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string | null;
+  funnelId: number | null;
+  leadType: string | null;
+  serviceType: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PendingRederiveLeadList {
+  leads: PendingRederiveLeadSummary[];
+  hitLimit: boolean;
+  maxLeads: number;
+}
+
+// Shared helper: walk recent attribution events for `tenantId` and collect the
+// set of lead ids whose most-recent submission matches the
+// (pageUrlPattern, formIdentifier) scope. Returns the lead-id set, whether the
+// `maxLeads` cap was hit, and the rule-update cutoff used to define "pending"
+// (a lead's `updatedAt` must predate this for it to count). Both
+// `countPendingRederiveLeadsForRuleScope` and
+// `listPendingRederiveLeadsForRuleScope` use this so a single change to the
+// scope-matching logic stays in sync between the count hint and the
+// "View pending leads" sheet that operators open from the failure hint.
+async function collectPendingRederiveScope(
   tenantId: number,
   pageUrlPattern: string,
   formIdentifier: string,
   options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
-): Promise<PendingRederiveCount> {
+): Promise<{ leadIds: Set<number>; hitLimit: boolean; maxLeads: number; cutoff: Date | null }> {
   const lookbackDays = options.lookbackDays ?? 30;
   const maxEvents = options.maxEvents ?? 2000;
   const maxLeads = options.maxLeads ?? 200;
   const excludeLeadId = options.excludeLeadId ?? null;
-  const lastAttemptedAt = new Date().toISOString();
 
-  // Latest rule's updatedAt for this scope is our "rule update timestamp"
-  // cutoff. Any lead whose updatedAt is older than this hasn't been touched
-  // since the rule was last saved and is therefore still pending a re-derive.
-  // No rule for the scope (shouldn't happen on the failure path, but guard
-  // anyway) -> count every candidate lead.
   const [latestRule] = await db
     .select({ updatedAt: fieldMappingRulesTable.updatedAt })
     .from(fieldMappingRulesTable)
@@ -293,6 +302,33 @@ export async function countPendingRederiveLeadsForRuleScope(
     if (leadIds.size >= maxLeads) { hitLimit = true; break; }
   }
 
+  return { leadIds, hitLimit, maxLeads, cutoff };
+}
+
+/**
+ * Count how many historical leads in the given rule scope still need to be
+ * re-derived — i.e. leads whose most-recent attribution event matches
+ * (pageUrlPattern, formIdentifier) and whose `leads.updatedAt` predates the
+ * latest matching field-mapping rule's `createdAt`. Used to populate the
+ * "~N historical leads still need updating" hint that the operator UI shows
+ * next to a failed-rederive notice, so they can size up whether retrying now
+ * is cheap or expensive.
+ *
+ * Mirrors the lookback / event-cap / lead-cap bounds of
+ * `reDeriveLeadsForRuleScope` so the count reflects the same population the
+ * fan-out would actually touch on a retry.
+ */
+export async function countPendingRederiveLeadsForRuleScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
+): Promise<PendingRederiveCount> {
+  const lastAttemptedAt = new Date().toISOString();
+  const { leadIds, hitLimit, maxLeads, cutoff } = await collectPendingRederiveScope(
+    tenantId, pageUrlPattern, formIdentifier, options,
+  );
+
   if (leadIds.size === 0) {
     return { pendingLeads: 0, hitLimit, maxLeads, lastAttemptedAt };
   }
@@ -313,4 +349,62 @@ export async function countPendingRederiveLeadsForRuleScope(
     maxLeads,
     lastAttemptedAt,
   };
+}
+
+/**
+ * Return the actual list of historical leads still pending a re-derive for the
+ * given rule scope, with the same lookback / event-cap / lead-cap bounds as
+ * `reDeriveLeadsForRuleScope` and `countPendingRederiveLeadsForRuleScope`. The
+ * operator UI opens this from the "View pending leads" link on the
+ * re-derive-failure hint so they can drill in and investigate (or fix
+ * individual leads by hand) rather than just seeing a count.
+ *
+ * Each row includes the minimum fields the sheet/list needs to render: name,
+ * contact info, current funnel, and timestamps. Sorted newest-first by
+ * `createdAt` so the most recently-affected leads surface at the top.
+ */
+export async function listPendingRederiveLeadsForRuleScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
+): Promise<PendingRederiveLeadList> {
+  const { leadIds, hitLimit, maxLeads, cutoff } = await collectPendingRederiveScope(
+    tenantId, pageUrlPattern, formIdentifier, options,
+  );
+
+  if (leadIds.size === 0) {
+    return { leads: [], hitLimit, maxLeads };
+  }
+
+  const conditions = [
+    eq(leadsTable.tenantId, tenantId),
+    inArray(leadsTable.id, Array.from(leadIds)),
+  ];
+  if (cutoff) conditions.push(lt(leadsTable.updatedAt, cutoff));
+
+  const rows = await db
+    .select({
+      id: leadsTable.id,
+      firstName: leadsTable.firstName,
+      lastName: leadsTable.lastName,
+      phone: leadsTable.phone,
+      email: leadsTable.email,
+      funnelId: leadsTable.funnelId,
+      leadType: leadsTable.leadType,
+      serviceType: leadsTable.serviceType,
+      createdAt: leadsTable.createdAt,
+      updatedAt: leadsTable.updatedAt,
+    })
+    .from(leadsTable)
+    .where(and(...conditions));
+
+  // Sort newest-first in JS — the result set is capped by `maxLeads` (200 by
+  // default) so the cost is negligible, and this keeps the drizzle chain
+  // simple (matches the shape `countPendingRederiveLeadsForRuleScope` uses).
+  const leads = [...rows].sort(
+    (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
+  );
+
+  return { leads, hitLimit, maxLeads };
 }
