@@ -19,7 +19,7 @@ import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
-  Upload, Info, Clock, Lightbulb,
+  Upload, Info, Clock, Lightbulb, Loader2,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -1401,14 +1401,21 @@ function subscribeRederiveOnce(
   pageUrlPattern: string,
   formIdentifier: string,
   onIndicator: (text: string) => void,
+  onSettled?: () => void,
 ): () => void {
-  if (!onRuleRederiveComplete) return () => {};
+  if (!onRuleRederiveComplete) {
+    // No notification shell — call onSettled so callers can immediately clear
+    // any "refreshing" indicator they speculatively set.
+    if (onSettled) onSettled();
+    return () => {};
+  }
   let done = false;
   const cleanup = () => {
     if (done) return;
     done = true;
     unsubscribe();
     clearTimeout(timer);
+    if (onSettled) onSettled();
   };
   const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
     if (done) return;
@@ -1437,6 +1444,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
+  const [refreshingHistorical, setRefreshingHistorical] = useState(false);
 
   if (!detected) return null;
   const entries = Object.entries(detected);
@@ -1448,6 +1456,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
     let pagePath = "*";
     try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
     const formIdentifier = event.formId || event.formName || "*";
+    setRefreshingHistorical(true);
     const unsubscribeRederive = subscribeRederiveOnce(
       onRuleRederiveComplete,
       tenantId,
@@ -1458,6 +1467,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
         sonnerToast.success(text);
         setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
       },
+      () => setRefreshingHistorical(false),
     );
     try {
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
@@ -1553,6 +1563,17 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       <p className="text-[10px] text-muted-foreground/70 mt-2">
         Click any mapping to override. Saving creates a field-mapping rule, re-runs detection, and refreshes the open lead.
       </p>
+      {refreshingHistorical && !rederiveHint && (
+        <p
+          className="text-[10px] text-sky-300/85 italic mt-1 flex items-center gap-1.5"
+          aria-live="polite"
+          role="status"
+          data-testid="refreshing-historical-hint"
+        >
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Refreshing historical leads…
+        </p>
+      )}
       {rederiveHint && (
         <p className="text-[10px] text-emerald-400/90 mt-1" aria-live="polite">
           {rederiveHint}
@@ -1571,6 +1592,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const [saved, setSaved] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
+  const [refreshingHistorical, setRefreshingHistorical] = useState(false);
   const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
 
   const formFields = event.formFields as Record<string, unknown> | null;
@@ -1586,6 +1608,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
     let pagePath = "*";
     try { pagePath = new URL(pageUrl).pathname; } catch {}
     const formIdentifier = formId || formName || "*";
+    setRefreshingHistorical(true);
     const unsubscribeRederive = subscribeRederiveOnce(
       onRuleRederiveComplete,
       tenantId,
@@ -1596,6 +1619,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
         sonnerToast.success(text);
         setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
       },
+      () => setRefreshingHistorical(false),
     );
     try {
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
@@ -1649,6 +1673,17 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       icon={<Settings className="w-4 h-4" />}
     >
       <p className="text-xs text-muted-foreground mb-3">Click a field to create a mapping rule for this page + form scope.</p>
+      {refreshingHistorical && !rederiveHint && (
+        <p
+          className="text-[10px] text-sky-300/85 italic mb-2 flex items-center gap-1.5"
+          aria-live="polite"
+          role="status"
+          data-testid="refreshing-historical-hint"
+        >
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Refreshing historical leads…
+        </p>
+      )}
       {rederiveHint && (
         <p className="text-[10px] text-emerald-400/90 mb-2" aria-live="polite">
           {rederiveHint}

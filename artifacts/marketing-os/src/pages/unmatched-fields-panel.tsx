@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Check, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, Undo2, X, Loader2 } from "lucide-react";
 import { useOptionalLeadNotification, type RuleRederiveCompleteData } from "@/contexts/lead-notification-context";
 import {
   MAP_TO_OPTIONS,
@@ -530,6 +530,16 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   // from another session" hint and an auto-clear timer below. Null means
   // either nothing has changed yet or the hint window has elapsed.
   const [rulesUpdatedAt, setRulesUpdatedAt] = useState<number | null>(null);
+  // Count of in-flight historical-leads re-derive subscriptions for saves
+  // issued from THIS panel. While > 0, render a small inline "Refreshing
+  // historical leads…" hint so the operator has a signal that something is
+  // happening during the up-to-30s window between the save returning and the
+  // rederive completion event arriving. Cleared automatically on completion,
+  // timeout, or save failure (each call to `subscribeRederiveOnce` registers
+  // an `onSettled` decrement). A counter (not a boolean) is used so the bulk
+  // "Save all suggested" path — which fans out one subscription per field —
+  // keeps the indicator visible until the LAST scope settles.
+  const [refreshingHistoricalCount, setRefreshingHistoricalCount] = useState(0);
 
   // Only fetch learned suggestions once the operator opens the panel — there's
   // no value loading them while collapsed.
@@ -650,12 +660,21 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   ): (() => void) => {
     if (!notification) return () => {};
     const { onRuleRederiveComplete } = notification;
+    // Bump the in-flight counter so the panel shows the "Refreshing historical
+    // leads…" hint until this subscription settles (success / timeout /
+    // caller-driven cleanup on save failure). A counter (rather than a boolean)
+    // is used so the indicator stays correct if additional save flows in the
+    // future fan out multiple concurrent subscriptions. Today only single
+    // saveMapping() subscribes — bulk "Save all suggested" writes directly via
+    // doSave without subscribing, so it does not currently light the hint.
+    setRefreshingHistoricalCount((n) => n + 1);
     let done = false;
     const cleanup = () => {
       if (done) return;
       done = true;
       unsubscribe();
       clearTimeout(timer);
+      setRefreshingHistoricalCount((n) => Math.max(0, n - 1));
     };
     const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
       if (done) return;
@@ -1009,6 +1028,17 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
               className="text-[11px] text-sky-200/85 italic"
             >
               Rules updated from another session.
+            </p>
+          )}
+          {refreshingHistoricalCount > 0 && (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="refreshing-historical-hint"
+              className="text-[11px] text-sky-300/85 italic flex items-center gap-1.5"
+            >
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Refreshing historical leads…
             </p>
           )}
 
