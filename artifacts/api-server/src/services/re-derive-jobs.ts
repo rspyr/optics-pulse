@@ -2,6 +2,22 @@ import { enqueueJob, registerJobHandler } from "./background-jobs";
 import { reDeriveLeadsForRuleScope, countPendingRederiveLeadsForRuleScope } from "./re-derive-lead-funnel";
 import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
 
+/**
+ * Errors whose `name` we know mean "retrying will not help" — bad inputs,
+ * missing tenant, fan-out validation failures. We match on `name` (not
+ * `instanceof`) so a test that re-imports the funnel module under a fresh
+ * registry still classifies its errors correctly.
+ */
+const NON_RETRYABLE_ERROR_NAMES = new Set<string>([
+  "NonRetryableReDeriveError",
+]);
+
+function isNonRetryableReDeriveError(err: unknown): boolean {
+  return (
+    err instanceof Error && NON_RETRYABLE_ERROR_NAMES.has(err.name)
+  );
+}
+
 export const REDERIVE_LEADS_FOR_RULE_SCOPE = "rederive_leads_for_rule_scope";
 
 /**
@@ -77,6 +93,17 @@ export function registerReDeriveJobHandlers(): void {
         break;
       } catch (err) {
         lastErr = err;
+        if (isNonRetryableReDeriveError(err)) {
+          // Bad inputs / missing tenant / fan-out validation failure — no
+          // amount of backoff will fix this. Skip remaining retries and let
+          // the failure surface to the operator immediately so the panel can
+          // show the retry hint without two pointless 250ms+ sleeps.
+          console.warn(
+            "[re-derive-jobs] non-retryable failure, skipping in-handler retries:",
+            err,
+          );
+          break;
+        }
         if (attempt < HANDLER_MAX_RETRIES) {
           const delayMs = HANDLER_RETRY_BASE_MS * Math.pow(2, attempt);
           console.warn(

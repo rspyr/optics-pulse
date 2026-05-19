@@ -3,6 +3,21 @@ import { eq, and, desc, gte, lt, inArray } from "drizzle-orm";
 import { detectFields, extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizeFunnel } from "./funnel-normalizer";
 
+/**
+ * Marker error for re-derive failures that obviously won't recover on retry —
+ * e.g. malformed inputs from the caller, a missing/invalid tenantId, or any
+ * validation failure inside the fan-out. The job handler uses the `name` (not
+ * `instanceof`, which is fragile across module reloads in tests) to skip
+ * in-handler retries and surface `rule-rederive-failed` immediately instead
+ * of burning two backoff sleeps for an error that's never going to resolve.
+ */
+export class NonRetryableReDeriveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableReDeriveError";
+  }
+}
+
 export interface RederiveResult {
   changed: boolean;
   leadId: number;
@@ -117,6 +132,22 @@ export async function reDeriveLeadsForRuleScope(
   formIdentifier: string,
   options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
 ): Promise<RederiveScopeResult> {
+  if (!Number.isInteger(tenantId) || tenantId <= 0) {
+    throw new NonRetryableReDeriveError(
+      `reDeriveLeadsForRuleScope: invalid tenantId ${JSON.stringify(tenantId)}`,
+    );
+  }
+  if (typeof pageUrlPattern !== "string" || pageUrlPattern.length === 0) {
+    throw new NonRetryableReDeriveError(
+      `reDeriveLeadsForRuleScope: invalid pageUrlPattern ${JSON.stringify(pageUrlPattern)}`,
+    );
+  }
+  if (typeof formIdentifier !== "string" || formIdentifier.length === 0) {
+    throw new NonRetryableReDeriveError(
+      `reDeriveLeadsForRuleScope: invalid formIdentifier ${JSON.stringify(formIdentifier)}`,
+    );
+  }
+
   const lookbackDays = options.lookbackDays ?? 30;
   const maxEvents = options.maxEvents ?? 2000;
   const maxLeads = options.maxLeads ?? 200;

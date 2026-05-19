@@ -228,6 +228,56 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
   });
 
+  it("fails fast on a non-retryable fan-out error (bad inputs / missing tenant) — no retries, no backoff sleeps, surfaces rule-rederive-failed immediately", async () => {
+    const handler = await loadHandler();
+    const nonRetryable = new Error("invalid pageUrlPattern \"\"");
+    nonRetryable.name = "NonRetryableReDeriveError";
+    reDeriveLeadsForRuleScopeMock.mockRejectedValue(nonRetryable);
+
+    await expect(
+      handler({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form",
+        excludeLeadId: null,
+      }),
+    ).rejects.toThrow(/invalid pageUrlPattern/);
+
+    // Only the initial attempt — non-retryable errors short-circuit the loop
+    expect(reDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
+    // No backoff sleep burned on a known-permanent failure
+    expect(sleepCalls).toHaveLength(0);
+    // Operator still gets the failure event so the panel can clear and show retry hint
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form",
+        reason: "invalid pageUrlPattern \"\"",
+      }),
+    );
+    expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it("still retries when the fan-out throws a plain (transient-looking) Error — non-retryable classification must not over-catch", async () => {
+    const handler = await loadHandler();
+    reDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("connection reset"));
+
+    await expect(
+      handler({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form",
+        excludeLeadId: null,
+      }),
+    ).rejects.toThrow("connection reset");
+
+    // 1 initial + 2 retries
+    expect(reDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(3);
+    expect(sleepCalls).toHaveLength(2);
+  });
+
   it("swallows a socket-emit failure so a downstream notification glitch doesn't fail the job", async () => {
     const handler = await loadHandler();
     reDeriveLeadsForRuleScopeMock.mockResolvedValue({ leadsChanged: 3, hitLimit: false, maxLeads: 500 });
