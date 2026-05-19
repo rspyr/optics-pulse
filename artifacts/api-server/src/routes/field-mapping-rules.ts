@@ -3,7 +3,7 @@ import { db, fieldMappingRulesTable, attributionEventsTable } from "@workspace/d
 import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
-import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { reDeriveLeadFunnel, reDeriveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
 
@@ -179,6 +179,33 @@ router.post("/field-mapping-rules", async (req, res) => {
       console.error("[field-mapping-rules.POST] reDeriveLeadFunnel failed:", err);
     }
   }
+
+  // Fan out to historical leads in the same (pageUrlPattern, formIdentifier)
+  // scope so older form submissions also pick up this mapping. We fire-and-
+  // forget here so the operator's save stays snappy — the work is bounded by
+  // a lookback window and a hard lead cap inside the service.
+  const scopeTenantId = tenantId;
+  const scopePageUrl = pageUrlPattern as string;
+  const scopeFormIdent = formIdentifier as string;
+  const scopeExcludeLeadId = resolvedLeadId;
+  void (async () => {
+    try {
+      const result = await reDeriveLeadsForRuleScope(
+        scopeTenantId,
+        scopePageUrl,
+        scopeFormIdent,
+        { excludeLeadId: scopeExcludeLeadId },
+      );
+      if (result.leadsChanged > 0 || result.hitLimit) {
+        console.log(
+          "[field-mapping-rules.POST] reDeriveLeadsForRuleScope",
+          { tenantId: scopeTenantId, pageUrlPattern: scopePageUrl, formIdentifier: scopeFormIdent, ...result },
+        );
+      }
+    } catch (err) {
+      console.error("[field-mapping-rules.POST] reDeriveLeadsForRuleScope failed:", err);
+    }
+  })();
 
   res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged });
 });

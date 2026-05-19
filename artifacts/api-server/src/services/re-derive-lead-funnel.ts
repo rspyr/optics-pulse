@@ -1,6 +1,6 @@
 import { db, leadsTable, attributionEventsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
-import { detectFields } from "./field-detection";
+import { eq, and, desc, gte } from "drizzle-orm";
+import { detectFields, extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizeFunnel } from "./funnel-normalizer";
 
 export interface RederiveResult {
@@ -90,5 +90,92 @@ export async function reDeriveLeadFunnel(
     funnelId: nextFunnelId,
     leadType: nextLeadType,
     serviceType: nextServiceType,
+  };
+}
+
+export interface RederiveScopeResult {
+  scanned: number;
+  leadsConsidered: number;
+  leadsChanged: number;
+  hitLimit: boolean;
+}
+
+/**
+ * Re-derive funnels for all leads whose most recent attribution event falls
+ * within the (pageUrlPattern, formIdentifier) scope of a mapping rule. Used
+ * after a rule is created/updated so historical leads — not just the one the
+ * operator was looking at — pick up the new mapping without waiting for the
+ * next ingest to touch them.
+ *
+ * The work is bounded by both a lookback window and a hard lead cap so the
+ * caller can fire-and-forget without risking a runaway scan.
+ */
+export async function reDeriveLeadsForRuleScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
+): Promise<RederiveScopeResult> {
+  const lookbackDays = options.lookbackDays ?? 30;
+  const maxEvents = options.maxEvents ?? 2000;
+  const maxLeads = options.maxLeads ?? 200;
+  const excludeLeadId = options.excludeLeadId ?? null;
+
+  const lookbackDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+
+  const events = await db
+    .select({
+      id: attributionEventsTable.id,
+      createdLeadId: attributionEventsTable.createdLeadId,
+      pageUrl: attributionEventsTable.pageUrl,
+      formId: attributionEventsTable.formId,
+      formName: attributionEventsTable.formName,
+      createdAt: attributionEventsTable.createdAt,
+    })
+    .from(attributionEventsTable)
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      gte(attributionEventsTable.createdAt, lookbackDate),
+    ))
+    .orderBy(desc(attributionEventsTable.createdAt))
+    .limit(maxEvents);
+
+  const leadIds = new Set<number>();
+  let scanned = 0;
+  let hitLimit = false;
+  for (const ev of events) {
+    scanned++;
+    if (!ev.createdLeadId) continue;
+    if (excludeLeadId && ev.createdLeadId === excludeLeadId) continue;
+    if (leadIds.has(ev.createdLeadId)) continue;
+
+    const evPath = extractPagePath(ev.pageUrl);
+    if (evPath !== pageUrlPattern) continue;
+
+    const evFormIdent = getFormIdentifier(ev.formId, ev.formName);
+    if (formIdentifier !== "*" && evFormIdent !== formIdentifier) continue;
+
+    leadIds.add(ev.createdLeadId);
+    if (leadIds.size >= maxLeads) {
+      hitLimit = true;
+      break;
+    }
+  }
+
+  let leadsChanged = 0;
+  for (const leadId of leadIds) {
+    try {
+      const result = await reDeriveLeadFunnel(tenantId, leadId);
+      if (result?.changed) leadsChanged++;
+    } catch (err) {
+      console.error("[reDeriveLeadsForRuleScope] reDeriveLeadFunnel failed for lead", leadId, err);
+    }
+  }
+
+  return {
+    scanned,
+    leadsConsidered: leadIds.size,
+    leadsChanged,
+    hitLimit,
   };
 }
