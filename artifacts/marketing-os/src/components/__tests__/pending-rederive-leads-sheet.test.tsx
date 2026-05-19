@@ -12,6 +12,7 @@ type FailedCb = (data: SelectedLeadsRederiveFailedData) => void;
 const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoisted(() => {
   const completeListeners = new Set<CompleteCb>();
   const failedListeners = new Set<FailedCb>();
+  const noop = () => () => {};
   return {
     completeListeners,
     failedListeners,
@@ -28,6 +29,12 @@ const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoist
           failedListeners.delete(cb);
         };
       },
+      // Other context callbacks the sheet subscribes to during queued
+      // re-derives. We don't drive any of them from the tests yet, so a
+      // no-op unsubscribe is sufficient — what matters is that the sheet's
+      // useEffect doesn't blow up calling an undefined function.
+      onSelectedLeadsRederiveProgress: noop,
+      onReconnect: noop,
     })),
   };
 });
@@ -193,6 +200,85 @@ describe("PendingRederiveLeadsSheet", () => {
     });
     expect(screen.getByTestId("pending-leads-bulk-result")).toHaveTextContent("2 updated");
     expect(screen.queryByTestId("pending-leads-bulk-job-error")).not.toBeInTheDocument();
+  });
+
+  it("sync partial failure surfaces the per-lead failure reason on the failed row", async () => {
+    const leads = [makeLead(1), makeLead(2), makeLead(3)];
+    mockFetch({
+      leads,
+      rederive: ({ leadIds }) => ({
+        mode: "sync",
+        total: leadIds.length,
+        succeeded: leadIds.length - 1,
+        failed: 1,
+        changed: leadIds.length - 1,
+        failedLeadIds: [2],
+        failedLeadErrors: { 2: "No matching funnel rule" },
+      }),
+    });
+
+    const user = await renderSheetAndSelectAll(leads);
+    await user.click(screen.getByTestId("pending-leads-rederive-selected"));
+
+    await screen.findByTestId("pending-leads-bulk-result");
+    const reasonEl = await screen.findByTestId("pending-lead-failure-reason-2");
+    expect(reasonEl).toHaveTextContent(/Failed: No matching funnel rule/);
+  });
+
+  it("queued partial failure surfaces per-lead failure reasons from the complete event", async () => {
+    const leads = [makeLead(1), makeLead(2), makeLead(3)];
+    mockFetch({
+      leads,
+      rederive: ({ leadIds }) => ({ mode: "queued", total: leadIds.length, jobId: 909 }),
+    });
+
+    const user = await renderSheetAndSelectAll(leads);
+    await user.click(screen.getByTestId("pending-leads-rederive-selected"));
+
+    await act(async () => {
+      emitComplete({
+        tenantId: 42,
+        jobId: 909,
+        total: 3,
+        succeeded: 1,
+        failed: 2,
+        changed: 1,
+        failedLeadIds: [2, 3],
+        failedLeadErrors: { 2: "Phone normalization failed", 3: "Lead not found" },
+      });
+    });
+
+    const reason2 = await screen.findByTestId("pending-lead-failure-reason-2");
+    expect(reason2).toHaveTextContent(/Failed: Phone normalization failed/);
+    const reason3 = screen.getByTestId("pending-lead-failure-reason-3");
+    expect(reason3).toHaveTextContent(/Failed: Lead not found/);
+    expect(screen.queryByTestId("pending-lead-failure-reason-1")).not.toBeInTheDocument();
+  });
+
+  it("queued partial failure without a reason map shows a no-reason fallback", async () => {
+    const leads = [makeLead(1), makeLead(2)];
+    mockFetch({
+      leads,
+      rederive: ({ leadIds }) => ({ mode: "queued", total: leadIds.length, jobId: 910 }),
+    });
+
+    const user = await renderSheetAndSelectAll(leads);
+    await user.click(screen.getByTestId("pending-leads-rederive-selected"));
+
+    await act(async () => {
+      emitComplete({
+        tenantId: 42,
+        jobId: 910,
+        total: 2,
+        succeeded: 1,
+        failed: 1,
+        changed: 1,
+        failedLeadIds: [2],
+      });
+    });
+
+    const reason = await screen.findByTestId("pending-lead-failure-reason-2");
+    expect(reason).toHaveTextContent(/Failed \(no reason reported\)/);
   });
 
   it("queued + partial failure shows failed count and highlights failed rows", async () => {

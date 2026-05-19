@@ -220,6 +220,11 @@ function registerSelectedLeadsHandler(): void {
     let failed = 0;
     let changed = 0;
     const failedLeadIds: number[] = [];
+    // Per-lead failure reason so the pending-rederive-leads sheet can show
+    // *why* each specific lead failed instead of just highlighting the row.
+    // Keyed by leadId; value is a short human-readable string pulled from
+    // the thrown Error's message.
+    const failedLeadErrors: Record<number, string> = {};
     // Emit progress every N processed leads OR every PROGRESS_INTERVAL_MS,
     // whichever comes first, so very small jobs still get an early
     // first-chunk event (so the bar moves) but huge jobs don't spam the
@@ -264,6 +269,7 @@ function registerSelectedLeadsHandler(): void {
         } catch (err) {
           failed++;
           failedLeadIds.push(leadId);
+          failedLeadErrors[leadId] = err instanceof Error && err.message ? err.message : String(err);
           console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
         }
         processed++;
@@ -299,6 +305,7 @@ function registerSelectedLeadsHandler(): void {
         failed,
         changed,
         failedLeadIds,
+        failedLeadErrors,
       });
     } catch (emitErr) {
       console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveComplete failed:", emitErr);

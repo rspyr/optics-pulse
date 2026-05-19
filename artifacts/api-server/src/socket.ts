@@ -419,6 +419,12 @@ type SelectedLeadsRederiveSnapshot = {
   // the final outcome via the REST endpoint.
   status: "running" | "complete" | "failed";
   failedLeadIds?: number[];
+  // Per-lead failure reason map, populated on `complete` when one or more
+  // leads failed. Mirrors the `failedLeadIds` array so the sheet can surface
+  // *why* each specific lead failed without re-fetching server logs. Kept in
+  // the snapshot (not just the live event) so a client that reconnects
+  // inside the terminal TTL still recovers the reasons via the REST endpoint.
+  failedLeadErrors?: Record<number, string>;
   reason?: string;
 };
 
@@ -464,7 +470,7 @@ export function emitSelectedLeadsRederiveProgress(
 function recordSelectedLeadsRederiveTerminal(
   jobId: number | null,
   patch:
-    | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[] }
+    | { status: "complete"; tenantId: number; total: number; succeeded: number; failed: number; changed: number; failedLeadIds: number[]; failedLeadErrors: Record<number, string> }
     | { status: "failed"; tenantId: number; total: number; reason: string },
 ) {
   if (jobId == null) return;
@@ -491,6 +497,7 @@ function recordSelectedLeadsRederiveTerminal(
           failed: patch.failed,
           changed: patch.changed,
           failedLeadIds: patch.failedLeadIds,
+          failedLeadErrors: patch.failedLeadErrors,
           updatedAt: new Date().toISOString(),
           status: "complete",
         }
@@ -525,8 +532,10 @@ export function emitSelectedLeadsRederiveComplete(
     failed: number;
     changed: number;
     failedLeadIds: number[];
+    failedLeadErrors?: Record<number, string>;
   },
 ) {
+  const failedLeadErrors = data.failedLeadErrors ?? {};
   recordSelectedLeadsRederiveTerminal(data.jobId, {
     status: "complete",
     tenantId,
@@ -535,9 +544,10 @@ export function emitSelectedLeadsRederiveComplete(
     failed: data.failed,
     changed: data.changed,
     failedLeadIds: data.failedLeadIds,
+    failedLeadErrors,
   });
   if (io) {
-    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-complete", { ...data, tenantId });
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-complete", { ...data, failedLeadErrors, tenantId });
     console.log(
       `[Socket.IO] Emitted selected-leads-rederive-complete for tenant-${tenantId} (` +
       `job=${data.jobId ?? "?"} total=${data.total} succeeded=${data.succeeded} ` +

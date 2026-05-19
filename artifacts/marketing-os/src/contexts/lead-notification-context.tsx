@@ -94,6 +94,12 @@ export interface SelectedLeadsRederiveCompleteData {
   failed: number;
   changed: number;
   failedLeadIds: number[];
+  // Per-lead failure reason map keyed by leadId. Server populates this on
+  // partial failures so the pending-rederive-leads sheet can surface *why*
+  // each specific lead failed without forcing operators into server logs.
+  // Optional for backwards compatibility with older server builds emitting
+  // only `failedLeadIds`.
+  failedLeadErrors?: Record<number, string>;
 }
 
 type SelectedLeadsRederiveCompleteCallback = (data: SelectedLeadsRederiveCompleteData) => void;

@@ -178,6 +178,10 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
   let failed = 0;
   let changed = 0;
   const failedLeadIds: number[] = [];
+  // Per-lead failure reason, surfaced to the pending-rederive-leads sheet
+  // so operators can triage *which* lead failed and *why* without digging
+  // into server logs. Keyed by leadId; value is the thrown Error's message.
+  const failedLeadErrors: Record<number, string> = {};
   for (const leadId of leadIds) {
     try {
       const r = await reDeriveLeadFunnel(tenantId, leadId);
@@ -186,6 +190,7 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
     } catch (err) {
       failed++;
       failedLeadIds.push(leadId);
+      failedLeadErrors[leadId] = err instanceof Error && err.message ? err.message : String(err);
       console.error("[field-mapping-rules.rederive-leads] reDeriveLeadFunnel failed for lead", leadId, err);
     }
   }
@@ -196,6 +201,7 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
     failed,
     changed,
     failedLeadIds,
+    failedLeadErrors,
   });
 });
 

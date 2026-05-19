@@ -56,6 +56,7 @@ type BulkResult =
       failed: number;
       changed: number;
       failedLeadIds: number[];
+      failedLeadErrors?: Record<number, string>;
     }
   | {
       mode: "queued";
@@ -74,6 +75,10 @@ type BulkResult =
         failed: number;
         changed: number;
         failedLeadIds: number[];
+        // Per-lead failure reason map, populated by
+        // `selected-leads-rederive-complete` (or the REST reconnect-fetch).
+        // Used to render a short reason next to each failed row.
+        failedLeadErrors?: Record<number, string>;
       };
       // Set when a `selected-leads-rederive-failed` event arrives (or the
       // safety timeout elapses without any event). Surfaces a retry button.
@@ -205,6 +210,17 @@ export function PendingRederiveLeadsSheet({
     return new Set<number>();
   }, [bulkResult]);
 
+  // Per-lead failure reason lookup so each highlighted row can show *why*
+  // it failed. Falls back to an empty object on older server builds that
+  // only emit `failedLeadIds`.
+  const failedReasons = useMemo<Record<number, string>>(() => {
+    if (bulkResult?.mode === "sync") return bulkResult.failedLeadErrors ?? {};
+    if (bulkResult?.mode === "queued" && bulkResult.jobResult) {
+      return bulkResult.jobResult.failedLeadErrors ?? {};
+    }
+    return {};
+  }, [bulkResult]);
+
   const isJobRunning =
     bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError;
 
@@ -276,6 +292,7 @@ export function PendingRederiveLeadsSheet({
                 failed: data.failed,
                 changed: data.changed,
                 failedLeadIds: data.failedLeadIds,
+                failedLeadErrors: data.failedLeadErrors,
               },
               jobError: undefined,
             }
@@ -317,6 +334,7 @@ export function PendingRederiveLeadsSheet({
           failed: number;
           changed: number;
           failedLeadIds?: number[];
+          failedLeadErrors?: Record<number, string>;
           reason?: string;
         } | null) => {
           if (!d) return;
@@ -335,6 +353,7 @@ export function PendingRederiveLeadsSheet({
                       failed: d.failed,
                       changed: d.changed,
                       failedLeadIds: d.failedLeadIds ?? [],
+                      failedLeadErrors: d.failedLeadErrors,
                     },
                   }
                 : prev,
@@ -590,6 +609,7 @@ export function PendingRederiveLeadsSheet({
                 {leads.map((l) => {
                   const isSelected = selected.has(l.id);
                   const isFailed = failedIds.has(l.id);
+                  const failureReason = isFailed ? failedReasons[l.id] : undefined;
                   return (
                     <li
                       key={l.id}
@@ -614,6 +634,23 @@ export function PendingRederiveLeadsSheet({
                               <span className="text-white/40"> · created {fmtRelative(l.createdAt)}</span>
                             )}
                           </p>
+                          {isFailed && failureReason && (
+                            <p
+                              className="text-[11px] text-red-400 mt-0.5 break-words"
+                              title={failureReason}
+                              data-testid={`pending-lead-failure-reason-${l.id}`}
+                            >
+                              Failed: {failureReason}
+                            </p>
+                          )}
+                          {isFailed && !failureReason && (
+                            <p
+                              className="text-[11px] text-red-400 mt-0.5 italic"
+                              data-testid={`pending-lead-failure-reason-${l.id}`}
+                            >
+                              Failed (no reason reported)
+                            </p>
+                          )}
                         </div>
                         <a
                           href={`${API_BASE}/?leadId=${l.id}`}
