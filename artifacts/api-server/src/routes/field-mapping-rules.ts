@@ -8,6 +8,8 @@ import {
   enqueueReDeriveLeadsForRuleScope,
   enqueueReDeriveSelectedLeads,
   findLatestCancelledRederiveSnapshotFromDb,
+  markCancelledRederiveSnapshotDismissedInDb,
+  clearCancelledRederiveDismissedInDbForScope,
   REDERIVE_SELECTED_LEADS,
 } from "../services/re-derive-jobs";
 import { mapReDeriveErrorForOperator } from "../services/re-derive-error-messages";
@@ -15,6 +17,8 @@ import {
   emitRuleRederiveFailed,
   emitSelectedLeadsRederiveCancelled,
   findLatestCancelledSelectedLeadsRederiveSnapshotForScope,
+  markCancelledSelectedLeadsRederiveSnapshotDismissed,
+  clearCancelledSelectedLeadsRederiveDismissedForScope,
   getSelectedLeadsRederiveProgress,
 } from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
@@ -190,6 +194,18 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
         pageUrlPattern,
         formIdentifier,
       });
+      // A fresh enqueue invalidates any prior dismissed cancelled banner
+      // for the scope — if this new job is itself cancelled the operator
+      // should see a fresh banner, not be silently suppressed by a stale
+      // server-side dismissal. Clear both in-memory and DB markers.
+      if (pageUrlPattern && formIdentifier) {
+        try {
+          clearCancelledSelectedLeadsRederiveDismissedForScope(tenantId, pageUrlPattern, formIdentifier);
+          await clearCancelledRederiveDismissedInDbForScope(tenantId, pageUrlPattern, formIdentifier);
+        } catch (clearErr) {
+          console.error("[field-mapping-rules.rederive-leads] clear dismissed failed:", clearErr);
+        }
+      }
       res.json({ mode: "queued", total: leadIds.length, jobId: job?.id ?? null });
     } catch (err) {
       console.error("[field-mapping-rules.rederive-leads] enqueue failed:", err);
@@ -216,6 +232,16 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
       failedLeadIds.push(leadId);
       failedLeadErrors[leadId] = mapReDeriveErrorForOperator(err);
       console.error("[field-mapping-rules.rederive-leads] reDeriveLeadFunnel failed for lead", leadId, err);
+    }
+  }
+  // Mirror the queued path: a successful submit for this scope invalidates
+  // any prior dismissed cancelled banner so a future cancel surfaces fresh.
+  if (pageUrlPattern && formIdentifier) {
+    try {
+      clearCancelledSelectedLeadsRederiveDismissedForScope(tenantId, pageUrlPattern, formIdentifier);
+      await clearCancelledRederiveDismissedInDbForScope(tenantId, pageUrlPattern, formIdentifier);
+    } catch (clearErr) {
+      console.error("[field-mapping-rules.rederive-leads] clear dismissed (sync) failed:", clearErr);
     }
   }
   res.json({
@@ -408,6 +434,14 @@ router.get("/field-mapping-rules/cancelled-rederive-snapshot", async (req, res) 
     formIdentifier,
   );
   if (memorySnapshot) {
+    // `findLatestCancelledSelectedLeadsRederiveSnapshotForScope` already
+    // skips dismissed snapshots, but double-check defensively so an
+    // operator who dismissed on one device can't see the banner
+    // momentarily reappear here.
+    if (memorySnapshot.dismissed) {
+      res.status(404).json({ error: "Cancelled snapshot dismissed" });
+      return;
+    }
     res.json(memorySnapshot);
     return;
   }
@@ -425,11 +459,72 @@ router.get("/field-mapping-rules/cancelled-rederive-snapshot", async (req, res) 
       res.status(404).json({ error: "No cancelled snapshot for this scope" });
       return;
     }
+    if (dbSnapshot.dismissed) {
+      res.status(404).json({ error: "Cancelled snapshot dismissed" });
+      return;
+    }
     res.json(dbSnapshot);
   } catch (err) {
     console.error("[field-mapping-rules.cancelled-rederive-snapshot] DB fallback failed:", err);
     res.status(500).json({ error: "Failed to load cancelled snapshot" });
   }
+});
+
+/**
+ * Mark the latest cancelled bulk re-derive snapshot for the given scope as
+ * dismissed so the "Cancelled at X/Y leads" banner stops re-surfacing when
+ * the operator re-opens the pending-leads sheet — including from a
+ * different device or browser profile. The dismissal is persisted both in
+ * the in-memory snapshot (so the live cancelled snapshot stops being
+ * returned by the snapshot GET while it's still hot) and on the
+ * `background_jobs.result` row (so the dismissal survives the in-memory
+ * TTL and process restarts).
+ *
+ * A new enqueue for the same scope clears this dismissal (handled in the
+ * rederive-leads POST), so a *fresh* cancellation still surfaces the
+ * banner.
+ *
+ * Idempotent: dismissing twice succeeds with `dismissed: true`. Returns
+ * 404 when no cancelled snapshot exists for the scope in either store.
+ */
+router.post("/field-mapping-rules/cancelled-rederive-snapshot/dismiss", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const body = (req.body ?? {}) as { pageUrlPattern?: unknown; formIdentifier?: unknown };
+  const pageUrlPattern = typeof body.pageUrlPattern === "string" ? body.pageUrlPattern : "";
+  const formIdentifier = typeof body.formIdentifier === "string" ? body.formIdentifier : "";
+  if (!pageUrlPattern || !formIdentifier) {
+    res.status(400).json({ error: "pageUrlPattern and formIdentifier are required" });
+    return;
+  }
+  const memorySnapshot = markCancelledSelectedLeadsRederiveSnapshotDismissed(
+    tenantId,
+    pageUrlPattern,
+    formIdentifier,
+  );
+  let dbJobId: number | null = null;
+  try {
+    dbJobId = await markCancelledRederiveSnapshotDismissedInDb(
+      tenantId,
+      pageUrlPattern,
+      formIdentifier,
+    );
+  } catch (err) {
+    console.error("[field-mapping-rules.cancelled-rederive-snapshot.dismiss] DB write failed:", err);
+    res.status(500).json({ error: "Failed to persist dismissal" });
+    return;
+  }
+  if (!memorySnapshot && dbJobId == null) {
+    res.status(404).json({ error: "No cancelled snapshot for this scope" });
+    return;
+  }
+  res.json({
+    dismissed: true,
+    jobId: memorySnapshot?.jobId ?? dbJobId,
+  });
 });
 
 router.get("/field-mapping-rules/rederive-job-progress", async (req, res) => {

@@ -61,13 +61,17 @@ vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
 }));
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLeadsRederiveCancelledMock, getSelectedLeadsRederiveProgressMock, findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock, findLatestCancelledRederiveSnapshotFromDbMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock, enqueueReDeriveSelectedLeadsMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLeadsRederiveCancelledMock, getSelectedLeadsRederiveProgressMock, findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock, findLatestCancelledRederiveSnapshotFromDbMock, markCancelledSelectedLeadsRederiveSnapshotDismissedMock, clearCancelledSelectedLeadsRederiveDismissedForScopeMock, markCancelledRederiveSnapshotDismissedInDbMock, clearCancelledRederiveDismissedInDbForScopeMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock, enqueueReDeriveSelectedLeadsMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
   emitSelectedLeadsRederiveCancelledMock: vi.fn(),
   getSelectedLeadsRederiveProgressMock: vi.fn(),
   findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock: vi.fn(),
   findLatestCancelledRederiveSnapshotFromDbMock: vi.fn(),
+  markCancelledSelectedLeadsRederiveSnapshotDismissedMock: vi.fn(),
+  clearCancelledSelectedLeadsRederiveDismissedForScopeMock: vi.fn(),
+  markCancelledRederiveSnapshotDismissedInDbMock: vi.fn(),
+  clearCancelledRederiveDismissedInDbForScopeMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
   reDeriveLeadFunnelMock: vi.fn(),
   countPendingRederiveLeadsForRuleScopeMock: vi.fn(),
@@ -82,6 +86,8 @@ vi.mock("../socket", () => ({
   emitSelectedLeadsRederiveCancelled: emitSelectedLeadsRederiveCancelledMock,
   getSelectedLeadsRederiveProgress: getSelectedLeadsRederiveProgressMock,
   findLatestCancelledSelectedLeadsRederiveSnapshotForScope: findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock,
+  markCancelledSelectedLeadsRederiveSnapshotDismissed: markCancelledSelectedLeadsRederiveSnapshotDismissedMock,
+  clearCancelledSelectedLeadsRederiveDismissedForScope: clearCancelledSelectedLeadsRederiveDismissedForScopeMock,
 }));
 
 vi.mock("../services/re-derive-lead-funnel", () => ({
@@ -95,6 +101,8 @@ vi.mock("../services/re-derive-jobs", () => ({
   enqueueReDeriveLeadsForRuleScope: enqueueReDeriveLeadsForRuleScopeMock,
   enqueueReDeriveSelectedLeads: enqueueReDeriveSelectedLeadsMock,
   findLatestCancelledRederiveSnapshotFromDb: findLatestCancelledRederiveSnapshotFromDbMock,
+  markCancelledRederiveSnapshotDismissedInDb: markCancelledRederiveSnapshotDismissedInDbMock,
+  clearCancelledRederiveDismissedInDbForScope: clearCancelledRederiveDismissedInDbForScopeMock,
   REDERIVE_LEADS_FOR_RULE_SCOPE: "rederive_leads_for_rule_scope",
   REDERIVE_SELECTED_LEADS: "rederive_selected_leads",
   registerReDeriveJobHandlers: vi.fn(),
@@ -122,6 +130,12 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   getSelectedLeadsRederiveProgressMock.mockReset();
   findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock.mockReset();
   findLatestCancelledRederiveSnapshotFromDbMock.mockReset();
+  markCancelledSelectedLeadsRederiveSnapshotDismissedMock.mockReset();
+  clearCancelledSelectedLeadsRederiveDismissedForScopeMock.mockReset();
+  markCancelledRederiveSnapshotDismissedInDbMock.mockReset();
+  markCancelledRederiveSnapshotDismissedInDbMock.mockResolvedValue(null);
+  clearCancelledRederiveDismissedInDbForScopeMock.mockReset();
+  clearCancelledRederiveDismissedInDbForScopeMock.mockResolvedValue(undefined);
   enqueueReDeriveSelectedLeadsMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   reDeriveLeadFunnelMock.mockReset();
@@ -770,6 +784,60 @@ describe("GET /field-mapping-rules/cancelled-rederive-snapshot", () => {
     });
   });
 
+  it("treats a dismissed in-memory snapshot as 404 so the sheet stays clean across devices", async () => {
+    findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock.mockReturnValueOnce(null);
+    // The lookup helpers themselves filter dismissed entries, but the route
+    // also defensively double-checks the `dismissed` flag — exercise both
+    // by handing back a dismissed snapshot anyway.
+    findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock.mockReturnValueOnce({
+      tenantId: 42,
+      jobId: 901,
+      total: 10,
+      processed: 5,
+      succeeded: 5,
+      failed: 0,
+      changed: 4,
+      failedLeadIds: [],
+      skippedLeadIds: [11, 12],
+      status: "cancelled",
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      updatedAt: new Date().toISOString(),
+      dismissed: true,
+    });
+    findLatestCancelledRederiveSnapshotFromDbMock.mockResolvedValueOnce(null);
+    const res = await getJson(
+      app,
+      "/field-mapping-rules/cancelled-rederive-snapshot?tenantId=42&pageUrlPattern=%2Fcontact&formIdentifier=contact-form",
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("treats a dismissed DB snapshot as 404 so the dismissal persists across server restarts", async () => {
+    findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock.mockReturnValueOnce(null);
+    findLatestCancelledRederiveSnapshotFromDbMock.mockResolvedValueOnce({
+      tenantId: 42,
+      jobId: 902,
+      total: 10,
+      processed: 5,
+      succeeded: 5,
+      failed: 0,
+      changed: 4,
+      failedLeadIds: [],
+      skippedLeadIds: [11, 12],
+      status: "cancelled",
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      updatedAt: new Date().toISOString(),
+      dismissed: true,
+    });
+    const res = await getJson(
+      app,
+      "/field-mapping-rules/cancelled-rederive-snapshot?tenantId=42&pageUrlPattern=%2Fcontact&formIdentifier=contact-form",
+    );
+    expect(res.status).toBe(404);
+  });
+
   it("returns 500 when the DB fallback throws so the sheet can surface a retry hint instead of a stale 404", async () => {
     findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock.mockReturnValueOnce(null);
     findLatestCancelledRederiveSnapshotFromDbMock.mockRejectedValueOnce(new Error("db down"));
@@ -781,5 +849,89 @@ describe("GET /field-mapping-rules/cancelled-rederive-snapshot", () => {
     expect(res.status).toBe(500);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe("POST /field-mapping-rules/cancelled-rederive-snapshot/dismiss", () => {
+  beforeEach(async () => {
+    await setupApp("agency_user", 42);
+  });
+
+  it("returns 400 when scope params are missing", async () => {
+    const res = await postJson(app, "/field-mapping-rules/cancelled-rederive-snapshot/dismiss?tenantId=42", {});
+    expect(res.status).toBe(400);
+  });
+
+  it("marks both the in-memory and DB cancelled snapshots dismissed for the scope", async () => {
+    markCancelledSelectedLeadsRederiveSnapshotDismissedMock.mockReturnValueOnce({
+      tenantId: 42,
+      jobId: 555,
+      total: 10,
+      processed: 3,
+      succeeded: 2,
+      failed: 1,
+      changed: 1,
+      failedLeadIds: [9],
+      skippedLeadIds: [11, 12, 13],
+      status: "cancelled",
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      updatedAt: new Date().toISOString(),
+      dismissed: true,
+    });
+    markCancelledRederiveSnapshotDismissedInDbMock.mockResolvedValueOnce(555);
+    const res = await postJson(
+      app,
+      "/field-mapping-rules/cancelled-rederive-snapshot/dismiss?tenantId=42",
+      { pageUrlPattern: "/contact", formIdentifier: "contact-form" },
+    );
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ dismissed: true, jobId: 555 });
+    expect(markCancelledSelectedLeadsRederiveSnapshotDismissedMock).toHaveBeenCalledWith(42, "/contact", "contact-form");
+    expect(markCancelledRederiveSnapshotDismissedInDbMock).toHaveBeenCalledWith(42, "/contact", "contact-form");
+  });
+
+  it("returns 404 when neither the in-memory nor DB snapshot exists for the scope", async () => {
+    markCancelledSelectedLeadsRederiveSnapshotDismissedMock.mockReturnValueOnce(null);
+    markCancelledRederiveSnapshotDismissedInDbMock.mockResolvedValueOnce(null);
+    const res = await postJson(
+      app,
+      "/field-mapping-rules/cancelled-rederive-snapshot/dismiss?tenantId=42",
+      { pageUrlPattern: "/contact", formIdentifier: "contact-form" },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 500 when the DB persistence fails so the client doesn't think dismissal stuck", async () => {
+    markCancelledSelectedLeadsRederiveSnapshotDismissedMock.mockReturnValueOnce(null);
+    markCancelledRederiveSnapshotDismissedInDbMock.mockRejectedValueOnce(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await postJson(
+      app,
+      "/field-mapping-rules/cancelled-rederive-snapshot/dismiss?tenantId=42",
+      { pageUrlPattern: "/contact", formIdentifier: "contact-form" },
+    );
+    expect(res.status).toBe(500);
+    errSpy.mockRestore();
+  });
+});
+
+describe("POST /field-mapping-rules/rederive-leads clears dismissed banner on enqueue", () => {
+  beforeEach(async () => {
+    await setupApp("agency_user", 42);
+  });
+
+  it("clears in-memory + DB dismissed markers after a successful queued enqueue", async () => {
+    enqueueReDeriveSelectedLeadsMock.mockResolvedValueOnce({ id: 999 });
+    const leadIds = Array.from({ length: 30 }, (_, i) => i + 1); // > sync threshold
+    const res = await postJson(
+      app,
+      "/field-mapping-rules/rederive-leads?tenantId=42",
+      { leadIds, pageUrlPattern: "/contact", formIdentifier: "contact-form" },
+    );
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ mode: "queued", jobId: 999 });
+    expect(clearCancelledSelectedLeadsRederiveDismissedForScopeMock).toHaveBeenCalledWith(42, "/contact", "contact-form");
+    expect(clearCancelledRederiveDismissedInDbForScopeMock).toHaveBeenCalledWith(42, "/contact", "contact-form");
   });
 });

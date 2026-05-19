@@ -421,6 +421,11 @@ export type PersistedCancelledRederiveSnapshot = {
   pageUrlPattern: string;
   formIdentifier: string;
   updatedAt: string;
+  // True when an operator has explicitly dismissed this cancelled banner.
+  // The route-level loader filters dismissed rows out so the sheet doesn't
+  // re-surface them, but the flag is included on the returned shape so
+  // future callers / tests can observe it directly.
+  dismissed?: boolean;
 };
 
 /**
@@ -470,6 +475,7 @@ export async function findLatestCancelledRederiveSnapshotFromDb(
     changed?: unknown;
     failedLeadIds?: unknown;
     skippedLeadIds?: unknown;
+    dismissed?: unknown;
   };
   const payloadLeadIds = Array.isArray(payload.leadIds)
     ? (payload.leadIds.filter((id) => typeof id === "number") as number[])
@@ -484,6 +490,7 @@ export async function findLatestCancelledRederiveSnapshotFromDb(
   // fall back to "all leads skipped" so the sheet can still offer
   // "Re-derive the rest" against the full original selection.
   const skippedLeadIds = asIdArray(result.skippedLeadIds, payloadLeadIds);
+  const dismissed = result.dismissed === true;
   return {
     tenantId,
     jobId: row.id,
@@ -498,6 +505,7 @@ export async function findLatestCancelledRederiveSnapshotFromDb(
     pageUrlPattern,
     formIdentifier,
     updatedAt: (row.completedAt ?? row.updatedAt ?? new Date()).toISOString(),
+    dismissed,
   };
 }
 
@@ -596,6 +604,82 @@ export function stopCancelledRederiveCleanupScheduler(): void {
   if (cleanupTimer) {
     clearInterval(cleanupTimer);
     cleanupTimer = null;
+  }
+}
+
+/**
+ * Mark the latest cancelled `rederive_selected_leads` row for the given
+ * scope as dismissed by writing `dismissed: true` into its `result` JSON.
+ * Persists the operator's "I've acknowledged this banner" across devices
+ * and process restarts. Returns the dismissed row's job id (or null when
+ * no matching cancelled row exists).
+ *
+ * Idempotent: re-running against an already-dismissed row leaves it
+ * dismissed and still returns its id so callers can treat the second call
+ * as a no-op success.
+ */
+export async function markCancelledRederiveSnapshotDismissedInDb(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): Promise<number | null> {
+  const rows = await db
+    .select()
+    .from(backgroundJobsTable)
+    .where(and(
+      eq(backgroundJobsTable.tenantId, tenantId),
+      eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+      eq(backgroundJobsTable.status, "cancelled"),
+      sql`${backgroundJobsTable.payload}->>'pageUrlPattern' = ${pageUrlPattern}`,
+      sql`${backgroundJobsTable.payload}->>'formIdentifier' = ${formIdentifier}`,
+    ))
+    .orderBy(desc(backgroundJobsTable.completedAt))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const prevResult = (row.result ?? {}) as Record<string, unknown>;
+  const nextResult = { ...prevResult, dismissed: true };
+  await db
+    .update(backgroundJobsTable)
+    .set({ result: nextResult as Record<string, unknown>, updatedAt: new Date() })
+    .where(eq(backgroundJobsTable.id, row.id));
+  return row.id;
+}
+
+/**
+ * Clear `dismissed` from any cancelled `rederive_selected_leads` rows for
+ * the given scope. Called on a fresh enqueue so a previously-dismissed
+ * banner doesn't bleed across re-derive lifecycles — if the operator
+ * cancelled, dismissed, and then re-tried for the same scope, a subsequent
+ * cancel should surface a fresh banner.
+ *
+ * Best-effort: errors are caught by the caller and logged. The dismiss-on-
+ * a-newer-row path (each cancel writes its own row, naturally non-
+ * dismissed) means losing this clear is non-fatal.
+ */
+export async function clearCancelledRederiveDismissedInDbForScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): Promise<void> {
+  const rows = await db
+    .select()
+    .from(backgroundJobsTable)
+    .where(and(
+      eq(backgroundJobsTable.tenantId, tenantId),
+      eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+      eq(backgroundJobsTable.status, "cancelled"),
+      sql`${backgroundJobsTable.payload}->>'pageUrlPattern' = ${pageUrlPattern}`,
+      sql`${backgroundJobsTable.payload}->>'formIdentifier' = ${formIdentifier}`,
+      sql`${backgroundJobsTable.result}->>'dismissed' = 'true'`,
+    ));
+  for (const row of rows) {
+    const prevResult = (row.result ?? {}) as Record<string, unknown>;
+    const { dismissed: _drop, ...rest } = prevResult;
+    await db
+      .update(backgroundJobsTable)
+      .set({ result: rest as Record<string, unknown>, updatedAt: new Date() })
+      .where(eq(backgroundJobsTable.id, row.id));
   }
 }
 

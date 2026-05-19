@@ -439,6 +439,13 @@ type SelectedLeadsRederiveSnapshot = {
   // with older callers that didn't thread scope through.
   pageUrlPattern?: string;
   formIdentifier?: string;
+  // Operator-acknowledged "I've seen this cancellation" flag. Set by the
+  // dismiss endpoint so the banner stops surfacing for this exact snapshot
+  // across the operator's devices (the in-memory and DB lookups both skip
+  // dismissed snapshots, so the sheet falls back to its normal "no result
+  // yet" state). Only relevant for `cancelled` snapshots; cleared
+  // implicitly by enqueueing a new bulk job for the same scope.
+  dismissed?: boolean;
 };
 
 const selectedLeadsRederiveProgressByJobId = new Map<number, SelectedLeadsRederiveSnapshot>();
@@ -475,6 +482,7 @@ export function findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
   let best: SelectedLeadsRederiveSnapshot | null = null;
   for (const snap of selectedLeadsRederiveProgressByJobId.values()) {
     if (snap.status !== "cancelled") continue;
+    if (snap.dismissed) continue;
     if (snap.tenantId !== tenantId) continue;
     if (snap.pageUrlPattern !== pageUrlPattern) continue;
     if (snap.formIdentifier !== formIdentifier) continue;
@@ -483,6 +491,64 @@ export function findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
     }
   }
   return best;
+}
+
+/**
+ * Mark the most recent cancelled snapshot for the given scope as dismissed
+ * so subsequent lookups by the same operator (on any device) skip it. Used
+ * by the dismiss endpoint so the operator's acknowledgement of a cancelled
+ * banner follows them across browsers. Returns the dismissed snapshot (now
+ * mutated in place) or null when no matching cancelled snapshot exists.
+ *
+ * We only flip the in-memory snapshot here — durable persistence is layered
+ * separately in `markCancelledRederiveSnapshotDismissedInDb` so the dismiss
+ * survives in-memory TTL expiry and server restarts.
+ */
+export function markCancelledSelectedLeadsRederiveSnapshotDismissed(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): SelectedLeadsRederiveSnapshot | null {
+  // Don't filter by `dismissed` here — if it's already dismissed in memory,
+  // flipping it again is a no-op and we still want to return it so callers
+  // can decide what to do (the route layer treats the second call as
+  // idempotent success).
+  let best: SelectedLeadsRederiveSnapshot | null = null;
+  for (const snap of selectedLeadsRederiveProgressByJobId.values()) {
+    if (snap.status !== "cancelled") continue;
+    if (snap.tenantId !== tenantId) continue;
+    if (snap.pageUrlPattern !== pageUrlPattern) continue;
+    if (snap.formIdentifier !== formIdentifier) continue;
+    if (!best || Date.parse(snap.updatedAt) > Date.parse(best.updatedAt)) {
+      best = snap;
+    }
+  }
+  if (!best) return null;
+  best.dismissed = true;
+  return best;
+}
+
+/**
+ * Clear the `dismissed` flag from any in-memory cancelled snapshots for the
+ * given scope. Called when a new bulk re-derive is enqueued for the scope so
+ * a stale dismissal on an older cancelled snapshot can't bleed into the new
+ * lifecycle. (In practice the new job will create its own snapshot and the
+ * older one will age out via TTL — but explicit clearing keeps behavior
+ * symmetric with the DB-side clear in `clearCancelledRederiveDismissedInDb`.)
+ */
+export function clearCancelledSelectedLeadsRederiveDismissedForScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): void {
+  for (const snap of selectedLeadsRederiveProgressByJobId.values()) {
+    if (snap.status !== "cancelled") continue;
+    if (!snap.dismissed) continue;
+    if (snap.tenantId !== tenantId) continue;
+    if (snap.pageUrlPattern !== pageUrlPattern) continue;
+    if (snap.formIdentifier !== formIdentifier) continue;
+    snap.dismissed = false;
+  }
 }
 
 export function emitSelectedLeadsRederiveProgress(

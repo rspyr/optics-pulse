@@ -633,8 +633,12 @@ export function PendingRederiveLeadsSheet({
 
   /**
    * Hide the restored cancelled banner for this scope until a new job is
-   * enqueued. Persists across sheet open/close via localStorage keyed by the
-   * cancelled jobId so a *fresh* cancellation still surfaces a banner.
+   * enqueued. Calls the server so the dismissal follows the operator across
+   * devices (the server marks the in-memory + persisted cancelled snapshot
+   * dismissed, and subsequent snapshot lookups skip dismissed entries).
+   * Also writes the legacy localStorage marker so a single-device dismissal
+   * works even if the server call hasn't returned yet — and so older
+   * client builds still respect the dismissal.
    */
   function dismissCancelledBanner() {
     if (bulkResult?.mode !== "queued" || !bulkResult.jobCancelled) return;
@@ -644,6 +648,17 @@ export function PendingRederiveLeadsSheet({
         bulkResult.jobId != null ? String(bulkResult.jobId) : "*",
       );
     } catch { /* best-effort; clearing local state below still hides it */ }
+    // Fire-and-forget: the local state flip below already hides the banner
+    // in this tab. The server call is what makes the dismissal stick when
+    // the operator re-opens the sheet from another device. Errors are
+    // non-fatal — the worst case is the banner re-appears cross-device.
+    const dismissUrl = `${API_BASE}/api/field-mapping-rules/cancelled-rederive-snapshot/dismiss?tenantId=${encodeURIComponent(String(tenantId))}`;
+    fetch(dismissUrl, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageUrlPattern, formIdentifier }),
+    }).catch(() => { /* best-effort; localStorage still hides it locally */ });
     setBulkResult(null);
     setSkippedIdsExpanded(false);
   }
