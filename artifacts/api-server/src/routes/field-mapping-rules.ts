@@ -3,8 +3,8 @@ import { db, fieldMappingRulesTable, attributionEventsTable } from "@workspace/d
 import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
-import { reDeriveLeadFunnel, reDeriveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
-import { emitRuleRederiveComplete } from "../socket";
+import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { enqueueReDeriveLeadsForRuleScope } from "../services/re-derive-jobs";
 
 const router: IRouter = Router();
 
@@ -181,43 +181,22 @@ router.post("/field-mapping-rules", async (req, res) => {
     }
   }
 
-  // Fan out to historical leads in the same (pageUrlPattern, formIdentifier)
-  // scope so older form submissions also pick up this mapping. We fire-and-
-  // forget here so the operator's save stays snappy — the work is bounded by
-  // a lookback window and a hard lead cap inside the service.
-  const scopeTenantId = tenantId;
-  const scopePageUrl = pageUrlPattern as string;
-  const scopeFormIdent = formIdentifier as string;
-  const scopeExcludeLeadId = resolvedLeadId;
-  void (async () => {
-    try {
-      const result = await reDeriveLeadsForRuleScope(
-        scopeTenantId,
-        scopePageUrl,
-        scopeFormIdent,
-        { excludeLeadId: scopeExcludeLeadId },
-      );
-      if (result.leadsChanged > 0 || result.hitLimit) {
-        console.log(
-          "[field-mapping-rules.POST] reDeriveLeadsForRuleScope",
-          { tenantId: scopeTenantId, pageUrlPattern: scopePageUrl, formIdentifier: scopeFormIdent, ...result },
-        );
-      }
-      // Notify the operator's UI so the panel that triggered the save can
-      // surface a "N leads re-derived" indicator. Emit on every completion
-      // (even zero) so the panel can clear its "working…" state instead of
-      // waiting forever when nothing matched.
-      emitRuleRederiveComplete(scopeTenantId, {
-        pageUrlPattern: scopePageUrl,
-        formIdentifier: scopeFormIdent,
-        leadsChanged: result.leadsChanged,
-        hitLimit: result.hitLimit,
-        maxLeads: result.maxLeads,
-      });
-    } catch (err) {
-      console.error("[field-mapping-rules.POST] reDeriveLeadsForRuleScope failed:", err);
-    }
-  })();
+  // scope so older form submissions also pick up this mapping. We enqueue
+  // this as a durable background job so the save stays snappy and the work
+  // survives restarts, gets retried on failure, and is observable via the
+  // `background_jobs` table. The job handler emits `rule-rederive-complete`
+  // on the tenant socket room when it finishes so the operator's panel can
+  // clear its "working…" state.
+  try {
+    await enqueueReDeriveLeadsForRuleScope({
+      tenantId,
+      pageUrlPattern: pageUrlPattern as string,
+      formIdentifier: formIdentifier as string,
+      excludeLeadId: resolvedLeadId,
+    });
+  } catch (err) {
+    console.error("[field-mapping-rules.POST] failed to enqueue rederive job:", err);
+  }
 
   res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged });
 });

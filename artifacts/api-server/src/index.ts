@@ -17,6 +17,8 @@ import { startCallbackScheduler } from "./services/callback-scheduler";
 import { startHeartbeatMonitor, startStaleInstallMonitor } from "./services/notifications";
 import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
 import { auditUsersWithoutTenant } from "./services/broken-account-audit";
+import { startBackgroundJobWorker } from "./services/background-jobs";
+import { registerReDeriveJobHandlers } from "./services/re-derive-jobs";
 
 const rawPort = process.env["PORT"];
 
@@ -89,6 +91,10 @@ async function startServer() {
     startHeartbeatMonitor();
     startStaleInstallMonitor();
     startTrackerRetentionCron();
+    registerReDeriveJobHandlers();
+    startBackgroundJobWorker().catch((err) =>
+      console.error("[background-jobs] failed to start:", err),
+    );
   });
 }
 

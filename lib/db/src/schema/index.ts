@@ -40,3 +40,4 @@ export * from "./lead-attribution-corrections";
 export * from "./meta-ads";
 export * from "./lead-assignments";
 export * from "./lead-status-history";
+export * from "./background-jobs";
