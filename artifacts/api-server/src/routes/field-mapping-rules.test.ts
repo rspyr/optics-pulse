@@ -30,8 +30,9 @@ vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
 }));
 
-const { emitRuleRederiveCompleteMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
+  emitRuleRederiveFailedMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
   reDeriveLeadFunnelMock: vi.fn(),
   enqueueReDeriveLeadsForRuleScopeMock: vi.fn(),
@@ -39,6 +40,7 @@ const { emitRuleRederiveCompleteMock, reDeriveLeadsForRuleScopeMock, reDeriveLea
 
 vi.mock("../socket", () => ({
   emitRuleRederiveComplete: emitRuleRederiveCompleteMock,
+  emitRuleRederiveFailed: emitRuleRederiveFailedMock,
 }));
 
 vi.mock("../services/re-derive-lead-funnel", () => ({
@@ -66,6 +68,7 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   insertCalls.length = 0;
   selectRowsQueue = [];
   emitRuleRederiveCompleteMock.mockReset();
+  emitRuleRederiveFailedMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   reDeriveLeadFunnelMock.mockReset();
   enqueueReDeriveLeadsForRuleScopeMock.mockReset();
@@ -307,7 +310,7 @@ describe("POST /field-mapping-rules", () => {
     });
   });
 
-  it("still returns 200 when enqueueing the rederive job fails (failure is logged, save is not undone)", async () => {
+  it("still returns 200 when enqueueing the rederive job fails (failure is logged, save is not undone), AND emits rule-rederive-failed so the panel can show the retry hint", async () => {
     enqueueReDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("queue full"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -321,6 +324,28 @@ describe("POST /field-mapping-rules", () => {
     expect((res.json as { rule: unknown }).rule).toBeTruthy();
     expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      reason: "queue full",
+    });
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("still returns 200 and logs (does not crash) when emitRuleRederiveFailed itself throws after an enqueue failure", async () => {
+    enqueueReDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("queue full"));
+    emitRuleRederiveFailedMock.mockImplementationOnce(() => { throw new Error("socket down"); });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    expect(res.status).toBe(200);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });

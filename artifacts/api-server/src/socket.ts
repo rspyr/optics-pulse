@@ -368,6 +368,23 @@ export function emitRuleRederiveComplete(
   }
 }
 
+export function emitRuleRederiveFailed(
+  tenantId: number,
+  data: {
+    pageUrlPattern: string;
+    formIdentifier: string;
+    reason: string;
+  },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("rule-rederive-failed", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted rule-rederive-failed for tenant-${tenantId} (` +
+      `scope=${data.pageUrlPattern}|${data.formIdentifier} reason=${data.reason})`,
+    );
+  }
+}
+
 export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("callback-due", data);

@@ -5,6 +5,7 @@ import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { enqueueReDeriveLeadsForRuleScope } from "../services/re-derive-jobs";
+import { emitRuleRederiveFailed } from "../socket";
 
 const router: IRouter = Router();
 
@@ -196,6 +197,18 @@ router.post("/field-mapping-rules", async (req, res) => {
     });
   } catch (err) {
     console.error("[field-mapping-rules.POST] failed to enqueue rederive job:", err);
+    // Surface the enqueue failure to the operator's UI so they aren't left
+    // staring at a "working…" indicator forever — the panel will replace it
+    // with a "couldn't re-derive historical leads" hint and a retry button.
+    try {
+      emitRuleRederiveFailed(tenantId, {
+        pageUrlPattern: pageUrlPattern as string,
+        formIdentifier: formIdentifier as string,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    } catch (emitErr) {
+      console.error("[field-mapping-rules.POST] emitRuleRederiveFailed failed:", emitErr);
+    }
   }
 
   res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged });

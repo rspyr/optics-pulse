@@ -1,7 +1,14 @@
-import type { RuleRederiveCompleteData } from "@/contexts/lead-notification-context";
+import type {
+  RuleRederiveCompleteData,
+  RuleRederiveFailedData,
+} from "@/contexts/lead-notification-context";
 
 export type SubscribeRuleRederiveComplete = (
   cb: (data: RuleRederiveCompleteData) => void,
+) => () => void;
+
+export type SubscribeRuleRederiveFailed = (
+  cb: (data: RuleRederiveFailedData) => void,
 ) => () => void;
 
 // Scope identifier used to filter `rule-rederive-complete` events down to the
@@ -76,7 +83,17 @@ export function createRederiveScopeSubscription(
   onRuleRederiveComplete: SubscribeRuleRederiveComplete,
   scope: RederiveScope,
   onMatch: (data: RuleRederiveCompleteData) => void,
-  opts?: { onCleanup?: () => void; timeoutMs?: number },
+  opts?: {
+    onCleanup?: () => void;
+    timeoutMs?: number;
+    // Optional companion subscription for `rule-rederive-failed`. When the
+    // server emits a failure for the same scope, `onFailureMatch` fires
+    // instead of `onMatch`. The underlying listener is torn down by the
+    // same `cleanup()` that tears down the complete-listener, so a single
+    // subscription handles both outcomes.
+    onRuleRederiveFailed?: SubscribeRuleRederiveFailed | null;
+    onFailureMatch?: (data: RuleRederiveFailedData) => void;
+  },
 ): RederiveScopeSubscription {
   let done = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -85,6 +102,7 @@ export function createRederiveScopeSubscription(
     if (done) return;
     done = true;
     unsubscribe();
+    if (unsubscribeFailed) unsubscribeFailed();
     if (timer !== null) {
       clearTimeout(timer);
       timer = null;
@@ -96,6 +114,13 @@ export function createRederiveScopeSubscription(
     if (!matchesRederiveScope(data, scope)) return;
     onMatch(data);
   });
+  const unsubscribeFailed = opts?.onRuleRederiveFailed
+    ? opts.onRuleRederiveFailed((data: RuleRederiveFailedData) => {
+        if (done) return;
+        if (!matchesRederiveScope(data, scope)) return;
+        if (opts.onFailureMatch) opts.onFailureMatch(data);
+      })
+    : null;
   return {
     cleanup,
     armTimeout: () => {
@@ -123,6 +148,11 @@ export function subscribeRederiveOnce(
   formIdentifier: string,
   onMessage: (text: string) => void,
   onSettled?: () => void,
+  // Optional `rule-rederive-failed` companion. When the server reports the
+  // historical-leads fan-out failed for this scope, `onFailure` fires with
+  // the reason and the subscription tears down (same as the complete path).
+  onRuleRederiveFailed?: SubscribeRuleRederiveFailed | null,
+  onFailure?: (reason: string) => void,
 ): () => void {
   if (!onRuleRederiveComplete) {
     if (onSettled) onSettled();
@@ -136,7 +166,14 @@ export function subscribeRederiveOnce(
       const text = formatRederiveMessage(data);
       if (text) onMessage(text);
     },
-    { onCleanup: onSettled },
+    {
+      onCleanup: onSettled,
+      onRuleRederiveFailed: onRuleRederiveFailed ?? null,
+      onFailureMatch: (data) => {
+        sub.cleanup();
+        if (onFailure) onFailure(data.reason || "Re-derive failed");
+      },
+    },
   );
   sub.armTimeout();
   return sub.cleanup;
@@ -183,6 +220,13 @@ export function subscribeBulkRederive(
   onRuleRederiveComplete: SubscribeRuleRederiveComplete | null,
   scope: RederiveScope,
   onSettled?: () => void,
+  // Optional `rule-rederive-failed` companion. A failure event for one of
+  // the queued jobs counts toward "received" the same way as a completion —
+  // no completion event will follow for that scope, so leaving it uncounted
+  // would strand the bulk listener until the 30s timeout. The first failure
+  // also fires `onFailure` so the caller can surface a retry hint.
+  onRuleRederiveFailed?: SubscribeRuleRederiveFailed | null,
+  onFailure?: (reason: string) => void,
 ): BulkRederiveSubscription {
   if (!onRuleRederiveComplete) {
     if (onSettled) onSettled();
@@ -208,6 +252,7 @@ export function subscribeBulkRederive(
       sub.cleanup();
     }
   };
+  let sawFailure = false;
   const sub = createRederiveScopeSubscription(
     onRuleRederiveComplete,
     scope,
@@ -215,7 +260,18 @@ export function subscribeBulkRederive(
       received += 1;
       maybeFinish();
     },
-    { onCleanup: onSettled },
+    {
+      onCleanup: onSettled,
+      onRuleRederiveFailed: onRuleRederiveFailed ?? null,
+      onFailureMatch: (data) => {
+        received += 1;
+        if (!sawFailure) {
+          sawFailure = true;
+          if (onFailure) onFailure(data.reason || "Re-derive failed");
+        }
+        maybeFinish();
+      },
+    },
   );
   return {
     onSaveSucceeded: () => {

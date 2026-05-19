@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { toastMock } = vi.hoisted(() => ({
@@ -2568,6 +2568,134 @@ describe("UnmatchedFieldsPanel — rule-rederive-complete subscription", () => {
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("shows a 'couldn't re-derive historical leads' hint with a Retry button when a matching rule-rederive-failed event arrives", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    // Wire a combined complete+failed notification context.
+    const completeListeners = new Set<EmitFn>();
+    const failedListeners = new Set<(d: {
+      tenantId?: number;
+      pageUrlPattern: string;
+      formIdentifier: string;
+      reason: string;
+    }) => void>();
+    const onRuleRederiveComplete = vi.fn((cb: EmitFn) => {
+      completeListeners.add(cb);
+      return () => completeListeners.delete(cb);
+    });
+    const onRuleRederiveFailed = vi.fn((cb: (d: {
+      tenantId?: number;
+      pageUrlPattern: string;
+      formIdentifier: string;
+      reason: string;
+    }) => void) => {
+      failedListeners.add(cb);
+      return () => failedListeners.delete(cb);
+    });
+    useOptionalLeadNotificationMock.mockReturnValue({ onRuleRederiveComplete, onRuleRederiveFailed });
+
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    // Server emits rule-rederive-failed for this exact scope.
+    failedListeners.forEach((cb) =>
+      cb({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        reason: "db blew up",
+      }),
+    );
+
+    const hint = await screen.findByTestId("rederive-error-hint");
+    expect(hint).toHaveTextContent(/Couldn't re-derive historical leads/i);
+    const retryBtn = within(hint).getByTestId("rederive-retry-button");
+    expect(retryBtn).toBeEnabled();
+
+    // Clicking Retry should re-POST to /api/field-mapping-rules with the same
+    // scope + last-saved mapping so the backend re-enqueues the fan-out.
+    const fetchSpy = vi.spyOn(global, "fetch");
+    fetchSpy.mockClear();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ rule: { id: 1 } }),
+    } as Response);
+
+    await user.click(retryBtn);
+    await waitFor(() => {
+      const matching = fetchSpy.mock.calls.find(([u]) =>
+        typeof u === "string" && u.includes("/api/field-mapping-rules"),
+      );
+      expect(matching).toBeTruthy();
+      const body = JSON.parse((matching![1] as RequestInit).body as string);
+      expect(body).toMatchObject({
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        fieldName: "field_3",
+        mapsTo: "phone",
+      });
+    });
+  });
+
+  it("ignores rule-rederive-failed events whose scope does not match this panel", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const failedListeners = new Set<(d: {
+      tenantId?: number;
+      pageUrlPattern: string;
+      formIdentifier: string;
+      reason: string;
+    }) => void>();
+    const onRuleRederiveFailed = vi.fn((cb: (d: {
+      tenantId?: number;
+      pageUrlPattern: string;
+      formIdentifier: string;
+      reason: string;
+    }) => void) => {
+      failedListeners.add(cb);
+      return () => failedListeners.delete(cb);
+    });
+    useOptionalLeadNotificationMock.mockReturnValue({
+      onRuleRederiveComplete: vi.fn(() => () => {}),
+      onRuleRederiveFailed,
+    });
+    mockFetchAll({
+      onOther: async () => ({ ok: true, status: 200, json: async () => ({ rule: { id: 1 } }) } as Response),
+    });
+
+    render(<UnmatchedFieldsPanel evt={makeEvent()} />);
+    await user.click(screen.getByRole("button", { name: /Why unmatched\?/ }));
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Map field_3 to" }),
+      "phone",
+    );
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByText(/mapped → phone/);
+
+    // Different scopes — none should surface the hint.
+    failedListeners.forEach((cb) =>
+      cb({ tenantId: 999, pageUrlPattern: "/contact", formIdentifier: "contact-form-1", reason: "x" }),
+    );
+    failedListeners.forEach((cb) =>
+      cb({ tenantId: 42, pageUrlPattern: "/other", formIdentifier: "contact-form-1", reason: "x" }),
+    );
+    failedListeners.forEach((cb) =>
+      cb({ tenantId: 42, pageUrlPattern: "/contact", formIdentifier: "other-form", reason: "x" }),
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("rederive-error-hint")).not.toBeInTheDocument();
   });
 
   it("does not register a listener when the notification context is not mounted", async () => {

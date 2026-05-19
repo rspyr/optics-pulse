@@ -544,6 +544,18 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   // "Save all suggested" path — which fans out one subscription per field —
   // keeps the indicator visible until the LAST scope settles.
   const [refreshingHistoricalCount, setRefreshingHistoricalCount] = useState(0);
+  // When the server signals that the background re-derive fan-out failed
+  // (either at enqueue time, or after exhausting the durable job's retries
+  // before our 30s listener window closes), we surface a non-blocking hint
+  // with a "Retry" button. The button re-POSTs the most recent in-session
+  // mapping for this scope — the route is idempotent and will re-enqueue
+  // the fan-out without changing the rule's mapsTo.
+  const [rederiveError, setRederiveError] = useState<{ reason: string } | null>(null);
+  // Latest field/target the operator saved in this panel session. Used by
+  // the retry button so it knows what to re-POST. Held in a ref so the
+  // error-event callback can read the latest value without re-binding.
+  const lastSavedRef = useRef<{ fieldName: string; mapsTo: MapToTarget } | null>(null);
+  const [retryingRederive, setRetryingRederive] = useState(false);
 
   // Only fetch learned suggestions once the operator opens the panel — there's
   // no value loading them while collapsed.
@@ -672,8 +684,16 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       tenantId,
       pageUrl,
       formIdent,
-      (text) => toast.success(text),
+      (text) => {
+        // A successful re-derive supersedes any earlier error hint for this
+        // scope — clear it so the operator doesn't see stale failure text
+        // next to a fresh "N re-derived" toast.
+        setRederiveError(null);
+        toast.success(text);
+      },
       () => setRefreshingHistoricalCount((n) => Math.max(0, n - 1)),
+      notification.onRuleRederiveFailed,
+      (reason) => setRederiveError({ reason }),
     );
   };
 
@@ -707,6 +727,8 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       notification.onRuleRederiveComplete,
       { tenantId, pageUrlPattern: pageUrl, formIdentifier: formIdent },
       () => setRefreshingHistoricalCount((n) => Math.max(0, n - 1)),
+      notification.onRuleRederiveFailed,
+      (reason) => setRederiveError({ reason }),
     );
   };
 
@@ -840,6 +862,10 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
 
   const saveMapping = async (fieldName: string, mapsTo: MapToTarget) => {
     setSavingField(fieldName);
+    // A new save attempt clears any prior failure hint — if the new fan-out
+    // also fails, a fresh event will set the hint again with the new reason.
+    setRederiveError(null);
+    lastSavedRef.current = { fieldName, mapsTo };
     // Listen for the historical-leads re-derive fan-out result before issuing
     // the save, so we don't miss the socket event if the server responds fast.
     const unsubscribe = subscribeRederiveOnce(evt.tenantId, pageUrlPattern, formIdentifier);
@@ -910,6 +936,46 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       toast.error("Network error removing mapping rule.");
     } finally {
       setUndoingField(null);
+    }
+  };
+
+  // Re-POST the most recent in-session save so the backend re-enqueues the
+  // historical-leads re-derive fan-out for this scope. The /field-mapping-rules
+  // POST handler is idempotent — if the rule already exists with this mapsTo
+  // the row stays untouched and we only get the side effect we want (a fresh
+  // background job + a new "complete" or "failed" event for our subscription).
+  const retryRederive = async () => {
+    const last = lastSavedRef.current;
+    if (!last) return;
+    setRetryingRederive(true);
+    setRederiveError(null);
+    const unsubscribe = subscribeRederiveOnce(evt.tenantId, pageUrlPattern, formIdentifier);
+    try {
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${evt.tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          pageUrlPattern,
+          formIdentifier,
+          fieldName: last.fieldName,
+          mapsTo: last.mapsTo,
+        }),
+      });
+      if (!res.ok) {
+        unsubscribe();
+        const d = await res.json().catch(() => ({} as { error?: string }));
+        const msg = d.error || `Failed to retry re-derive (HTTP ${res.status})`;
+        setRederiveError({ reason: msg });
+        toast.error(msg);
+      }
+    } catch {
+      unsubscribe();
+      const msg = "Network error retrying re-derive.";
+      setRederiveError({ reason: msg });
+      toast.error(msg);
+    } finally {
+      setRetryingRederive(false);
     }
   };
 
@@ -1075,6 +1141,32 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
               <Loader2 className="w-3 h-3 animate-spin" />
               Refreshing historical leads…
             </p>
+          )}
+          {rederiveError && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="rederive-error-hint"
+              className="flex items-center justify-between gap-2 bg-amber-500/[0.06] border border-amber-500/30 rounded-md px-2.5 py-1.5"
+            >
+              <span
+                className="text-[11px] text-amber-200/90"
+                title={rederiveError.reason}
+              >
+                Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+              </span>
+              {lastSavedRef.current && (
+                <button
+                  type="button"
+                  onClick={retryRederive}
+                  disabled={retryingRederive}
+                  data-testid="rederive-retry-button"
+                  className="text-[11px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                >
+                  {retryingRederive ? "Retrying…" : "Retry"}
+                </button>
+              )}
+            </div>
           )}
 
           {fieldNames.length === 0 ? (

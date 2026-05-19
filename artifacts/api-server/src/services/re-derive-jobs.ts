@@ -1,6 +1,6 @@
 import { enqueueJob, registerJobHandler } from "./background-jobs";
 import { reDeriveLeadsForRuleScope } from "./re-derive-lead-funnel";
-import { emitRuleRederiveComplete } from "../socket";
+import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
 
 export const REDERIVE_LEADS_FOR_RULE_SCOPE = "rederive_leads_for_rule_scope";
 
@@ -36,12 +36,30 @@ function parsePayload(p: Record<string, unknown>): ReDerivePayload {
 export function registerReDeriveJobHandlers(): void {
   registerJobHandler(REDERIVE_LEADS_FOR_RULE_SCOPE, async (payload) => {
     const args = parsePayload(payload);
-    const result = await reDeriveLeadsForRuleScope(
-      args.tenantId,
-      args.pageUrlPattern,
-      args.formIdentifier,
-      { excludeLeadId: args.excludeLeadId },
-    );
+    let result;
+    try {
+      result = await reDeriveLeadsForRuleScope(
+        args.tenantId,
+        args.pageUrlPattern,
+        args.formIdentifier,
+        { excludeLeadId: args.excludeLeadId },
+      );
+    } catch (err) {
+      // Surface the failure to the operator's UI so the panel that triggered
+      // the save can show a "couldn't re-derive historical leads" hint with a
+      // retry button. We still rethrow so background-jobs marks the job as
+      // failed/retryable per its own policy.
+      try {
+        emitRuleRederiveFailed(args.tenantId, {
+          pageUrlPattern: args.pageUrlPattern,
+          formIdentifier: args.formIdentifier,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      } catch (emitErr) {
+        console.error("[re-derive-jobs] emitRuleRederiveFailed failed:", emitErr);
+      }
+      throw err;
+    }
     // Notify the operator's UI so the panel that triggered the save can
     // surface a "N leads re-derived" indicator. Emit on every completion
     // (even zero) so the panel can clear its "working…" state instead of

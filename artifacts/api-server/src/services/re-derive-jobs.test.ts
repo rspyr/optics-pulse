@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { emitRuleRederiveCompleteMock, reDeriveLeadsForRuleScopeMock, registerJobHandlerMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, registerJobHandlerMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
+  emitRuleRederiveFailedMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
   registerJobHandlerMock: vi.fn(),
 }));
 
 vi.mock("../socket", () => ({
   emitRuleRederiveComplete: emitRuleRederiveCompleteMock,
+  emitRuleRederiveFailed: emitRuleRederiveFailedMock,
 }));
 
 vi.mock("./re-derive-lead-funnel", () => ({
@@ -24,6 +26,7 @@ type Handler = (payload: Record<string, unknown>) => Promise<unknown>;
 async function loadHandler(): Promise<Handler> {
   vi.resetModules();
   emitRuleRederiveCompleteMock.mockReset();
+  emitRuleRederiveFailedMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   registerJobHandlerMock.mockReset();
 
@@ -37,6 +40,7 @@ async function loadHandler(): Promise<Handler> {
 describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out finishes", () => {
   beforeEach(() => {
     emitRuleRederiveCompleteMock.mockReset();
+    emitRuleRederiveFailedMock.mockReset();
     reDeriveLeadsForRuleScopeMock.mockReset();
   });
 
@@ -91,7 +95,7 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     });
   });
 
-  it("does not emit rule-rederive-complete when the fan-out throws — the error propagates so the job is marked failed/retryable", async () => {
+  it("does not emit rule-rederive-complete when the fan-out throws — the error propagates so the job is marked failed/retryable, AND emits rule-rederive-failed so the panel can show the retry hint", async () => {
     const handler = await loadHandler();
     reDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("db blew up"));
 
@@ -105,6 +109,31 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     ).rejects.toThrow("db blew up");
 
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      reason: "db blew up",
+    });
+  });
+
+  it("swallows a socket-emit failure on the failed event so notification glitches don't mask the original error", async () => {
+    const handler = await loadHandler();
+    reDeriveLeadsForRuleScopeMock.mockRejectedValue(new Error("fan-out exploded"));
+    emitRuleRederiveFailedMock.mockImplementationOnce(() => { throw new Error("socket down"); });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      handler({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form",
+        excludeLeadId: null,
+      }),
+    ).rejects.toThrow("fan-out exploded");
+
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("rejects malformed payloads before invoking the fan-out (so a bad job row doesn't silently no-op)", async () => {

@@ -1392,6 +1392,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const queryClient = useQueryClient();
   const notification = useOptionalLeadNotification();
   const onRuleRederiveComplete = notification?.onRuleRederiveComplete ?? null;
+  const onRuleRederiveFailed = notification?.onRuleRederiveFailed ?? null;
   const detected = event.detectedMappings as Record<string, { mapsTo: string; method: string }> | null;
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<string>("");
@@ -1400,30 +1401,74 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const [refreshingHistorical, setRefreshingHistorical] = useState(false);
+  const [rederiveError, setRederiveError] = useState<string | null>(null);
+  const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
+  const [retryingRederive, setRetryingRederive] = useState(false);
 
   if (!detected) return null;
   const entries = Object.entries(detected);
   if (entries.length === 0) return null;
 
-  const save = async (fieldName: string, mapsTo: string) => {
-    setSaving(true);
-    setError(null);
-    let pagePath = "*";
-    try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
-    const formIdentifier = event.formId || event.formName || "*";
+  const subscribeForScope = (pagePath: string, formIdentifier: string) => {
     setRefreshingHistorical(true);
-    const unsubscribeRederive = subscribeRederiveOnce(
+    return subscribeRederiveOnce(
       onRuleRederiveComplete,
       tenantId,
       pagePath,
       formIdentifier,
       (text) => {
         setRederiveHint(text);
+        setRederiveError(null);
         sonnerToast.success(text);
         setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
       },
       () => setRefreshingHistorical(false),
+      onRuleRederiveFailed,
+      (reason) => setRederiveError(reason),
     );
+  };
+
+  const retryRederive = async () => {
+    const last = lastSavedRef.current;
+    if (!last) return;
+    setRetryingRederive(true);
+    setRederiveError(null);
+    const unsubscribeRederive = subscribeForScope(last.pagePath, last.formIdentifier);
+    try {
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageUrlPattern: last.pagePath,
+          formIdentifier: last.formIdentifier,
+          fieldName: last.fieldName,
+          mapsTo: last.mapsTo,
+          attributionEventId: event.id,
+        }),
+      });
+      if (!res.ok) {
+        unsubscribeRederive();
+        const d = await res.json().catch(() => ({}));
+        setRederiveError(d.error || `Failed to retry (HTTP ${res.status})`);
+      }
+    } catch {
+      unsubscribeRederive();
+      setRederiveError("Network error retrying re-derive.");
+    } finally {
+      setRetryingRederive(false);
+    }
+  };
+
+  const save = async (fieldName: string, mapsTo: string) => {
+    setSaving(true);
+    setError(null);
+    setRederiveError(null);
+    let pagePath = "*";
+    try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
+    const formIdentifier = event.formId || event.formName || "*";
+    lastSavedRef.current = { fieldName, mapsTo, pagePath, formIdentifier };
+    const unsubscribeRederive = subscribeForScope(pagePath, formIdentifier);
     try {
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
         method: "POST",
@@ -1534,6 +1579,29 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
           {rederiveHint}
         </p>
       )}
+      {rederiveError && (
+        <div
+          className="mt-1 flex items-center justify-between gap-2 bg-amber-500/[0.06] border border-amber-500/30 rounded-md px-2 py-1"
+          role="status"
+          aria-live="polite"
+          data-testid="rederive-error-hint"
+        >
+          <span className="text-[10px] text-amber-200/90" title={rederiveError}>
+            Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+          </span>
+          {lastSavedRef.current && (
+            <button
+              type="button"
+              onClick={retryRederive}
+              disabled={retryingRederive}
+              data-testid="rederive-retry-button"
+              className="text-[10px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 shrink-0"
+            >
+              {retryingRederive ? "Retrying…" : "Retry"}
+            </button>
+          )}
+        </div>
+      )}
     </DetailSection>
   );
 }
@@ -1541,6 +1609,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
 export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
   const notification = useOptionalLeadNotification();
   const onRuleRederiveComplete = notification?.onRuleRederiveComplete ?? null;
+  const onRuleRederiveFailed = notification?.onRuleRederiveFailed ?? null;
   const [correcting, setCorrecting] = useState<string | null>(null);
   const [selectedMapping, setSelectedMapping] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1548,6 +1617,9 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const [error, setError] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const [refreshingHistorical, setRefreshingHistorical] = useState(false);
+  const [rederiveError, setRederiveError] = useState<string | null>(null);
+  const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
+  const [retryingRederive, setRetryingRederive] = useState(false);
   const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
 
   const formFields = event.formFields as Record<string, unknown> | null;
@@ -1557,25 +1629,66 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const formId = event.formId || "";
   const formName = event.formName || "";
 
-  const saveRule = async (fieldName: string, mapsTo: string) => {
-    setSaving(true);
-    setError(null);
-    let pagePath = "*";
-    try { pagePath = new URL(pageUrl).pathname; } catch {}
-    const formIdentifier = formId || formName || "*";
+  const subscribeForScope = (pagePath: string, formIdentifier: string) => {
     setRefreshingHistorical(true);
-    const unsubscribeRederive = subscribeRederiveOnce(
+    return subscribeRederiveOnce(
       onRuleRederiveComplete,
       tenantId,
       pagePath,
       formIdentifier,
       (text) => {
         setRederiveHint(text);
+        setRederiveError(null);
         sonnerToast.success(text);
         setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
       },
       () => setRefreshingHistorical(false),
+      onRuleRederiveFailed,
+      (reason) => setRederiveError(reason),
     );
+  };
+
+  const retryRederive = async () => {
+    const last = lastSavedRef.current;
+    if (!last) return;
+    setRetryingRederive(true);
+    setRederiveError(null);
+    const unsubscribeRederive = subscribeForScope(last.pagePath, last.formIdentifier);
+    try {
+      const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          pageUrlPattern: last.pagePath,
+          formIdentifier: last.formIdentifier,
+          fieldName: last.fieldName,
+          mapsTo: last.mapsTo,
+          attributionEventId: event.id,
+        }),
+      });
+      if (!res.ok) {
+        unsubscribeRederive();
+        const d = await res.json().catch(() => ({}));
+        setRederiveError(d.error || `Failed to retry (HTTP ${res.status})`);
+      }
+    } catch {
+      unsubscribeRederive();
+      setRederiveError("Network error retrying re-derive.");
+    } finally {
+      setRetryingRederive(false);
+    }
+  };
+
+  const saveRule = async (fieldName: string, mapsTo: string) => {
+    setSaving(true);
+    setError(null);
+    setRederiveError(null);
+    let pagePath = "*";
+    try { pagePath = new URL(pageUrl).pathname; } catch {}
+    const formIdentifier = formId || formName || "*";
+    lastSavedRef.current = { fieldName, mapsTo, pagePath, formIdentifier };
+    const unsubscribeRederive = subscribeForScope(pagePath, formIdentifier);
     try {
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
         method: "POST",
@@ -1643,6 +1756,29 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
         <p className="text-[10px] text-emerald-400/90 mb-2" aria-live="polite">
           {rederiveHint}
         </p>
+      )}
+      {rederiveError && (
+        <div
+          className="mb-2 flex items-center justify-between gap-2 bg-amber-500/[0.06] border border-amber-500/30 rounded-md px-2.5 py-1.5"
+          role="status"
+          aria-live="polite"
+          data-testid="rederive-error-hint"
+        >
+          <span className="text-[11px] text-amber-200/90" title={rederiveError}>
+            Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+          </span>
+          {lastSavedRef.current && (
+            <button
+              type="button"
+              onClick={retryRederive}
+              disabled={retryingRederive}
+              data-testid="rederive-retry-button"
+              className="text-[11px] px-2 py-0.5 rounded border border-amber-400/50 text-amber-100 hover:bg-amber-500/15 disabled:opacity-50 shrink-0"
+            >
+              {retryingRederive ? "Retrying…" : "Retry"}
+            </button>
+          )}
+        </div>
       )}
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">

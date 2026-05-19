@@ -535,3 +535,203 @@ describe("EditableAutoDetectedFields — rule-rederive-complete subscription", (
     expect(sonnerToastMock.success).not.toHaveBeenCalled();
   });
 });
+
+// Shared scaffolding for the rule-rederive-FAILED subscription tests below.
+type FailedEmitFn = (data: {
+  tenantId?: number;
+  pageUrlPattern: string;
+  formIdentifier: string;
+  reason: string;
+}) => void;
+
+function setupRederiveBothNotifications(): {
+  emitComplete: RederiveEmitFn;
+  emitFailed: FailedEmitFn;
+} {
+  const completeListeners = new Set<RederiveEmitFn>();
+  const failedListeners = new Set<FailedEmitFn>();
+  const onRuleRederiveComplete = vi.fn((cb: RederiveEmitFn) => {
+    completeListeners.add(cb);
+    return () => completeListeners.delete(cb);
+  });
+  const onRuleRederiveFailed = vi.fn((cb: FailedEmitFn) => {
+    failedListeners.add(cb);
+    return () => failedListeners.delete(cb);
+  });
+  useOptionalLeadNotificationMock.mockReturnValue({
+    onRuleRederiveComplete,
+    onRuleRederiveFailed,
+  });
+  return {
+    emitComplete: (d) => completeListeners.forEach((cb) => cb(d)),
+    emitFailed: (d) => failedListeners.forEach((cb) => cb(d)),
+  };
+}
+
+describe("InlineFieldCorrection — rule-rederive-failed subscription", () => {
+  beforeEach(() => {
+    sonnerToastMock.success.mockReset();
+    sonnerToastMock.error.mockReset();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  async function openAndSave(fieldName: string) {
+    const fieldSpan = screen.getByText(fieldName);
+    const chipButton = fieldSpan.closest("button");
+    if (!chipButton) throw new Error("chip button not found");
+    await act(async () => { fireEvent.click(chipButton); });
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    await act(async () => { fireEvent.change(select, { target: { value: "phone" } }); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Save/ })); });
+  }
+
+  it("renders the error hint + Retry button when a matching rule-rederive-failed event arrives", async () => {
+    const { emitFailed } = setupRederiveBothNotifications();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ rule: { id: 1 } }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+
+    await openAndSave("field_3");
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    await act(async () => {
+      emitFailed({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        reason: "db blew up",
+      });
+    });
+
+    const hint = await screen.findByTestId("rederive-error-hint");
+    expect(hint).toHaveTextContent(/Couldn't re-derive historical leads/i);
+    const retryBtn = screen.getByTestId("rederive-retry-button");
+
+    fetchMock.mockClear();
+    await act(async () => { fireEvent.click(retryBtn); });
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u]: [string]) => typeof u === "string" && u.includes("/api/field-mapping-rules"));
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call![1].body as string);
+      expect(body).toMatchObject({
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        fieldName: "field_3",
+        mapsTo: "phone",
+      });
+    });
+  });
+
+  it("ignores rule-rederive-failed events whose scope does not match", async () => {
+    const { emitFailed } = setupRederiveBothNotifications();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ rule: { id: 1 } }) }));
+
+    render(
+      <InlineFieldCorrection
+        tenantId={42}
+        event={{
+          id: 9,
+          pageUrl: "https://example.com/contact",
+          formId: "contact-form-1",
+          formFields: { field_3: "555" },
+        } as unknown as AttributionEvent}
+      />,
+    );
+    await openAndSave("field_3");
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    await act(async () => {
+      emitFailed({ tenantId: 999, pageUrlPattern: "/contact", formIdentifier: "contact-form-1", reason: "x" });
+      emitFailed({ tenantId: 42, pageUrlPattern: "/other", formIdentifier: "contact-form-1", reason: "x" });
+      emitFailed({ tenantId: 42, pageUrlPattern: "/contact", formIdentifier: "other-form", reason: "x" });
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("rederive-error-hint")).not.toBeInTheDocument();
+  });
+});
+
+describe("EditableAutoDetectedFields — rule-rederive-failed subscription", () => {
+  beforeEach(() => {
+    sonnerToastMock.success.mockReset();
+    sonnerToastMock.error.mockReset();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useOptionalLeadNotificationMock.mockReturnValue(null);
+  });
+
+  function renderWithClient(ui: React.ReactNode) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  }
+  function makeAutoDetectedEvent(): AttributionEvent {
+    return {
+      id: 9,
+      pageUrl: "https://example.com/contact",
+      formId: "contact-form-1",
+      formName: null,
+      detectedMappings: { field_3: { mapsTo: "phone", method: "value_pattern" } },
+    } as unknown as AttributionEvent;
+  }
+  async function saveOverride() {
+    fireEvent.click(screen.getByText("phone"));
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "email" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  }
+
+  it("renders the error hint + Retry button on a matching rule-rederive-failed event, and Retry re-POSTs the rule", async () => {
+    const { emitFailed } = setupRederiveBothNotifications();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ rule: { id: 1 } }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<EditableAutoDetectedFields tenantId={42} event={makeAutoDetectedEvent()} />);
+    await saveOverride();
+
+    await act(async () => {
+      emitFailed({
+        tenantId: 42,
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        reason: "db blew up",
+      });
+    });
+
+    const hint = await screen.findByTestId("rederive-error-hint");
+    expect(hint).toHaveTextContent(/Couldn't re-derive historical leads/i);
+
+    fetchMock.mockClear();
+    await act(async () => { fireEvent.click(screen.getByTestId("rederive-retry-button")); });
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u]: [string]) => typeof u === "string" && u.includes("/api/field-mapping-rules"));
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call![1].body as string);
+      expect(body).toMatchObject({
+        pageUrlPattern: "/contact",
+        formIdentifier: "contact-form-1",
+        fieldName: "field_3",
+        mapsTo: "email",
+      });
+    });
+  });
+});

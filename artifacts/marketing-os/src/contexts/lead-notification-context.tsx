@@ -66,6 +66,15 @@ export interface RuleRederiveCompleteData {
 
 type RuleRederiveCompleteCallback = (data: RuleRederiveCompleteData) => void;
 
+export interface RuleRederiveFailedData {
+  tenantId?: number;
+  pageUrlPattern: string;
+  formIdentifier: string;
+  reason: string;
+}
+
+type RuleRederiveFailedCallback = (data: RuleRederiveFailedData) => void;
+
 interface LeadNotificationContextType {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
@@ -81,6 +90,7 @@ interface LeadNotificationContextType {
   clearCallbackDue: () => void;
   playCallbackSound: (leadName: string) => void;
   onRuleRederiveComplete: (cb: RuleRederiveCompleteCallback) => () => void;
+  onRuleRederiveFailed: (cb: RuleRederiveFailedCallback) => () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -112,6 +122,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const reconnectListenersRef = useRef<Set<ReconnectCallback>>(new Set());
   const podiumMessageListenersRef = useRef<Set<PodiumMessageCallback>>(new Set());
   const ruleRederiveListenersRef = useRef<Set<RuleRederiveCompleteCallback>>(new Set());
+  const ruleRederiveFailedListenersRef = useRef<Set<RuleRederiveFailedCallback>>(new Set());
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
@@ -303,6 +314,12 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         try { cb(data); } catch (e) { console.warn("[LeadNotification] rule-rederive-complete callback error:", e); }
       });
     });
+    socket.on("rule-rederive-failed", (data: RuleRederiveFailedData) => {
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      ruleRederiveFailedListenersRef.current.forEach(cb => {
+        try { cb(data); } catch (e) { console.warn("[LeadNotification] rule-rederive-failed callback error:", e); }
+      });
+    });
     socket.on("callback-due", (data: CallbackDueData) => {
       if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
@@ -394,8 +411,13 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     return () => { ruleRederiveListenersRef.current.delete(cb); };
   }, []);
 
+  const registerOnRuleRederiveFailed = useCallback((cb: RuleRederiveFailedCallback) => {
+    ruleRederiveFailedListenersRef.current.add(cb);
+    return () => { ruleRederiveFailedListenersRef.current.delete(cb); };
+  }, []);
+
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete, onRuleRederiveFailed: registerOnRuleRederiveFailed }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>
