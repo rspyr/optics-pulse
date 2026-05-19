@@ -10,9 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
-import { useOptionalLeadNotification, type RuleRederiveCompleteData } from "@/contexts/lead-notification-context";
+import { useOptionalLeadNotification } from "@/contexts/lead-notification-context";
 import { toast as sonnerToast } from "sonner";
 import { formatFieldValue } from "@/lib/format-field-value";
+import { subscribeRederiveOnce } from "@/lib/rule-rederive-subscription";
 import { CapturePathBadge } from "@/components/capture-path-badge";
 import { format } from "date-fns";
 import {
@@ -1385,52 +1386,6 @@ function dispatchPulseRefresh(reason: string) {
     }
     window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason } }));
   } catch {}
-}
-
-// Subscribe (one-shot, time-bounded) to the historical-leads re-derive
-// fan-out completion for a specific (tenantId, pageUrlPattern, formIdentifier)
-// scope. When the server reports back, surface a toast like
-// "12 historical leads re-derived" so the operator knows the rule actually
-// rippled through. Falls silent on zero. Returns an unsubscribe so the caller
-// can drop the listener if the save itself failed and no event will arrive.
-// When `onRuleRederiveComplete` is null (e.g. component rendered in a unit
-// test without the notification shell) this is a no-op.
-function subscribeRederiveOnce(
-  onRuleRederiveComplete: ((cb: (data: RuleRederiveCompleteData) => void) => () => void) | null,
-  tenantId: number,
-  pageUrlPattern: string,
-  formIdentifier: string,
-  onIndicator: (text: string) => void,
-  onSettled?: () => void,
-): () => void {
-  if (!onRuleRederiveComplete) {
-    // No notification shell — call onSettled so callers can immediately clear
-    // any "refreshing" indicator they speculatively set.
-    if (onSettled) onSettled();
-    return () => {};
-  }
-  let done = false;
-  const cleanup = () => {
-    if (done) return;
-    done = true;
-    unsubscribe();
-    clearTimeout(timer);
-    if (onSettled) onSettled();
-  };
-  const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
-    if (done) return;
-    if (data.tenantId && data.tenantId !== tenantId) return;
-    if (data.pageUrlPattern !== pageUrlPattern) return;
-    if (data.formIdentifier !== formIdentifier) return;
-    cleanup();
-    if (data.leadsChanged > 0) {
-      const cappedSuffix = data.hitLimit ? `+ (capped at ${data.maxLeads})` : "";
-      const noun = data.leadsChanged === 1 ? "lead" : "leads";
-      onIndicator(`${data.leadsChanged}${cappedSuffix} historical ${noun} re-derived`);
-    }
-  });
-  const timer = setTimeout(cleanup, 30_000);
-  return cleanup;
 }
 
 export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {

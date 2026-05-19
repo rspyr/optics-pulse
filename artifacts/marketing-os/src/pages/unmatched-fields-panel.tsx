@@ -10,6 +10,7 @@ import {
   type MapToTarget,
 } from "@/lib/field-mapping-heuristic";
 import { formatFieldValue } from "@/lib/format-field-value";
+import { subscribeRederiveOnce as sharedSubscribeRederiveOnce } from "@/lib/rule-rederive-subscription";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -659,33 +660,18 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     formIdent: string,
   ): (() => void) => {
     if (!notification) return () => {};
-    const { onRuleRederiveComplete } = notification;
     // Bump the in-flight counter so the panel shows the "Refreshing historical
     // leads…" hint until this subscription settles (success / timeout /
     // caller-driven cleanup on save failure).
     setRefreshingHistoricalCount((n) => n + 1);
-    let done = false;
-    const cleanup = () => {
-      if (done) return;
-      done = true;
-      unsubscribe();
-      clearTimeout(timer);
-      setRefreshingHistoricalCount((n) => Math.max(0, n - 1));
-    };
-    const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
-      if (done) return;
-      if (data.tenantId && data.tenantId !== tenantId) return;
-      if (data.pageUrlPattern !== pageUrl) return;
-      if (data.formIdentifier !== formIdent) return;
-      cleanup();
-      if (data.leadsChanged > 0) {
-        const cappedSuffix = data.hitLimit ? `+ (capped at ${data.maxLeads})` : "";
-        const noun = data.leadsChanged === 1 ? "lead" : "leads";
-        toast.success(`${data.leadsChanged}${cappedSuffix} historical ${noun} re-derived`);
-      }
-    });
-    const timer = setTimeout(cleanup, 30_000);
-    return cleanup;
+    return sharedSubscribeRederiveOnce(
+      notification.onRuleRederiveComplete,
+      tenantId,
+      pageUrl,
+      formIdent,
+      (text) => toast.success(text),
+      () => setRefreshingHistoricalCount((n) => Math.max(0, n - 1)),
+    );
   };
 
   // Aggregate subscription used by the bulk "Save all suggested" path. The
