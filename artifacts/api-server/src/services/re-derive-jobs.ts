@@ -1,5 +1,9 @@
 import { enqueueJob, registerJobHandler } from "./background-jobs";
-import { reDeriveLeadsForRuleScope, countPendingRederiveLeadsForRuleScope } from "./re-derive-lead-funnel";
+import {
+  reDeriveLeadsForRuleScope,
+  countPendingRederiveLeadsForRuleScope,
+  reDeriveLeadFunnel,
+} from "./re-derive-lead-funnel";
 import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
 
 /**
@@ -76,6 +80,7 @@ function parsePayload(p: Record<string, unknown>): ReDerivePayload {
 }
 
 export function registerReDeriveJobHandlers(): void {
+  registerSelectedLeadsHandler();
   registerJobHandler(REDERIVE_LEADS_FOR_RULE_SCOPE, async (payload) => {
     const args = parsePayload(payload);
     let result;
@@ -169,6 +174,63 @@ export function registerReDeriveJobHandlers(): void {
     }
     return result;
   });
+}
+
+export const REDERIVE_SELECTED_LEADS = "rederive_selected_leads";
+
+interface ReDeriveSelectedPayload {
+  tenantId: number;
+  leadIds: number[];
+}
+
+function parseSelectedPayload(p: Record<string, unknown>): ReDeriveSelectedPayload {
+  const tenantId = p["tenantId"];
+  const leadIds = p["leadIds"];
+  if (
+    typeof tenantId !== "number" ||
+    !Array.isArray(leadIds) ||
+    leadIds.some((id) => typeof id !== "number" || !Number.isFinite(id))
+  ) {
+    throw new Error(
+      `Invalid payload for ${REDERIVE_SELECTED_LEADS}: ${JSON.stringify(p)}`,
+    );
+  }
+  return { tenantId, leadIds: leadIds as number[] };
+}
+
+/**
+ * Registers the selected-leads bulk re-derive handler. Used when the operator
+ * picks a specific subset of pending leads in the "View pending leads" sheet
+ * and the count is large enough that we want the work to run as a durable
+ * background job (with retries + visibility) instead of holding the request
+ * open synchronously.
+ */
+function registerSelectedLeadsHandler(): void {
+  registerJobHandler(REDERIVE_SELECTED_LEADS, async (payload) => {
+    const args = parseSelectedPayload(payload);
+    let succeeded = 0;
+    let failed = 0;
+    let changed = 0;
+    for (const leadId of args.leadIds) {
+      try {
+        const r = await reDeriveLeadFunnel(args.tenantId, leadId);
+        succeeded++;
+        if (r?.changed) changed++;
+      } catch (err) {
+        failed++;
+        console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
+      }
+    }
+    return { total: args.leadIds.length, succeeded, failed, changed };
+  });
+}
+
+export async function enqueueReDeriveSelectedLeads(args: ReDeriveSelectedPayload) {
+  return enqueueJob(
+    REDERIVE_SELECTED_LEADS,
+    args as unknown as Record<string, unknown>,
+    { tenantId: args.tenantId, maxAttempts: 1 },
+  );
 }
 
 export async function enqueueReDeriveLeadsForRuleScope(args: ReDerivePayload) {

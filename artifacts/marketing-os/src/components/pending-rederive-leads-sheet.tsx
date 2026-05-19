@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, ExternalLink } from "lucide-react";
 import {
   Sheet,
@@ -7,6 +7,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -37,6 +39,17 @@ type Props = {
   excludeLeadId?: number | null;
 };
 
+type BulkResult =
+  | {
+      mode: "sync";
+      total: number;
+      succeeded: number;
+      failed: number;
+      changed: number;
+      failedLeadIds: number[];
+    }
+  | { mode: "queued"; total: number; jobId: number | null };
+
 function fmtName(l: PendingLead) {
   const name = `${l.firstName ?? ""} ${l.lastName ?? ""}`.trim();
   return name || `Lead #${l.id}`;
@@ -61,6 +74,10 @@ function fmtRelative(iso: string): string {
  * The list is server-filtered to the same (pageUrlPattern, formIdentifier)
  * scope and lookback window the fan-out itself would use, so what the
  * operator sees here is exactly the population a successful retry would touch.
+ *
+ * Operators can also multi-select leads and re-derive just that subset via
+ * the bulk endpoint, which short-circuits the full fan-out retry for cases
+ * where they already know which specific leads are still wrong.
  */
 export function PendingRederiveLeadsSheet({
   open,
@@ -74,12 +91,19 @@ export function PendingRederiveLeadsSheet({
   const [error, setError] = useState<string | null>(null);
   const [leads, setLeads] = useState<PendingLead[]>([]);
   const [hitLimit, setHitLimit] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setSelected(new Set());
+    setBulkResult(null);
+    setBulkError(null);
     const params = new URLSearchParams({
       tenantId: String(tenantId),
       pageUrlPattern,
@@ -111,6 +135,63 @@ export function PendingRederiveLeadsSheet({
       });
     return () => { cancelled = true; };
   }, [open, tenantId, pageUrlPattern, formIdentifier, excludeLeadId]);
+
+  const allSelected = leads.length > 0 && selected.size === leads.length;
+  const someSelected = selected.size > 0 && selected.size < leads.length;
+
+  const toggleOne = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(leads.map((l) => l.id)));
+    }
+  };
+
+  const failedIds = useMemo(
+    () => (bulkResult?.mode === "sync" ? new Set(bulkResult.failedLeadIds) : new Set<number>()),
+    [bulkResult],
+  );
+
+  async function submitRederive() {
+    if (selected.size === 0 || submitting) return;
+    setSubmitting(true);
+    setBulkError(null);
+    setBulkResult(null);
+    try {
+      // tenantId is sent both as a query param (so `resolveTenantId` on the
+      // server picks it up for super_admin / agency_user contexts that aren't
+      // bound to a single tenant by session) and in the body so the request
+      // is self-contained for logging/debugging.
+      const url = `${API_BASE}/api/field-mapping-rules/rederive-leads?tenantId=${encodeURIComponent(String(tenantId))}`;
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          leadIds: Array.from(selected),
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      setBulkResult(d as BulkResult);
+      // Keep selection so the operator can see which rows the result refers
+      // to (failed ones are highlighted via `failedIds`).
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : "Failed to re-derive selected leads");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -152,35 +233,109 @@ export function PendingRederiveLeadsSheet({
                 {leads.length}{hitLimit ? "+" : ""} lead{leads.length === 1 ? "" : "s"} pending re-derive.
                 {hitLimit && " Showing capped set."}
               </p>
+
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-2">
+                <label className="flex items-center gap-2 text-[11px] text-white/80 cursor-pointer select-none">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={toggleAll}
+                    data-testid="pending-leads-select-all"
+                  />
+                  <span>
+                    {selected.size > 0
+                      ? `${selected.size} selected`
+                      : "Select all"}
+                  </span>
+                </label>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={selected.size === 0 || submitting}
+                  onClick={submitRederive}
+                  data-testid="pending-leads-rederive-selected"
+                  className="h-7 text-xs"
+                >
+                  {submitting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                  Re-derive selected
+                </Button>
+              </div>
+
+              {bulkError && (
+                <p
+                  className="text-xs text-red-400"
+                  data-testid="pending-leads-bulk-error"
+                >
+                  {bulkError}
+                </p>
+              )}
+
+              {bulkResult?.mode === "sync" && (
+                <p
+                  className="text-xs text-white/80"
+                  data-testid="pending-leads-bulk-result"
+                >
+                  Re-derived {bulkResult.succeeded}/{bulkResult.total} leads
+                  {bulkResult.changed > 0 && (
+                    <> · {bulkResult.changed} updated</>
+                  )}
+                  {bulkResult.failed > 0 && (
+                    <span className="text-red-400">
+                      {" "}· {bulkResult.failed} failed
+                    </span>
+                  )}
+                </p>
+              )}
+              {bulkResult?.mode === "queued" && (
+                <p
+                  className="text-xs text-white/80"
+                  data-testid="pending-leads-bulk-result"
+                >
+                  Queued {bulkResult.total} leads for background re-derive.
+                </p>
+              )}
+
               <ul className="space-y-1.5" data-testid="pending-leads-list">
-                {leads.map((l) => (
-                  <li
-                    key={l.id}
-                    className="border border-white/10 bg-white/[0.02] rounded-md px-2.5 py-2"
-                    data-testid={`pending-lead-row-${l.id}`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-white/90 truncate">{fmtName(l)}</p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {l.phone || l.email || "—"}
-                          {l.createdAt && (
-                            <span className="text-white/40"> · created {fmtRelative(l.createdAt)}</span>
-                          )}
-                        </p>
+                {leads.map((l) => {
+                  const isSelected = selected.has(l.id);
+                  const isFailed = failedIds.has(l.id);
+                  return (
+                    <li
+                      key={l.id}
+                      className={`border rounded-md px-2.5 py-2 ${
+                        isFailed
+                          ? "border-red-500/40 bg-red-500/[0.04]"
+                          : "border-white/10 bg-white/[0.02]"
+                      }`}
+                      data-testid={`pending-lead-row-${l.id}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={isSelected}
+                          onCheckedChange={() => toggleOne(l.id)}
+                          data-testid={`pending-lead-checkbox-${l.id}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium text-white/90 truncate">{fmtName(l)}</p>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {l.phone || l.email || "—"}
+                            {l.createdAt && (
+                              <span className="text-white/40"> · created {fmtRelative(l.createdAt)}</span>
+                            )}
+                          </p>
+                        </div>
+                        <a
+                          href={`${API_BASE}/?leadId=${l.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 shrink-0"
+                          data-testid={`pending-lead-link-${l.id}`}
+                        >
+                          View <ExternalLink className="w-3 h-3" />
+                        </a>
                       </div>
-                      <a
-                        href={`${API_BASE}/?leadId=${l.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 shrink-0"
-                        data-testid={`pending-lead-link-${l.id}`}
-                      >
-                        View <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             </>
           )}

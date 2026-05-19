@@ -4,7 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
-import { enqueueReDeriveLeadsForRuleScope } from "../services/re-derive-jobs";
+import { enqueueReDeriveLeadsForRuleScope, enqueueReDeriveSelectedLeads } from "../services/re-derive-jobs";
 import { emitRuleRederiveFailed } from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
@@ -115,6 +115,88 @@ router.get("/field-mapping-rules/pending-rederive-leads", async (req, res) => {
     excludeLeadId: Number.isFinite(excludeLeadId as number) ? excludeLeadId : null,
   });
   res.json(result);
+});
+
+// Threshold under which the bulk re-derive endpoint runs the per-lead
+// re-derive inline (so the operator sees success/failure counts directly).
+// Above this, we hand the work off to a durable background job so the
+// request stays snappy and the work survives restarts/retries.
+const BULK_REDERIVE_SYNC_THRESHOLD = 25;
+// Hard cap on the number of leads accepted per request — both to protect the
+// API and to keep the queued job's payload bounded.
+const BULK_REDERIVE_MAX_LEADS = 500;
+
+/**
+ * Bulk re-derive a specific set of pending leads chosen by the operator in
+ * the "View pending leads" sheet. Small selections run synchronously so the
+ * sheet can surface success/failure counts immediately; larger selections
+ * are handed off to the `rederive_selected_leads` background job.
+ */
+router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "tenantId is required" });
+    return;
+  }
+  const rawLeadIds = (req.body as { leadIds?: unknown })?.leadIds;
+  if (!Array.isArray(rawLeadIds) || rawLeadIds.length === 0) {
+    res.status(400).json({ error: "leadIds must be a non-empty array" });
+    return;
+  }
+  if (rawLeadIds.length > BULK_REDERIVE_MAX_LEADS) {
+    res.status(400).json({
+      error: `Too many leadIds (max ${BULK_REDERIVE_MAX_LEADS})`,
+    });
+    return;
+  }
+  const leadIds: number[] = [];
+  const seen = new Set<number>();
+  for (const v of rawLeadIds) {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ error: "leadIds must contain positive integers" });
+      return;
+    }
+    if (!seen.has(n)) {
+      seen.add(n);
+      leadIds.push(n);
+    }
+  }
+
+  if (leadIds.length > BULK_REDERIVE_SYNC_THRESHOLD) {
+    try {
+      const job = await enqueueReDeriveSelectedLeads({ tenantId, leadIds });
+      res.json({ mode: "queued", total: leadIds.length, jobId: job?.id ?? null });
+    } catch (err) {
+      console.error("[field-mapping-rules.rederive-leads] enqueue failed:", err);
+      res.status(500).json({ error: "Failed to enqueue re-derive job" });
+    }
+    return;
+  }
+
+  let succeeded = 0;
+  let failed = 0;
+  let changed = 0;
+  const failedLeadIds: number[] = [];
+  for (const leadId of leadIds) {
+    try {
+      const r = await reDeriveLeadFunnel(tenantId, leadId);
+      succeeded++;
+      if (r?.changed) changed++;
+    } catch (err) {
+      failed++;
+      failedLeadIds.push(leadId);
+      console.error("[field-mapping-rules.rederive-leads] reDeriveLeadFunnel failed for lead", leadId, err);
+    }
+  }
+  res.json({
+    mode: "sync",
+    total: leadIds.length,
+    succeeded,
+    failed,
+    changed,
+    failedLeadIds,
+  });
 });
 
 router.get("/field-mapping-rules", async (req, res) => {
