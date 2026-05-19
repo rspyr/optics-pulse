@@ -20,6 +20,7 @@ import { auditUsersWithoutTenant } from "./services/broken-account-audit";
 import { startBackgroundJobWorker } from "./services/background-jobs";
 import { registerReDeriveJobHandlers } from "./services/re-derive-jobs";
 import { registerPodiumSyncJobHandlers } from "./services/podium-sync-jobs";
+import { registerPushNotificationJobHandlers } from "./services/push-notification-jobs";
 
 const rawPort = process.env["PORT"];
 
@@ -94,6 +95,7 @@ async function startServer() {
     startTrackerRetentionCron();
     registerReDeriveJobHandlers();
     registerPodiumSyncJobHandlers();
+    registerPushNotificationJobHandlers();
     startBackgroundJobWorker().catch((err) =>
       console.error("[background-jobs] failed to start:", err),
     );

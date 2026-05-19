@@ -1,7 +1,7 @@
 import { db, leadsTable, callAttemptsTable, usersTable } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { emitLeadResubmitted } from "../socket";
-import { sendPushToUser } from "./push-notifications";
+import { enqueueSendPushToUser } from "./push-notification-jobs";
 import { recordLeadStatusChange } from "./lead-status-history";
 
 const TERMINAL_HUB_STATUSES = new Set(["appt_set", "appt_booked", "dead"]);
@@ -104,12 +104,18 @@ export async function handleResubmission(
       source: sourceLabel,
       reactivated,
     });
-    sendPushToUser(
-      lead.assignedCsrId,
-      "Lead Resubmitted",
-      `${leadName} resubmitted from ${sourceLabel} — reach out again`,
-      { leadId: existingLeadId, type: "lead-resubmitted", intent: "open-lead" },
-    ).catch(err => console.error("[Push] handleResubmission push error:", err));
+    try {
+      await enqueueSendPushToUser({
+        userId: lead.assignedCsrId,
+        title: "Lead Resubmitted",
+        body: `${leadName} resubmitted from ${sourceLabel} — reach out again`,
+        data: { leadId: existingLeadId, type: "lead-resubmitted", intent: "open-lead" },
+        tenantId,
+        source: "lead-resubmission",
+      });
+    } catch (err) {
+      console.error("[Push] handleResubmission enqueue error:", err);
+    }
   }
 
   return {

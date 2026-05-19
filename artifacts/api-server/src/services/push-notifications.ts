@@ -84,8 +84,14 @@ interface ExpoPushTicket {
   details?: { error?: string };
 }
 
-async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoPushTicket[]> {
-  if (messages.length === 0) return [];
+interface ExpoSendResult {
+  tickets: ExpoPushTicket[];
+  /** Number of messages whose chunk failed to send entirely (transient transport). */
+  transportFailures: number;
+}
+
+async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoSendResult> {
+  if (messages.length === 0) return { tickets: [], transportFailures: 0 };
 
   const chunks: ExpoPushMessage[][] = [];
   for (let i = 0; i < messages.length; i += 100) {
@@ -93,6 +99,7 @@ async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoPushTicket
   }
 
   const tickets: ExpoPushTicket[] = [];
+  let transportFailures = 0;
   for (const chunk of chunks) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -108,10 +115,11 @@ async function sendExpoPush(messages: ExpoPushMessage[]): Promise<ExpoPushTicket
       tickets.push(...(result.data || []));
     } catch (err) {
       console.error("[Push] Failed to send Expo chunk:", err);
+      transportFailures += chunk.length;
     }
   }
 
-  return tickets;
+  return { tickets, transportFailures };
 }
 
 async function sendAPNsPush(
@@ -158,7 +166,8 @@ async function sendWebPushToUser(
   userId: number,
   title: string,
   body: string,
-  data?: Record<string, unknown>,
+  data: Record<string, unknown> | undefined,
+  report: PushDeliveryReport,
 ): Promise<void> {
   if (!vapidPublic || !vapidPrivate) return;
 
@@ -171,19 +180,44 @@ async function sendWebPushToUser(
   console.log(`[Push] Sending web push "${title}" to user ${userId} (${webSubs.length} sub(s))`);
 
   for (const sub of webSubs) {
+    report.attempted++;
     try {
       const payload = JSON.stringify({ title, body, ...data });
       await webpush.sendNotification(sub.subscription as webpush.PushSubscription, payload);
+      report.succeeded++;
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 404 || statusCode === 410) {
         await db.delete(pushTokensTable).where(eq(pushTokensTable.id, sub.id));
         console.log(`[Push] Removed expired web subscription for user ${userId}`);
+        report.permanentFailures++;
       } else {
         console.error(`[Push] Web push error for user ${userId}:`, err);
+        report.transientFailures++;
       }
     }
   }
+}
+
+/**
+ * Outcome of a push delivery attempt. Used by the durable jobs runner to
+ * decide whether to retry. A push with `transientFailures > 0` and
+ * `succeeded === 0` is a candidate for retry; anything else (no tokens,
+ * permanent failures only, or at least one successful delivery) is final.
+ */
+export interface PushDeliveryReport {
+  attempted: number;
+  succeeded: number;
+  /** Bad/expired tokens that were cleaned up — do not retry. */
+  permanentFailures: number;
+  /** Network, transport, or unknown provider errors — retry candidates. */
+  transientFailures: number;
+  /** Top-level exception (e.g. DB query failed). Always retry-able. */
+  topLevelError?: Error;
+}
+
+function emptyReport(): PushDeliveryReport {
+  return { attempted: 0, succeeded: 0, permanentFailures: 0, transientFailures: 0 };
 }
 
 export async function sendPushToUser(
@@ -191,12 +225,13 @@ export async function sendPushToUser(
   title: string,
   body: string,
   data?: Record<string, unknown>,
-): Promise<void> {
+): Promise<PushDeliveryReport> {
+  const report = emptyReport();
   try {
     const tokens = await db.select().from(pushTokensTable).where(eq(pushTokensTable.userId, userId));
     if (tokens.length === 0) {
       console.log(`[Push] No tokens registered for user ${userId}, skipping`);
-      return;
+      return report;
     }
 
     const expoTokens = tokens.filter(t => t.platform !== "web" && isExpoToken(t.token));
@@ -221,16 +256,17 @@ export async function sendPushToUser(
         sound: "default",
       }));
 
-      const tickets = await sendExpoPush(messages);
+      report.attempted += expoTokens.length;
+      const { tickets, transportFailures } = await sendExpoPush(messages);
+      // Chunk-level transport failures (fetch threw) — count each affected
+      // message as transient so the job can retry.
+      report.transientFailures += transportFailures;
 
-      let okCount = 0;
-      let errCount = 0;
       for (let i = 0; i < tickets.length; i++) {
         const ticket = tickets[i];
         if (ticket.status === "ok") {
-          okCount++;
+          report.succeeded++;
         } else if (ticket.status === "error") {
-          errCount++;
           const errorType = ticket.details?.error ?? "unknown";
 
           if (errorType === "InvalidCredentials") {
@@ -238,18 +274,23 @@ export async function sendPushToUser(
               console.error(`[Push] InvalidCredentials error — the EXPO_ACCESS_TOKEN is missing or invalid. Push notifications will fail until a valid token is configured.`);
               invalidCredentialsWarned = true;
             }
+            // Bad server config — retrying after a token rotation will work,
+            // so treat as transient.
+            report.transientFailures++;
           } else if (errorType === "DeviceNotRegistered") {
             const tokenToRemove = expoTokens[i]?.token;
             if (tokenToRemove) {
               await db.delete(pushTokensTable).where(eq(pushTokensTable.token, tokenToRemove));
               console.log(`[Push] Removed invalid Expo token for user ${userId}`);
             }
+            report.permanentFailures++;
           } else {
             console.error(`[Push] Expo ticket error for user ${userId}: ${errorType} — ${ticket.message ?? "no details"}`);
+            report.transientFailures++;
           }
         }
       }
-      console.log(`[Push] Expo delivery result for user ${userId}: ${okCount} ok, ${errCount} error(s)`);
+      console.log(`[Push] Expo delivery result for user ${userId}: ${report.succeeded} ok, ${tickets.filter(t => t.status === "error").length + transportFailures} error(s)`);
     }
 
     if (apnsTokens.length > 0) {
@@ -257,32 +298,33 @@ export async function sendPushToUser(
         console.warn(`[Push] Skipping ${apnsTokens.length} APNs token(s) for user ${userId} — APNs not configured`);
       } else {
         console.log(`[Push] Sending via APNs "${title}" to user ${userId} (${apnsTokens.length} token(s))`);
-        let apnsOk = 0;
-        let apnsErr = 0;
         for (const t of apnsTokens) {
+          report.attempted++;
           const result = await sendAPNsPush(t.token, title, body, data);
           if (result.success) {
-            apnsOk++;
+            report.succeeded++;
           } else {
-            apnsErr++;
             if (result.reason === "BadDeviceToken" || result.reason === "Unregistered") {
               await db.delete(pushTokensTable).where(eq(pushTokensTable.id, t.id));
               console.log(`[Push] Removed invalid APNs token (${result.reason}) for user ${userId}`);
+              report.permanentFailures++;
             } else {
               console.error(`[Push] APNs error for user ${userId}: ${result.reason}`);
+              report.transientFailures++;
             }
           }
         }
-        console.log(`[Push] APNs delivery result for user ${userId}: ${apnsOk} ok, ${apnsErr} error(s)`);
       }
     }
 
     if (hasWebTokens) {
-      await sendWebPushToUser(userId, title, body, data);
+      await sendWebPushToUser(userId, title, body, data, report);
     }
   } catch (err) {
     console.error(`[Push] Error sending to user ${userId}:`, err);
+    report.topLevelError = err instanceof Error ? err : new Error(String(err));
   }
+  return report;
 }
 
 export async function sendPushToTenantUsers(
@@ -291,7 +333,8 @@ export async function sendPushToTenantUsers(
   body: string,
   data?: Record<string, unknown>,
   excludeUserId?: number,
-): Promise<void> {
+): Promise<PushDeliveryReport> {
+  const report = emptyReport();
   try {
     const { usersTable } = await import("@workspace/db");
     const { eq: eqOp, and: andOp } = await import("drizzle-orm");
@@ -302,9 +345,20 @@ export async function sendPushToTenantUsers(
 
     for (const user of users) {
       if (excludeUserId && user.id === excludeUserId) continue;
-      await sendPushToUser(user.id, title, body, data);
+      const sub = await sendPushToUser(user.id, title, body, data);
+      report.attempted += sub.attempted;
+      report.succeeded += sub.succeeded;
+      report.permanentFailures += sub.permanentFailures;
+      report.transientFailures += sub.transientFailures;
+      // If any individual user delivery had a top-level error, surface it
+      // so the job runner can retry the whole broadcast.
+      if (sub.topLevelError && !report.topLevelError) {
+        report.topLevelError = sub.topLevelError;
+      }
     }
   } catch (err) {
     console.error(`[Push] Error sending to tenant ${tenantId}:`, err);
+    report.topLevelError = err instanceof Error ? err : new Error(String(err));
   }
+  return report;
 }

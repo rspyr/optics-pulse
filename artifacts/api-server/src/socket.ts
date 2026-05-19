@@ -289,16 +289,22 @@ export function emitNewLead(tenantId: number, lead: Record<string, unknown>) {
   }
   const assignedCsrId = (lead.assignedCsrId ?? lead.assignedUserId) as number | undefined;
   if (assignedCsrId) {
-    import("./services/push-notifications").then(({ sendPushToUser }) => {
+    // Enqueue into the durable jobs runner so the push survives a server
+    // restart. The enqueue itself is async (a DB insert), but emitNewLead is
+    // called from sync contexts; once the row lands in `background_jobs` the
+    // worker will deliver and retry it.
+    import("./services/push-notification-jobs").then(({ enqueueSendPushToUser }) => {
       const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "New Lead";
       const source = (lead.source as string) || "";
-      sendPushToUser(
-        assignedCsrId,
-        "New Lead Assigned",
-        `${name}${source ? ` from ${source}` : ""}`,
-        { leadId: lead.id, type: "new-lead", intent: "open-lead" },
-      ).catch(err => console.error("[Push] emitNewLead push error:", err));
-    }).catch(err => console.error("[Push] Failed to load push-notifications module:", err));
+      enqueueSendPushToUser({
+        userId: assignedCsrId,
+        title: "New Lead Assigned",
+        body: `${name}${source ? ` from ${source}` : ""}`,
+        data: { leadId: lead.id, type: "new-lead", intent: "open-lead" },
+        tenantId,
+        source: "socket-new-lead",
+      }).catch(err => console.error("[Push] emitNewLead enqueue error:", err));
+    }).catch(err => console.error("[Push] Failed to load push-notification-jobs module:", err));
   } else {
     console.log(`[Socket.IO] Lead ${lead.id} has no assignedCsrId, skipping push notification`);
   }

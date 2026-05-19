@@ -920,7 +920,9 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
     } as unknown as Record<string, unknown>);
 
     if (direction === "inbound" && matchedTenantId) {
-      const { sendPushToUser, sendPushToTenantUsers } = await import("../services/push-notifications");
+      const { enqueueSendPushToUser, enqueueSendPushToTenantUsers } = await import(
+        "../services/push-notification-jobs"
+      );
       const isCall = channelType === "call" || channelType === "phone_call" || channelType === "car_wars";
       const pushTitle = isCall ? "Incoming Call" : "Inbound Text";
       const contactName = leadName || senderName || "Unknown Contact";
@@ -929,12 +931,27 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
         : `${contactName}: ${messageBody.slice(0, 100) || "(no message)"}`;
       const intent = isCall ? "open-lead" : "open-lead-sms";
       const pushData = { leadId: matchedLeadId, type: "podium_inbound", channelType, intent };
-      if (assignedCsrId) {
-        sendPushToUser(assignedCsrId, pushTitle, pushBody, pushData)
-          .catch(err => console.error("[Podium Webhook] Push notification error:", err));
-      } else {
-        sendPushToTenantUsers(matchedTenantId, pushTitle, pushBody, pushData)
-          .catch(err => console.error("[Podium Webhook] Push notification error:", err));
+      try {
+        if (assignedCsrId) {
+          await enqueueSendPushToUser({
+            userId: assignedCsrId,
+            title: pushTitle,
+            body: pushBody,
+            data: pushData,
+            tenantId: matchedTenantId,
+            source: "podium-webhook-assigned",
+          });
+        } else {
+          await enqueueSendPushToTenantUsers({
+            tenantId: matchedTenantId,
+            title: pushTitle,
+            body: pushBody,
+            data: pushData,
+            source: "podium-webhook-broadcast",
+          });
+        }
+      } catch (err) {
+        console.error("[Podium Webhook] Push enqueue error:", err);
       }
     }
 
