@@ -47,9 +47,11 @@ async function loadHandler(): Promise<Handler> {
     sleepCalls.push(ms);
   });
   mod.registerReDeriveJobHandlers();
-  expect(registerJobHandlerMock).toHaveBeenCalledTimes(1);
-  expect(registerJobHandlerMock.mock.calls[0][0]).toBe("rederive_leads_for_rule_scope");
-  return registerJobHandlerMock.mock.calls[0][1] as Handler;
+  const call = registerJobHandlerMock.mock.calls.find(
+    (c: unknown[]) => c[0] === "rederive_leads_for_rule_scope",
+  );
+  expect(call).toBeDefined();
+  return call![1] as Handler;
 }
 
 describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out finishes", () => {

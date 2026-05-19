@@ -4,7 +4,12 @@ import {
   countPendingRederiveLeadsForRuleScope,
   reDeriveLeadFunnel,
 } from "./re-derive-lead-funnel";
-import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
+import {
+  emitRuleRederiveComplete,
+  emitRuleRederiveFailed,
+  emitSelectedLeadsRederiveComplete,
+  emitSelectedLeadsRederiveFailed,
+} from "../socket";
 
 /**
  * Errors whose `name` we know mean "retrying will not help" — bad inputs,
@@ -206,22 +211,57 @@ function parseSelectedPayload(p: Record<string, unknown>): ReDeriveSelectedPaylo
  * open synchronously.
  */
 function registerSelectedLeadsHandler(): void {
-  registerJobHandler(REDERIVE_SELECTED_LEADS, async (payload) => {
+  registerJobHandler(REDERIVE_SELECTED_LEADS, async (payload, ctx) => {
     const args = parseSelectedPayload(payload);
+    const jobId = ctx?.job?.id ?? null;
     let succeeded = 0;
     let failed = 0;
     let changed = 0;
-    for (const leadId of args.leadIds) {
-      try {
-        const r = await reDeriveLeadFunnel(args.tenantId, leadId);
-        succeeded++;
-        if (r?.changed) changed++;
-      } catch (err) {
-        failed++;
-        console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
+    const failedLeadIds: number[] = [];
+    try {
+      for (const leadId of args.leadIds) {
+        try {
+          const r = await reDeriveLeadFunnel(args.tenantId, leadId);
+          succeeded++;
+          if (r?.changed) changed++;
+        } catch (err) {
+          failed++;
+          failedLeadIds.push(leadId);
+          console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
+        }
       }
+    } catch (err) {
+      // Defensive: catastrophic loop failure (something other than a per-lead
+      // throw, which we already catch above). Surface to the sheet so it can
+      // clear its "working…" state and show a retry hint.
+      try {
+        emitSelectedLeadsRederiveFailed(args.tenantId, {
+          jobId,
+          total: args.leadIds.length,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      } catch (emitErr) {
+        console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveFailed failed:", emitErr);
+      }
+      throw err;
     }
-    return { total: args.leadIds.length, succeeded, failed, changed };
+
+    // Notify the sheet that the background job has finished. Emit even when
+    // every lead failed so the sheet can show the failure counts and offer a
+    // retry without waiting for a timeout.
+    try {
+      emitSelectedLeadsRederiveComplete(args.tenantId, {
+        jobId,
+        total: args.leadIds.length,
+        succeeded,
+        failed,
+        changed,
+        failedLeadIds,
+      });
+    } catch (emitErr) {
+      console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveComplete failed:", emitErr);
+    }
+    return { total: args.leadIds.length, succeeded, failed, changed, failedLeadIds };
   });
 }
 

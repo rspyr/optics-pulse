@@ -394,6 +394,44 @@ export function emitRuleRederiveFailed(
   }
 }
 
+export function emitSelectedLeadsRederiveComplete(
+  tenantId: number,
+  data: {
+    jobId: number | null;
+    total: number;
+    succeeded: number;
+    failed: number;
+    changed: number;
+    failedLeadIds: number[];
+  },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-complete", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted selected-leads-rederive-complete for tenant-${tenantId} (` +
+      `job=${data.jobId ?? "?"} total=${data.total} succeeded=${data.succeeded} ` +
+      `failed=${data.failed} changed=${data.changed})`,
+    );
+  }
+}
+
+export function emitSelectedLeadsRederiveFailed(
+  tenantId: number,
+  data: {
+    jobId: number | null;
+    total: number;
+    reason: string;
+  },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("selected-leads-rederive-failed", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted selected-leads-rederive-failed for tenant-${tenantId} (` +
+      `job=${data.jobId ?? "?"} total=${data.total} reason=${data.reason})`,
+    );
+  }
+}
+
 export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("callback-due", data);

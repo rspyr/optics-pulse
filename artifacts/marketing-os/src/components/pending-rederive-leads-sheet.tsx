@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, ExternalLink } from "lucide-react";
 import {
   Sheet,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/sheet";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { useLeadNotification } from "@/contexts/lead-notification-context";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
@@ -48,7 +49,23 @@ type BulkResult =
       changed: number;
       failedLeadIds: number[];
     }
-  | { mode: "queued"; total: number; jobId: number | null };
+  | {
+      mode: "queued";
+      total: number;
+      jobId: number | null;
+      // The background job result is filled in once the
+      // `selected-leads-rederive-complete` socket event arrives. Until then
+      // the sheet shows a "Re-deriving N leads in the background…" indicator.
+      jobResult?: {
+        succeeded: number;
+        failed: number;
+        changed: number;
+        failedLeadIds: number[];
+      };
+      // Set when a `selected-leads-rederive-failed` event arrives (or the
+      // safety timeout elapses without any event). Surfaces a retry button.
+      jobError?: string;
+    };
 
 function fmtName(l: PendingLead) {
   const name = `${l.firstName ?? ""} ${l.lastName ?? ""}`.trim();
@@ -95,6 +112,12 @@ export function PendingRederiveLeadsSheet({
   const [submitting, setSubmitting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const { onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed } = useLeadNotification();
+  // Safety timeout for the queued path — if no socket event arrives within
+  // this window the sheet surfaces a retry button so the operator is never
+  // stuck staring at a "running…" indicator forever.
+  const QUEUED_TIMEOUT_MS = 5 * 60 * 1000;
+  const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -156,13 +179,79 @@ export function PendingRederiveLeadsSheet({
     }
   };
 
-  const failedIds = useMemo(
-    () => (bulkResult?.mode === "sync" ? new Set(bulkResult.failedLeadIds) : new Set<number>()),
-    [bulkResult],
-  );
+  const failedIds = useMemo(() => {
+    if (bulkResult?.mode === "sync") return new Set(bulkResult.failedLeadIds);
+    if (bulkResult?.mode === "queued" && bulkResult.jobResult) {
+      return new Set(bulkResult.jobResult.failedLeadIds);
+    }
+    return new Set<number>();
+  }, [bulkResult]);
 
-  async function submitRederive() {
-    if (selected.size === 0 || submitting) return;
+  const isJobRunning =
+    bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError;
+
+  // Subscribe to the background job's completion/failure events so the sheet
+  // can fill in the queued result row with the final success/failure/changed
+  // counts (or surface a retry hint on failure / timeout). We filter on
+  // jobId so a concurrent bulk re-derive started elsewhere in the tenant
+  // doesn't corrupt this sheet's progress display.
+  useEffect(() => {
+    if (!isJobRunning) return;
+    if (bulkResult?.mode !== "queued") return;
+    const targetJobId = bulkResult.jobId;
+
+    const clearTimer = () => {
+      if (queuedTimerRef.current) {
+        clearTimeout(queuedTimerRef.current);
+        queuedTimerRef.current = null;
+      }
+    };
+
+    const unsubComplete = onSelectedLeadsRederiveComplete((data) => {
+      if (targetJobId != null && data.jobId !== targetJobId) return;
+      clearTimer();
+      setBulkResult((prev) =>
+        prev?.mode === "queued"
+          ? {
+              ...prev,
+              jobResult: {
+                succeeded: data.succeeded,
+                failed: data.failed,
+                changed: data.changed,
+                failedLeadIds: data.failedLeadIds,
+              },
+              jobError: undefined,
+            }
+          : prev,
+      );
+    });
+    const unsubFailed = onSelectedLeadsRederiveFailed((data) => {
+      if (targetJobId != null && data.jobId !== targetJobId) return;
+      clearTimer();
+      setBulkResult((prev) =>
+        prev?.mode === "queued"
+          ? { ...prev, jobError: data.reason || "Background job failed" }
+          : prev,
+      );
+    });
+    queuedTimerRef.current = setTimeout(() => {
+      setBulkResult((prev) =>
+        prev?.mode === "queued" && !prev.jobResult && !prev.jobError
+          ? { ...prev, jobError: "Timed out waiting for background job to finish" }
+          : prev,
+      );
+    }, QUEUED_TIMEOUT_MS);
+
+    return () => {
+      unsubComplete();
+      unsubFailed();
+      clearTimer();
+    };
+  }, [isJobRunning, bulkResult, onSelectedLeadsRederiveComplete, onSelectedLeadsRederiveFailed]);
+
+  async function submitRederive(leadIdsOverride?: number[]) {
+    const leadIds = leadIdsOverride ?? Array.from(selected);
+    if (leadIds.length === 0 || submitting) return;
     setSubmitting(true);
     setBulkError(null);
     setBulkResult(null);
@@ -178,7 +267,7 @@ export function PendingRederiveLeadsSheet({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tenantId,
-          leadIds: Array.from(selected),
+          leadIds,
         }),
       });
       const d = await res.json().catch(() => ({}));
@@ -298,13 +387,51 @@ export function PendingRederiveLeadsSheet({
                   )}
                 </p>
               )}
-              {bulkResult?.mode === "queued" && (
+              {bulkResult?.mode === "queued" && !bulkResult.jobResult && !bulkResult.jobError && (
+                <p
+                  className="text-xs text-white/80 flex items-center gap-2"
+                  data-testid="pending-leads-bulk-result"
+                >
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Re-deriving {bulkResult.total} leads in the background…
+                </p>
+              )}
+              {bulkResult?.mode === "queued" && bulkResult.jobResult && (
                 <p
                   className="text-xs text-white/80"
                   data-testid="pending-leads-bulk-result"
                 >
-                  Queued {bulkResult.total} leads for background re-derive.
+                  Re-derived {bulkResult.jobResult.succeeded}/{bulkResult.total} leads
+                  {bulkResult.jobResult.changed > 0 && (
+                    <> · {bulkResult.jobResult.changed} updated</>
+                  )}
+                  {bulkResult.jobResult.failed > 0 && (
+                    <span className="text-red-400">
+                      {" "}· {bulkResult.jobResult.failed} failed
+                    </span>
+                  )}
                 </p>
+              )}
+              {bulkResult?.mode === "queued" && bulkResult.jobError && (
+                <div
+                  className="flex items-start gap-2 text-xs text-red-400"
+                  data-testid="pending-leads-bulk-job-error"
+                >
+                  <span className="flex-1">
+                    Background re-derive failed: {bulkResult.jobError}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={submitting}
+                    onClick={() => submitRederive(Array.from(selected))}
+                    data-testid="pending-leads-bulk-retry"
+                    className="h-6 text-[11px] px-2"
+                  >
+                    {submitting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                    Retry
+                  </Button>
+                </div>
               )}
 
               <ul className="space-y-1.5" data-testid="pending-leads-list">
