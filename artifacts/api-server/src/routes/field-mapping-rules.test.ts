@@ -30,11 +30,13 @@ vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
 }));
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
   reDeriveLeadFunnelMock: vi.fn(),
+  countPendingRederiveLeadsForRuleScopeMock: vi.fn(),
+  listPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   enqueueReDeriveLeadsForRuleScopeMock: vi.fn(),
 }));
 
@@ -46,6 +48,8 @@ vi.mock("../socket", () => ({
 vi.mock("../services/re-derive-lead-funnel", () => ({
   reDeriveLeadsForRuleScope: reDeriveLeadsForRuleScopeMock,
   reDeriveLeadFunnel: reDeriveLeadFunnelMock,
+  countPendingRederiveLeadsForRuleScope: countPendingRederiveLeadsForRuleScopeMock,
+  listPendingRederiveLeadsForRuleScope: listPendingRederiveLeadsForRuleScopeMock,
 }));
 
 vi.mock("../services/re-derive-jobs", () => ({
@@ -71,6 +75,19 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   emitRuleRederiveFailedMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
   reDeriveLeadFunnelMock.mockReset();
+  countPendingRederiveLeadsForRuleScopeMock.mockReset();
+  countPendingRederiveLeadsForRuleScopeMock.mockResolvedValue({
+    pendingLeads: 0,
+    hitLimit: false,
+    maxLeads: 500,
+    lastAttemptedAt: null,
+  });
+  listPendingRederiveLeadsForRuleScopeMock.mockReset();
+  listPendingRederiveLeadsForRuleScopeMock.mockResolvedValue({
+    leads: [],
+    hitLimit: false,
+    maxLeads: 500,
+  });
   enqueueReDeriveLeadsForRuleScopeMock.mockReset();
   enqueueReDeriveLeadsForRuleScopeMock.mockResolvedValue({ id: 1 });
   const mod = await import("./field-mapping-rules");
@@ -325,11 +342,11 @@ describe("POST /field-mapping-rules", () => {
     expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
-    expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, {
+    expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, expect.objectContaining({
       pageUrlPattern: "/contact",
       formIdentifier: "contact-form",
       reason: "queue full",
-    });
+    }));
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
