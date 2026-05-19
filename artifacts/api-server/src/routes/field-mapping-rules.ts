@@ -7,6 +7,7 @@ import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import {
   enqueueReDeriveLeadsForRuleScope,
   enqueueReDeriveSelectedLeads,
+  findLatestCancelledRederiveSnapshotFromDb,
   REDERIVE_SELECTED_LEADS,
 } from "../services/re-derive-jobs";
 import { mapReDeriveErrorForOperator } from "../services/re-derive-error-messages";
@@ -279,6 +280,34 @@ router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) =>
   // Atomic conditional update — only flip rows that are still pending or
   // in_progress. If 0 rows match, the row raced to a terminal state between
   // our read and our write; return 409 so the UI can refresh.
+  //
+  // We also pre-compute the "pending-cancel" terminal result snapshot here
+  // (status=pending case) so the same UPDATE that flips the row persists
+  // the cancellation context. Without this, a pending-cancel row would land
+  // in the DB with `result=NULL` and the cross-session restore endpoint
+  // would only see the payload — which works thanks to the helper's
+  // "all leads skipped" inference, but explicitly writing the result also
+  // future-proofs callers that may want to consume the row directly.
+  const pendingPayload = (existing.payload ?? {}) as {
+    leadIds?: unknown;
+    pageUrlPattern?: unknown;
+    formIdentifier?: unknown;
+  };
+  const pendingLeadIds = Array.isArray(pendingPayload.leadIds)
+    ? (pendingPayload.leadIds.filter((id) => typeof id === "number") as number[])
+    : [];
+  const pendingCancelResult = existing.status === "pending"
+    ? {
+        total: pendingLeadIds.length,
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        changed: 0,
+        failedLeadIds: [] as number[],
+        skippedLeadIds: pendingLeadIds,
+        cancelled: true,
+      }
+    : null;
   const updatedRows = await db
     .update(backgroundJobsTable)
     .set({
@@ -287,6 +316,9 @@ router.post("/field-mapping-rules/rederive-jobs/:id/cancel", async (req, res) =>
       updatedAt: new Date(),
       lockedAt: null,
       lockedBy: null,
+      ...(pendingCancelResult
+        ? { result: pendingCancelResult as unknown as Record<string, unknown> }
+        : {}),
     })
     .where(and(
       eq(backgroundJobsTable.id, jobId),
@@ -370,16 +402,34 @@ router.get("/field-mapping-rules/cancelled-rederive-snapshot", async (req, res) 
     res.status(400).json({ error: "pageUrlPattern and formIdentifier are required" });
     return;
   }
-  const snapshot = findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
+  const memorySnapshot = findLatestCancelledSelectedLeadsRederiveSnapshotForScope(
     tenantId,
     pageUrlPattern,
     formIdentifier,
   );
-  if (!snapshot) {
-    res.status(404).json({ error: "No cancelled snapshot for this scope" });
+  if (memorySnapshot) {
+    res.json(memorySnapshot);
     return;
   }
-  res.json(snapshot);
+  // Fall back to the persisted `background_jobs.result` row so a cancelled
+  // snapshot survives the in-memory TTL (10 min) and process restarts —
+  // operators who come back the next day can still resume "Re-derive the
+  // rest" instead of losing the skipped subset.
+  try {
+    const dbSnapshot = await findLatestCancelledRederiveSnapshotFromDb(
+      tenantId,
+      pageUrlPattern,
+      formIdentifier,
+    );
+    if (!dbSnapshot) {
+      res.status(404).json({ error: "No cancelled snapshot for this scope" });
+      return;
+    }
+    res.json(dbSnapshot);
+  } catch (err) {
+    console.error("[field-mapping-rules.cancelled-rederive-snapshot] DB fallback failed:", err);
+    res.status(500).json({ error: "Failed to load cancelled snapshot" });
+  }
 });
 
 router.get("/field-mapping-rules/rederive-job-progress", async (req, res) => {

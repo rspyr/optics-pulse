@@ -1,4 +1,6 @@
 import { enqueueJob, isJobCancelled, registerJobHandler } from "./background-jobs";
+import { db, backgroundJobsTable } from "@workspace/db";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   reDeriveLeadsForRuleScope,
   countPendingRederiveLeadsForRuleScope,
@@ -396,6 +398,107 @@ export async function enqueueReDeriveSelectedLeads(args: ReDeriveSelectedPayload
     payload,
     { tenantId: args.tenantId, maxAttempts: 1 },
   );
+}
+
+/**
+ * Shape of the persisted cancelled snapshot returned by the DB fallback.
+ * Mirrors the in-memory `SelectedLeadsRederiveSnapshot` cancelled-status
+ * shape from `socket.ts` so the operator UI can consume either source
+ * interchangeably. Status is always `"cancelled"` because this loader is
+ * scoped to cancelled rows only.
+ */
+export type PersistedCancelledRederiveSnapshot = {
+  tenantId: number;
+  jobId: number;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  changed: number;
+  failedLeadIds: number[];
+  skippedLeadIds: number[];
+  status: "cancelled";
+  pageUrlPattern: string;
+  formIdentifier: string;
+  updatedAt: string;
+};
+
+/**
+ * Look up the most recent cancelled bulk re-derive job for the given scope
+ * from the `background_jobs` table. Acts as the durable fallback for the
+ * in-memory snapshot map in `socket.ts`: when an operator re-opens the
+ * pending-leads sheet after the in-memory TTL has expired (or the server
+ * restarted), we still want "Cancelled at X/Y leads" + "Re-derive the rest"
+ * to be available.
+ *
+ * Reconstructs the snapshot from the job row's `payload` (leadIds + scope)
+ * and `result` (the partial counts written by the handler on cancel, or
+ * absent for pending-cancel rows where the handler never ran — in which
+ * case we infer "processed=0, all leadIds skipped").
+ *
+ * Returns null when no matching cancelled row exists.
+ */
+export async function findLatestCancelledRederiveSnapshotFromDb(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+): Promise<PersistedCancelledRederiveSnapshot | null> {
+  const rows = await db
+    .select()
+    .from(backgroundJobsTable)
+    .where(and(
+      eq(backgroundJobsTable.tenantId, tenantId),
+      eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+      eq(backgroundJobsTable.status, "cancelled"),
+      sql`${backgroundJobsTable.payload}->>'pageUrlPattern' = ${pageUrlPattern}`,
+      sql`${backgroundJobsTable.payload}->>'formIdentifier' = ${formIdentifier}`,
+    ))
+    .orderBy(desc(backgroundJobsTable.completedAt))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const payload = (row.payload ?? {}) as {
+    leadIds?: unknown;
+    pageUrlPattern?: unknown;
+    formIdentifier?: unknown;
+  };
+  const result = (row.result ?? {}) as {
+    total?: unknown;
+    processed?: unknown;
+    succeeded?: unknown;
+    failed?: unknown;
+    changed?: unknown;
+    failedLeadIds?: unknown;
+    skippedLeadIds?: unknown;
+  };
+  const payloadLeadIds = Array.isArray(payload.leadIds)
+    ? (payload.leadIds.filter((id) => typeof id === "number") as number[])
+    : [];
+  const asNum = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  const asIdArray = (v: unknown, fallback: number[]) =>
+    Array.isArray(v) ? (v.filter((x) => typeof x === "number") as number[]) : fallback;
+  const total = asNum(result.total, payloadLeadIds.length);
+  const processed = asNum(result.processed, 0);
+  // For pending-cancel rows the handler never ran, so result is empty;
+  // fall back to "all leads skipped" so the sheet can still offer
+  // "Re-derive the rest" against the full original selection.
+  const skippedLeadIds = asIdArray(result.skippedLeadIds, payloadLeadIds);
+  return {
+    tenantId,
+    jobId: row.id,
+    total,
+    processed,
+    succeeded: asNum(result.succeeded, 0),
+    failed: asNum(result.failed, 0),
+    changed: asNum(result.changed, 0),
+    failedLeadIds: asIdArray(result.failedLeadIds, []),
+    skippedLeadIds,
+    status: "cancelled",
+    pageUrlPattern,
+    formIdentifier,
+    updatedAt: (row.completedAt ?? row.updatedAt ?? new Date()).toISOString(),
+  };
 }
 
 export async function enqueueReDeriveLeadsForRuleScope(args: ReDerivePayload) {
