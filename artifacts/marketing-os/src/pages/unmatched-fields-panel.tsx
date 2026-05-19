@@ -662,11 +662,7 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     const { onRuleRederiveComplete } = notification;
     // Bump the in-flight counter so the panel shows the "Refreshing historical
     // leads…" hint until this subscription settles (success / timeout /
-    // caller-driven cleanup on save failure). A counter (rather than a boolean)
-    // is used so the indicator stays correct if additional save flows in the
-    // future fan out multiple concurrent subscriptions. Today only single
-    // saveMapping() subscribes — bulk "Save all suggested" writes directly via
-    // doSave without subscribing, so it does not currently light the hint.
+    // caller-driven cleanup on save failure).
     setRefreshingHistoricalCount((n) => n + 1);
     let done = false;
     const cleanup = () => {
@@ -690,6 +686,100 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     });
     const timer = setTimeout(cleanup, 30_000);
     return cleanup;
+  };
+
+  // Aggregate subscription used by the bulk "Save all suggested" path. The
+  // backend schedules one re-derive job per saved rule and emits one
+  // `rule-rederive-complete` event per job — but ALL events for the same
+  // (tenantId, pageUrlPattern, formIdentifier) scope are indistinguishable
+  // at the payload level (no per-job correlation id). A naive per-field
+  // call to subscribeRederiveOnce would therefore have every listener match
+  // the FIRST event and clean up at once, clearing the hint long before
+  // the remaining queued re-derives finish.
+  //
+  // Instead, register a SINGLE listener for the bulk operation that:
+  //  - bumps the refreshing counter once on start,
+  //  - tracks how many saves were issued vs. how many completion events
+  //    have arrived for the scope,
+  //  - clears the hint only when every issued save has either received a
+  //    matching completion event, was reported as failed (no event will
+  //    arrive), or the aggregate timeout elapses.
+  //
+  // Per-completion success toasts are intentionally suppressed for bulk —
+  // saveAllSuggested already emits an aggregate "Saved X of Y…" toast and
+  // N "X historical leads re-derived" toasts would be noisy.
+  const subscribeBulkRederive = (
+    tenantId: number,
+    pageUrl: string,
+    formIdent: string,
+  ): {
+    onSaveSucceeded: () => void;
+    onSaveFailed: () => void;
+    finalize: () => void;
+  } => {
+    if (!notification) {
+      return { onSaveSucceeded: () => {}, onSaveFailed: () => {}, finalize: () => {} };
+    }
+    const { onRuleRederiveComplete } = notification;
+    setRefreshingHistoricalCount((n) => n + 1);
+    let allSavesIssued = false;
+    let expected = 0;
+    let received = 0;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      if (timer !== null) clearTimeout(timer);
+      setRefreshingHistoricalCount((n) => Math.max(0, n - 1));
+    };
+    const maybeFinish = () => {
+      if (done) return;
+      if (!allSavesIssued) return;
+      if (received >= expected) cleanup();
+    };
+    const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
+      if (done) return;
+      if (data.tenantId && data.tenantId !== tenantId) return;
+      if (data.pageUrlPattern !== pageUrl) return;
+      if (data.formIdentifier !== formIdent) return;
+      received += 1;
+      maybeFinish();
+    });
+    // NB: the 30s timeout is intentionally NOT armed here. A large bulk save
+    // can take longer than 30s just to issue all of its POSTs, so anchoring
+    // the timeout to subscription creation could clear the hint while saves
+    // are still being sent. Instead the timer is armed in finalize(), so
+    // the 30s budget covers the post-issuance "waiting for re-derive events"
+    // window — mirroring the single-save subscribeRederiveOnce semantics.
+    return {
+      onSaveSucceeded: () => {
+        if (done) return;
+        expected += 1;
+        // received may already exceed expected if an earlier event arrived
+        // first; maybeFinish checks both totals against allSavesIssued.
+        maybeFinish();
+      },
+      onSaveFailed: () => {
+        // No event will arrive for this save; nothing to track. Still call
+        // maybeFinish in case this was the last outstanding save and every
+        // other completion has already landed.
+        maybeFinish();
+      },
+      finalize: () => {
+        if (done) return;
+        allSavesIssued = true;
+        // Edge case: every save failed (expected === 0) — finish immediately.
+        if (received >= expected) {
+          cleanup();
+          return;
+        }
+        // Otherwise wait for remaining events; arm the 30s safety timeout
+        // now so the hint can't get stuck if the server never replies.
+        timer = setTimeout(cleanup, 30_000);
+      },
+    };
   };
 
   // Subscribe to scoped-rules cache changes whenever the panel is expanded so
@@ -964,21 +1054,38 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
     let savedCount = 0;
     let failureCount = 0;
     setBulkProgress({ current: 0, total });
-    for (let i = 0; i < targets.length; i++) {
-      const name = targets[i];
-      const sugg = suggestions.get(name);
-      if (!sugg) continue;
-      setBulkProgress({ current: i + 1, total });
-      setSavingField(name);
-      const result = await doSave(name, sugg);
-      if (result.ok) {
-        savedCount++;
-      } else {
-        failureCount++;
-        if (result.errorMsg) {
-          toast.error(`"${name}": ${result.errorMsg}`);
+    // Open a single aggregate subscription for the whole bulk operation so
+    // the "Refreshing historical leads…" hint stays visible until every
+    // queued re-derive completes (or the 30s aggregate timeout elapses).
+    // See subscribeBulkRederive for why per-field subscriptions don't work
+    // for this scope-keyed event.
+    const bulkRederive = subscribeBulkRederive(evt.tenantId, pageUrlPattern, formIdentifier);
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const name = targets[i];
+        const sugg = suggestions.get(name);
+        if (!sugg) continue;
+        setBulkProgress({ current: i + 1, total });
+        setSavingField(name);
+        const result = await doSave(name, sugg);
+        if (result.ok) {
+          savedCount++;
+          bulkRederive.onSaveSucceeded();
+        } else {
+          failureCount++;
+          bulkRederive.onSaveFailed();
+          if (result.errorMsg) {
+            toast.error(`"${name}": ${result.errorMsg}`);
+          }
         }
       }
+    } finally {
+      // Tell the aggregate tracker no more saves are coming. If every issued
+      // save has already received its completion event (or every save
+      // failed), this clears the hint immediately; otherwise the listener
+      // keeps the hint visible until the remaining events arrive or the
+      // 30s timeout fires.
+      bulkRederive.finalize();
     }
     setSavingField(null);
     setBulkProgress(null);
