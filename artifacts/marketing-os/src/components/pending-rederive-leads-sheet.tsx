@@ -917,6 +917,16 @@ export function PendingRederiveLeadsSheet({
                 >
                   {failureGroups.map((g) => {
                     const isActive = activeReason === g.reason;
+                    // The "Select N" half lights up when the current selection
+                    // exactly matches this group's lead ids — so after the
+                    // operator clicks it and scrolls down to "Re-derive
+                    // selected", the chip still tells them which group is
+                    // driving that count. Toggling a row or hitting
+                    // "Select all" changes `selected.size`, which naturally
+                    // clears this active state.
+                    const isSelectionActive =
+                      selected.size === g.leadIds.length &&
+                      g.leadIds.every((id) => selected.has(id));
                     return (
                       <div
                         key={g.reason}
@@ -957,7 +967,12 @@ export function PendingRederiveLeadsSheet({
                             // selected" button retries exactly that batch.
                             setSelected(new Set(g.leadIds));
                           }}
-                          className="text-[11px] px-1.5 py-0.5 border-l border-red-500/30 hover:bg-red-500/15 inline-flex items-center gap-1"
+                          aria-pressed={isSelectionActive}
+                          className={`text-[11px] px-1.5 py-0.5 border-l border-red-500/30 inline-flex items-center gap-1 transition-colors ${
+                            isSelectionActive
+                              ? "bg-red-500/30 text-red-50 ring-1 ring-inset ring-red-300/50"
+                              : "hover:bg-red-500/15"
+                          }`}
                           title={`Select ${g.count} lead${g.count === 1 ? "" : "s"} with reason: ${g.reason}`}
                           aria-label={`Select ${g.count} lead${g.count === 1 ? "" : "s"} with reason ${g.reason}`}
                           data-testid={`pending-leads-failure-group-select-${encodeURIComponent(g.reason)}`}
