@@ -1259,6 +1259,27 @@ const migrations: Migration[] = [
       console.log(`[Migration] Seeded ${seededBooking.rows.length} booking row(s) into lead_status_history`);
     },
   },
+  {
+    id: "2026-05-19_field-mapping-rules-updated-at",
+    description:
+      "Add updated_at column to field_mapping_rules so the re-derive failure hint " +
+      "can use the latest rule-save timestamp as the last-derived-before cutoff " +
+      "when counting historical leads still pending re-derivation (task #510).",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE field_mapping_rules
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      `);
+      // Seed updated_at = created_at for existing rows so historical rules
+      // get a sensible cutoff (their original save time) rather than NOW().
+      await db.execute(sql`
+        UPDATE field_mapping_rules
+        SET updated_at = created_at
+        WHERE updated_at > created_at
+      `);
+      console.log("[Migration] Added updated_at column to field_mapping_rules and seeded from created_at");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

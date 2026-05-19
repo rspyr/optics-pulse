@@ -1,5 +1,5 @@
-import { db, leadsTable, attributionEventsTable } from "@workspace/db";
-import { eq, and, desc, gte } from "drizzle-orm";
+import { db, leadsTable, attributionEventsTable, fieldMappingRulesTable } from "@workspace/db";
+import { eq, and, desc, gte, lt, inArray } from "drizzle-orm";
 import { detectFields, extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizeFunnel } from "./funnel-normalizer";
 
@@ -179,5 +179,107 @@ export async function reDeriveLeadsForRuleScope(
     leadsChanged,
     hitLimit,
     maxLeads,
+  };
+}
+
+export interface PendingRederiveCount {
+  pendingLeads: number;
+  hitLimit: boolean;
+  maxLeads: number;
+  lastAttemptedAt: string;
+}
+
+/**
+ * Count how many historical leads in the given rule scope still need to be
+ * re-derived — i.e. leads whose most-recent attribution event matches
+ * (pageUrlPattern, formIdentifier) and whose `leads.updatedAt` predates the
+ * latest matching field-mapping rule's `createdAt`. Used to populate the
+ * "~N historical leads still need updating" hint that the operator UI shows
+ * next to a failed-rederive notice, so they can size up whether retrying now
+ * is cheap or expensive.
+ *
+ * Mirrors the lookback / event-cap / lead-cap bounds of
+ * `reDeriveLeadsForRuleScope` so the count reflects the same population the
+ * fan-out would actually touch on a retry.
+ */
+export async function countPendingRederiveLeadsForRuleScope(
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
+): Promise<PendingRederiveCount> {
+  const lookbackDays = options.lookbackDays ?? 30;
+  const maxEvents = options.maxEvents ?? 2000;
+  const maxLeads = options.maxLeads ?? 200;
+  const excludeLeadId = options.excludeLeadId ?? null;
+  const lastAttemptedAt = new Date().toISOString();
+
+  // Latest rule's updatedAt for this scope is our "rule update timestamp"
+  // cutoff. Any lead whose updatedAt is older than this hasn't been touched
+  // since the rule was last saved and is therefore still pending a re-derive.
+  // No rule for the scope (shouldn't happen on the failure path, but guard
+  // anyway) -> count every candidate lead.
+  const [latestRule] = await db
+    .select({ updatedAt: fieldMappingRulesTable.updatedAt })
+    .from(fieldMappingRulesTable)
+    .where(and(
+      eq(fieldMappingRulesTable.tenantId, tenantId),
+      eq(fieldMappingRulesTable.pageUrlPattern, pageUrlPattern),
+      eq(fieldMappingRulesTable.formIdentifier, formIdentifier),
+    ))
+    .orderBy(desc(fieldMappingRulesTable.updatedAt))
+    .limit(1);
+  const cutoff: Date | null = latestRule?.updatedAt ?? null;
+
+  const lookbackDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+
+  const events = await db
+    .select({
+      createdLeadId: attributionEventsTable.createdLeadId,
+      pageUrl: attributionEventsTable.pageUrl,
+      formId: attributionEventsTable.formId,
+      formName: attributionEventsTable.formName,
+    })
+    .from(attributionEventsTable)
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      gte(attributionEventsTable.createdAt, lookbackDate),
+    ))
+    .orderBy(desc(attributionEventsTable.createdAt))
+    .limit(maxEvents);
+
+  const leadIds = new Set<number>();
+  let hitLimit = false;
+  for (const ev of events) {
+    if (!ev.createdLeadId) continue;
+    if (excludeLeadId && ev.createdLeadId === excludeLeadId) continue;
+    if (leadIds.has(ev.createdLeadId)) continue;
+    const evPath = extractPagePath(ev.pageUrl);
+    if (evPath !== pageUrlPattern) continue;
+    const evFormIdent = getFormIdentifier(ev.formId, ev.formName);
+    if (formIdentifier !== "*" && evFormIdent !== formIdentifier) continue;
+    leadIds.add(ev.createdLeadId);
+    if (leadIds.size >= maxLeads) { hitLimit = true; break; }
+  }
+
+  if (leadIds.size === 0) {
+    return { pendingLeads: 0, hitLimit, maxLeads, lastAttemptedAt };
+  }
+
+  const conditions = [
+    eq(leadsTable.tenantId, tenantId),
+    inArray(leadsTable.id, Array.from(leadIds)),
+  ];
+  if (cutoff) conditions.push(lt(leadsTable.updatedAt, cutoff));
+  const rows = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(and(...conditions));
+
+  return {
+    pendingLeads: rows.length,
+    hitLimit,
+    maxLeads,
+    lastAttemptedAt,
   };
 }

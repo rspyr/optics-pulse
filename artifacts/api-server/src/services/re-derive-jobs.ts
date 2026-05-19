@@ -1,5 +1,5 @@
 import { enqueueJob, registerJobHandler } from "./background-jobs";
-import { reDeriveLeadsForRuleScope } from "./re-derive-lead-funnel";
+import { reDeriveLeadsForRuleScope, countPendingRederiveLeadsForRuleScope } from "./re-derive-lead-funnel";
 import { emitRuleRederiveComplete, emitRuleRederiveFailed } from "../socket";
 
 export const REDERIVE_LEADS_FOR_RULE_SCOPE = "rederive_leads_for_rule_scope";
@@ -94,11 +94,30 @@ export function registerReDeriveJobHandlers(): void {
       // historical leads" hint with a retry button. We still rethrow so
       // background-jobs marks the job failed (we enqueue with
       // maxAttempts: 1 to prevent double-retry on top of our own).
+      // Best-effort: compute how many leads in this scope still need to be
+      // re-derived so the operator UI can show "~N historical leads still
+      // need updating" next to the retry button. A failure here is silent;
+      // the failure hint itself is more important than the count.
+      let pendingCount: Awaited<ReturnType<typeof countPendingRederiveLeadsForRuleScope>> | null = null;
+      try {
+        pendingCount = await countPendingRederiveLeadsForRuleScope(
+          args.tenantId,
+          args.pageUrlPattern,
+          args.formIdentifier,
+          { excludeLeadId: args.excludeLeadId },
+        );
+      } catch (countErr) {
+        console.error("[re-derive-jobs] countPendingRederiveLeadsForRuleScope failed:", countErr);
+      }
       try {
         emitRuleRederiveFailed(args.tenantId, {
           pageUrlPattern: args.pageUrlPattern,
           formIdentifier: args.formIdentifier,
           reason: lastErr instanceof Error ? lastErr.message : String(lastErr),
+          pendingLeads: pendingCount?.pendingLeads,
+          hitLimit: pendingCount?.hitLimit,
+          maxLeads: pendingCount?.maxLeads,
+          lastAttemptedAt: pendingCount?.lastAttemptedAt ?? new Date().toISOString(),
         });
       } catch (emitErr) {
         console.error("[re-derive-jobs] emitRuleRederiveFailed failed:", emitErr);

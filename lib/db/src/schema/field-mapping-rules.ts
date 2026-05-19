@@ -10,6 +10,7 @@ export const fieldMappingRulesTable = pgTable("field_mapping_rules", {
   mapsTo: text("maps_to").notNull(),
   priority: integer("priority").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("uq_tenant_page_form_field").on(table.tenantId, table.pageUrlPattern, table.formIdentifier, table.fieldName),
 ]);

@@ -6,6 +6,7 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { enqueueReDeriveLeadsForRuleScope } from "../services/re-derive-jobs";
 import { emitRuleRederiveFailed } from "../socket";
+import { countPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
 
@@ -141,7 +142,7 @@ router.post("/field-mapping-rules", async (req, res) => {
   let wasUpdate = false;
   if (existing.length > 0) {
     const [updated] = await db.update(fieldMappingRulesTable)
-      .set({ mapsTo, priority: priority ?? 0 })
+      .set({ mapsTo, priority: priority ?? 0, updatedAt: new Date() })
       .where(eq(fieldMappingRulesTable.id, existing[0].id))
       .returning();
     resultRule = updated;
@@ -200,11 +201,28 @@ router.post("/field-mapping-rules", async (req, res) => {
     // Surface the enqueue failure to the operator's UI so they aren't left
     // staring at a "working…" indicator forever — the panel will replace it
     // with a "couldn't re-derive historical leads" hint and a retry button.
+    // Best-effort pending-lead count so the panel can show
+    // "~N historical leads still need updating" next to the retry button.
+    let pendingCount: Awaited<ReturnType<typeof countPendingRederiveLeadsForRuleScope>> | null = null;
+    try {
+      pendingCount = await countPendingRederiveLeadsForRuleScope(
+        tenantId,
+        pageUrlPattern as string,
+        formIdentifier as string,
+        { excludeLeadId: resolvedLeadId },
+      );
+    } catch (countErr) {
+      console.error("[field-mapping-rules.POST] countPendingRederiveLeadsForRuleScope failed:", countErr);
+    }
     try {
       emitRuleRederiveFailed(tenantId, {
         pageUrlPattern: pageUrlPattern as string,
         formIdentifier: formIdentifier as string,
         reason: err instanceof Error ? err.message : String(err),
+        pendingLeads: pendingCount?.pendingLeads,
+        hitLimit: pendingCount?.hitLimit,
+        maxLeads: pendingCount?.maxLeads,
+        lastAttemptedAt: pendingCount?.lastAttemptedAt ?? new Date().toISOString(),
       });
     } catch (emitErr) {
       console.error("[field-mapping-rules.POST] emitRuleRederiveFailed failed:", emitErr);

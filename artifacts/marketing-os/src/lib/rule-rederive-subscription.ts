@@ -152,7 +152,7 @@ export function subscribeRederiveOnce(
   // historical-leads fan-out failed for this scope, `onFailure` fires with
   // the reason and the subscription tears down (same as the complete path).
   onRuleRederiveFailed?: SubscribeRuleRederiveFailed | null,
-  onFailure?: (reason: string) => void,
+  onFailure?: (data: RuleRederiveFailedData) => void,
 ): () => void {
   if (!onRuleRederiveComplete) {
     if (onSettled) onSettled();
@@ -171,7 +171,7 @@ export function subscribeRederiveOnce(
       onRuleRederiveFailed: onRuleRederiveFailed ?? null,
       onFailureMatch: (data) => {
         sub.cleanup();
-        if (onFailure) onFailure(data.reason || "Re-derive failed");
+        if (onFailure) onFailure(data);
       },
     },
   );
@@ -226,7 +226,7 @@ export function subscribeBulkRederive(
   // would strand the bulk listener until the 30s timeout. The first failure
   // also fires `onFailure` so the caller can surface a retry hint.
   onRuleRederiveFailed?: SubscribeRuleRederiveFailed | null,
-  onFailure?: (reason: string) => void,
+  onFailure?: (data: RuleRederiveFailedData) => void,
 ): BulkRederiveSubscription {
   if (!onRuleRederiveComplete) {
     if (onSettled) onSettled();
@@ -267,7 +267,7 @@ export function subscribeBulkRederive(
         received += 1;
         if (!sawFailure) {
           sawFailure = true;
-          if (onFailure) onFailure(data.reason || "Re-derive failed");
+          if (onFailure) onFailure(data);
         }
         maybeFinish();
       },

@@ -14,6 +14,7 @@ import { useOptionalLeadNotification } from "@/contexts/lead-notification-contex
 import { toast as sonnerToast } from "sonner";
 import { formatFieldValue } from "@/lib/format-field-value";
 import { subscribeRederiveOnce } from "@/lib/rule-rederive-subscription";
+import { formatLastAttempted } from "./unmatched-fields-panel";
 import { CapturePathBadge } from "@/components/capture-path-badge";
 import { format } from "date-fns";
 import {
@@ -1401,7 +1402,13 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const [refreshingHistorical, setRefreshingHistorical] = useState(false);
-  const [rederiveError, setRederiveError] = useState<string | null>(null);
+  const [rederiveError, setRederiveError] = useState<{
+    reason: string;
+    pendingLeads?: number;
+    hitLimit?: boolean;
+    maxLeads?: number;
+    lastAttemptedAt?: string;
+  } | null>(null);
   const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
   const [retryingRederive, setRetryingRederive] = useState(false);
 
@@ -1424,7 +1431,13 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       },
       () => setRefreshingHistorical(false),
       onRuleRederiveFailed,
-      (reason) => setRederiveError(reason),
+      (data) => setRederiveError({
+        reason: data.reason,
+        pendingLeads: data.pendingLeads,
+        hitLimit: data.hitLimit,
+        maxLeads: data.maxLeads,
+        lastAttemptedAt: data.lastAttemptedAt,
+      }),
     );
   };
 
@@ -1450,11 +1463,11 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       if (!res.ok) {
         unsubscribeRederive();
         const d = await res.json().catch(() => ({}));
-        setRederiveError(d.error || `Failed to retry (HTTP ${res.status})`);
+        setRederiveError({ reason: d.error || `Failed to retry (HTTP ${res.status})` });
       }
     } catch {
       unsubscribeRederive();
-      setRederiveError("Network error retrying re-derive.");
+      setRederiveError({ reason: "Network error retrying re-derive." });
     } finally {
       setRetryingRederive(false);
     }
@@ -1586,8 +1599,26 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
           aria-live="polite"
           data-testid="rederive-error-hint"
         >
-          <span className="text-[10px] text-amber-200/90" title={rederiveError}>
+          <span className="text-[10px] text-amber-200/90" title={rederiveError.reason}>
             Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+            {typeof rederiveError.pendingLeads === "number" && (
+              <>
+                {" "}
+                <span data-testid="rederive-pending-count">
+                  {rederiveError.pendingLeads === 0
+                    ? "No historical leads still need updating."
+                    : `~${rederiveError.pendingLeads}${rederiveError.hitLimit ? "+" : ""} historical lead${rederiveError.pendingLeads === 1 ? "" : "s"} still need updating.`}
+                </span>
+              </>
+            )}
+            {rederiveError.lastAttemptedAt && (
+              <>
+                {" "}
+                <span className="text-amber-200/60" data-testid="rederive-last-attempted">
+                  Last tried {formatLastAttempted(rederiveError.lastAttemptedAt)}.
+                </span>
+              </>
+            )}
           </span>
           {lastSavedRef.current && (
             <button
@@ -1617,7 +1648,13 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const [error, setError] = useState<string | null>(null);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const [refreshingHistorical, setRefreshingHistorical] = useState(false);
-  const [rederiveError, setRederiveError] = useState<string | null>(null);
+  const [rederiveError, setRederiveError] = useState<{
+    reason: string;
+    pendingLeads?: number;
+    hitLimit?: boolean;
+    maxLeads?: number;
+    lastAttemptedAt?: string;
+  } | null>(null);
   const lastSavedRef = useRef<{ fieldName: string; mapsTo: string; pagePath: string; formIdentifier: string } | null>(null);
   const [retryingRederive, setRetryingRederive] = useState(false);
   const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
@@ -1644,7 +1681,13 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       },
       () => setRefreshingHistorical(false),
       onRuleRederiveFailed,
-      (reason) => setRederiveError(reason),
+      (data) => setRederiveError({
+        reason: data.reason,
+        pendingLeads: data.pendingLeads,
+        hitLimit: data.hitLimit,
+        maxLeads: data.maxLeads,
+        lastAttemptedAt: data.lastAttemptedAt,
+      }),
     );
   };
 
@@ -1670,11 +1713,11 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       if (!res.ok) {
         unsubscribeRederive();
         const d = await res.json().catch(() => ({}));
-        setRederiveError(d.error || `Failed to retry (HTTP ${res.status})`);
+        setRederiveError({ reason: d.error || `Failed to retry (HTTP ${res.status})` });
       }
     } catch {
       unsubscribeRederive();
-      setRederiveError("Network error retrying re-derive.");
+      setRederiveError({ reason: "Network error retrying re-derive." });
     } finally {
       setRetryingRederive(false);
     }
@@ -1764,8 +1807,26 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
           aria-live="polite"
           data-testid="rederive-error-hint"
         >
-          <span className="text-[11px] text-amber-200/90" title={rederiveError}>
+          <span className="text-[11px] text-amber-200/90" title={rederiveError.reason}>
             Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+            {typeof rederiveError.pendingLeads === "number" && (
+              <>
+                {" "}
+                <span data-testid="rederive-pending-count">
+                  {rederiveError.pendingLeads === 0
+                    ? "No historical leads still need updating."
+                    : `~${rederiveError.pendingLeads}${rederiveError.hitLimit ? "+" : ""} historical lead${rederiveError.pendingLeads === 1 ? "" : "s"} still need updating.`}
+                </span>
+              </>
+            )}
+            {rederiveError.lastAttemptedAt && (
+              <>
+                {" "}
+                <span className="text-amber-200/60" data-testid="rederive-last-attempted">
+                  Last tried {formatLastAttempted(rederiveError.lastAttemptedAt)}.
+                </span>
+              </>
+            )}
           </span>
           {lastSavedRef.current && (
             <button

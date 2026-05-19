@@ -374,13 +374,22 @@ export function emitRuleRederiveFailed(
     pageUrlPattern: string;
     formIdentifier: string;
     reason: string;
+    // Optional companion fields that let the operator UI surface
+    // "~N historical leads still need updating" alongside the failure hint
+    // and timestamp it. All optional because the count computation can
+    // itself fail (DB hiccup etc.) and we still want to surface the failure.
+    pendingLeads?: number;
+    hitLimit?: boolean;
+    maxLeads?: number;
+    lastAttemptedAt?: string;
   },
 ) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("rule-rederive-failed", { ...data, tenantId });
     console.log(
       `[Socket.IO] Emitted rule-rederive-failed for tenant-${tenantId} (` +
-      `scope=${data.pageUrlPattern}|${data.formIdentifier} reason=${data.reason})`,
+      `scope=${data.pageUrlPattern}|${data.formIdentifier} reason=${data.reason} ` +
+      `pending=${data.pendingLeads ?? "?"})`,
     );
   }
 }

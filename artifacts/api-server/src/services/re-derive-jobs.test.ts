@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, registerJobHandlerMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, reDeriveLeadsForRuleScopeMock, countPendingRederiveLeadsForRuleScopeMock, registerJobHandlerMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
   reDeriveLeadsForRuleScopeMock: vi.fn(),
+  countPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   registerJobHandlerMock: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock("../socket", () => ({
 
 vi.mock("./re-derive-lead-funnel", () => ({
   reDeriveLeadsForRuleScope: reDeriveLeadsForRuleScopeMock,
+  countPendingRederiveLeadsForRuleScope: countPendingRederiveLeadsForRuleScopeMock,
 }));
 
 vi.mock("./background-jobs", () => ({
@@ -30,6 +32,13 @@ async function loadHandler(): Promise<Handler> {
   emitRuleRederiveCompleteMock.mockReset();
   emitRuleRederiveFailedMock.mockReset();
   reDeriveLeadsForRuleScopeMock.mockReset();
+  countPendingRederiveLeadsForRuleScopeMock.mockReset();
+  countPendingRederiveLeadsForRuleScopeMock.mockResolvedValue({
+    pendingLeads: 7,
+    hitLimit: false,
+    maxLeads: 200,
+    lastAttemptedAt: "2026-05-19T00:00:00.000Z",
+  });
   registerJobHandlerMock.mockReset();
   sleepCalls.length = 0;
 
@@ -122,7 +131,20 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
       pageUrlPattern: "/contact",
       formIdentifier: "contact-form",
       reason: "db blew up",
+      pendingLeads: 7,
+      hitLimit: false,
+      maxLeads: 200,
+      lastAttemptedAt: "2026-05-19T00:00:00.000Z",
     });
+    // Pending-count query should be scoped to the same tenant/page/form
+    // and pass excludeLeadId so the displayed count matches the fan-out's
+    // selection semantics.
+    expect(countPendingRederiveLeadsForRuleScopeMock).toHaveBeenCalledWith(
+      42,
+      "/contact",
+      "contact-form",
+      { excludeLeadId: null },
+    );
   });
 
   it("auto-retries a transient failure and emits rule-rederive-complete (not -failed) when a later attempt succeeds", async () => {

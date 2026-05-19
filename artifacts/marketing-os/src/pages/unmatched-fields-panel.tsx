@@ -17,6 +17,19 @@ import {
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
+// Render the `lastAttemptedAt` ISO timestamp from a rule-rederive-failed
+// event as a short, locale-friendly time string. Falls back to the raw
+// string when parsing fails so the hint never disappears silently.
+export function formatLastAttempted(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  try {
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return d.toISOString();
+  }
+}
+
 type SavedEntry = { mapsTo: MapToTarget; ruleId: number | null };
 
 export interface UnmatchedFieldsPanelEvent {
@@ -550,7 +563,13 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   // with a "Retry" button. The button re-POSTs the most recent in-session
   // mapping for this scope — the route is idempotent and will re-enqueue
   // the fan-out without changing the rule's mapsTo.
-  const [rederiveError, setRederiveError] = useState<{ reason: string } | null>(null);
+  const [rederiveError, setRederiveError] = useState<{
+    reason: string;
+    pendingLeads?: number;
+    hitLimit?: boolean;
+    maxLeads?: number;
+    lastAttemptedAt?: string;
+  } | null>(null);
   // Latest field/target the operator saved in this panel session. Used by
   // the retry button so it knows what to re-POST. Held in a ref so the
   // error-event callback can read the latest value without re-binding.
@@ -693,7 +712,13 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       },
       () => setRefreshingHistoricalCount((n) => Math.max(0, n - 1)),
       notification.onRuleRederiveFailed,
-      (reason) => setRederiveError({ reason }),
+      (data) => setRederiveError({
+        reason: data.reason,
+        pendingLeads: data.pendingLeads,
+        hitLimit: data.hitLimit,
+        maxLeads: data.maxLeads,
+        lastAttemptedAt: data.lastAttemptedAt,
+      }),
     );
   };
 
@@ -728,7 +753,13 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
       { tenantId, pageUrlPattern: pageUrl, formIdentifier: formIdent },
       () => setRefreshingHistoricalCount((n) => Math.max(0, n - 1)),
       notification.onRuleRederiveFailed,
-      (reason) => setRederiveError({ reason }),
+      (data) => setRederiveError({
+        reason: data.reason,
+        pendingLeads: data.pendingLeads,
+        hitLimit: data.hitLimit,
+        maxLeads: data.maxLeads,
+        lastAttemptedAt: data.lastAttemptedAt,
+      }),
     );
   };
 
@@ -1154,6 +1185,24 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
                 title={rederiveError.reason}
               >
                 Couldn't re-derive historical leads. Mapping is saved; only the back-fill failed.
+                {typeof rederiveError.pendingLeads === "number" && (
+                  <>
+                    {" "}
+                    <span data-testid="rederive-pending-count">
+                      {rederiveError.pendingLeads === 0
+                        ? "No historical leads still need updating."
+                        : `~${rederiveError.pendingLeads}${rederiveError.hitLimit ? "+" : ""} historical lead${rederiveError.pendingLeads === 1 ? "" : "s"} still need updating.`}
+                    </span>
+                  </>
+                )}
+                {rederiveError.lastAttemptedAt && (
+                  <>
+                    {" "}
+                    <span className="text-amber-200/60" data-testid="rederive-last-attempted">
+                      Last tried {formatLastAttempted(rederiveError.lastAttemptedAt)}.
+                    </span>
+                  </>
+                )}
               </span>
               {lastSavedRef.current && (
                 <button

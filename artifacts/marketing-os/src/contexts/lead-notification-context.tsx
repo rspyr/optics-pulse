@@ -71,6 +71,17 @@ export interface RuleRederiveFailedData {
   pageUrlPattern: string;
   formIdentifier: string;
   reason: string;
+  // Approximate count of historical leads in this rule's scope that still
+  // need re-deriving (i.e. whose `updatedAt` predates the rule's
+  // `createdAt`). Surfaced inline next to the failure hint so operators can
+  // tell at a glance whether retrying now is cheap or expensive.
+  pendingLeads?: number;
+  hitLimit?: boolean;
+  maxLeads?: number;
+  // ISO timestamp the server attempted the fan-out / computed the pending
+  // count. Used by the UI to render "last tried HH:MM" so a stale hint
+  // doesn't look fresh.
+  lastAttemptedAt?: string;
 }
 
 type RuleRederiveFailedCallback = (data: RuleRederiveFailedData) => void;
