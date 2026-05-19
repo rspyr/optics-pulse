@@ -39,6 +39,7 @@ export const leadsTable = pgTable("leads", {
   dayInSequence: integer("day_in_sequence").notNull().default(1),
   contactPreferences: jsonb("contact_preferences").$type<string[]>().default([]),
   callbackAt: timestamp("callback_at"),
+  callbackNotifiedAt: timestamp("callback_notified_at"),
   revisitDate: date("revisit_date"),
   deadReason: text("dead_reason"),
   preBooked: boolean("pre_booked").notNull().default(false),

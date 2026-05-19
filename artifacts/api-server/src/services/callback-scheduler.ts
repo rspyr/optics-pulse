@@ -1,18 +1,9 @@
 import { db, leadsTable } from "@workspace/db";
-import { and, lte, isNotNull, ne, asc } from "drizzle-orm";
+import { and, lte, isNotNull, ne, asc, or, eq, sql } from "drizzle-orm";
 import { enqueueSendPushToUser } from "./push-notification-jobs";
 import { emitCallbackDue } from "../socket";
 
 const CHECK_INTERVAL_MS = 60_000;
-const NOTIFIED_SET = new Map<number, number>();
-const NOTIFICATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
-
-function pruneOldNotifications() {
-  const cutoff = Date.now() - NOTIFICATION_EXPIRY_MS;
-  for (const [id, ts] of NOTIFIED_SET) {
-    if (ts < cutoff) NOTIFIED_SET.delete(id);
-  }
-}
 
 async function checkDueCallbacks() {
   try {
@@ -30,6 +21,7 @@ async function checkDueCallbacks() {
           phone: leadsTable.phone,
           callbackAt: leadsTable.callbackAt,
           assignedCsrId: leadsTable.assignedCsrId,
+          callbackNotifiedAt: leadsTable.callbackNotifiedAt,
         })
         .from(leadsTable)
         .where(
@@ -38,6 +30,10 @@ async function checkDueCallbacks() {
             lte(leadsTable.callbackAt, now),
             isNotNull(leadsTable.assignedCsrId),
             ne(leadsTable.hubStatus, "dead"),
+            or(
+              sql`${leadsTable.callbackNotifiedAt} IS NULL`,
+              sql`${leadsTable.callbackNotifiedAt} < ${leadsTable.callbackAt}`,
+            ),
           )
         )
         .orderBy(asc(leadsTable.callbackAt))
@@ -47,10 +43,26 @@ async function checkDueCallbacks() {
       if (dueLeads.length === 0) break;
 
       for (const lead of dueLeads) {
-        if (!lead.assignedCsrId || NOTIFIED_SET.has(lead.id)) continue;
+        if (!lead.assignedCsrId) continue;
 
         const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "Unknown";
         const phone = lead.phone || "";
+
+        const claimed = await db
+          .update(leadsTable)
+          .set({ callbackNotifiedAt: new Date() })
+          .where(
+            and(
+              eq(leadsTable.id, lead.id),
+              or(
+                sql`${leadsTable.callbackNotifiedAt} IS NULL`,
+                sql`${leadsTable.callbackNotifiedAt} < ${leadsTable.callbackAt}`,
+              ),
+            ),
+          )
+          .returning({ id: leadsTable.id });
+
+        if (claimed.length === 0) continue;
 
         await enqueueSendPushToUser({
           userId: lead.assignedCsrId,
@@ -69,15 +81,12 @@ async function checkDueCallbacks() {
           callbackAt: lead.callbackAt?.toISOString(),
         });
 
-        NOTIFIED_SET.set(lead.id, Date.now());
         console.log(`[CallbackScheduler] Sent push for lead ${lead.id} to user ${lead.assignedCsrId}`);
       }
 
       if (dueLeads.length < pageSize) break;
       offset += pageSize;
     }
-
-    pruneOldNotifications();
   } catch (err) {
     console.error("[CallbackScheduler] Error checking callbacks:", err);
   }
