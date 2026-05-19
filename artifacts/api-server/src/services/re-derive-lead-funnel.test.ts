@@ -165,3 +165,73 @@ describe("countPendingRederiveLeadsForRuleScope", () => {
     expect(result.pendingLeads).toBe(1);
   });
 });
+
+describe("reDeriveLeadsForRuleScope — input validation guardrails", () => {
+  beforeEach(() => {
+    selectQueue = [];
+    nextSelectIndex = 0;
+  });
+
+  it("throws NonRetryableReDeriveError for a zero tenantId so a missing/unauthenticated caller fails fast instead of scanning every tenant's events", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(reDeriveLeadsForRuleScope(0, "/contact", "form-1")).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(reDeriveLeadsForRuleScope(0, "/contact", "form-1")).rejects.toThrow(/tenantId/);
+  });
+
+  it("throws NonRetryableReDeriveError for a negative tenantId", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(reDeriveLeadsForRuleScope(-5, "/contact", "form-1")).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(reDeriveLeadsForRuleScope(-5, "/contact", "form-1")).rejects.toThrow(/tenantId/);
+  });
+
+  it("throws NonRetryableReDeriveError for a non-integer tenantId so a stringly-typed payload doesn't silently match nothing", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(reDeriveLeadsForRuleScope(1.5, "/contact", "form-1")).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(reDeriveLeadsForRuleScope(1.5, "/contact", "form-1")).rejects.toThrow(/tenantId/);
+    await expect(
+      reDeriveLeadsForRuleScope("42" as unknown as number, "/contact", "form-1"),
+    ).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+  });
+
+  it("throws NonRetryableReDeriveError for an empty pageUrlPattern so the fan-out won't accidentally match every event with no path", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(reDeriveLeadsForRuleScope(42, "", "form-1")).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(reDeriveLeadsForRuleScope(42, "", "form-1")).rejects.toThrow(/pageUrlPattern/);
+  });
+
+  it("throws NonRetryableReDeriveError for a non-string pageUrlPattern", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(
+      reDeriveLeadsForRuleScope(42, null as unknown as string, "form-1"),
+    ).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(
+      reDeriveLeadsForRuleScope(42, null as unknown as string, "form-1"),
+    ).rejects.toThrow(/pageUrlPattern/);
+  });
+
+  it("throws NonRetryableReDeriveError for an empty formIdentifier so callers can't accidentally widen the scope to everything by omitting the form", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(reDeriveLeadsForRuleScope(42, "/contact", "")).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(reDeriveLeadsForRuleScope(42, "/contact", "")).rejects.toThrow(/formIdentifier/);
+  });
+
+  it("throws NonRetryableReDeriveError for a non-string formIdentifier", async () => {
+    const { reDeriveLeadsForRuleScope, NonRetryableReDeriveError } = await import("./re-derive-lead-funnel");
+    await expect(
+      reDeriveLeadsForRuleScope(42, "/contact", undefined as unknown as string),
+    ).rejects.toBeInstanceOf(NonRetryableReDeriveError);
+    await expect(
+      reDeriveLeadsForRuleScope(42, "/contact", undefined as unknown as string),
+    ).rejects.toThrow(/formIdentifier/);
+  });
+
+  it("never reaches the DB on a validation failure — guards short-circuit before any select() is issued", async () => {
+    const { reDeriveLeadsForRuleScope } = await import("./re-derive-lead-funnel");
+    const dbMod = (await import("@workspace/db")) as unknown as { db: { select: { mock: { calls: unknown[][] } } } };
+    const before = dbMod.db.select.mock.calls.length;
+    await expect(reDeriveLeadsForRuleScope(0, "/contact", "form-1")).rejects.toThrow();
+    await expect(reDeriveLeadsForRuleScope(42, "", "form-1")).rejects.toThrow();
+    await expect(reDeriveLeadsForRuleScope(42, "/contact", "")).rejects.toThrow();
+    expect(dbMod.db.select.mock.calls.length).toBe(before);
+  });
+});
