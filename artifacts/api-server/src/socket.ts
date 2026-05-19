@@ -342,6 +342,26 @@ export function emitNewAttributionEvent(tenantId: number, data: Record<string, u
   }
 }
 
+export function emitRuleRederiveComplete(
+  tenantId: number,
+  data: {
+    pageUrlPattern: string;
+    formIdentifier: string;
+    leadsChanged: number;
+    hitLimit: boolean;
+    maxLeads: number;
+  },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("rule-rederive-complete", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted rule-rederive-complete for tenant-${tenantId} (` +
+      `scope=${data.pageUrlPattern}|${data.formIdentifier} changed=${data.leadsChanged} ` +
+      `hitLimit=${data.hitLimit})`,
+    );
+  }
+}
+
 export function emitCallbackDue(tenantId: number, data: { leadId: number; targetUserId: number; leadName: string; phone?: string; callbackAt?: string }) {
   if (io) {
     io.to(`tenant-${tenantId}`).emit("callback-due", data);

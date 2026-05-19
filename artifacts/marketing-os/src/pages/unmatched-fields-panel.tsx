@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Check, Undo2, X } from "lucide-react";
+import { useOptionalLeadNotification, type RuleRederiveCompleteData } from "@/contexts/lead-notification-context";
 import {
   MAP_TO_OPTIONS,
   normalizeFieldName,
@@ -633,6 +634,45 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
   );
   const scopeKey = scopeKeyOf(evt.tenantId, pageUrlPattern, formIdentifier);
 
+  // Subscribe to the historical-leads re-derive fan-out result for the scope
+  // of the save that's about to happen, so we can surface a follow-up toast
+  // like "12 historical leads updated" once the server reports back.
+  // Returns an unsubscribe so callers can drop the listener if the save
+  // itself fails. Bounded by a timeout in case the event never arrives.
+  // Degrades to a no-op when the notification context isn't mounted (e.g.
+  // unit tests that render this panel in isolation) so the panel stays
+  // usable outside of the Pulse shell.
+  const notification = useOptionalLeadNotification();
+  const subscribeRederiveOnce = (
+    tenantId: number,
+    pageUrl: string,
+    formIdent: string,
+  ): (() => void) => {
+    if (!notification) return () => {};
+    const { onRuleRederiveComplete } = notification;
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      clearTimeout(timer);
+    };
+    const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
+      if (done) return;
+      if (data.tenantId && data.tenantId !== tenantId) return;
+      if (data.pageUrlPattern !== pageUrl) return;
+      if (data.formIdentifier !== formIdent) return;
+      cleanup();
+      if (data.leadsChanged > 0) {
+        const cappedSuffix = data.hitLimit ? `+ (capped at ${data.maxLeads})` : "";
+        const noun = data.leadsChanged === 1 ? "lead" : "leads";
+        toast.success(`${data.leadsChanged}${cappedSuffix} historical ${noun} re-derived`);
+      }
+    });
+    const timer = setTimeout(cleanup, 30_000);
+    return cleanup;
+  };
+
   // Subscribe to scoped-rules cache changes whenever the panel is expanded so
   // that saves / undos in sibling panels for the same scope are reflected
   // here without a manual refresh.
@@ -763,6 +803,9 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
 
   const saveMapping = async (fieldName: string, mapsTo: MapToTarget) => {
     setSavingField(fieldName);
+    // Listen for the historical-leads re-derive fan-out result before issuing
+    // the save, so we don't miss the socket event if the server responds fast.
+    const unsubscribe = subscribeRederiveOnce(evt.tenantId, pageUrlPattern, formIdentifier);
     const result = await doSave(fieldName, mapsTo);
     setSavingField(null);
     if (result.ok) {
@@ -774,8 +817,11 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         return next;
       });
       toast.success(`Mapped "${fieldName}" → ${mapsTo}. Applies to future fills of this form only.`);
-    } else if (result.errorMsg) {
-      toast.error(result.errorMsg);
+    } else {
+      // Save failed — drop the rederive listener; the server never ran the
+      // fan-out, so no follow-up toast will arrive.
+      unsubscribe();
+      if (result.errorMsg) toast.error(result.errorMsg);
     }
   };
 

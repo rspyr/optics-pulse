@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { reDeriveLeadFunnel, reDeriveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
+import { emitRuleRederiveComplete } from "../socket";
 
 const router: IRouter = Router();
 
@@ -202,6 +203,17 @@ router.post("/field-mapping-rules", async (req, res) => {
           { tenantId: scopeTenantId, pageUrlPattern: scopePageUrl, formIdentifier: scopeFormIdent, ...result },
         );
       }
+      // Notify the operator's UI so the panel that triggered the save can
+      // surface a "N leads re-derived" indicator. Emit on every completion
+      // (even zero) so the panel can clear its "working…" state instead of
+      // waiting forever when nothing matched.
+      emitRuleRederiveComplete(scopeTenantId, {
+        pageUrlPattern: scopePageUrl,
+        formIdentifier: scopeFormIdent,
+        leadsChanged: result.leadsChanged,
+        hitLimit: result.hitLimit,
+        maxLeads: result.maxLeads,
+      });
     } catch (err) {
       console.error("[field-mapping-rules.POST] reDeriveLeadsForRuleScope failed:", err);
     }

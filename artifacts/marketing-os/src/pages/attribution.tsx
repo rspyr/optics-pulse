@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { UnmatchedFieldsPanel, usePrefetchScopedRules } from "./unmatched-fields-panel";
+import { useOptionalLeadNotification, type RuleRederiveCompleteData } from "@/contexts/lead-notification-context";
+import { toast as sonnerToast } from "sonner";
 import { formatFieldValue } from "@/lib/format-field-value";
 import { CapturePathBadge } from "@/components/capture-path-badge";
 import { format } from "date-fns";
@@ -1385,14 +1387,56 @@ function dispatchPulseRefresh(reason: string) {
   } catch {}
 }
 
+// Subscribe (one-shot, time-bounded) to the historical-leads re-derive
+// fan-out completion for a specific (tenantId, pageUrlPattern, formIdentifier)
+// scope. When the server reports back, surface a toast like
+// "12 historical leads re-derived" so the operator knows the rule actually
+// rippled through. Falls silent on zero. Returns an unsubscribe so the caller
+// can drop the listener if the save itself failed and no event will arrive.
+// When `onRuleRederiveComplete` is null (e.g. component rendered in a unit
+// test without the notification shell) this is a no-op.
+function subscribeRederiveOnce(
+  onRuleRederiveComplete: ((cb: (data: RuleRederiveCompleteData) => void) => () => void) | null,
+  tenantId: number,
+  pageUrlPattern: string,
+  formIdentifier: string,
+  onIndicator: (text: string) => void,
+): () => void {
+  if (!onRuleRederiveComplete) return () => {};
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    unsubscribe();
+    clearTimeout(timer);
+  };
+  const unsubscribe = onRuleRederiveComplete((data: RuleRederiveCompleteData) => {
+    if (done) return;
+    if (data.tenantId && data.tenantId !== tenantId) return;
+    if (data.pageUrlPattern !== pageUrlPattern) return;
+    if (data.formIdentifier !== formIdentifier) return;
+    cleanup();
+    if (data.leadsChanged > 0) {
+      const cappedSuffix = data.hitLimit ? `+ (capped at ${data.maxLeads})` : "";
+      const noun = data.leadsChanged === 1 ? "lead" : "leads";
+      onIndicator(`${data.leadsChanged}${cappedSuffix} historical ${noun} re-derived`);
+    }
+  });
+  const timer = setTimeout(cleanup, 30_000);
+  return cleanup;
+}
+
 export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
   const queryClient = useQueryClient();
+  const notification = useOptionalLeadNotification();
+  const onRuleRederiveComplete = notification?.onRuleRederiveComplete ?? null;
   const detected = event.detectedMappings as Record<string, { mapsTo: string; method: string }> | null;
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const [rederiveHint, setRederiveHint] = useState<string | null>(null);
 
   if (!detected) return null;
   const entries = Object.entries(detected);
@@ -1401,10 +1445,21 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const save = async (fieldName: string, mapsTo: string) => {
     setSaving(true);
     setError(null);
+    let pagePath = "*";
+    try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
+    const formIdentifier = event.formId || event.formName || "*";
+    const unsubscribeRederive = subscribeRederiveOnce(
+      onRuleRederiveComplete,
+      tenantId,
+      pagePath,
+      formIdentifier,
+      (text) => {
+        setRederiveHint(text);
+        sonnerToast.success(text);
+        setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
+      },
+    );
     try {
-      let pagePath = "*";
-      try { if (event.pageUrl) pagePath = new URL(event.pageUrl).pathname; } catch {}
-      const formIdentifier = event.formId || event.formName || "*";
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
         method: "POST",
         credentials: "include",
@@ -1420,6 +1475,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save mapping");
+        unsubscribeRederive();
         return;
       }
       const d = await res.json().catch(() => ({}));
@@ -1432,6 +1488,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       if (d?.leadFunnelChanged) dispatchPulseRefresh("field-mapping-updated");
     } catch {
       setError("Network error");
+      unsubscribeRederive();
     } finally {
       setSaving(false);
     }
@@ -1496,16 +1553,24 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       <p className="text-[10px] text-muted-foreground/70 mt-2">
         Click any mapping to override. Saving creates a field-mapping rule, re-runs detection, and refreshes the open lead.
       </p>
+      {rederiveHint && (
+        <p className="text-[10px] text-emerald-400/90 mt-1" aria-live="polite">
+          {rederiveHint}
+        </p>
+      )}
     </DetailSection>
   );
 }
 
 export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; event: AttributionEvent }) {
+  const notification = useOptionalLeadNotification();
+  const onRuleRederiveComplete = notification?.onRuleRederiveComplete ?? null;
   const [correcting, setCorrecting] = useState<string | null>(null);
   const [selectedMapping, setSelectedMapping] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const FIELD_OPTIONS = ["firstName", "lastName", "fullName", "phone", "email", "address", "city", "state", "zip", "funnel", "appointmentDate", "appointmentTime"];
 
   const formFields = event.formFields as Record<string, unknown> | null;
@@ -1518,10 +1583,21 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
   const saveRule = async (fieldName: string, mapsTo: string) => {
     setSaving(true);
     setError(null);
+    let pagePath = "*";
+    try { pagePath = new URL(pageUrl).pathname; } catch {}
+    const formIdentifier = formId || formName || "*";
+    const unsubscribeRederive = subscribeRederiveOnce(
+      onRuleRederiveComplete,
+      tenantId,
+      pagePath,
+      formIdentifier,
+      (text) => {
+        setRederiveHint(text);
+        sonnerToast.success(text);
+        setTimeout(() => setRederiveHint(prev => (prev === text ? null : prev)), 6000);
+      },
+    );
     try {
-      let pagePath = "*";
-      try { pagePath = new URL(pageUrl).pathname; } catch {}
-      const formIdentifier = formId || formName || "*";
       const res = await fetch(`${API_BASE}/api/field-mapping-rules?tenantId=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1537,6 +1613,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to save rule");
+        unsubscribeRederive();
         setSaving(false);
         return;
       }
@@ -1557,6 +1634,7 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       } catch {}
     } catch {
       setError("Network error");
+      unsubscribeRederive();
     }
     setSaving(false);
   };
@@ -1571,6 +1649,11 @@ export function InlineFieldCorrection({ tenantId, event }: { tenantId: number; e
       icon={<Settings className="w-4 h-4" />}
     >
       <p className="text-xs text-muted-foreground mb-3">Click a field to create a mapping rule for this page + form scope.</p>
+      {rederiveHint && (
+        <p className="text-[10px] text-emerald-400/90 mb-2" aria-live="polite">
+          {rederiveHint}
+        </p>
+      )}
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">
           <p className="text-xs text-red-400">{error}</p>

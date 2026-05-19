@@ -98,6 +98,7 @@ export interface RederiveScopeResult {
   leadsConsidered: number;
   leadsChanged: number;
   hitLimit: boolean;
+  maxLeads: number;
 }
 
 /**
@@ -177,5 +178,6 @@ export async function reDeriveLeadsForRuleScope(
     leadsConsidered: leadIds.size,
     leadsChanged,
     hitLimit,
+    maxLeads,
   };
 }

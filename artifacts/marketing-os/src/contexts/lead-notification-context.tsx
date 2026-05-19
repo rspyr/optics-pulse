@@ -55,6 +55,17 @@ type ReconnectCallback = () => void;
 
 type PodiumMessageCallback = (msg: PodiumNotificationData) => void;
 
+export interface RuleRederiveCompleteData {
+  tenantId?: number;
+  pageUrlPattern: string;
+  formIdentifier: string;
+  leadsChanged: number;
+  hitLimit: boolean;
+  maxLeads: number;
+}
+
+type RuleRederiveCompleteCallback = (data: RuleRederiveCompleteData) => void;
+
 interface LeadNotificationContextType {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
@@ -69,6 +80,7 @@ interface LeadNotificationContextType {
   latestCallbackDue: CallbackDueData | null;
   clearCallbackDue: () => void;
   playCallbackSound: (leadName: string) => void;
+  onRuleRederiveComplete: (cb: RuleRederiveCompleteCallback) => () => void;
 }
 
 const LeadNotificationContext = createContext<LeadNotificationContextType | null>(null);
@@ -99,6 +111,7 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
   const audioUnlockedRef = useRef(false);
   const reconnectListenersRef = useRef<Set<ReconnectCallback>>(new Set());
   const podiumMessageListenersRef = useRef<Set<PodiumMessageCallback>>(new Set());
+  const ruleRederiveListenersRef = useRef<Set<RuleRederiveCompleteCallback>>(new Set());
 
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { tenantIdRef.current = effectiveTenantId; }, [effectiveTenantId]);
@@ -284,6 +297,12 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         playSound(isCall ? "inbound-call" : "text-message");
       }
     });
+    socket.on("rule-rederive-complete", (data: RuleRederiveCompleteData) => {
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      ruleRederiveListenersRef.current.forEach(cb => {
+        try { cb(data); } catch (e) { console.warn("[LeadNotification] rule-rederive-complete callback error:", e); }
+      });
+    });
     socket.on("callback-due", (data: CallbackDueData) => {
       if (!isAgency && user?.id && data.targetUserId !== user.id) return;
       setLatestCallbackDue(data);
@@ -370,8 +389,13 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
     return () => { podiumMessageListenersRef.current.delete(cb); };
   }, []);
 
+  const registerOnRuleRederiveComplete = useCallback((cb: RuleRederiveCompleteCallback) => {
+    ruleRederiveListenersRef.current.add(cb);
+    return () => { ruleRederiveListenersRef.current.delete(cb); };
+  }, []);
+
   return (
-    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound }}>
+    <LeadNotificationContext.Provider value={{ soundEnabled, setSoundEnabled, pendingNewLeads, dismissNewLead, newLeadSignal, leadUpdatedSignal, onReconnect: registerOnReconnect, latestPodiumNotification, clearPodiumNotification, onPodiumMessage: registerOnPodiumMessage, latestCallbackDue, clearCallbackDue, playCallbackSound, onRuleRederiveComplete: registerOnRuleRederiveComplete }}>
       {children}
       <PushPromptBanner />
     </LeadNotificationContext.Provider>
@@ -456,4 +480,12 @@ export function useLeadNotification() {
   const ctx = useContext(LeadNotificationContext);
   if (!ctx) throw new Error("useLeadNotification must be used within LeadNotificationProvider");
   return ctx;
+}
+
+// Variant that returns null when no provider is mounted. Useful in tests and
+// in components that are rendered both inside and outside the notification
+// shell — they can degrade gracefully (e.g. skip the socket subscription)
+// rather than throwing during render.
+export function useOptionalLeadNotification(): LeadNotificationContextType | null {
+  return useContext(LeadNotificationContext);
 }
