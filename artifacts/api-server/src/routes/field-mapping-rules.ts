@@ -9,6 +9,7 @@ import {
   enqueueReDeriveSelectedLeads,
   REDERIVE_SELECTED_LEADS,
 } from "../services/re-derive-jobs";
+import { mapReDeriveErrorForOperator } from "../services/re-derive-error-messages";
 import { emitRuleRederiveFailed, emitSelectedLeadsRederiveCancelled, getSelectedLeadsRederiveProgress } from "../socket";
 import { countPendingRederiveLeadsForRuleScope, listPendingRederiveLeadsForRuleScope } from "../services/re-derive-lead-funnel";
 
@@ -194,7 +195,7 @@ router.post("/field-mapping-rules/rederive-leads", async (req, res) => {
     } catch (err) {
       failed++;
       failedLeadIds.push(leadId);
-      failedLeadErrors[leadId] = err instanceof Error && err.message ? err.message : String(err);
+      failedLeadErrors[leadId] = mapReDeriveErrorForOperator(err);
       console.error("[field-mapping-rules.rederive-leads] reDeriveLeadFunnel failed for lead", leadId, err);
     }
   }
@@ -485,7 +486,7 @@ router.post("/field-mapping-rules", async (req, res) => {
       emitRuleRederiveFailed(tenantId, {
         pageUrlPattern: pageUrlPattern as string,
         formIdentifier: formIdentifier as string,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: mapReDeriveErrorForOperator(err),
         pendingLeads: pendingCount?.pendingLeads,
         hitLimit: pendingCount?.hitLimit,
         maxLeads: pendingCount?.maxLeads,

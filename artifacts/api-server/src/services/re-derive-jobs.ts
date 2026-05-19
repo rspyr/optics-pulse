@@ -4,6 +4,7 @@ import {
   countPendingRederiveLeadsForRuleScope,
   reDeriveLeadFunnel,
 } from "./re-derive-lead-funnel";
+import { mapReDeriveErrorForOperator } from "./re-derive-error-messages";
 import {
   emitRuleRederiveComplete,
   emitRuleRederiveFailed,
@@ -152,7 +153,7 @@ export function registerReDeriveJobHandlers(): void {
         emitRuleRederiveFailed(args.tenantId, {
           pageUrlPattern: args.pageUrlPattern,
           formIdentifier: args.formIdentifier,
-          reason: lastErr instanceof Error ? lastErr.message : String(lastErr),
+          reason: mapReDeriveErrorForOperator(lastErr),
           pendingLeads: pendingCount?.pendingLeads,
           hitLimit: pendingCount?.hitLimit,
           maxLeads: pendingCount?.maxLeads,
@@ -287,7 +288,7 @@ function registerSelectedLeadsHandler(): void {
         } catch (err) {
           failed++;
           failedLeadIds.push(leadId);
-          failedLeadErrors[leadId] = err instanceof Error && err.message ? err.message : String(err);
+          failedLeadErrors[leadId] = mapReDeriveErrorForOperator(err);
           console.error("[re-derive-jobs:selected] reDeriveLeadFunnel failed for lead", leadId, err);
         }
         processed++;
@@ -334,7 +335,7 @@ function registerSelectedLeadsHandler(): void {
         emitSelectedLeadsRederiveFailed(args.tenantId, {
           jobId,
           total: args.leadIds.length,
-          reason: err instanceof Error ? err.message : String(err),
+          reason: mapReDeriveErrorForOperator(err),
         });
       } catch (emitErr) {
         console.error("[re-derive-jobs:selected] emitSelectedLeadsRederiveFailed failed:", emitErr);
