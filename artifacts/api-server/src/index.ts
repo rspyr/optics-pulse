@@ -18,7 +18,7 @@ import { startHeartbeatMonitor, startStaleInstallMonitor } from "./services/noti
 import { startTrackerRetentionCron } from "./services/tracker-retention-cron";
 import { auditUsersWithoutTenant } from "./services/broken-account-audit";
 import { startBackgroundJobWorker } from "./services/background-jobs";
-import { registerReDeriveJobHandlers } from "./services/re-derive-jobs";
+import { registerReDeriveJobHandlers, startCancelledRederiveCleanupScheduler } from "./services/re-derive-jobs";
 import { registerPodiumSyncJobHandlers } from "./services/podium-sync-jobs";
 import { registerPushNotificationJobHandlers } from "./services/push-notification-jobs";
 
@@ -94,6 +94,7 @@ async function startServer() {
     startStaleInstallMonitor();
     startTrackerRetentionCron();
     registerReDeriveJobHandlers();
+    startCancelledRederiveCleanupScheduler();
     registerPodiumSyncJobHandlers();
     registerPushNotificationJobHandlers();
     startBackgroundJobWorker().catch((err) =>

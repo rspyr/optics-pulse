@@ -501,6 +501,104 @@ export async function findLatestCancelledRederiveSnapshotFromDb(
   };
 }
 
+/**
+ * Delete terminal `cancelled` rows of type `rederive_selected_leads` older
+ * than `retentionDays`. Cancelled snapshots are persisted on the job row's
+ * `result` jsonb so an operator can resume "Re-derive the rest" after a
+ * server restart, but without pruning the `background_jobs` table grows
+ * unboundedly. The cancelled-snapshot endpoint (see
+ * `findLatestCancelledRederiveSnapshotFromDb`) only looks at recent rows,
+ * so anything past the retention window is safe to drop.
+ *
+ * Returns the number of rows deleted.
+ */
+export async function cleanupOldCancelledSelectedLeadsRederives(
+  retentionDays: number,
+): Promise<number> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    throw new Error(
+      `cleanupOldCancelledSelectedLeadsRederives: invalid retentionDays=${retentionDays}`,
+    );
+  }
+  // Prefer `completedAt` (set when the cancel endpoint flips status), but
+  // fall back to `updatedAt` for older rows that may not have it populated.
+  const cutoffMs = `${Math.floor(retentionDays * 24 * 60 * 60 * 1000)} milliseconds`;
+  const res = await db.execute(sql`
+    DELETE FROM background_jobs
+     WHERE type = ${REDERIVE_SELECTED_LEADS}
+       AND status = 'cancelled'
+       AND COALESCE(completed_at, updated_at) < now() - ${cutoffMs}::interval
+     RETURNING id
+  `);
+  const rows = (res as unknown as { rows?: Array<{ id: number }> }).rows ?? [];
+  return rows.length;
+}
+
+const DEFAULT_CANCELLED_RETENTION_DAYS = 30;
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_STARTUP_DELAY_MS = 60_000;
+
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+let cleanupStartupTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resolveCancelledRetentionDays(): number {
+  const raw = process.env["REDERIVE_CANCELLED_RETENTION_DAYS"];
+  if (!raw) return DEFAULT_CANCELLED_RETENTION_DAYS;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[re-derive-jobs:cleanup] Invalid REDERIVE_CANCELLED_RETENTION_DAYS=${raw}, falling back to ${DEFAULT_CANCELLED_RETENTION_DAYS}d`,
+    );
+    return DEFAULT_CANCELLED_RETENTION_DAYS;
+  }
+  return parsed;
+}
+
+async function runCancelledRederiveCleanupSweep(retentionDays: number): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const deleted = await cleanupOldCancelledSelectedLeadsRederives(retentionDays);
+    const ms = Date.now() - startedAt;
+    console.log(
+      `[re-derive-jobs:cleanup] Deleted ${deleted} cancelled ${REDERIVE_SELECTED_LEADS} row(s) older than ${retentionDays}d (${ms}ms)`,
+    );
+  } catch (err) {
+    console.error("[re-derive-jobs:cleanup] Sweep failed:", err);
+  }
+}
+
+/**
+ * Start a daily background sweep that prunes old cancelled bulk re-derive
+ * snapshots from the `background_jobs` table. Idempotent — calling it again
+ * clears any existing timers first.
+ */
+export function startCancelledRederiveCleanupScheduler(): void {
+  stopCancelledRederiveCleanupScheduler();
+  const retentionDays = resolveCancelledRetentionDays();
+  cleanupStartupTimer = setTimeout(() => {
+    void runCancelledRederiveCleanupSweep(retentionDays);
+  }, CLEANUP_STARTUP_DELAY_MS);
+  cleanupStartupTimer.unref?.();
+  cleanupTimer = setInterval(() => {
+    void runCancelledRederiveCleanupSweep(retentionDays);
+  }, CLEANUP_INTERVAL_MS);
+  cleanupTimer.unref?.();
+  console.log(
+    `[re-derive-jobs:cleanup] Scheduler started (every 24h, ${retentionDays}d retention)`,
+  );
+}
+
+export function stopCancelledRederiveCleanupScheduler(): void {
+  if (cleanupStartupTimer) {
+    clearTimeout(cleanupStartupTimer);
+    cleanupStartupTimer = null;
+  }
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
 export async function enqueueReDeriveLeadsForRuleScope(args: ReDerivePayload) {
   return enqueueJob(
     REDERIVE_LEADS_FOR_RULE_SCOPE,
