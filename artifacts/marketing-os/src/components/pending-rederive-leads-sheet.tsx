@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, ExternalLink, X } from "lucide-react";
+import { Loader2, ExternalLink, X, CheckSquare } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -857,32 +857,54 @@ export function PendingRederiveLeadsSheet({
                   {failureGroups.map((g) => {
                     const isActive = activeReason === g.reason;
                     return (
-                      <button
+                      <div
                         key={g.reason}
-                        type="button"
-                        onClick={() => {
-                          const next = isActive ? null : g.reason;
-                          setActiveReason(next);
-                          if (next) {
-                            const firstId = g.leadIds[0];
-                            // Defer to next frame so the filtered list has
-                            // rendered before we try to scroll into it.
-                            requestAnimationFrame(() => {
-                              const el = rowRefs.current.get(firstId);
-                              if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                            });
-                          }
-                        }}
-                        className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                        className={`inline-flex items-stretch rounded-full border overflow-hidden transition-colors ${
                           isActive
                             ? "border-red-400/60 bg-red-500/20 text-red-100"
-                            : "border-red-500/30 bg-red-500/[0.06] text-red-300 hover:bg-red-500/10"
+                            : "border-red-500/30 bg-red-500/[0.06] text-red-300"
                         }`}
-                        title={isActive ? "Show all failed leads" : `Show only: ${g.reason}`}
-                        data-testid={`pending-leads-failure-group-${encodeURIComponent(g.reason)}`}
                       >
-                        {g.count} × {g.reason}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = isActive ? null : g.reason;
+                            setActiveReason(next);
+                            if (next) {
+                              const firstId = g.leadIds[0];
+                              // Defer to next frame so the filtered list has
+                              // rendered before we try to scroll into it.
+                              requestAnimationFrame(() => {
+                                const el = rowRefs.current.get(firstId);
+                                if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                              });
+                            }
+                          }}
+                          className={`text-[11px] px-2 py-0.5 transition-colors ${
+                            isActive ? "hover:bg-red-500/10" : "hover:bg-red-500/10"
+                          }`}
+                          title={isActive ? "Show all failed leads" : `Show only: ${g.reason}`}
+                          data-testid={`pending-leads-failure-group-${encodeURIComponent(g.reason)}`}
+                        >
+                          {g.count} × {g.reason}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Replace the current selection with just this
+                            // group's lead ids so the existing "Re-derive
+                            // selected" button retries exactly that batch.
+                            setSelected(new Set(g.leadIds));
+                          }}
+                          className="text-[11px] px-1.5 py-0.5 border-l border-red-500/30 hover:bg-red-500/15 inline-flex items-center gap-1"
+                          title={`Select ${g.count} lead${g.count === 1 ? "" : "s"} with reason: ${g.reason}`}
+                          aria-label={`Select ${g.count} lead${g.count === 1 ? "" : "s"} with reason ${g.reason}`}
+                          data-testid={`pending-leads-failure-group-select-${encodeURIComponent(g.reason)}`}
+                        >
+                          <CheckSquare className="w-3 h-3" />
+                          Select {g.count}
+                        </button>
+                      </div>
                     );
                   })}
                   {activeReason && (
