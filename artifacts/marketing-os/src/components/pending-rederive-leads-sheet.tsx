@@ -182,6 +182,20 @@ export function PendingRederiveLeadsSheet({
     return () => { cancelled = true; };
   }, [open, tenantId, pageUrlPattern, formIdentifier, excludeLeadId]);
 
+  // When the sheet closes, clear any bulk result/error and cancel the
+  // queued-job safety timeout. Without this, a late socket event (or a
+  // pending timer) firing after the sheet has been closed and reopened with
+  // a *different* scope can briefly flash stale data on the new sheet.
+  useEffect(() => {
+    if (open) return;
+    setBulkResult(null);
+    setBulkError(null);
+    if (queuedTimerRef.current) {
+      clearTimeout(queuedTimerRef.current);
+      queuedTimerRef.current = null;
+    }
+  }, [open]);
+
   const allSelected = leads.length > 0 && selected.size === leads.length;
   const someSelected = selected.size > 0 && selected.size < leads.length;
 

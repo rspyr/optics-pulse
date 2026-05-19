@@ -500,4 +500,83 @@ describe("PendingRederiveLeadsSheet", () => {
     });
     expect(rederive.mock.calls[1][0].leadIds).toEqual([2]);
   });
+
+  it("clears bulk state on close so a late event after reopen with a different scope doesn't flash stale data", async () => {
+    const leadsA = [makeLead(1), makeLead(2)];
+    const leadsB = [makeLead(10), makeLead(11)];
+    let currentLeads = leadsA;
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes("/pending-rederive-leads")) {
+        return { ok: true, status: 200, json: async () => ({ leads: currentLeads, hitLimit: false }) } as Response;
+      }
+      if (method === "POST" && url.includes("/field-mapping-rules/rederive-leads")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ mode: "queued", total: 2, jobId: 909 }),
+        } as Response;
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <PendingRederiveLeadsSheet
+        open={true}
+        onOpenChange={() => {}}
+        tenantId={42}
+        pageUrlPattern="/contact"
+        formIdentifier="form-A"
+      />,
+    );
+    await screen.findByTestId("pending-leads-list");
+    await user.click(screen.getByTestId("pending-leads-select-all"));
+    await user.click(screen.getByTestId("pending-leads-rederive-selected"));
+    await screen.findByTestId("pending-leads-bulk-result");
+
+    // Close the sheet.
+    rerender(
+      <PendingRederiveLeadsSheet
+        open={false}
+        onOpenChange={() => {}}
+        tenantId={42}
+        pageUrlPattern="/contact"
+        formIdentifier="form-A"
+      />,
+    );
+
+    // Reopen with a different scope — the sheet should refetch a different
+    // lead population and must NOT carry over the previous bulk result.
+    currentLeads = leadsB;
+    rerender(
+      <PendingRederiveLeadsSheet
+        open={true}
+        onOpenChange={() => {}}
+        tenantId={42}
+        pageUrlPattern="/pricing"
+        formIdentifier="form-B"
+      />,
+    );
+    await screen.findByTestId("pending-lead-row-10");
+
+    // Now a late completion event for the previous job arrives. The sheet
+    // must ignore it (bulkResult was cleared on close, so there's no queued
+    // job in flight to update).
+    await act(async () => {
+      emitComplete({
+        tenantId: 42,
+        jobId: 909,
+        total: 2,
+        succeeded: 2,
+        failed: 0,
+        changed: 2,
+        failedLeadIds: [],
+      });
+    });
+
+    expect(screen.queryByTestId("pending-leads-bulk-result")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pending-leads-bulk-job-error")).not.toBeInTheDocument();
+  });
 });
