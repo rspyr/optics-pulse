@@ -7,7 +7,7 @@ const router: IRouter = Router();
 
 const agencyOnly = [requireRole("super_admin", "agency_user")];
 
-const VALID_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
+const VALID_STATUSES = ["pending", "in_progress", "completed", "failed", "cancelled"] as const;
 type JobStatus = (typeof VALID_STATUSES)[number];
 
 /**
@@ -82,20 +82,11 @@ router.post("/admin/background-jobs/:id/retry", ...agencyOnly, async (req, res) 
       return;
     }
 
-    const [existing] = await db
-      .select()
-      .from(backgroundJobsTable)
-      .where(eq(backgroundJobsTable.id, id));
-    if (!existing) {
-      res.status(404).json({ error: "Job not found" });
-      return;
-    }
-    if (existing.status !== "failed") {
-      res.status(409).json({ error: `Only failed jobs can be retried (current status: ${existing.status})` });
-      return;
-    }
-
-    const [updated] = await db
+    // Atomic conditional update so we can't race with a concurrent status
+    // change (e.g. an admin clicking retry twice, or a worker flipping the
+    // row). If no row matches the (id, status='failed') predicate, we fall
+    // back to a separate read to decide between 404 and 409.
+    const updatedRows = await db
       .update(backgroundJobsTable)
       .set({
         status: "pending",
@@ -106,12 +97,75 @@ router.post("/admin/background-jobs/:id/retry", ...agencyOnly, async (req, res) 
         lockedBy: null,
         updatedAt: new Date(),
       })
-      .where(eq(backgroundJobsTable.id, id))
+      .where(and(eq(backgroundJobsTable.id, id), eq(backgroundJobsTable.status, "failed")))
       .returning();
 
-    res.json({ job: updated });
+    if (updatedRows.length === 0) {
+      const [existing] = await db
+        .select()
+        .from(backgroundJobsTable)
+        .where(eq(backgroundJobsTable.id, id));
+      if (!existing) {
+        res.status(404).json({ error: "Job not found" });
+      } else {
+        res.status(409).json({ error: `Only failed jobs can be retried (current status: ${existing.status})` });
+      }
+      return;
+    }
+
+    res.json({ job: updatedRows[0] });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to retry job";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Mark a pending job as `cancelled` so the worker skips it. Only jobs that
+ * are still `pending` can be cancelled — once a job is `in_progress` the
+ * worker already holds the row and stopping mid-run isn't safe; completed,
+ * failed, and already-cancelled jobs are terminal. Cancellation sets
+ * `completed_at` so the row sorts with other terminal results.
+ */
+router.post("/admin/background-jobs/:id/cancel", ...agencyOnly, async (req, res) => {
+  try {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+
+    // Atomic conditional update guards against the worker racing in
+    // between a read and a write: we only flip rows that are still
+    // `pending`, so an in_progress job can never be silently cancelled.
+    const updatedRows = await db
+      .update(backgroundJobsTable)
+      .set({
+        status: "cancelled",
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+      })
+      .where(and(eq(backgroundJobsTable.id, id), eq(backgroundJobsTable.status, "pending")))
+      .returning();
+
+    if (updatedRows.length === 0) {
+      const [existing] = await db
+        .select()
+        .from(backgroundJobsTable)
+        .where(eq(backgroundJobsTable.id, id));
+      if (!existing) {
+        res.status(404).json({ error: "Job not found" });
+      } else {
+        res.status(409).json({ error: `Only pending jobs can be cancelled (current status: ${existing.status})` });
+      }
+      return;
+    }
+
+    res.json({ job: updatedRows[0] });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to cancel job";
     res.status(500).json({ error: msg });
   }
 });

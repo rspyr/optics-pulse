@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { RefreshCw, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
+import { RefreshCw, RotateCcw, ChevronDown, ChevronRight, Ban } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -32,12 +32,13 @@ interface ListResponse {
   statusCounts: Record<string, number>;
 }
 
-const STATUS_OPTIONS = ["pending", "in_progress", "completed", "failed"] as const;
+const STATUS_OPTIONS = ["pending", "in_progress", "completed", "failed", "cancelled"] as const;
 const STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
   in_progress: "In Progress",
   completed: "Completed",
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 function statusVariant(status: string): "default" | "success" | "danger" | "neutral" {
@@ -74,6 +75,7 @@ export default function AdminBackgroundJobs() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [retrying, setRetrying] = useState<Record<number, boolean>>({});
+  const [cancelling, setCancelling] = useState<Record<number, boolean>>({});
   const inFlightRef = useRef(false);
 
   const fetchJobs = useCallback(async (opts: { silent?: boolean } = {}) => {
@@ -160,6 +162,29 @@ export default function AdminBackgroundJobs() {
       setError(err instanceof Error ? err.message : "Failed to retry job");
     } finally {
       setRetrying((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  };
+
+  const handleCancel = async (id: number) => {
+    setCancelling((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/background-jobs/${id}/cancel`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed (${res.status})`);
+      }
+      await fetchJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel job");
+    } finally {
+      setCancelling((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
@@ -303,6 +328,15 @@ export default function AdminBackgroundJobs() {
                             >
                               <RotateCcw className="w-3 h-3" />
                               {retrying[job.id] ? "Retrying..." : "Retry"}
+                            </button>
+                          ) : job.status === "pending" ? (
+                            <button
+                              onClick={() => handleCancel(job.id)}
+                              disabled={!!cancelling[job.id]}
+                              className="inline-flex items-center gap-1 bg-red-500/20 hover:bg-red-500/30 disabled:opacity-50 text-red-100 px-3 py-1 rounded text-xs transition-colors"
+                            >
+                              <Ban className="w-3 h-3" />
+                              {cancelling[job.id] ? "Cancelling..." : "Cancel"}
                             </button>
                           ) : null}
                         </td>
