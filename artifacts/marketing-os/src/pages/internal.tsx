@@ -137,21 +137,41 @@ export default function Internal() {
   }, [anyBackfillRunning, anyBackfillBusy, fetchSyncStatus]);
 
   const [cancellingLogIds, setCancellingLogIds] = useState<Record<number, boolean>>({});
+  // Timestamp (ms) of when the operator first clicked Cancel for a given
+  // sync log id. Used to delay the "Force cancel" button by ~8s, giving
+  // the cooperative cancel handshake time to unwind before we suggest a
+  // hard kill.
+  const [cancelStartedAt, setCancelStartedAt] = useState<Record<number, number>>({});
+  // Tick at 1Hz while any cancel is pending so the "Force cancel" button
+  // appears on its own once enough time has elapsed.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    if (Object.keys(cancelStartedAt).length === 0) return;
+    const id = setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [cancelStartedAt]);
+  const FORCE_CANCEL_DELAY_MS = 8000;
 
-  const cancelBackfill = async (integ: string, logId: number) => {
+  const cancelBackfill = async (integ: string, logId: number, force = false) => {
     if (!logId) return;
-    if (!confirm(`Cancel the running ${integ} backfill? Rows already synced will be kept.`)) return;
+    const prompt = force
+      ? `Force-cancel the ${integ} backfill? This hard-flips the run to "cancelled" — use only if the worker is unresponsive.`
+      : `Cancel the running ${integ} backfill? Rows already synced will be kept.`;
+    if (!confirm(prompt)) return;
     setCancellingLogIds((s) => ({ ...s, [logId]: true }));
+    if (!force) setCancelStartedAt((s) => (s[logId] ? s : { ...s, [logId]: Date.now() }));
     try {
-      const res = await fetch(`${API_BASE}/api/integrations/sync-logs/${logId}/cancel`, {
-        method: "POST",
-        credentials: "include",
-      });
+      const url = `${API_BASE}/api/integrations/sync-logs/${logId}/cancel${force ? "?force=true" : ""}`;
+      const res = await fetch(url, { method: "POST", credentials: "include" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
       } else {
-        toast({ title: "Cancel requested", description: "The run will stop after the current batch finishes." });
+        const body = await res.json().catch(() => ({}));
+        toast({
+          title: body?.forced ? "Run hard-cancelled" : "Cancel requested",
+          description: body?.message || "The run will stop after the current batch finishes.",
+        });
       }
     } catch (err) {
       toast({ title: "Cancel failed", description: (err as Error).message, variant: "destructive" });
@@ -618,18 +638,40 @@ export default function Internal() {
                           bf.status === "running" ? (
                             <span className="flex items-center gap-2 text-[11px] text-blue-400">
                               <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Running</span>
-                              {bf.syncLogId && (
-                                bf.cancelRequested || cancellingLogIds[bf.syncLogId] ? (
-                                  <span className="text-amber-400">Cancelling…</span>
-                                ) : (
-                                  <button
-                                    onClick={() => cancelBackfill(integ, bf.syncLogId!)}
-                                    className="text-[10px] px-1.5 py-0.5 rounded border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors"
-                                  >
-                                    Cancel
-                                  </button>
-                                )
-                              )}
+                              {bf.syncLogId && (() => {
+                                const sid = bf.syncLogId;
+                                const isCancelling = bf.cancelRequested || cancellingLogIds[sid];
+                                if (!isCancelling) {
+                                  return (
+                                    <button
+                                      onClick={() => cancelBackfill(integ, sid)}
+                                      className="text-[10px] px-1.5 py-0.5 rounded border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors"
+                                    >
+                                      Cancel
+                                    </button>
+                                  );
+                                }
+                                const startedAt = cancelStartedAt[sid];
+                                const elapsedMs = startedAt ? Date.now() - startedAt : Number.MAX_SAFE_INTEGER;
+                                const showForce = !startedAt || elapsedMs > FORCE_CANCEL_DELAY_MS;
+                                const secondsLeft = startedAt ? Math.max(0, Math.ceil((FORCE_CANCEL_DELAY_MS - elapsedMs) / 1000)) : 0;
+                                return (
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="text-amber-400">Cancelling…</span>
+                                    {showForce ? (
+                                      <button
+                                        onClick={() => cancelBackfill(integ, sid, true)}
+                                        title="Worker may be stuck — hard-flip the run to cancelled"
+                                        className="text-[10px] px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors"
+                                      >
+                                        Force cancel
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] text-white/40">(force in {secondsLeft}s)</span>
+                                    )}
+                                  </span>
+                                );
+                              })()}
                             </span>
                           ) : bf.status === "cancelled" ? (
                             <span className="flex items-center gap-1 text-[11px] text-amber-300"><XCircle className="w-3 h-3" /> Cancelled</span>

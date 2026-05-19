@@ -163,9 +163,24 @@ const RULES: Rule[] = [
   },
   {
     code: "expired_credentials",
-    test: /\b(invalid_grant|expired|token expired|unauthorized|needs reconnect|re-?authent|401)\b/i,
+    test: /\b(invalid_grant|expired|token expired|unauthorized|needs reconnect|re-?authent|401|ServiceTitan auth failed)\b/i,
     message: "Upstream credentials expired or were revoked.",
     suggestedAction: "Reconnect the integration in the tenant settings, then retry the backfill.",
+  },
+  {
+    // ServiceTitan returns 404 "Unable to match incoming request to an
+    // operation" when the tenant ID, API base, or app key is wrong — NOT
+    // when a single record is missing. Treat as configuration error.
+    code: "not_configured",
+    test: /\b(404|not found|Unable to match incoming request)\b/i,
+    message: "Upstream API rejected the request as 404 — usually a tenant ID, app key, or API scope misconfiguration.",
+    suggestedAction: "Verify the ServiceTitan tenant ID, app key, and that the connected app has JPM + CRM scopes, then retry.",
+  },
+  {
+    code: "permission_denied",
+    test: /\b400\b|\bbad request\b/i,
+    message: "Upstream API rejected the request as malformed (400).",
+    suggestedAction: "Usually indicates an unsupported filter (date range too wide, invalid status). Try a smaller backfill window.",
   },
   {
     code: "permission_denied",

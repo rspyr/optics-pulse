@@ -57,6 +57,17 @@ async function startServer() {
   httpServer.listen(port, async () => {
     console.log(`Server listening on port ${port}`);
     await runOneTimeMigrations();
+    // Reap orphaned sync_log rows left at status='running' by the previous
+    // process — otherwise a backfill that was in flight during the last
+    // deploy will sit "running" forever, and the UI gets stuck on
+    // "Cancelling…" because there's no worker to flip cancel_requested.
+    try {
+      const { reapOrphanedSyncLogs } = await import("./services/orphan-sync-reaper");
+      const reaped = await reapOrphanedSyncLogs(15);
+      if (reaped > 0) console.log(`[startup] Reaped ${reaped} orphaned sync_log row(s)`);
+    } catch (err) {
+      console.error("[startup] Orphan sync reaper failed:", err);
+    }
     await auditUsersWithoutTenant();
     await closeStaleLoginSessions();
     startLoginSessionExpiryJob();

@@ -133,6 +133,7 @@ router.post("/integrations/service_titan/backfill", requireRole("super_admin", "
 // useful). 404 if the log doesn't exist; 409 if the run already finished.
 router.post("/integrations/sync-logs/:id/cancel", requireRole("super_admin", "agency_user"), async (req, res) => {
   const logId = Number(req.params.id);
+  const force = req.query.force === "true" || req.body?.force === true;
   if (!Number.isFinite(logId) || logId <= 0) {
     res.status(400).json({ error: "Invalid sync log id" });
     return;
@@ -149,10 +150,40 @@ router.post("/integrations/sync-logs/:id/cancel", requireRole("super_admin", "ag
     res.status(409).json({ error: `Sync log is not running (status=${log.status})` });
     return;
   }
+
+  // Force-cancel escape hatch: hard-flips the row to `cancelled` directly,
+  // bypassing the cooperative cancel-flag handshake. Use when the worker is
+  // dead/unresponsive (server restarted mid-run, or the cancel flag was
+  // already set and nothing happened). The advisory lock auto-releases on
+  // next DB connection turnover.
+  //
+  // We deliberately do NOT auto-trigger force based on `startedAt` age —
+  // `startedAt` is run-start time, not cancel-request time, so any long
+  // legitimately-running backfill would be force-killed on the operator's
+  // first Cancel click. The UI gates this behind a separate "Force cancel"
+  // button that only appears after the cooperative cancel has had time to
+  // unwind. The orphan reaper at server startup handles the restart case.
+  if (force) {
+    await db.update(integrationSyncLogsTable)
+      .set({
+        status: "cancelled",
+        completedAt: new Date(),
+        errorMessage: "Force-cancelled by operator",
+        errorCode: null,
+        progressCurrentChunk: null,
+        progressTotalChunks: null,
+        progressWindowStart: null,
+        progressWindowEnd: null,
+      })
+      .where(eq(integrationSyncLogsTable.id, logId));
+    res.json({ success: true, logId, forced: true, message: "Run hard-cancelled. Any worker still alive will exit on its next cancel check." });
+    return;
+  }
+
   await db.update(integrationSyncLogsTable)
     .set({ cancelRequested: true })
     .where(eq(integrationSyncLogsTable.id, logId));
-  res.json({ success: true, logId, message: "Cancel requested — run will stop after the current batch" });
+  res.json({ success: true, logId, forced: false, message: "Cancel requested — run will stop after the current batch" });
 });
 
 router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"), async (req, res) => {
