@@ -63,7 +63,7 @@ export default function Internal() {
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
     statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> }>;
-    recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
+    recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number; triggeredBySyncLogId?: number | null }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
     backfillStatus?: Record<string, {
@@ -878,6 +878,15 @@ export default function Internal() {
                       )}
                       <Badge variant="neutral">{log.integration.replace(/_/g, " ")}</Badge>
                       <span className="text-white/30 capitalize">{log.syncType.replace(/_/g, " ")}</span>
+                      {log.triggeredBySyncLogId != null && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+                          title={`Auto-enqueued by nightly catch-up (parent sync log #${log.triggeredBySyncLogId}). Triggered when the tenant's last successful sync was older than the nightly window cap.`}
+                        >
+                          <Clock className="w-2.5 h-2.5" />
+                          Auto-triggered
+                        </span>
+                      )}
                     </div>
                     <span className="text-muted-foreground">{log.recordsProcessed.toLocaleString()} records</span>
                   </div>
