@@ -348,6 +348,30 @@ export function emitNewAttributionEvent(tenantId: number, data: Record<string, u
   }
 }
 
+/**
+ * Task #593: synchronous companion to `rule-rederive-complete`. The latter
+ * is fired by the *background* historical re-derive job some time after the
+ * POST handler has already flipped the targeted event to `manual` via
+ * `markEventManuallyMatched`. That gap (slow job queue, retries) leaves an
+ * open event sheet stale even after the row list has already flipped.
+ *
+ * `attribution-event-updated` is emitted *synchronously* from
+ * `markEventManuallyMatched` so the open sheet refetches the freshly-flipped
+ * `matchLevel` immediately, without waiting on the background job's emit.
+ */
+export function emitAttributionEventUpdated(
+  tenantId: number,
+  data: { eventId: number; matchLevel: string },
+) {
+  if (io) {
+    io.to(`tenant-${tenantId}`).emit("attribution-event-updated", { ...data, tenantId });
+    console.log(
+      `[Socket.IO] Emitted attribution-event-updated for tenant-${tenantId} ` +
+      `(event ${data.eventId} -> ${data.matchLevel})`,
+    );
+  }
+}
+
 export function emitRuleRederiveComplete(
   tenantId: number,
   data: {

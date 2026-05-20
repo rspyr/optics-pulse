@@ -388,6 +388,25 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
         playSound(isCall ? "inbound-call" : "text-message");
       }
     });
+    socket.on("attribution-event-updated", (data: { tenantId?: number; eventId: number; matchLevel: string }) => {
+      // Task #593: `markEventManuallyMatched` on the server fires this
+      // *synchronously* the moment it flips an event to `manual`. The
+      // background re-derive job's `rule-rederive-complete` already invalidates
+      // the same keys, but it can lag noticeably (slow job queue, retries)
+      // and the open event sheet would stay stale in the meantime. Invalidating
+      // here closes that gap so the sheet refetches the freshly-flipped
+      // `matchLevel` immediately.
+      if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
+      try {
+        queryClient.invalidateQueries({
+          queryKey: getListAttributionEventsQueryKey() as readonly unknown[],
+          exact: false,
+        });
+        queryClient.invalidateQueries({ queryKey: ["attribution-event"], exact: false });
+      } catch (e) {
+        console.warn("[LeadNotification] attribution-event-updated invalidate failed:", e);
+      }
+    });
     socket.on("rule-rederive-complete", (data: RuleRederiveCompleteData) => {
       if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
       ruleRederiveListenersRef.current.forEach(cb => {

@@ -2,6 +2,7 @@ import { db, leadsTable, attributionEventsTable, fieldMappingRulesTable } from "
 import { eq, and, desc, gte, lt, inArray } from "drizzle-orm";
 import { detectFields, extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizeFunnel } from "./funnel-normalizer";
+import { emitAttributionEventUpdated } from "../socket";
 
 /**
  * Marker error for re-derive failures that obviously won't recover on retry —
@@ -66,6 +67,18 @@ export async function markEventManuallyMatched(
       eq(attributionEventsTable.matchLevel, "unmatched"),
     ))
     .returning({ id: attributionEventsTable.id });
+  // Task #593: emit a synchronous `attribution-event-updated` socket event so
+  // any open event sheet for this row refetches the freshly-flipped
+  // `matchLevel: "manual"` immediately, without waiting on the background
+  // historical re-derive job's eventual `rule-rederive-complete` emit (which
+  // can lag noticeably under slow job queue / retry conditions).
+  if (rows.length > 0) {
+    try {
+      emitAttributionEventUpdated(tenantId, { eventId, matchLevel: "manual" });
+    } catch (err) {
+      console.warn("[markEventManuallyMatched] emitAttributionEventUpdated failed:", err);
+    }
+  }
   return rows.length;
 }
 

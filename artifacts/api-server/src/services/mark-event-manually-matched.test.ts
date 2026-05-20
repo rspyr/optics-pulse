@@ -57,6 +57,11 @@ vi.mock("drizzle-orm", () => ({
   inArray: vi.fn((c: unknown, vals: unknown) => ({ __op: "inArray", c, vals })),
 }));
 
+const emitAttributionEventUpdatedMock = vi.fn();
+vi.mock("../socket", () => ({
+  emitAttributionEventUpdated: (...args: unknown[]) => emitAttributionEventUpdatedMock(...args),
+}));
+
 vi.mock("./field-detection", () => ({
   detectFields: vi.fn(),
   extractPagePath: (u: string) => u,
