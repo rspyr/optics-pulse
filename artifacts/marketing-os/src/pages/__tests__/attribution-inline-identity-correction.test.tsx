@@ -191,7 +191,38 @@ describe("InlineIdentityCorrection — Task #549 funnel scope & override", () =>
     const undoBtn = await screen.findByTestId("button-clear-funnel-override");
     fireEvent.click(undoBtn);
     await waitFor(() => {
-      expect(calls.some(c => c.url.includes("/api/leads/555/funnel-override") && c.init?.method === "DELETE")).toBe(true);
+      // DELETE must include the open event id so the server can also
+      // redetect the currently-open event row (an override made from a
+      // non-latest event would otherwise stay manually-set after Undo).
+      expect(calls.some(c =>
+        c.url.includes("/api/leads/555/funnel-override")
+        && c.url.includes("attributionEventId=42")
+        && c.init?.method === "DELETE"
+      )).toBe(true);
+    });
+  });
+
+  it("Bug #3: scope toggle is hidden when the event has no matched lead", async () => {
+    const { mock } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }, { id: 9, name: "Webinar" }] }) },
+      { match: "/api/lead-source-aliases", handler: () => ({ aliases: [] }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
+
+    renderComp(makeEvent({ id: 42 }), null);
+    await screen.findByRole("option", { name: "Webinar" });
+    const funnelSelect = (screen.getAllByRole("combobox") as HTMLSelectElement[])
+      .find(s => Array.from(s.options).some(o => o.text === "Webinar")) as HTMLSelectElement;
+    fireEvent.change(funnelSelect, { target: { value: "9" } });
+
+    // With no matchedLead, the per-lead button must not be on screen at all —
+    // not even disabled. Only the alias path remains.
+    await waitFor(() => {
+      expect(screen.queryByTestId("button-funnel-scope-lead")).toBeNull();
+      expect(screen.queryByTestId("button-funnel-scope-alias")).toBeNull();
+      expect(screen.queryByTestId("button-save-funnel-lead")).toBeNull();
+      // Alias preview entry-point is still available.
+      expect(screen.queryByTestId("button-preview-funnel-alias")).not.toBeNull();
     });
   });
 });

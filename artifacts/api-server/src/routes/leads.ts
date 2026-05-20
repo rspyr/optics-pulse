@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable, attributionEventsTable, leadAttributionCorrectionsTable, tenantFunnelTypesTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
-import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
 import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitLeadUpdated } from "../socket";
@@ -907,8 +907,18 @@ router.post("/leads/:leadId/funnel-override", async (req, res) => {
 // Task #549: clear a per-lead funnel override and re-derive the lead's
 // funnel from its latest attribution event. After clearing, the lead is
 // back in scope for future tenant-wide alias retags.
+//
+// Also redetects the *open* attribution event (when supplied) so the
+// drawer's resolved_funnel snaps back to the alias-driven value even if the
+// override was made from an older, non-latest event — otherwise the
+// previously-overridden event row would keep the manually-set funnel name
+// and the open drawer would look stale after Undo.
 router.delete("/leads/:leadId/funnel-override", async (req, res) => {
   const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+  const attributionEventIdRaw = req.query.attributionEventId ?? (req.body as { attributionEventId?: number } | undefined)?.attributionEventId;
+  const attributionEventId = attributionEventIdRaw !== undefined && attributionEventIdRaw !== null
+    ? Number(attributionEventIdRaw)
+    : null;
 
   const [existingLead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
   if (!existingLead) {
@@ -938,6 +948,23 @@ router.delete("/leads/:leadId/funnel-override", async (req, res) => {
     await reDeriveLeadFunnel(existingLead.tenantId, leadId);
   } catch (err) {
     console.error("[funnel-override.DELETE] reDeriveLeadFunnel failed:", err);
+  }
+  // Recompute the currently-open event too. reDeriveLeadFunnel only
+  // touches the lead's latest event, so an override made from an older
+  // event would keep its stale resolved_funnel after Undo without this.
+  if (attributionEventId !== null && Number.isFinite(attributionEventId) && attributionEventId > 0) {
+    try {
+      // Verify tenant scope before redetecting — redetectAndPersistEvent
+      // already filters by tenantId, but a defensive guard avoids issuing
+      // the work at all for cross-tenant ids.
+      const [ev] = await db.select({ tenantId: attributionEventsTable.tenantId })
+        .from(attributionEventsTable).where(eq(attributionEventsTable.id, attributionEventId)).limit(1);
+      if (ev && ev.tenantId === existingLead.tenantId) {
+        await redetectAndPersistEvent(existingLead.tenantId, attributionEventId);
+      }
+    } catch (err) {
+      console.error("[funnel-override.DELETE] redetectAndPersistEvent failed:", err);
+    }
   }
   try {
     await reRouteLeadsAfterAttributionChange(existingLead.tenantId, [leadId]);

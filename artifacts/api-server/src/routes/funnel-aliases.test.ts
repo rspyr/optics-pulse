@@ -5,6 +5,7 @@ const updateCalls: Array<{ table: string; set: Record<string, unknown> }> = [];
 const selectWhereArgs: unknown[][] = [];
 let selectRowsQueue: Array<unknown[]> = [];
 let updateReturningQueue: Array<{ table: string; rows: unknown[] }> = [];
+let executeRowsQueue: Array<unknown[]> = [];
 
 vi.mock("@workspace/db", () => {
   const tables = {
@@ -19,7 +20,7 @@ vi.mock("@workspace/db", () => {
       resolvedFunnel: "resolvedFunnel",
       formFields: "formFields",
     },
-    leadsTable: { __name: "leadsTable", id: "id", tenantId: "tenantId", leadType: "leadType", funnelId: "funnelId" },
+    leadsTable: { __name: "leadsTable", id: "id", tenantId: "tenantId", leadType: "leadType", funnelId: "funnelId", funnelOverriddenAt: "funnel_overridden_at" },
     leadAttributionCorrectionsTable: { __name: "leadAttributionCorrectionsTable" },
   };
   const db: Record<string, unknown> = {
@@ -69,6 +70,12 @@ vi.mock("@workspace/db", () => {
   // by passing the same mocked db as the transaction handle so insert /
   // update calls inside the callback flow into the same tracking arrays.
   db.transaction = vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  // Task #549: /funnel-aliases/preview uses raw db.execute. Honor a queue of
+  // canned row arrays so each preview test can return its own counts.
+  db.execute = vi.fn().mockImplementation(() => {
+    const next = executeRowsQueue.length > 0 ? executeRowsQueue.shift()! : [];
+    return Promise.resolve({ rows: next });
+  });
   return { db, ...tables };
 });
 
@@ -89,7 +96,12 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...args: unknown[]) => ({ __op: "and", args })),
   inArray: vi.fn((...args: unknown[]) => ({ __op: "inArray", args })),
   sql: Object.assign(
-    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ __sql: strings.join("?") }),
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({
+      __sql: strings.join("?"),
+      // Surface interpolated column refs so tests can assert that the
+      // override-exclusion column appears in the WHERE clause.
+      __values: values,
+    }),
     {},
   ),
 }));
@@ -105,6 +117,7 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   selectWhereArgs.length = 0;
   selectRowsQueue = [];
   updateReturningQueue = [];
+  executeRowsQueue = [];
   const mod = await import("./funnel-aliases");
   app = express();
   app.use(express.json());
@@ -153,6 +166,31 @@ function postJson(
         },
       );
       req.write(payload);
+      req.end();
+    });
+  });
+}
+
+function getJson(
+  expressApp: express.Express,
+  path: string,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  return new Promise((resolve) => {
+    const http = require("http");
+    const server = http.createServer(expressApp);
+    server.listen(0, () => {
+      const port = (server.address() as { port: number }).port;
+      const req = http.request(
+        { hostname: "127.0.0.1", port, path, method: "GET" },
+        (res: { statusCode: number; on: Function }) => {
+          let data = "";
+          res.on("data", (chunk: string) => (data += chunk));
+          res.on("end", () => {
+            server.close();
+            resolve({ status: res.statusCode, json: data ? JSON.parse(data) : {} });
+          });
+        },
+      );
       req.end();
     });
   });
@@ -273,6 +311,35 @@ describe("POST /funnel-aliases — re-resolve historical events and leads", () =
     expect(updateCalls.some(c => c.table === "leadsTable")).toBe(false);
   });
 
+  // Task #549: a tenant-wide alias retag must skip every lead that already
+  // carries a per-lead override. The exclusion lives in the WHERE clause of
+  // the leads-snapshot select inside reResolveFunnelForLeads.
+  it("excludes leads with funnel_overridden_at set from tenant-wide alias retag", async () => {
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]); // tenant association
+    selectRowsQueue.push([]); // no existing alias row
+    selectRowsQueue.push([{ name: "BOGO Free Smart Furnace" }]); // funnel type lookup
+    selectRowsQueue.push([{ id: 501, oldLeadType: "ac" }]); // snapshot
+    updateReturningQueue.push({ table: "attributionEventsTable", rows: [{ id: 101 }] });
+
+    const res = await postJson(app, "/funnel-aliases?tenantId=42", {
+      funnelTypeId: 5,
+      alias: "AC Breakdown Prevention",
+    });
+
+    expect(res.status).toBe(200);
+    // The matched-leads WHERE clause must reference funnel_overridden_at.
+    // Drizzle's sql template renders ${leadsTable.funnelOverriddenAt} as
+    // the column identifier we put on the mocked table.
+    // The matched-leads WHERE clause must reference the override column
+    // (mocked as the column identifier "funnel_overridden_at") and the SQL
+    // fragment "? IS NULL" so a future refactor can't drop the exclusion.
+    const matchedLeadsWhere = selectWhereArgs.find(args => {
+      const j = JSON.stringify(args);
+      return j.includes("funnel_overridden_at") && j.includes("? IS NULL");
+    });
+    expect(matchedLeadsWhere).toBeDefined();
+  });
+
   it("returns updatedLeadCount=0 when no leads matched", async () => {
     selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
     selectRowsQueue.push([]);
@@ -288,6 +355,28 @@ describe("POST /funnel-aliases — re-resolve historical events and leads", () =
     expect(res.status).toBe(200);
     expect(res.json.updatedEventCount).toBe(1);
     expect(res.json.updatedLeadCount).toBe(0);
+  });
+});
+
+describe("GET /funnel-aliases/preview — Task #549 dry-run scope", () => {
+  beforeEach(async () => {
+    await setupApp("agency_user", 42);
+  });
+
+  it("returns the canonical name plus the count of events and leads that would be retagged", async () => {
+    selectRowsQueue.push([{ name: "Webinar" }]); // funnel type lookup
+    executeRowsQueue.push([{ cnt: 12 }]); // events count
+    executeRowsQueue.push([{ cnt: 47 }]); // leads count
+
+    const res = await getJson(app, "/funnel-aliases/preview?tenantId=42&alias=ac%20breakdown%20prevention&funnelTypeId=5");
+
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ events: 12, leads: 47, canonicalName: "Webinar", alias: "ac breakdown prevention", funnelTypeId: 5 });
+  });
+
+  it("400s when alias or funnelTypeId is missing", async () => {
+    const res = await getJson(app, "/funnel-aliases/preview?tenantId=42&alias=&funnelTypeId=5");
+    expect(res.status).toBe(400);
   });
 });
 

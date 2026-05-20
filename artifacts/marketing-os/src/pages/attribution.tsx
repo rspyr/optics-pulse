@@ -981,7 +981,11 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
   // doesn't silently retag every lead sharing the alias. Only show the
   // tenant-wide option when we actually have a lead to override (matchedLead).
   type FunnelScope = "lead" | "alias";
-  const [funnelScope, setFunnelScope] = useState<FunnelScope>("lead");
+  // Default to "lead" when we have a matched lead, otherwise fall back to
+  // "alias" — there's nothing to override without a lead, and forcing a
+  // disabled scope toggle on screen just confuses operators.
+  const initialFunnelScope: FunnelScope = "lead";
+  const [funnelScope, setFunnelScope] = useState<FunnelScope>(initialFunnelScope);
   const [aliasPreview, setAliasPreview] = useState<{ events: number; leads: number } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [pendingAliasConfirm, setPendingAliasConfirm] = useState(false);
@@ -1029,15 +1033,15 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
     if (match) setFunnelTypeId(String(match.id));
   }, [currentFunnelDisplay, funnelTypes]);
 
-  // Reset the per-lead/alias scope toggle and any in-flight preview state
-  // whenever the operator switches to a different attribution event, so a
-  // stale "you'll retag 47 leads" confirm from a previous event can't bleed
-  // into the next one.
+  // Reset scope and any in-flight preview state when the operator switches
+  // to a different attribution event. When the new event has no matched
+  // lead, force alias scope so the operator isn't presented with a Save
+  // button that has nothing to override.
   useEffect(() => {
-    setFunnelScope("lead");
+    setFunnelScope(matchedLead?.id ? "lead" : "alias");
     setAliasPreview(null);
     setPendingAliasConfirm(false);
-  }, [event.id]);
+  }, [event.id, matchedLead?.id]);
 
   // Sync sourceAlias from known canonical names when they load.
   useEffect(() => {
@@ -1168,10 +1172,10 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/leads/${matchedLead.id}/funnel-override`, {
-        method: "DELETE",
-        credentials: "include",
-      });
+      const res = await fetch(
+        `${API_BASE}/api/leads/${matchedLead.id}/funnel-override?attributionEventId=${event.id}`,
+        { method: "DELETE", credentials: "include" },
+      );
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error || "Failed to clear override");
@@ -1415,48 +1419,51 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
 
           {funnelChanged && (
             <div className="mt-2 space-y-2 rounded border border-white/10 bg-black/20 px-2 py-2">
-              {/* Task #549 (bug #3): scope toggle defaults to "Just this lead" */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => { setFunnelScope("lead"); setPendingAliasConfirm(false); setAliasPreview(null); }}
-                  disabled={!matchedLead?.id}
-                  className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
-                    funnelScope === "lead"
-                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-200"
-                      : "bg-black/40 border-white/10 text-white/60 hover:text-white"
-                  } disabled:opacity-40 disabled:cursor-not-allowed`}
-                  title={matchedLead?.id ? "Override only this lead's funnel" : "No matched lead to override"}
-                  data-testid="button-funnel-scope-lead"
-                >
-                  Just this lead
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setFunnelScope("alias"); }}
-                  className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
-                    funnelScope === "alias"
-                      ? "bg-amber-500/20 border-amber-500/40 text-amber-200"
-                      : "bg-black/40 border-white/10 text-white/60 hover:text-white"
-                  }`}
-                  title="Retag every lead in this tenant whose funnel matches this alias"
-                  data-testid="button-funnel-scope-alias"
-                >
-                  All leads with this funnel
-                </button>
-              </div>
+              {/* Task #549 (bug #3): scope toggle is only shown when there's
+                  a matched lead to override. When the event has no linked
+                  lead, the only meaningful action is the tenant-wide alias
+                  retag — hide the toggle entirely instead of disabling the
+                  per-lead branch. */}
+              {matchedLead?.id && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { setFunnelScope("lead"); setPendingAliasConfirm(false); setAliasPreview(null); }}
+                    className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
+                      funnelScope === "lead"
+                        ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-200"
+                        : "bg-black/40 border-white/10 text-white/60 hover:text-white"
+                    }`}
+                    title="Override only this lead's funnel"
+                    data-testid="button-funnel-scope-lead"
+                  >
+                    Just this lead
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setFunnelScope("alias"); }}
+                    className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
+                      funnelScope === "alias"
+                        ? "bg-amber-500/20 border-amber-500/40 text-amber-200"
+                        : "bg-black/40 border-white/10 text-white/60 hover:text-white"
+                    }`}
+                    title="Retag every lead in this tenant whose funnel matches this alias"
+                    data-testid="button-funnel-scope-alias"
+                  >
+                    All leads with this funnel
+                  </button>
+                </div>
+              )}
 
-              {funnelScope === "lead" && (
+              {funnelScope === "lead" && matchedLead?.id && (
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] text-white/50">
-                    {matchedLead?.id
-                      ? "Only this lead will change. Future alias edits won't touch it."
-                      : "No matched lead — switch to alias mode or use the auto-detected fields above."}
+                    Only this lead will change. Future alias edits won't touch it.
                   </p>
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={saving || !matchedLead?.id}
+                    disabled={saving}
                     onClick={saveFunnelForLead}
                     className="text-xs h-7 px-2 shrink-0"
                     data-testid="button-save-funnel-lead"
