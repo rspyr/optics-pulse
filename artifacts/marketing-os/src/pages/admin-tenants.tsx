@@ -95,7 +95,7 @@ const emptyForm: TenantForm = {
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
-type EditTab = "integrations" | "alerts" | "scripts" | "leaderboard";
+type EditTab = "integrations" | "alerts" | "scripts" | "leaderboard" | "maintenance";
 
 function SetupGuide({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -969,6 +969,9 @@ export default function AdminTenants() {
               <button onClick={() => setEditTab("leaderboard")} className={tabClass("leaderboard")}>
                 <Trophy className="w-3.5 h-3.5 inline mr-1.5" />Leaderboard
               </button>
+              <button onClick={() => setEditTab("maintenance")} className={tabClass("maintenance")}>
+                <Settings className="w-3.5 h-3.5 inline mr-1.5" />Maintenance
+              </button>
             </div>
           </div>
           <div className="p-6">
@@ -991,6 +994,9 @@ export default function AdminTenants() {
             )}
             {editTab === "leaderboard" && (
               <TenantLeaderboardConfig tenantId={editId} apiBase={API_BASE} />
+            )}
+            {editTab === "maintenance" && (
+              <TenantMaintenance tenantId={editId} apiBase={API_BASE} />
             )}
           </div>
         </PremiumCard>
@@ -1618,6 +1624,183 @@ function CallRailWebhookStatus({ tenantId, apiBase }: { tenantId: number; apiBas
           {loading ? "…" : "Refresh"}
         </button>
       </div>
+    </div>
+  );
+}
+
+interface BackfillDefaultFunnelResult {
+  tenantId: number;
+  defaultFunnelName: string | null;
+  candidateEvents: number;
+  clearedEvents: number;
+  clearedLeads: number;
+  leadsSkippedDueToOverride: number;
+  leadsSkippedDueToLaterMatch: number;
+  dryRun: boolean;
+}
+
+function TenantMaintenance({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
+  const [running, setRunning] = useState<"idle" | "dryRun" | "writing">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [dryRunResult, setDryRunResult] = useState<BackfillDefaultFunnelResult | null>(null);
+  const [writeResult, setWriteResult] = useState<BackfillDefaultFunnelResult | null>(null);
+
+  const runBackfill = async (dryRun: boolean): Promise<BackfillDefaultFunnelResult | null> => {
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/admin/backfill-default-funnel/${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ dryRun }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError((data as { error?: string }).error ?? `Request failed (${res.status})`);
+        return null;
+      }
+      return data as BackfillDefaultFunnelResult;
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Network error");
+      return null;
+    }
+  };
+
+  const handleDryRun = async () => {
+    setRunning("dryRun");
+    setWriteResult(null);
+    const result = await runBackfill(true);
+    if (result) setDryRunResult(result);
+    setRunning("idle");
+  };
+
+  const handleConfirm = async () => {
+    if (!dryRunResult) return;
+    const ok = window.confirm(
+      `This will clear resolved_funnel on ${dryRunResult.candidateEvents} event(s) and reset lead funnel on up to ${dryRunResult.clearedLeads} lead(s). Continue?`,
+    );
+    if (!ok) return;
+    setRunning("writing");
+    const result = await runBackfill(false);
+    if (result) {
+      setWriteResult(result);
+      setDryRunResult(null);
+    }
+    setRunning("idle");
+  };
+
+  const handleReset = () => {
+    setDryRunResult(null);
+    setWriteResult(null);
+    setError(null);
+  };
+
+  const summary = writeResult ?? dryRunResult;
+  const noCandidates = summary !== null && summary.candidateEvents === 0;
+  const showConfirm = dryRunResult !== null && !writeResult && dryRunResult.candidateEvents > 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="border border-white/10 rounded-lg p-4 bg-background/30 space-y-4">
+        <div>
+          <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center gap-2">
+            <Settings className="w-3.5 h-3.5" /> Backfill default-funnel events
+          </h4>
+          <p className="text-sm text-muted-foreground mt-2">
+            One-shot cleanup for events whose <span className="font-mono text-[11px] text-white/80">resolved_funnel</span> was stamped purely by the old "first active funnel" fallback. Re-runs the live resolver and clears values that no longer match any rule. Idempotent — once cleared, future runs find 0 candidates.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleDryRun}
+            disabled={running !== "idle"}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 border border-blue-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+          >
+            {running === "dryRun" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+            {dryRunResult || writeResult ? "Re-run dry run" : "Run dry run"}
+          </button>
+          {showConfirm && (
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={running !== "idle"}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
+            >
+              {running === "writing" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              Confirm &amp; clear {dryRunResult.candidateEvents} event(s)
+            </button>
+          )}
+          {noCandidates && !writeResult && (
+            <button
+              type="button"
+              disabled
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white/5 text-muted-foreground border border-white/10 cursor-not-allowed flex items-center gap-1.5"
+              title="Nothing to clean up"
+            >
+              <CheckCircle className="w-3 h-3" /> 0 candidates
+            </button>
+          )}
+          {(dryRunResult || writeResult || error) && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="text-[11px] text-muted-foreground hover:text-white px-2 py-1 rounded border border-white/10 hover:bg-white/5"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 text-red-300 border border-red-500/20 text-xs flex items-start gap-2">
+            <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {summary && (
+          <div className={`rounded-lg border p-3 ${writeResult ? "bg-emerald-500/5 border-emerald-500/20" : "bg-blue-500/5 border-blue-500/20"}`}>
+            <div className="flex items-center gap-2 mb-3 text-xs font-medium">
+              {writeResult ? (
+                <>
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-300">Cleanup complete</span>
+                </>
+              ) : (
+                <>
+                  <Info className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="text-blue-300">Dry run — no changes written</span>
+                </>
+              )}
+              {summary.defaultFunnelName ? (
+                <span className="text-muted-foreground">
+                  · default funnel: <span className="text-white/80 font-mono text-[11px]">{summary.defaultFunnelName}</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">· no default funnel found</span>
+              )}
+            </div>
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+              <SummaryRow label="Candidate events" value={summary.candidateEvents} />
+              <SummaryRow label={writeResult ? "Events cleared" : "Events that would clear"} value={summary.clearedEvents} />
+              <SummaryRow label={writeResult ? "Leads reset" : "Leads that would reset"} value={summary.clearedLeads} />
+              <SummaryRow label="Leads skipped (override)" value={summary.leadsSkippedDueToOverride} muted />
+              <SummaryRow label="Leads skipped (later match)" value={summary.leadsSkippedDueToLaterMatch} muted />
+            </dl>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value, muted }: { label: string; value: number; muted?: boolean }) {
+  return (
+    <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
+      <dt className={muted ? "text-muted-foreground" : "text-white/70"}>{label}</dt>
+      <dd className={`font-mono ${muted ? "text-muted-foreground" : "text-white"}`}>{value}</dd>
     </div>
   );
 }
