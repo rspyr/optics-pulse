@@ -90,6 +90,8 @@ export * from "./leadStatusHistoryResponse";
 export * from "./linkPodiumUserInput";
 export * from "./linkPodiumUserParams";
 export * from "./listAllTrainingPurchasesParams";
+export * from "./listAttributionEventsDateRange";
+export * from "./listAttributionEventsEventType";
 export * from "./listAttributionEventsMatchLevel";
 export * from "./listAttributionEventsParams";
 export * from "./listAutomationAlertsAcknowledged";

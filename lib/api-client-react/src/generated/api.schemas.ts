@@ -1483,6 +1483,15 @@ export type GetMetaCampaignBreakdownParams = {
 export type ListAttributionEventsParams = {
   tenantId?: number;
   matchLevel?: ListAttributionEventsMatchLevel;
+  eventType?: ListAttributionEventsEventType;
+  source?: string;
+  funnel?: string;
+  dateRange?: ListAttributionEventsDateRange;
+  /**
+   * Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.
+   */
+  subdomainRule?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 };
@@ -1496,6 +1505,24 @@ export const ListAttributionEventsMatchLevel = {
   silver: "silver",
   bronze: "bronze",
   unmatched: "unmatched",
+} as const;
+
+export type ListAttributionEventsEventType =
+  (typeof ListAttributionEventsEventType)[keyof typeof ListAttributionEventsEventType];
+
+export const ListAttributionEventsEventType = {
+  click: "click",
+  call: "call",
+  form_fill: "form_fill",
+} as const;
+
+export type ListAttributionEventsDateRange =
+  (typeof ListAttributionEventsDateRange)[keyof typeof ListAttributionEventsDateRange];
+
+export const ListAttributionEventsDateRange = {
+  "1d": "1d",
+  "7d": "7d",
+  "30d": "30d",
 } as const;
 
 export type RunReconciliationBody = {

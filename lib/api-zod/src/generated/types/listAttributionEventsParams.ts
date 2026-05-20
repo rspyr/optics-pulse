@@ -5,11 +5,22 @@
  * Optics API - Attribution Engine & Leads Dashboard
  * OpenAPI spec version: 0.1.0
  */
+import type { ListAttributionEventsDateRange } from "./listAttributionEventsDateRange";
+import type { ListAttributionEventsEventType } from "./listAttributionEventsEventType";
 import type { ListAttributionEventsMatchLevel } from "./listAttributionEventsMatchLevel";
 
 export type ListAttributionEventsParams = {
   tenantId?: number;
   matchLevel?: ListAttributionEventsMatchLevel;
+  eventType?: ListAttributionEventsEventType;
+  source?: string;
+  funnel?: string;
+  dateRange?: ListAttributionEventsDateRange;
+  /**
+   * Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.
+   */
+  subdomainRule?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 };

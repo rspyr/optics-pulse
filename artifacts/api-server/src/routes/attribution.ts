@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, attributionEventsTable, reconciliationRunsTable, jobsTable, leadsTable } from "@workspace/db";
-import { eq, and, or, count, desc, sql, SQL } from "drizzle-orm";
+import { eq, and, or, count, desc, sql, ilike, isNull, gte, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
@@ -31,6 +31,68 @@ router.get("/attribution/events", async (req, res) => {
   if (query.matchLevel) {
     const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "unmatched";
     conditions.push(eq(attributionEventsTable.matchLevel, level));
+  }
+
+  if (query.eventType) {
+    conditions.push(eq(attributionEventsTable.eventType, query.eventType));
+  }
+
+  if (query.source) {
+    // Frontend label is `resolvedLeadSource || utmSource`, so match either
+    // the canonical resolved value or the raw utm_source when no resolved
+    // value exists.
+    const sourceCond = or(
+      eq(attributionEventsTable.resolvedLeadSource, query.source),
+      and(
+        isNull(attributionEventsTable.resolvedLeadSource),
+        eq(attributionEventsTable.utmSource, query.source),
+      ),
+    );
+    if (sourceCond) conditions.push(sourceCond);
+  }
+
+  if (query.funnel) {
+    conditions.push(eq(attributionEventsTable.resolvedFunnel, query.funnel));
+  }
+
+  if (query.dateRange) {
+    const days = query.dateRange === "1d" ? 1 : query.dateRange === "7d" ? 7 : 30;
+    conditions.push(
+      gte(attributionEventsTable.createdAt, new Date(Date.now() - days * 86_400_000)),
+    );
+  }
+
+  if (query.subdomainRule) {
+    // Mirror extractSubdomain() from the frontend in SQL: take the URL's
+    // hostname (lower-cased, www. and port stripped), and if it has at
+    // least three labels return everything except the last two; otherwise
+    // null.
+    const hostnameExpr = sql`regexp_replace(regexp_replace(regexp_replace(lower(${attributionEventsTable.pageUrl}), '^https?://', ''), '(:[0-9]+)?/.*$', ''), '^www\\.', '')`;
+    const partsExpr = sql`string_to_array(${hostnameExpr}, '.')`;
+    const subdomainExpr = sql`(CASE WHEN array_length(${partsExpr}, 1) >= 3 THEN array_to_string(trim_array(${partsExpr}, 2), '.') ELSE NULL END)`;
+    if (query.subdomainRule === "__none__") {
+      conditions.push(
+        sql`NOT EXISTS (SELECT 1 FROM subdomain_funnel_rules r WHERE r.tenant_id = ${attributionEventsTable.tenantId} AND r.subdomain = ${subdomainExpr})`,
+      );
+    } else {
+      conditions.push(sql`${subdomainExpr} = ${query.subdomainRule}`);
+    }
+  }
+
+  if (query.search) {
+    const needle = `%${query.search}%`;
+    const searchCond = or(
+      ilike(attributionEventsTable.utmSource, needle),
+      ilike(attributionEventsTable.utmCampaign, needle),
+      ilike(attributionEventsTable.gclid, needle),
+      ilike(attributionEventsTable.fbclid, needle),
+      ilike(attributionEventsTable.pageUrl, needle),
+      ilike(attributionEventsTable.landingPage, needle),
+      ilike(attributionEventsTable.formName, needle),
+      ilike(attributionEventsTable.resolvedLeadSource, needle),
+      ilike(attributionEventsTable.resolvedFunnel, needle),
+    );
+    if (searchCond) conditions.push(searchCond);
   }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;

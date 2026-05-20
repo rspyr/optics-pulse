@@ -1012,6 +1012,17 @@ export const ListAttributionEventsQueryParams = zod.object({
   matchLevel: zod
     .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
     .optional(),
+  eventType: zod.enum(["click", "call", "form_fill"]).optional(),
+  source: zod.coerce.string().optional(),
+  funnel: zod.coerce.string().optional(),
+  dateRange: zod.enum(["1d", "7d", "30d"]).optional(),
+  subdomainRule: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.",
+    ),
+  search: zod.coerce.string().optional(),
   limit: zod.coerce.number().default(listAttributionEventsQueryLimitDefault),
   offset: zod.coerce.number().default(listAttributionEventsQueryOffsetDefault),
 });

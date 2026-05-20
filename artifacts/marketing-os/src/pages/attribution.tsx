@@ -92,9 +92,20 @@ export default function Attribution() {
   // Don't issue the cross-tenant "give me everything" fetch when the operator
   // hasn't picked a tenant — agency users get a "select a tenant" prompt
   // below instead.
-  const listEventsParams = effectiveTenantId
-    ? { tenantId: effectiveTenantId, limit: pageSize, offset: (page - 1) * pageSize }
-    : { limit: pageSize, offset: (page - 1) * pageSize };
+  const listEventsParams = {
+    ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
+    ...(filterType !== "all" ? { eventType: filterType as "click" | "call" | "form_fill" } : {}),
+    ...(filterMatch !== "all"
+      ? { matchLevel: filterMatch as "diamond" | "golden" | "silver" | "bronze" | "unmatched" }
+      : {}),
+    ...(filterSource !== "all" ? { source: filterSource } : {}),
+    ...(filterFunnel !== "all" ? { funnel: filterFunnel } : {}),
+    ...(filterDateRange !== "all" ? { dateRange: filterDateRange as "1d" | "7d" | "30d" } : {}),
+    ...(filterSubdomainRule !== "all" ? { subdomainRule: filterSubdomainRule } : {}),
+    ...(searchText.trim() !== "" ? { search: searchText.trim() } : {}),
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  };
   const { data } = useListAttributionEvents(
     listEventsParams,
     {
@@ -271,44 +282,9 @@ export default function Attribution() {
   const uniqueSources = [...new Set(events.map(ev => ev.resolvedLeadSource || ev.utmSource || "").filter(Boolean))];
   const uniqueFunnels = [...new Set(events.map(ev => ev.resolvedFunnel || "").filter(Boolean))];
 
-  const filteredEvents = events.filter(ev => {
-    if (filterType !== "all" && ev.eventType !== filterType) return false;
-    if (filterMatch !== "all" && ev.matchLevel !== filterMatch) return false;
-    if (filterSource !== "all") {
-      const evSource = ev.resolvedLeadSource || ev.utmSource || "";
-      if (evSource !== filterSource) return false;
-    }
-    if (filterFunnel !== "all") {
-      const evFunnel = ev.resolvedFunnel || "";
-      if (evFunnel !== filterFunnel) return false;
-    }
-    if (filterDateRange !== "all") {
-      const evDate = new Date(ev.createdAt);
-      const now = new Date();
-      const daysAgo = filterDateRange === "1d" ? 1 : filterDateRange === "7d" ? 7 : filterDateRange === "30d" ? 30 : 0;
-      if (daysAgo > 0 && evDate < new Date(now.getTime() - daysAgo * 86400000)) return false;
-    }
-    if (filterSubdomainRule !== "all") {
-      const evSubdomain = extractSubdomain(ev.pageUrl);
-      const matchingRule = evSubdomain ? subdomainRules.get(evSubdomain) : undefined;
-      if (filterSubdomainRule === "__none__") {
-        if (matchingRule) return false;
-      } else {
-        if (!matchingRule || matchingRule.subdomain !== filterSubdomainRule) return false;
-      }
-    }
-    if (searchText) {
-      const s = searchText.toLowerCase();
-      const searchable = [
-        ev.utmSource, ev.utmCampaign, ev.gclid, ev.fbclid,
-        ev.pageUrl, ev.landingPage, ev.formName,
-        ev.resolvedLeadSource,
-        ev.resolvedFunnel,
-      ].filter(Boolean).join(" ").toLowerCase();
-      if (!searchable.includes(s)) return false;
-    }
-    return true;
-  });
+  // Filtering is now applied server-side via listEventsParams, so the
+  // current page already reflects the active filters.
+  const filteredEvents = events;
 
   const getMatchBadge = (level: string | null | undefined) => {
     switch(level) {
@@ -604,15 +580,7 @@ export default function Attribution() {
                     if (totalEvents === 0) return "0 events";
                     const start = (page - 1) * pageSize + 1;
                     const end = Math.min(page * pageSize, totalEvents);
-                    const base = `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${totalEvents.toLocaleString()} event${totalEvents !== 1 ? "s" : ""}`;
-                    // Filters are applied client-side to the current page, so
-                    // when active, call out how many of the loaded rows match.
-                    const filtersActive =
-                      filterType !== "all" || filterMatch !== "all" || filterSource !== "all" ||
-                      filterFunnel !== "all" || filterDateRange !== "all" || filterSubdomainRule !== "all" ||
-                      searchText.trim() !== "";
-                    if (!filtersActive) return base;
-                    return `${base} · ${filteredEvents.length} match${filteredEvents.length === 1 ? "" : "es"} on this page`;
+                    return `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${totalEvents.toLocaleString()} event${totalEvents !== 1 ? "s" : ""}`;
                   })()}
                 </span>
                 <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v) as 25 | 50 | 100)}>

@@ -615,6 +615,33 @@ paths:
           schema:
             type: string
             enum: [diamond, golden, silver, bronze, unmatched]
+        - name: eventType
+          in: query
+          schema:
+            type: string
+            enum: [click, call, form_fill]
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: funnel
+          in: query
+          schema:
+            type: string
+        - name: dateRange
+          in: query
+          schema:
+            type: string
+            enum: ["1d", "7d", "30d"]
+        - name: subdomainRule
+          in: query
+          schema:
+            type: string
+          description: Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.
+        - name: search
+          in: query
+          schema:
+            type: string
         - name: limit
           in: query
           schema:
