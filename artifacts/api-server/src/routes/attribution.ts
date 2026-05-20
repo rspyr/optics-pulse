@@ -52,7 +52,17 @@ router.get("/attribution/events", async (req, res) => {
   }
 
   if (query.funnel) {
-    conditions.push(eq(attributionEventsTable.resolvedFunnel, query.funnel));
+    // Sentinel value used by the Attribution page's funnel filter to
+    // surface events that didn't resolve to any funnel (no _custom.funnel,
+    // no field alias, no URL path alias, no subdomain rule). Task #575
+    // removed the "first active funnel" default fallback, so unmatched
+    // events now persist with `resolved_funnel = NULL` and need an
+    // explicit option in the filter dropdown to be isolated.
+    if (query.funnel === "__unmatched__") {
+      conditions.push(isNull(attributionEventsTable.resolvedFunnel));
+    } else {
+      conditions.push(eq(attributionEventsTable.resolvedFunnel, query.funnel));
+    }
   }
 
   if (query.dateRange) {

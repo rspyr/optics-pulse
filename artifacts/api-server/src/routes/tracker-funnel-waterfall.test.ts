@@ -6,11 +6,13 @@
 //   2. detection.funnelRawValue → funnel-alias match
 //   3. URL **path** → funnel-alias match
 //   4. URL **subdomain** → subdomain-funnel rule
-//   5. Tenant default funnel (lowest)
 //
-// These tests pin down the middle of the waterfall: subdomain rules win
-// over the tenant default but lose to explicit path aliases. They guard
-// against accidentally re-ordering the steps in tracker.ts.
+// If none of those fire, the event is persisted with `resolved_funnel =
+// NULL` (task #575 removed the prior "tenant's first active funnel"
+// fallback — see tracker.ts for the rationale). These tests pin down
+// the middle of the waterfall: subdomain rules lose to explicit path
+// aliases, and an event with no resolver hit stays unmatched. They
+// guard against accidentally re-ordering the steps in tracker.ts.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -284,10 +286,9 @@ describe("/collect/submit funnel resolution waterfall", () => {
     expect(aliasCall[1]).toBe("/smart-furnace");
   });
 
-  it("falls back to the tenant default funnel when neither path alias nor subdomain rule matches", async () => {
+  it("persists resolved_funnel as null when neither path alias nor subdomain rule matches (task #575)", async () => {
     mockDb.selectResults = [
       [{ id: 1, name: "Tenant", leadIngestionMode: "sheets" }], // tenant lookup
-      [{ funnelTypeId: 3, funnelName: "Default Funnel" }],      // tenant-default fallback
     ];
     normalizeFunnelMock.mockResolvedValue(null);
     resolveSubdomainFunnelMock.mockResolvedValue(null);
@@ -300,16 +301,17 @@ describe("/collect/submit funnel resolution waterfall", () => {
 
     expect(res.status).toBe(200);
     const ev = findEventInsert();
-    expect(ev.resolvedFunnel).toBe("Default Funnel");
-    // Both finer stages were attempted before falling back.
+    // Task #575 — the prior "first active funnel" fallback was removed.
+    // Unmatched events are now surfaced explicitly via resolved_funnel = null.
+    expect(ev.resolvedFunnel).toBeNull();
+    // Both finer stages were still attempted.
     expect(normalizeFunnelMock).toHaveBeenCalled();
     expect(resolveSubdomainFunnelMock).toHaveBeenCalled();
   });
 
-  it("does not consult the subdomain rule when there is no page_url", async () => {
+  it("does not consult the subdomain rule when there is no page_url and leaves resolved_funnel null", async () => {
     mockDb.selectResults = [
       [{ id: 1, name: "Tenant", leadIngestionMode: "sheets" }],
-      [{ funnelTypeId: 3, funnelName: "Default Funnel" }],
     ];
     normalizeFunnelMock.mockResolvedValue(null);
     resolveSubdomainFunnelMock.mockResolvedValue({ funnelTypeId: 77, funnelName: "Protect" });
@@ -322,6 +324,6 @@ describe("/collect/submit funnel resolution waterfall", () => {
     expect(res.status).toBe(200);
     expect(resolveSubdomainFunnelMock).not.toHaveBeenCalled();
     const ev = findEventInsert();
-    expect(ev.resolvedFunnel).toBe("Default Funnel");
+    expect(ev.resolvedFunnel).toBeNull();
   });
 });

@@ -431,8 +431,8 @@ export default function Attribution() {
                         <p className="text-[11px] text-muted-foreground/80 mt-1">
                           {s.reason === "label-match"
                             ? s.matchedAlias
-                              ? `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches alias "${s.matchedAlias}" for funnel "${s.suggestedFunnelName}".`
-                              : `All ${s.eventCount} events fell through to the default funnel, but the subdomain name matches "${s.suggestedFunnelName}".`
+                              ? `All ${s.eventCount} events had no funnel match, but the subdomain name matches alias "${s.matchedAlias}" for funnel "${s.suggestedFunnelName}".`
+                              : `All ${s.eventCount} events had no funnel match, but the subdomain name matches "${s.suggestedFunnelName}".`
                             : `Every tagged event on this subdomain in the last 90 days resolved to "${s.suggestedFunnelName}".`}
                         </p>
                       </div>
@@ -545,17 +545,20 @@ export default function Attribution() {
                   </SelectContent>
                 </Select>
               )}
-              {uniqueFunnels.length > 0 && (
-                <Select value={filterFunnel} onValueChange={setFilterFunnel}>
-                  <SelectTrigger className="w-[140px] bg-white/5 border border-white/10 text-sm">
-                    <SelectValue placeholder="Funnel" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Funnels</SelectItem>
-                    {uniqueFunnels.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              )}
+              <Select value={filterFunnel} onValueChange={setFilterFunnel}>
+                <SelectTrigger className="w-[140px] bg-white/5 border border-white/10 text-sm">
+                  <SelectValue placeholder="Funnel" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Funnels</SelectItem>
+                  {/* Task #575 — unmatched leads now persist with
+                      resolved_funnel = NULL instead of being auto-assigned
+                      to the tenant's first funnel. Surface them explicitly
+                      so operators can isolate "no funnel match" rows. */}
+                  <SelectItem value="__unmatched__">Unmatched</SelectItem>
+                  {uniqueFunnels.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                </SelectContent>
+              </Select>
               <Select value={filterDateRange} onValueChange={setFilterDateRange}>
                 <SelectTrigger className="w-[120px] bg-white/5 border border-white/10 text-sm">
                   <SelectValue placeholder="Date Range" />

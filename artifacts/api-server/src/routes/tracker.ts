@@ -434,19 +434,13 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
       }
     }
 
-    if (!resolvedFunnelId) {
-      const [defaultAssoc] = await db
-        .select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId, funnelName: funnelTypesTable.name })
-        .from(tenantFunnelTypesTable)
-        .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
-        .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
-        .orderBy(tenantFunnelTypesTable.funnelTypeId)
-        .limit(1);
-      if (defaultAssoc) {
-        resolvedFunnelId = defaultAssoc.funnelTypeId;
-        resolvedFunnelStr = defaultAssoc.funnelName;
-      }
-    }
+    // Task #575 — previously, if none of the resolvers above fired we'd
+    // fall back to "the tenant's first active funnel ordered by funnel
+    // type id". That was an arbitrary guess with zero proof, and it made
+    // unmatched leads silently look like they belonged to a real funnel
+    // in every UI that reads `resolvedFunnel`. Leave resolvedFunnelId /
+    // resolvedFunnelStr as null when nothing actually matched — the
+    // attribution UI surfaces these as "Unmatched" instead.
 
     const formFieldsToStore = Object.keys(fields).length > 0
       ? { ...fields, ...(Object.keys(custom).length > 0 ? { _custom: custom } : {}) }
