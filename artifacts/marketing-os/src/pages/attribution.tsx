@@ -1793,6 +1793,15 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const savedFlashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (savedFlashTimeoutRef.current !== null) {
+        clearTimeout(savedFlashTimeoutRef.current);
+        savedFlashTimeoutRef.current = null;
+      }
+    };
+  }, []);
   const [rederiveHint, setRederiveHint] = useState<string | null>(null);
   const [refreshingHistorical, setRefreshingHistorical] = useState(false);
   const [rederiveError, setRederiveError] = useState<{
@@ -1908,7 +1917,13 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
       const d = await res.json().catch(() => ({}));
       setEditing(null);
       setSavedFlash(fieldName);
-      setTimeout(() => setSavedFlash(prev => (prev === fieldName ? null : prev)), 2000);
+      if (savedFlashTimeoutRef.current !== null) {
+        clearTimeout(savedFlashTimeoutRef.current);
+      }
+      savedFlashTimeoutRef.current = setTimeout(() => {
+        savedFlashTimeoutRef.current = null;
+        setSavedFlash(prev => (prev === fieldName ? null : prev));
+      }, 2000);
       queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() });
       queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) });
       queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] });
