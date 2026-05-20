@@ -401,3 +401,188 @@ describe("syncMetaCampaigns — token expired", () => {
     expect(fetchAdSetsMock).not.toHaveBeenCalled();
   });
 });
+
+// ─── Task #561: incremental window + rate-limit-budget guardrails ────────────
+
+describe("syncMetaCampaigns — incremental window (Task #561)", () => {
+  /**
+   * Pin the system date so the deterministic `(tenantId + dayOfWeek) % 7`
+   * branch in `syncMetaCampaigns` is testable. The test sets a date and
+   * picks the tenantId to land on either the incremental or weekly-full
+   * branch.
+   */
+  function setupHappyPath(tenantOverrides: Partial<Record<string, unknown>> = {}) {
+    state.selectQueue.push([tenantWithMeta(tenantOverrides)]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.executeQueue.push({ rows: [{ got: true }] });
+    fetchAdSetsMock.mockResolvedValue([]);
+    fetchAdsMock.mockResolvedValue([]);
+    fetchAdDailyInsightsMock.mockResolvedValue([]);
+  }
+
+  it("uses a 7-day rolling window when the tenant has a fresh watermark and is NOT on its weekly-refresh day", async () => {
+    // Wed 2026-05-20 UTC → getUTCDay() === 3. Pick tenantId=1 so
+    // (1 + 3) % 7 === 4 ≠ 0 → incremental branch. Watermark = today, so
+    // catch-up logic is a no-op and the rolling 7-day window is the floor.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2026-05-20T12:00:00Z") });
+
+      await syncMetaCampaigns(1);
+
+      expect(fetchAdDailyInsightsMock).toHaveBeenCalledTimes(1);
+      const [since, until] = fetchAdDailyInsightsMock.mock.calls[0];
+      expect(until).toBe("2026-05-20");
+      // 7 days before 2026-05-20 = 2026-05-13
+      expect(since).toBe("2026-05-13");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the 30-day full-refresh window on the tenant's weekly-refresh day", async () => {
+    // Wed 2026-05-20 UTC → dayOfWeek=3. Pick tenantId=4 so (4+3)%7===0.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      // Watermark fresh enough that catch-up never widens beyond 30d.
+      setupHappyPath({ id: 4, metaLastSyncedAt: new Date("2026-05-20T12:00:00Z") });
+
+      await syncMetaCampaigns(4);
+
+      const [since, until] = fetchAdDailyInsightsMock.mock.calls[0];
+      expect(until).toBe("2026-05-20");
+      // 30 days before 2026-05-20 = 2026-04-20
+      expect(since).toBe("2026-04-20");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("widens the window via watermark catch-up when the tenant's last sync is stale (e.g. 14 days)", async () => {
+    // Incremental branch (id=1, dow=3 → 4%7 !== 0) but watermark is 14 days
+    // old. `since` should widen to `watermark - 7d` rather than stay pinned
+    // at `today - 7d`, so we don't drop the missed 7 days of data.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2026-05-06T12:00:00Z") });
+
+      await syncMetaCampaigns(1);
+
+      const [since, until] = fetchAdDailyInsightsMock.mock.calls[0];
+      expect(until).toBe("2026-05-20");
+      // 2026-05-06 - 7d = 2026-04-29
+      expect(since).toBe("2026-04-29");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the catch-up window at META_MAX_CATCHUP_DAYS (default 90) for very stale tenants", async () => {
+    // Watermark 6 months stale. The nightly path must not regress into
+    // unbounded multi-month pulls — backfill (async report) is responsible
+    // for older history.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2025-11-01T12:00:00Z") });
+
+      await syncMetaCampaigns(1);
+
+      const [since] = fetchAdDailyInsightsMock.mock.calls[0];
+      // 90 days before 2026-05-20 = 2026-02-19
+      expect(since).toBe("2026-02-19");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the 30-day full-refresh window on a tenant's first-ever run (no metaLastSyncedAt)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      // tenantId=1 would normally be the incremental branch; first-run override wins.
+      setupHappyPath({ id: 1, metaLastSyncedAt: null });
+
+      await syncMetaCampaigns(1);
+
+      const [since] = fetchAdDailyInsightsMock.mock.calls[0];
+      expect(since).toBe("2026-04-20");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("calls fetchAds() without expanding the creative field on the nightly path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2026-05-19T12:00:00Z") });
+
+      await syncMetaCampaigns(1);
+
+      expect(fetchAdsMock).toHaveBeenCalledTimes(1);
+      // First positional arg is the includeCreative toggle. We want it
+      // explicitly false so the nightly path never re-pulls creative
+      // expansion — `backfillMetaAdCreatives` is the dedicated owner.
+      expect(fetchAdsMock.mock.calls[0][0]).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not persist any video_* fields in the per-ad-day actions payload (dead fields dropped)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+
+      state.selectQueue.push([tenantWithMeta({ id: 1, metaLastSyncedAt: new Date("2026-05-19T12:00:00Z") })]);
+      state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+      // Campaign lookup for c1: not found
+      state.selectQueue.push([]);
+      state.executeQueue.push({ rows: [{ got: true }] });
+      state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+      fetchAdSetsMock.mockResolvedValue([]);
+      fetchAdsMock.mockResolvedValue([]);
+      // Insights row with video_* fields present — should be ignored by the writer.
+      fetchAdDailyInsightsMock.mockResolvedValue([
+        {
+          ad_id: "ad_1", adset_id: "as_1",
+          campaign_id: "c1", date_start: "2026-05-19",
+          spend: "5", impressions: "100", clicks: "5",
+          actions: [{ action_type: "lead", value: "1" }],
+          // Even if a future Meta payload smuggled these in, we must not write them.
+          video_play_actions: [{ action_type: "video_view", value: "10" }],
+          video_p100_watched_actions: [{ action_type: "video_view", value: "3" }],
+        },
+      ]);
+
+      await syncMetaCampaigns(1);
+
+      const adDailyInserts = state.insertCalls.filter((c) => c.table === "meta_ad_daily_stats");
+      expect(adDailyInserts).toHaveLength(1);
+      const row = adDailyInserts[0].values[0] as Record<string, unknown>;
+      const actionsJson = row.actionsJson as Record<string, unknown>;
+      expect(actionsJson).toBeDefined();
+      expect(actionsJson.actions).toBeDefined();
+      // Dead video fields are NOT written to actions_json.
+      expect(actionsJson.video_play_actions).toBeUndefined();
+      expect(actionsJson.video_p25_watched_actions).toBeUndefined();
+      expect(actionsJson.video_p50_watched_actions).toBeUndefined();
+      expect(actionsJson.video_p75_watched_actions).toBeUndefined();
+      expect(actionsJson.video_p100_watched_actions).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

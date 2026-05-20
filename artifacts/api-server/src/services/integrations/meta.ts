@@ -138,7 +138,6 @@ export function sumConversionActions(actions: MetaAction[] | undefined | null): 
   return total;
 }
 
-export interface MetaVideoAction { action_type: string; value: string }
 interface MetaInsightRow {
   ad_id?: string;
   ad_name?: string;
@@ -152,12 +151,14 @@ interface MetaInsightRow {
   spend?: string;
   cpm?: string;
   actions?: MetaAction[];
-  video_play_actions?: MetaAction[];
-  video_p25_watched_actions?: MetaAction[];
-  video_p50_watched_actions?: MetaAction[];
-  video_p75_watched_actions?: MetaAction[];
-  video_p100_watched_actions?: MetaAction[];
 }
+
+// Field list used by both sync and async insights endpoints. Deliberately
+// excludes video_* breakdowns — they were never read anywhere in the
+// codebase and inflated Meta's per-call rate-limit scoring (Task #561).
+// If video metrics are needed in the future, add them behind a per-tenant
+// feature flag rather than re-adding them universally.
+const META_INSIGHTS_AD_FIELDS = "ad_id,ad_name,adset_id,campaign_id,campaign_name,impressions,clicks,spend,cpm,actions,date_start,date_stop";
 
 interface MetaInsightsResponse {
   data: MetaInsightRow[];
@@ -211,6 +212,10 @@ export class MetaAPIService {
   private accessToken: string;
   private adAccountId: string;
   private pixelId?: string;
+  // Total number of Graph API HTTP requests issued by this instance.
+  // Counts every fetch attempt including retries — useful for surfacing
+  // call volume in sync logs / observability (Task #561).
+  private _requestCount = 0;
 
   constructor(config: MetaConfig) {
     if (!config.accessToken) throw new Error("MetaAPIService: accessToken required");
@@ -220,6 +225,9 @@ export class MetaAPIService {
       : "";
     this.pixelId = config.pixelId;
   }
+
+  /** Total Graph requests this instance has issued (including retries). */
+  get requestCount(): number { return this._requestCount; }
 
   /** Build a Graph URL with access_token attached as a query param. */
   private buildUrl(path: string, params?: Record<string, string>): string {
@@ -242,6 +250,7 @@ export class MetaAPIService {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      this._requestCount++;
       try {
         const headers: Record<string, string> = {};
         let body: string | undefined;
@@ -332,7 +341,7 @@ export class MetaAPIService {
   async fetchAdDailyInsights(since: string, until: string): Promise<MetaInsightRow[]> {
     if (!this.adAccountId) throw new Error("MetaAPIService: adAccountId required for insights");
     const params: Record<string, string> = {
-      fields: "ad_id,ad_name,adset_id,campaign_id,campaign_name,impressions,clicks,spend,cpm,actions,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions,date_start,date_stop",
+      fields: META_INSIGHTS_AD_FIELDS,
       time_range: JSON.stringify({ since, until }),
       level: "ad",
       time_increment: "1",
@@ -357,6 +366,103 @@ export class MetaAPIService {
       nextParams = undefined;
     }
 
+    return all;
+  }
+
+  /**
+   * Per-ad daily insights via Meta's **async report** path. Used by the
+   * historical backfill (`backfillMetaCampaigns`) — Meta tracks async reports
+   * against a separate per-app budget from synchronous `/insights` calls,
+   * so moving the heavy multi-month pulls off the sync endpoint stops the
+   * backfill from eating into the nightly sync's per-user rate-limit budget
+   * (Task #561).
+   *
+   * Flow:
+   *   1. POST `/act_X/insights` with the same params as the sync version
+   *      → `{ report_run_id }`.
+   *   2. Poll GET `/<report_run_id>?fields=async_status,async_percent_completion`
+   *      until `async_status` is `Job Completed` (or a terminal failure).
+   *   3. Page GET `/<report_run_id>/insights` to collect rows.
+   *
+   * Errors:
+   *   - `MetaTokenInvalidError` (code 190 only) bubbles through `request()`
+   *     unchanged, preserving the reconnect-flag logic from Task #556.
+   *   - Terminal async failures (`Job Failed` / `Job Skipped`) raise
+   *     `MetaApiError` (non-transient).
+   *   - Poll timeout raises a plain `Error` so the backfill's outer catch
+   *     records the partial-failure progress.
+   */
+  async fetchAdDailyInsightsAsync(
+    since: string,
+    until: string,
+    opts: { pollIntervalMs?: number; timeoutMs?: number } = {},
+  ): Promise<MetaInsightRow[]> {
+    if (!this.adAccountId) throw new Error("MetaAPIService: adAccountId required for insights");
+    const pollIntervalMs = Math.max(500, opts.pollIntervalMs ?? 5000);
+    const timeoutMs = Math.max(pollIntervalMs, opts.timeoutMs ?? 5 * 60_000);
+
+    // 1) Kick off the async report.
+    const runResp = await this.request<{ report_run_id?: string }>(
+      `/${this.adAccountId}/insights`,
+      {
+        method: "POST",
+        params: {
+          fields: META_INSIGHTS_AD_FIELDS,
+          time_range: JSON.stringify({ since, until }),
+          level: "ad",
+          time_increment: "1",
+        },
+      },
+    );
+    const runId = runResp.report_run_id;
+    if (!runId) {
+      throw new MetaApiError(
+        `Meta async insights: missing report_run_id in POST response (since=${since}, until=${until})`,
+        502, undefined, false,
+      );
+    }
+
+    // 2) Poll until terminal status.
+    const startedAt = Date.now();
+    interface PollResp { async_status?: string; async_percent_completion?: number }
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const poll = await this.request<PollResp>(
+        `/${runId}`,
+        { params: { fields: "async_status,async_percent_completion" } },
+      );
+      const status = poll.async_status || "";
+      if (status === "Job Completed") break;
+      if (status === "Job Failed" || status === "Job Skipped") {
+        throw new MetaApiError(
+          `Meta async insights ${runId} terminated with status=${status} (since=${since}, until=${until})`,
+          502, undefined, false,
+        );
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error(
+          `Meta async insights ${runId} timed out after ${Math.round((Date.now() - startedAt) / 1000)}s (status=${status}, ${poll.async_percent_completion ?? 0}% complete)`,
+        );
+      }
+      await sleep(pollIntervalMs);
+    }
+
+    // 3) Page the completed report.
+    const all: MetaInsightRow[] = [];
+    let nextPath: string | null = `/${runId}/insights`;
+    let nextParams: Record<string, string> | undefined = { limit: "500" };
+    let lastCursor: string | null = null;
+    let safety = 0;
+    while (nextPath && safety++ < 200) {
+      const resp: MetaInsightsResponse = await this.request<MetaInsightsResponse>(nextPath, nextParams ? { params: nextParams } : undefined);
+      if (Array.isArray(resp.data)) all.push(...resp.data);
+      const next = resp.paging?.next || null;
+      const cursor = resp.paging?.cursors?.after || null;
+      if (next && cursor && cursor === lastCursor) break;
+      lastCursor = cursor;
+      nextPath = next;
+      nextParams = undefined;
+    }
     return all;
   }
 
@@ -423,13 +529,31 @@ export class MetaAPIService {
     );
   }
 
-  async fetchAds(): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }>> {
+  /**
+   * List ads for the configured ad account.
+   *
+   * By default (`includeCreative=false`) this requests only the lightweight
+   * `id,name,adset_id,campaign_id,effective_status` field set — the nightly
+   * sync doesn't need creative metadata on every run because
+   * `backfillMetaAdCreatives` already fills in thumbnail/title/body for any
+   * ad that's missing them, and re-pulling the `creative{…}` expansion for
+   * every ad each night is pure overhead against the per-user rate limit
+   * (Task #561).
+   *
+   * Pass `includeCreative=true` to expand `creative{id,thumbnail_url,title,body}`
+   * inline — used by callers that want creative data without a follow-up
+   * fetch (e.g. tests, future ad-hoc tooling).
+   */
+  async fetchAds(includeCreative = false): Promise<Array<{ id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }>> {
     if (!this.adAccountId) return [];
     interface Row { id: string; name: string; adset_id?: string; campaign_id?: string; effective_status?: string; creative?: { id?: string; thumbnail_url?: string; title?: string; body?: string } }
     interface Resp { data: Row[]; paging?: { next?: string; cursors?: { after?: string } } }
     const all: Row[] = [];
     let nextPath: string | null = `/${this.adAccountId}/ads`;
-    let nextParams: Record<string, string> | undefined = { fields: "id,name,adset_id,campaign_id,effective_status,creative{id,thumbnail_url,title,body}", limit: "200" };
+    const fields = includeCreative
+      ? "id,name,adset_id,campaign_id,effective_status,creative{id,thumbnail_url,title,body}"
+      : "id,name,adset_id,campaign_id,effective_status";
+    let nextParams: Record<string, string> | undefined = { fields, limit: "200" };
     let lastCursor: string | null = null;
     let safety = 0;
     while (nextPath && safety++ < 50) {

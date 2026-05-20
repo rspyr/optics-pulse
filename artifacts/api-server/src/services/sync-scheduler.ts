@@ -637,15 +637,69 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
   }
 
   try {
-    const endDate = new Date().toISOString().split("T")[0];
-    // Refetch last 30 days every run to catch attribution back-fills.
-    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+    // ── Task #561: incremental nightly window with weekly full refresh ──
+    // Meta's default attribution window settles within ~7 days. Re-pulling
+    // the full 30 days every night was the single biggest driver of code-17
+    // rate-limit failures for high-volume tenants (Advantage). Strategy:
+    //   • Default to a rolling `META_ATTRIBUTION_REFRESH_DAYS` window
+    //     (env-overridable, defaults to 7).
+    //   • Once per week per tenant (deterministic via tenantId mod) fall
+    //     back to the original `META_FULL_REFRESH_DAYS` window (default 30)
+    //     so late attribution back-fills are still captured.
+    //   • First-ever nightly run for a tenant (no `metaLastSyncedAt`) also
+    //     uses the full window so we don't ship with a 7-day cold start.
+    const attributionRefreshDays = Math.max(
+      1, Number(process.env.META_ATTRIBUTION_REFRESH_DAYS || "7"),
+    );
+    const fullRefreshDays = Math.max(
+      attributionRefreshDays, Number(process.env.META_FULL_REFRESH_DAYS || "30"),
+    );
+    // Hard cap on how far back nightly sync will ever reach in a single run,
+    // even if the tenant's watermark is months stale. Older history is the
+    // backfill route's job (`backfillMetaCampaigns`, which now uses Meta's
+    // async report endpoint).
+    const maxCatchupDays = Math.max(
+      fullRefreshDays, Number(process.env.META_MAX_CATCHUP_DAYS || "90"),
+    );
+    const dayOfWeek = new Date().getUTCDay(); // 0..6
+    const isWeeklyFullRefresh = ((tenantId + dayOfWeek) % 7) === 0;
+    const isFirstRun = !tenant.metaLastSyncedAt;
+    const useFullRefresh = isFirstRun || isWeeklyFullRefresh;
+    const baseWindowDays = useFullRefresh ? fullRefreshDays : attributionRefreshDays;
+
+    // Watermark catch-up: if the last successful sync is older than the
+    // base window (e.g. tenant was paused for two weeks), widen `since` to
+    // `metaLastSyncedAt - attributionRefreshDays` so we still pick up any
+    // attribution back-fills inside the gap. Capped at `maxCatchupDays`.
+    const nowMs = Date.now();
+    const baseSinceMs = nowMs - baseWindowDays * 86400000;
+    const watermarkMs = tenant.metaLastSyncedAt
+      ? new Date(tenant.metaLastSyncedAt as Date).getTime() - attributionRefreshDays * 86400000
+      : baseSinceMs;
+    const capMs = nowMs - maxCatchupDays * 86400000;
+    const sinceMs = Math.max(capMs, Math.min(baseSinceMs, watermarkMs));
+    const isCatchup = sinceMs < baseSinceMs;
+    const windowDays = Math.round((nowMs - sinceMs) / 86400000);
+
+    const endDate = new Date(nowMs).toISOString().split("T")[0];
+    const startDate = new Date(sinceMs).toISOString().split("T")[0];
 
     const svc = new MetaAPIService({
       accessToken: config.metaAccessToken,
       adAccountId,
       pixelId: config.metaPixelId,
     });
+
+    const modeLabel = isFirstRun
+      ? "full-refresh:first-run"
+      : isCatchup
+        ? `catchup:${useFullRefresh ? "full" : "incremental"}`
+        : useFullRefresh
+          ? "full-refresh:weekly"
+          : "incremental";
+    console.log(
+      `[Sync] Meta tenant ${tenantId}: window=${startDate}→${endDate} (${windowDays}d, ${modeLabel})`,
+    );
 
     // Use account currency if known (from meta_ad_accounts).
     let currency: string | undefined;
@@ -660,9 +714,12 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
     }
 
     // Fetch ad-set + ad metadata so we can persist names/statuses/budgets.
+    // `fetchAds()` no longer expands `creative{…}` — the idempotent
+    // `backfillMetaAdCreatives` job handles thumbnail/title/body. This drops
+    // one expansion per ad per night off the rate-limit budget (Task #561).
     const [adSets, ads, insights] = await Promise.all([
       svc.fetchAdSets(),
-      svc.fetchAds(),
+      svc.fetchAds(/* includeCreative */ false),
       svc.fetchAdDailyInsights(startDate, endDate),
     ]);
 
@@ -736,7 +793,9 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       .where(eq(tenantsTable.id, tenantId));
 
     await completeSyncLog(syncLog.id, "completed", perAdSynced);
-    console.log(`[Sync] Meta tenant ${tenantId}: ${perAdSynced} ad-day rows, ${campaignDayCount} campaign-day rollups`);
+    console.log(
+      `[Sync] Meta tenant ${tenantId}: ${perAdSynced} ad-day rows, ${campaignDayCount} campaign-day rollups, ${svc.requestCount} Graph requests (window=${startDate}→${endDate}, ${useFullRefresh ? "full" : "incremental"})`,
+    );
     return { synced: perAdSynced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -915,11 +974,6 @@ interface MetaInsightLikeRow {
   impressions?: string;
   clicks?: string;
   actions?: MetaAction[];
-  video_play_actions?: MetaAction[];
-  video_p25_watched_actions?: MetaAction[];
-  video_p50_watched_actions?: MetaAction[];
-  video_p75_watched_actions?: MetaAction[];
-  video_p100_watched_actions?: MetaAction[];
 }
 
 /**
@@ -961,12 +1015,11 @@ async function upsertMetaInsightRows(
     const clicks = parseIntField(row.clicks);
     const actions: MetaAction[] = row.actions || [];
     const conversions = sumConversionActions(actions);
+    // Task #561: dropped video_play_actions / video_pNN_watched_actions —
+    // nothing in the codebase ever read them, and pulling them inflated
+    // Meta's per-user rate-limit scoring. If video metrics come back,
+    // gate them behind a per-tenant feature flag.
     const actionsPayload: Record<string, MetaAction[]> = { actions };
-    if (row.video_play_actions) actionsPayload.video_play_actions = row.video_play_actions;
-    if (row.video_p25_watched_actions) actionsPayload.video_p25_watched_actions = row.video_p25_watched_actions;
-    if (row.video_p50_watched_actions) actionsPayload.video_p50_watched_actions = row.video_p50_watched_actions;
-    if (row.video_p75_watched_actions) actionsPayload.video_p75_watched_actions = row.video_p75_watched_actions;
-    if (row.video_p100_watched_actions) actionsPayload.video_p100_watched_actions = row.video_p100_watched_actions;
 
     adDailyRows.push({
       tenantId,
@@ -1188,10 +1241,16 @@ export async function backfillMetaCampaigns(
           since,
           until,
         );
-        const insights = await svc.fetchAdDailyInsights(since, until);
+        // Task #561: route historical chunks through Meta's async report
+        // endpoint. Async reports are tracked against a separate per-app
+        // budget from synchronous `/insights` calls, so heavy multi-month
+        // backfills no longer starve the nightly sync's per-user quota.
+        // `MetaTokenInvalidError` still bubbles through unchanged so the
+        // reconnect-flag logic from Task #556 keeps working.
+        const insights = await svc.fetchAdDailyInsightsAsync(since, until);
         const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
         totalSynced += perAdSynced;
-        console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows`);
+        console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows (async, ${svc.requestCount} requests so far)`);
       }
     } catch (innerErr) {
       // Re-throw so the outer catch handles error-state, but stash partial
@@ -1203,7 +1262,7 @@ export async function backfillMetaCampaigns(
     }
 
     await completeSyncLog(syncLog.id, "completed", totalSynced);
-    console.log(`[Backfill] Meta tenant ${tenantId}: backfilled ${totalSynced} ad-day rows across ${chunks.length} chunks (${totalDays} days)`);
+    console.log(`[Backfill] Meta tenant ${tenantId}: backfilled ${totalSynced} ad-day rows across ${chunks.length} chunks (${totalDays} days, ${svc.requestCount} Graph requests)`);
     return { synced: totalSynced, chunks: chunks.length };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

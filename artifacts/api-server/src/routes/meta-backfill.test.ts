@@ -134,13 +134,18 @@ vi.mock("../services/integrations/service-titan", () => ({
 vi.mock("../services/integrations/google-ads", () => ({ fetchCampaignPerformance: vi.fn(), formatCampaignRow: vi.fn() }));
 vi.mock("../services/integrations/podium", () => ({ syncPodiumReviews: vi.fn() }));
 
-// Mock MetaAPIService — expose a configurable fetchAdDailyInsights spy.
+// Mock MetaAPIService — expose configurable spies. The backfill route now
+// drives its insights pulls through `fetchAdDailyInsightsAsync` (Task #561,
+// Meta's async report path), but we keep a `fetchAdDailyInsights` mock too
+// in case other code paths reach for it.
 const metaMocks = vi.hoisted(() => ({
   fetchAdDailyInsights: (..._args: unknown[]) => Promise.resolve([]) as Promise<unknown>,
+  fetchAdDailyInsightsAsync: (..._args: unknown[]) => Promise.resolve([]) as Promise<unknown>,
   fetchAdSets: (..._args: unknown[]) => Promise.resolve([]) as Promise<unknown>,
   fetchAds: (..._args: unknown[]) => Promise.resolve([]) as Promise<unknown>,
   listAdAccounts: (..._args: unknown[]) => Promise.resolve([]) as Promise<unknown>,
   verifyToken: (..._args: unknown[]) => Promise.resolve({}) as Promise<unknown>,
+  requestCount: 0,
 }));
 
 vi.mock("../services/integrations/meta", async () => {
@@ -149,18 +154,23 @@ vi.mock("../services/integrations/meta", async () => {
   );
   class MockMetaAPIService {
     fetchAdDailyInsights(...args: unknown[]) { return metaMocks.fetchAdDailyInsights(...args); }
+    fetchAdDailyInsightsAsync(...args: unknown[]) { return metaMocks.fetchAdDailyInsightsAsync(...args); }
     fetchAdSets(...args: unknown[]) { return metaMocks.fetchAdSets(...args); }
     fetchAds(...args: unknown[]) { return metaMocks.fetchAds(...args); }
     listAdAccounts(...args: unknown[]) { return metaMocks.listAdAccounts(...args); }
     verifyToken(...args: unknown[]) { return metaMocks.verifyToken(...args); }
+    get requestCount() { return metaMocks.requestCount; }
   }
   return { ...actual, MetaAPIService: MockMetaAPIService };
 });
 
+// The backfill route uses Meta's async report path. Tests assert calls
+// against `fetchAdDailyInsightsAsync`; the old variable name is kept as an
+// alias so test bodies read the same.
 const fetchAdDailyInsightsMock = vi.fn();
 
 beforeEach(() => {
-  metaMocks.fetchAdDailyInsights = fetchAdDailyInsightsMock as unknown as typeof metaMocks.fetchAdDailyInsights;
+  metaMocks.fetchAdDailyInsightsAsync = fetchAdDailyInsightsMock as unknown as typeof metaMocks.fetchAdDailyInsightsAsync;
 });
 
 // ─── Test app + helpers ──────────────────────────────────────────────────────

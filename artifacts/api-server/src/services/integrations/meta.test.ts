@@ -617,6 +617,126 @@ describe("MetaAPIService — insights pagination", () => {
   });
 });
 
+describe("MetaAPIService — fetchAdDailyInsights field set (Task #561)", () => {
+  it("does NOT include any video_* breakdown fields in the request URL", async () => {
+    const capturedUrls: string[] = [];
+    setFetch(async (url) => {
+      capturedUrls.push(String(url));
+      return mockResponse(200, { data: [], paging: {} });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    await runWithTimers(svc.fetchAdDailyInsights("2026-01-01", "2026-01-02"));
+
+    expect(capturedUrls.length).toBeGreaterThan(0);
+    const fieldsParam = capturedUrls[0];
+    expect(fieldsParam).not.toMatch(/video_play_actions/);
+    expect(fieldsParam).not.toMatch(/video_p25_watched_actions/);
+    expect(fieldsParam).not.toMatch(/video_p50_watched_actions/);
+    expect(fieldsParam).not.toMatch(/video_p75_watched_actions/);
+    expect(fieldsParam).not.toMatch(/video_p100_watched_actions/);
+    expect(fieldsParam).toMatch(/spend/);
+    expect(fieldsParam).toMatch(/impressions/);
+    expect(fieldsParam).toMatch(/actions/);
+  });
+});
+
+describe("MetaAPIService — fetchAdDailyInsightsAsync (Task #561 async report path)", () => {
+  it("POSTs the kickoff, polls until Job Completed, then pages the report and returns rows", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    let pollCount = 0;
+    setFetch(async (url, init) => {
+      const i = init as RequestInit | undefined;
+      const u = String(url);
+      const method = i?.method || "GET";
+      calls.push({ url: u, method });
+
+      if (method === "POST" && u.includes("/act_1/insights")) {
+        return mockResponse(200, { report_run_id: "rep_42" });
+      }
+      if (method === "GET" && /\/rep_42\?/.test(u)) {
+        pollCount++;
+        if (pollCount < 2) {
+          return mockResponse(200, { async_status: "Job Running", async_percent_completion: 50 });
+        }
+        return mockResponse(200, { async_status: "Job Completed", async_percent_completion: 100 });
+      }
+      if (method === "GET" && /\/rep_42\/insights/.test(u)) {
+        return mockResponse(200, {
+          data: [
+            { ad_id: "a1", date_start: "2026-01-01", date_stop: "2026-01-01", impressions: "10" },
+            { ad_id: "a2", date_start: "2026-01-02", date_stop: "2026-01-02", impressions: "20" },
+          ],
+          paging: { cursors: { after: "p1" } },
+        });
+      }
+      return mockResponse(500, { error: { message: "unexpected route", url: u } });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(
+      svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", { pollIntervalMs: 1000 }),
+    );
+
+    expect(rows.map((r) => r.ad_id)).toEqual(["a1", "a2"]);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].url).toMatch(/\/act_1\/insights/);
+    expect(calls.filter((c) => /\/rep_42\?/.test(c.url)).length).toBe(2);
+    expect(calls.filter((c) => /\/rep_42\/insights/.test(c.url)).length).toBe(1);
+  });
+
+  it("throws MetaApiError when the async job terminates with Job Failed", async () => {
+    setFetch(async (_url, init) => {
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST") return mockResponse(200, { report_run_id: "rep_x" });
+      return mockResponse(200, { async_status: "Job Failed" });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    let caught: unknown;
+    try {
+      await runWithTimers(svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", { pollIntervalMs: 500 }));
+    } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(MetaApiError);
+    expect((caught as Error).message).toMatch(/Job Failed/);
+  });
+
+  it("throws a plain Error (not MetaApiError) when polling exceeds the timeout", async () => {
+    setFetch(async (_url, init) => {
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST") return mockResponse(200, { report_run_id: "rep_t" });
+      return mockResponse(200, { async_status: "Job Running", async_percent_completion: 10 });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    let caught: unknown;
+    try {
+      await runWithTimers(
+        svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", {
+          pollIntervalMs: 1000,
+          timeoutMs: 2000,
+        }),
+      );
+    } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/timed out/);
+    expect(caught).not.toBeInstanceOf(MetaApiError);
+  });
+
+  it("throws MetaApiError when the kickoff POST returns no report_run_id", async () => {
+    setFetch(async (_url, init) => {
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST") return mockResponse(200, {});
+      return mockResponse(500, {});
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    await expect(
+      runWithTimers(svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02")),
+    ).rejects.toBeInstanceOf(MetaApiError);
+  });
+});
+
 describe("MetaAPIService — listing pagination guards", () => {
   it("listAdAccounts aggregates rows across multi-page paging.next responses in order", async () => {
     const pages = [
