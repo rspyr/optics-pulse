@@ -97,9 +97,11 @@ vi.mock("drizzle-orm", () => ({
 
 const reDeriveLeadFunnelMock = vi.fn().mockResolvedValue(undefined);
 const redetectAndPersistEventMock = vi.fn().mockResolvedValue(undefined);
+const markEventManuallyMatchedMock = vi.fn().mockResolvedValue(1);
 vi.mock("../services/re-derive-lead-funnel", () => ({
   reDeriveLeadFunnel: reDeriveLeadFunnelMock,
   redetectAndPersistEvent: redetectAndPersistEventMock,
+  markEventManuallyMatched: markEventManuallyMatchedMock,
 }));
 
 vi.mock("../services/lead-rerouting", () => ({
@@ -146,6 +148,8 @@ async function setupApp(role: string, tenantId: number, userId = 7) {
   selectRowsQueue = [];
   reDeriveLeadFunnelMock.mockClear();
   redetectAndPersistEventMock.mockClear();
+  markEventManuallyMatchedMock.mockClear();
+  markEventManuallyMatchedMock.mockResolvedValue(1);
   const mod = await import("./leads");
   app = express();
   app.use(express.json());
@@ -220,6 +224,49 @@ describe("POST /leads/:leadId/funnel-override — Task #549", () => {
     const res = await request("POST", "/leads/555/funnel-override", { funnelTypeId: 5 });
     expect(res.status).toBe(400);
     expect(updateCalls.some(c => c.table === "leadsTable")).toBe(false);
+  });
+
+  it("flips an unmatched attributionEventId to `manual` via markEventManuallyMatched after applying the override (Task #580)", async () => {
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "ac" }]); // existing lead
+    selectRowsQueue.push([{ id: 5, name: "Webinar" }]);                 // funnel type
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);          // tenant assoc
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "Webinar" }]); // reload
+
+    const res = await request("POST", "/leads/555/funnel-override", { funnelTypeId: 5, attributionEventId: 1234 });
+
+    expect(res.status).toBe(200);
+    // Operator-action path: the manual-match flip is invoked with the
+    // lead's tenant + the open event's id, so the badge/filter/no-panel
+    // contract holds for per-lead funnel overrides too.
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledTimes(1);
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(42, 1234);
+  });
+
+  it("does NOT call markEventManuallyMatched when the override is saved without an attributionEventId (Task #580)", async () => {
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "ac" }]);
+    selectRowsQueue.push([{ id: 5, name: "Webinar" }]);
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "Webinar" }]);
+
+    const res = await request("POST", "/leads/555/funnel-override", { funnelTypeId: 5 });
+
+    expect(res.status).toBe(200);
+    expect(markEventManuallyMatchedMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns 200 when markEventManuallyMatched throws (best-effort flip, override is not rolled back) — Task #580", async () => {
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "ac" }]);
+    selectRowsQueue.push([{ id: 5, name: "Webinar" }]);
+    selectRowsQueue.push([{ tenantId: 42, funnelTypeId: 5 }]);
+    selectRowsQueue.push([{ id: 555, tenantId: 42, leadType: "Webinar" }]);
+    markEventManuallyMatchedMock.mockRejectedValueOnce(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request("POST", "/leads/555/funnel-override", { funnelTypeId: 5, attributionEventId: 1234 });
+
+    expect(res.status).toBe(200);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("pins funnel fields, stamps funnel_overridden_at, writes audit row, and tenant-scopes the event update", async () => {

@@ -61,7 +61,7 @@ vi.mock("../services/field-detection", () => ({
   invalidateRuleCache: vi.fn(),
 }));
 
-const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLeadsRederiveCancelledMock, getSelectedLeadsRederiveProgressMock, findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock, findLatestCancelledRederiveSnapshotFromDbMock, markCancelledSelectedLeadsRederiveSnapshotDismissedMock, clearCancelledSelectedLeadsRederiveDismissedForScopeMock, markCancelledRederiveSnapshotDismissedInDbMock, clearCancelledRederiveDismissedInDbForScopeMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock, enqueueReDeriveSelectedLeadsMock } = vi.hoisted(() => ({
+const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLeadsRederiveCancelledMock, getSelectedLeadsRederiveProgressMock, findLatestCancelledSelectedLeadsRederiveSnapshotForScopeMock, findLatestCancelledRederiveSnapshotFromDbMock, markCancelledSelectedLeadsRederiveSnapshotDismissedMock, clearCancelledSelectedLeadsRederiveDismissedForScopeMock, markCancelledRederiveSnapshotDismissedInDbMock, clearCancelledRederiveDismissedInDbForScopeMock, reDeriveLeadsForRuleScopeMock, reDeriveLeadFunnelMock, countPendingRederiveLeadsForRuleScopeMock, listPendingRederiveLeadsForRuleScopeMock, enqueueReDeriveLeadsForRuleScopeMock, enqueueReDeriveSelectedLeadsMock, markEventManuallyMatchedMock, redetectAndPersistEventMock } = vi.hoisted(() => ({
   emitRuleRederiveCompleteMock: vi.fn(),
   emitRuleRederiveFailedMock: vi.fn(),
   emitSelectedLeadsRederiveCancelledMock: vi.fn(),
@@ -78,6 +78,8 @@ const { emitRuleRederiveCompleteMock, emitRuleRederiveFailedMock, emitSelectedLe
   listPendingRederiveLeadsForRuleScopeMock: vi.fn(),
   enqueueReDeriveLeadsForRuleScopeMock: vi.fn(),
   enqueueReDeriveSelectedLeadsMock: vi.fn(),
+  markEventManuallyMatchedMock: vi.fn(),
+  redetectAndPersistEventMock: vi.fn(),
 }));
 
 vi.mock("../socket", () => ({
@@ -95,6 +97,8 @@ vi.mock("../services/re-derive-lead-funnel", () => ({
   reDeriveLeadFunnel: reDeriveLeadFunnelMock,
   countPendingRederiveLeadsForRuleScope: countPendingRederiveLeadsForRuleScopeMock,
   listPendingRederiveLeadsForRuleScope: listPendingRederiveLeadsForRuleScopeMock,
+  markEventManuallyMatched: markEventManuallyMatchedMock,
+  redetectAndPersistEvent: redetectAndPersistEventMock,
 }));
 
 vi.mock("../services/re-derive-jobs", () => ({
@@ -154,6 +158,10 @@ async function setupApp(role: string | undefined, tenantId: number | null) {
   });
   enqueueReDeriveLeadsForRuleScopeMock.mockReset();
   enqueueReDeriveLeadsForRuleScopeMock.mockResolvedValue({ id: 1 });
+  markEventManuallyMatchedMock.mockReset();
+  markEventManuallyMatchedMock.mockResolvedValue(1);
+  redetectAndPersistEventMock.mockReset();
+  redetectAndPersistEventMock.mockResolvedValue({ changed: false });
   const mod = await import("./field-mapping-rules");
   app = express();
   app.use(express.json());
@@ -362,6 +370,62 @@ describe("POST /field-mapping-rules", () => {
     // The route itself must NOT emit the socket event — that's the job
     // handler's responsibility, and the handler is mocked out here.
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it("flips an unmatched attributionEventId to `manual` via markEventManuallyMatched after saving the rule (Task #580)", async () => {
+    // Route looks up createdLeadId via attributionEventId — return a row with
+    // a matching tenant so the resolved lead path is exercised end-to-end.
+    selectRowsQueue = [
+      [],
+      [{ createdLeadId: 77, tenantId: 42 }],
+    ];
+    reDeriveLeadFunnelMock.mockResolvedValue({ changed: false });
+
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/quote",
+      formIdentifier: "quote-form",
+      fieldName: "field_9",
+      mapsTo: "email",
+      attributionEventId: 4242,
+    });
+    expect(res.status).toBe(200);
+
+    // The manual-match flip must be invoked exactly once with the request's
+    // tenant + event id — that's what surfaces the MANUAL badge and hides
+    // the "Why unmatched?" panel for the operator who just saved the rule.
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledTimes(1);
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(42, 4242);
+  });
+
+  it("does not call markEventManuallyMatched when no attributionEventId is provided (Task #580)", async () => {
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      fieldName: "field_3",
+      mapsTo: "phone",
+    });
+    expect(res.status).toBe(200);
+    expect(markEventManuallyMatchedMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns 200 when markEventManuallyMatched throws (the flip is best-effort, the save is not undone) — Task #580", async () => {
+    selectRowsQueue = [
+      [],
+      [{ createdLeadId: 77, tenantId: 42 }],
+    ];
+    markEventManuallyMatchedMock.mockRejectedValueOnce(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await postJson(app, "/field-mapping-rules", {
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      fieldName: "field_3",
+      mapsTo: "phone",
+      attributionEventId: 4242,
+    });
+    expect(res.status).toBe(200);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("enqueues with excludeLeadId resolved from attributionEventId so the open lead isn't re-derived twice", async () => {
