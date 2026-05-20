@@ -1280,6 +1280,30 @@ const migrations: Migration[] = [
       console.log("[Migration] Added updated_at column to field_mapping_rules and seeded from created_at");
     },
   },
+  {
+    id: "2026-05-20_add-funnel-override-to-leads",
+    description:
+      "Add funnel_overridden_at / funnel_overridden_by_user_id to leads (task #549) " +
+      "so a per-lead funnel correction made from the attribution drawer survives " +
+      "later tenant-wide alias edits. Also adds a partial index used by alias " +
+      "re-resolution to exclude overridden leads efficiently.",
+    run: async () => {
+      await db.execute(sql`
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS funnel_overridden_at TIMESTAMPTZ
+      `);
+      await db.execute(sql`
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS funnel_overridden_by_user_id INTEGER REFERENCES users(id)
+      `);
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS idx_leads_tenant_funnel_overridden_at
+          ON leads(tenant_id, funnel_overridden_at)
+          WHERE funnel_overridden_at IS NOT NULL
+      `);
+      console.log("[Migration] Added funnel_overridden_at / funnel_overridden_by_user_id to leads");
+    },
+  },
 ];
 
 export async function runOneTimeMigrations(): Promise<void> {

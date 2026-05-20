@@ -758,6 +758,7 @@ export default function Attribution() {
                     key={selectedEvent.id}
                     tenantId={effectiveTenantId}
                     event={selectedEvent}
+                    matchedLead={matchedLead as ({ id: number; firstName?: string; lastName?: string; funnelOverriddenAt?: string | Date | null } | null | undefined)}
                     onJumpToSubdomainRule={jumpToSubdomainRule}
                   />
                 )}
@@ -943,7 +944,12 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRule }: { tenantId: number; event: AttributionEvent; onJumpToSubdomainRule?: (subdomain: string) => void }) {
+export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpToSubdomainRule }: {
+  tenantId: number;
+  event: AttributionEvent;
+  matchedLead?: { id: number; firstName?: string; lastName?: string; funnelOverriddenAt?: string | Date | null } | null;
+  onJumpToSubdomainRule?: (subdomain: string) => void;
+}) {
   const queryClient = useQueryClient();
   const resolvedSource = event.resolvedLeadSource ?? undefined;
   const resolvedFunnel = event.resolvedFunnel ?? undefined;
@@ -971,16 +977,28 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
   const [savedFunnelCount, setSavedFunnelCount] = useState<{ events: number; leads: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Task #549 (bug #3): default to per-lead scope so a Funnel dropdown save
+  // doesn't silently retag every lead sharing the alias. Only show the
+  // tenant-wide option when we actually have a lead to override (matchedLead).
+  type FunnelScope = "lead" | "alias";
+  const [funnelScope, setFunnelScope] = useState<FunnelScope>("lead");
+  const [aliasPreview, setAliasPreview] = useState<{ events: number; leads: number } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [pendingAliasConfirm, setPendingAliasConfirm] = useState(false);
+
+  const funnelOverriddenAt = matchedLead?.funnelOverriddenAt
+    ? (matchedLead.funnelOverriddenAt instanceof Date
+        ? matchedLead.funnelOverriddenAt.toISOString()
+        : matchedLead.funnelOverriddenAt)
+    : null;
+  const hasOverride = !!funnelOverriddenAt;
+
   useEffect(() => {
     fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(d => {
         const types = d.funnelTypes || d || [];
         setFunnelTypes(types);
-        if (currentFunnelDisplay) {
-          const match = types.find((ft: { id: number; name: string }) => ft.name === currentFunnelDisplay);
-          if (match) setFunnelTypeId(String(match.id));
-        }
       })
       .catch(() => {});
     fetch(`${API_BASE}/api/lead-source-aliases?tenantId=${tenantId}`, { credentials: "include" })
@@ -989,12 +1007,44 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
         const aliases: { canonicalName: string }[] = d.aliases || [];
         const names = [...new Set(aliases.map(a => a.canonicalName))].sort();
         setKnownSources(names);
-        if (currentSourceDisplay && names.includes(currentSourceDisplay)) {
-          setSourceAlias(currentSourceDisplay);
-        }
       })
       .catch(() => {});
   }, [tenantId]);
+
+  // Task #549 (bug #2): re-sync the Funnel dropdown selection whenever the
+  // event's resolved_funnel changes (after a save / refetch / event switch),
+  // independent of when funnelTypes load. Previously the selection was only
+  // seeded inside the funnelTypes fetch and never re-synced, so the dropdown
+  // appeared stuck on the pre-save value after a successful retag. We only
+  // overwrite the user's pick when the canonical value actually changed —
+  // otherwise an in-progress edit (e.g. operator picked "Webinar" while the
+  // event still says "Lead Magnet") would snap back to the resolved value.
+  const lastSyncedFunnelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (funnelTypes.length === 0) return;
+    if (lastSyncedFunnelRef.current === currentFunnelDisplay) return;
+    lastSyncedFunnelRef.current = currentFunnelDisplay;
+    if (!currentFunnelDisplay) return;
+    const match = funnelTypes.find(ft => ft.name === currentFunnelDisplay);
+    if (match) setFunnelTypeId(String(match.id));
+  }, [currentFunnelDisplay, funnelTypes]);
+
+  // Reset the per-lead/alias scope toggle and any in-flight preview state
+  // whenever the operator switches to a different attribution event, so a
+  // stale "you'll retag 47 leads" confirm from a previous event can't bleed
+  // into the next one.
+  useEffect(() => {
+    setFunnelScope("lead");
+    setAliasPreview(null);
+    setPendingAliasConfirm(false);
+  }, [event.id]);
+
+  // Sync sourceAlias from known canonical names when they load.
+  useEffect(() => {
+    if (currentSourceDisplay && knownSources.includes(currentSourceDisplay)) {
+      setSourceAlias(currentSourceDisplay);
+    }
+  }, [knownSources, currentSourceDisplay]);
 
   useEffect(() => {
     if (savedSourceCount !== null) {
@@ -1049,6 +1099,14 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
     setSaving(false);
   };
 
+  const invalidateAttributionQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+      queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
+      queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
+    ]);
+  };
+
   const saveFunnelAlias = async () => {
     if (!funnelTypeId) return;
     const aliasKey = rawFunnel || funnelTypes.find(ft => ft.id === parseInt(funnelTypeId))?.name || "";
@@ -1070,16 +1128,82 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
         const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
         const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
         setSavedFunnelCount({ events, leads });
-        // Refetch the events list and the open detail panel so the new
-        // canonical funnel name shows up immediately without a manual reload.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
-          queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
-          queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
-        ]);
+        setPendingAliasConfirm(false);
+        setAliasPreview(null);
+        await invalidateAttributionQueries();
       }
     } catch { setError("Network error"); }
     setSaving(false);
+  };
+
+  // Task #549 (bug #3): per-lead override save. Only flips this lead's
+  // funnel and stamps funnel_overridden_at so a later tenant-wide alias
+  // retag cannot stomp the operator's manual fix.
+  const saveFunnelForLead = async () => {
+    if (!funnelTypeId || !matchedLead?.id) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/leads/${matchedLead.id}/funnel-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ funnelTypeId: parseInt(funnelTypeId), attributionEventId: event.id }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to set funnel for this lead");
+      } else {
+        setSavedFunnelCount({ events: 1, leads: 1 });
+        await invalidateAttributionQueries();
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  // Task #549 (bug #3): clear a per-lead override and re-derive the lead's
+  // funnel from its latest attribution event.
+  const clearLeadOverride = async () => {
+    if (!matchedLead?.id) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/leads/${matchedLead.id}/funnel-override`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to clear override");
+      } else {
+        await invalidateAttributionQueries();
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  // Task #549 (bug #3): dry-run preview before tenant-wide retag, so the
+  // operator sees exactly how many leads/events the alias save would touch.
+  const fetchAliasPreview = async () => {
+    if (!funnelTypeId) return;
+    const aliasKey = rawFunnel || funnelTypes.find(ft => ft.id === parseInt(funnelTypeId))?.name || "";
+    if (!aliasKey) return;
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/funnel-aliases/preview?tenantId=${tenantId}&alias=${encodeURIComponent(aliasKey)}&funnelTypeId=${funnelTypeId}`,
+        { credentials: "include" },
+      );
+      if (res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setAliasPreview({ events: Number(d.events ?? 0), leads: Number(d.leads ?? 0) });
+        setPendingAliasConfirm(true);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to load preview");
+      }
+    } catch { setError("Network error"); }
+    setPreviewLoading(false);
   };
 
   const sourceChanged = sourceAlias.trim() !== "" && sourceAlias !== currentSourceDisplay;
@@ -1256,23 +1380,144 @@ export function InlineIdentityCorrection({ tenantId, event, onJumpToSubdomainRul
         </div>
 
         <div className="space-y-1">
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Funnel</span>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Funnel</span>
+            {hasOverride && (
+              <button
+                type="button"
+                onClick={clearLeadOverride}
+                disabled={saving}
+                className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1 disabled:opacity-50"
+                title={`Manually set${funnelOverriddenAt ? ` on ${new Date(funnelOverriddenAt).toLocaleString()}` : ""}. Click to undo and re-derive from latest event.`}
+                data-testid="button-clear-funnel-override"
+              >
+                <ShieldCheck className="w-3 h-3" />
+                Manually set — undo
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <select
               value={funnelTypeId}
-              onChange={e => setFunnelTypeId(e.target.value)}
+              onChange={e => {
+                setFunnelTypeId(e.target.value);
+                setPendingAliasConfirm(false);
+                setAliasPreview(null);
+              }}
               className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1.5 h-8"
+              data-testid="select-funnel-type"
             >
               <option value="">Select funnel...</option>
               {funnelTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
             </select>
-            {funnelChanged && (
-              <Button size="sm" variant="ghost" disabled={saving} onClick={saveFunnelAlias} className="text-xs h-8 px-2 shrink-0">
-                Save
-              </Button>
-            )}
             {savedFunnelCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
           </div>
+
+          {funnelChanged && (
+            <div className="mt-2 space-y-2 rounded border border-white/10 bg-black/20 px-2 py-2">
+              {/* Task #549 (bug #3): scope toggle defaults to "Just this lead" */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => { setFunnelScope("lead"); setPendingAliasConfirm(false); setAliasPreview(null); }}
+                  disabled={!matchedLead?.id}
+                  className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
+                    funnelScope === "lead"
+                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-200"
+                      : "bg-black/40 border-white/10 text-white/60 hover:text-white"
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                  title={matchedLead?.id ? "Override only this lead's funnel" : "No matched lead to override"}
+                  data-testid="button-funnel-scope-lead"
+                >
+                  Just this lead
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFunnelScope("alias"); }}
+                  className={`flex-1 text-[11px] h-7 rounded border px-2 transition-colors ${
+                    funnelScope === "alias"
+                      ? "bg-amber-500/20 border-amber-500/40 text-amber-200"
+                      : "bg-black/40 border-white/10 text-white/60 hover:text-white"
+                  }`}
+                  title="Retag every lead in this tenant whose funnel matches this alias"
+                  data-testid="button-funnel-scope-alias"
+                >
+                  All leads with this funnel
+                </button>
+              </div>
+
+              {funnelScope === "lead" && (
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-white/50">
+                    {matchedLead?.id
+                      ? "Only this lead will change. Future alias edits won't touch it."
+                      : "No matched lead — switch to alias mode or use the auto-detected fields above."}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving || !matchedLead?.id}
+                    onClick={saveFunnelForLead}
+                    className="text-xs h-7 px-2 shrink-0"
+                    data-testid="button-save-funnel-lead"
+                  >
+                    {saving ? "Saving…" : "Save"}
+                  </Button>
+                </div>
+              )}
+
+              {funnelScope === "alias" && !pendingAliasConfirm && (
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-white/50">
+                    Retags every lead in this tenant matching the same alias.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving || previewLoading}
+                    onClick={fetchAliasPreview}
+                    className="text-xs h-7 px-2 shrink-0"
+                    data-testid="button-preview-funnel-alias"
+                  >
+                    {previewLoading ? "Loading…" : "Preview"}
+                  </Button>
+                </div>
+              )}
+
+              {funnelScope === "alias" && pendingAliasConfirm && aliasPreview && (
+                <div className="space-y-2">
+                  <p className="text-[10px] text-amber-300" data-testid="text-alias-preview">
+                    This will retag <strong>{aliasPreview.leads}</strong> lead{aliasPreview.leads === 1 ? "" : "s"}{" "}
+                    and <strong>{aliasPreview.events}</strong> past event{aliasPreview.events === 1 ? "" : "s"} in this tenant.
+                    {aliasPreview.leads === 0 && aliasPreview.events === 0 && " Nothing else matches — only this row will change."}
+                  </p>
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={saving}
+                      onClick={() => { setPendingAliasConfirm(false); setAliasPreview(null); }}
+                      className="text-xs h-7 px-2"
+                      data-testid="button-cancel-alias-save"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={saving}
+                      onClick={saveFunnelAlias}
+                      className="text-xs h-7 px-2 bg-amber-500/10 border border-amber-500/30 text-amber-200 hover:bg-amber-500/20"
+                      data-testid="button-confirm-alias-save"
+                    >
+                      {saving ? "Saving…" : "Confirm & save alias"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {savedFunnelCount !== null && (
             <p className="text-[10px] text-emerald-400 pl-0.5">
               {(() => {

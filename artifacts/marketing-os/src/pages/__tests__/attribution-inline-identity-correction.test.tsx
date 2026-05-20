@@ -22,19 +22,23 @@ function makeEvent(overrides: Partial<AttributionEvent> = {}): AttributionEvent 
   } as unknown as AttributionEvent;
 }
 
-type FetchHandler = () => unknown;
+type FetchHandler = (url: string, init?: RequestInit) => unknown;
 
-function makeFetchMock(handlers: Array<{ match: string; handler: FetchHandler; ok?: boolean }>) {
-  return vi.fn(async (url: RequestInfo | URL) => {
+function makeFetchMock(handlers: Array<{ match: string; method?: string; handler: FetchHandler; ok?: boolean }>) {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const mock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const u = String(url);
-    for (const { match, handler, ok = true } of handlers) {
-      if (u.includes(match)) {
-        const data = handler();
-        return { ok, json: async () => data } as Response;
-      }
+    calls.push({ url: u, init });
+    const method = (init?.method ?? "GET").toUpperCase();
+    for (const h of handlers) {
+      if (!u.includes(h.match)) continue;
+      if (h.method && h.method.toUpperCase() !== method) continue;
+      const data = h.handler(u, init);
+      return { ok: h.ok ?? true, json: async () => data } as Response;
     }
     return { ok: true, json: async () => ({}) } as Response;
   });
+  return { mock, calls };
 }
 
 function findCallWithQueryKey(
@@ -48,7 +52,7 @@ function findCallWithQueryKey(
   });
 }
 
-describe("InlineIdentityCorrection — cache invalidation on Save", () => {
+describe("InlineIdentityCorrection — Task #549 funnel scope & override", () => {
   let queryClient: QueryClient;
   let invalidateSpy: ReturnType<typeof vi.spyOn>;
 
@@ -65,119 +69,129 @@ describe("InlineIdentityCorrection — cache invalidation on Save", () => {
     queryClient.clear();
   });
 
-  function renderComp(event: AttributionEvent) {
+  function renderComp(
+    event: AttributionEvent,
+    matchedLead?: { id: number; firstName?: string; lastName?: string; funnelOverriddenAt?: string | null } | null,
+  ) {
     return render(
       <QueryClientProvider client={queryClient}>
-        <InlineIdentityCorrection tenantId={1} event={event} />
+        <InlineIdentityCorrection tenantId={1} event={event} matchedLead={matchedLead ?? null} />
       </QueryClientProvider>,
     );
   }
 
-  it("invalidates events list, generated detail, and custom ['attribution-event', id] keys after a Source save", async () => {
-    vi.stubGlobal(
-      "fetch",
-      makeFetchMock([
-        {
-          match: "/api/funnel-types",
-          handler: () => ({
-            funnelTypes: [
-              { id: 7, name: "Lead Magnet" },
-              { id: 9, name: "Webinar" },
-            ],
-          }),
-        },
-        {
-          match: "/api/lead-source-aliases",
-          handler: () => ({
-            aliases: [{ canonicalName: "Google" }, { canonicalName: "Facebook" }],
-          }),
-        },
-      ]),
-    );
+  it("Source save still invalidates all three query keys", async () => {
+    const { mock } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }] }) },
+      { match: "/api/lead-source-aliases", handler: () => ({ aliases: [{ canonicalName: "Google" }, { canonicalName: "Facebook" }] }) },
+      { match: "/api/lead-source-aliases", method: "POST", handler: () => ({ updatedEventCount: 0, updatedLeadCount: 0 }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
 
-    const event = makeEvent({ id: 42 });
-    renderComp(event);
-
-    // Wait for the lead-source-aliases fetch to populate the dropdown.
+    renderComp(makeEvent({ id: 42 }));
     await screen.findByRole("option", { name: "Facebook" });
-
     const [sourceSelect] = screen.getAllByRole("combobox") as HTMLSelectElement[];
     fireEvent.change(sourceSelect, { target: { value: "Facebook" } });
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
 
-    const saveBtn = await screen.findByRole("button", { name: /save/i });
-    fireEvent.click(saveBtn);
-
-    await waitFor(() => {
-      expect(invalidateSpy).toHaveBeenCalledTimes(3);
-    });
-
-    expect(
-      findCallWithQueryKey(invalidateSpy, getListAttributionEventsQueryKey()),
-      "events list query key was not invalidated after Source save",
-    ).toBeTruthy();
-    expect(
-      findCallWithQueryKey(invalidateSpy, getGetAttributionEventQueryKey(42)),
-      "generated event detail query key was not invalidated after Source save",
-    ).toBeTruthy();
-    expect(
-      findCallWithQueryKey(invalidateSpy, ["attribution-event", 42]),
-      "custom ['attribution-event', id] detail query key was not invalidated after Source save",
-    ).toBeTruthy();
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(3));
+    expect(findCallWithQueryKey(invalidateSpy, getListAttributionEventsQueryKey())).toBeTruthy();
+    expect(findCallWithQueryKey(invalidateSpy, getGetAttributionEventQueryKey(42))).toBeTruthy();
+    expect(findCallWithQueryKey(invalidateSpy, ["attribution-event", 42])).toBeTruthy();
   });
 
-  it("invalidates events list, generated detail, and custom ['attribution-event', id] keys after a Funnel save", async () => {
-    vi.stubGlobal(
-      "fetch",
-      makeFetchMock([
-        {
-          match: "/api/funnel-types",
-          handler: () => ({
-            funnelTypes: [
-              { id: 7, name: "Lead Magnet" },
-              { id: 9, name: "Webinar" },
-            ],
-          }),
-        },
-        {
-          match: "/api/lead-source-aliases",
-          handler: () => ({ aliases: [{ canonicalName: "Google" }] }),
-        },
-      ]),
-    );
+  it("Bug #3: Funnel change defaults to 'Just this lead' and POSTs to /funnel-override", async () => {
+    const { mock, calls } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }, { id: 9, name: "Webinar" }] }) },
+      { match: "/api/lead-source-aliases", handler: () => ({ aliases: [] }) },
+      { match: "/funnel-override", method: "POST", handler: () => ({ lead: { id: 555 }, funnelOverriddenAt: new Date().toISOString() }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
 
-    const event = makeEvent({ id: 42 });
-    renderComp(event);
-
-    // Wait for funnel-types to load (Webinar option appearing means funnelTypes is populated).
+    renderComp(makeEvent({ id: 42 }), { id: 555, funnelOverriddenAt: null });
     await screen.findByRole("option", { name: "Webinar" });
-
     const selects = screen.getAllByRole("combobox") as HTMLSelectElement[];
-    const funnelSelect = selects.find((s) =>
-      Array.from(s.options).some((o) => o.text === "Webinar"),
-    ) as HTMLSelectElement;
-    expect(funnelSelect).toBeDefined();
-
-    // Switch funnel from "Lead Magnet" (id=7, current) to "Webinar" (id=9).
+    const funnelSelect = selects.find(s => Array.from(s.options).some(o => o.text === "Webinar")) as HTMLSelectElement;
     fireEvent.change(funnelSelect, { target: { value: "9" } });
 
-    const saveBtn = await screen.findByRole("button", { name: /save/i });
+    // Default scope = "Just this lead" — find Save button in lead scope panel.
+    const saveBtn = await screen.findByTestId("button-save-funnel-lead");
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
-      expect(invalidateSpy).toHaveBeenCalledTimes(3);
+      expect(calls.some(c => c.url.includes("/api/leads/555/funnel-override") && c.init?.method === "POST")).toBe(true);
     });
+    // Tenant-wide alias endpoint must NOT have been touched.
+    expect(calls.some(c => c.url.includes("/api/funnel-aliases?") && c.init?.method === "POST")).toBe(false);
+  });
 
-    expect(
-      findCallWithQueryKey(invalidateSpy, getListAttributionEventsQueryKey()),
-      "events list query key was not invalidated after Funnel save",
-    ).toBeTruthy();
-    expect(
-      findCallWithQueryKey(invalidateSpy, getGetAttributionEventQueryKey(42)),
-      "generated event detail query key was not invalidated after Funnel save",
-    ).toBeTruthy();
-    expect(
-      findCallWithQueryKey(invalidateSpy, ["attribution-event", 42]),
-      "custom ['attribution-event', id] detail query key was not invalidated after Funnel save",
-    ).toBeTruthy();
+  it("Bug #3: switching to 'All leads' scope triggers Preview → Confirm flow that POSTs to /funnel-aliases", async () => {
+    const { mock, calls } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }, { id: 9, name: "Webinar" }] }) },
+      { match: "/api/lead-source-aliases", method: "GET", handler: () => ({ aliases: [] }) },
+      { match: "/api/funnel-aliases/preview", handler: () => ({ events: 12, leads: 47, canonicalName: "Webinar" }) },
+      { match: "/api/funnel-aliases", method: "POST", handler: () => ({ updatedEventCount: 12, updatedLeadCount: 47 }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
+
+    renderComp(makeEvent({ id: 42 }), { id: 555, funnelOverriddenAt: null });
+    await screen.findByRole("option", { name: "Webinar" });
+    const funnelSelect = (screen.getAllByRole("combobox") as HTMLSelectElement[])
+      .find(s => Array.from(s.options).some(o => o.text === "Webinar")) as HTMLSelectElement;
+    fireEvent.change(funnelSelect, { target: { value: "9" } });
+
+    fireEvent.click(await screen.findByTestId("button-funnel-scope-alias"));
+    fireEvent.click(await screen.findByTestId("button-preview-funnel-alias"));
+
+    // Preview message should appear with the counts the endpoint returned.
+    const previewText = await screen.findByTestId("text-alias-preview");
+    expect(previewText.textContent).toMatch(/47/);
+    expect(previewText.textContent).toMatch(/12/);
+
+    fireEvent.click(screen.getByTestId("button-confirm-alias-save"));
+    await waitFor(() => {
+      expect(calls.some(c => c.url.includes("/api/funnel-aliases?") && c.init?.method === "POST")).toBe(true);
+    });
+  });
+
+  it("Bug #2: Funnel dropdown re-syncs after event.resolvedFunnel changes", async () => {
+    const { mock } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }, { id: 9, name: "Webinar" }] }) },
+      { match: "/api/lead-source-aliases", handler: () => ({ aliases: [] }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <InlineIdentityCorrection tenantId={1} event={makeEvent({ id: 42, resolvedFunnel: "Lead Magnet" })} matchedLead={null} />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("option", { name: "Webinar" });
+    const funnelSelect = screen.getByTestId("select-funnel-type") as HTMLSelectElement;
+    await waitFor(() => expect(funnelSelect.value).toBe("7"));
+
+    // Simulate refetch returning the new canonical funnel — the dropdown must follow.
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <InlineIdentityCorrection tenantId={1} event={makeEvent({ id: 42, resolvedFunnel: "Webinar" })} matchedLead={null} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(funnelSelect.value).toBe("9"));
+  });
+
+  it("Bug #3: 'Manually set — undo' pill appears when matchedLead.funnelOverriddenAt is set and DELETEs on click", async () => {
+    const { mock, calls } = makeFetchMock([
+      { match: "/api/funnel-types", handler: () => ({ funnelTypes: [{ id: 7, name: "Lead Magnet" }] }) },
+      { match: "/api/lead-source-aliases", handler: () => ({ aliases: [] }) },
+      { match: "/funnel-override", method: "DELETE", handler: () => ({ lead: { id: 555 }, cleared: true }) },
+    ]);
+    vi.stubGlobal("fetch", mock);
+
+    renderComp(makeEvent({ id: 42 }), { id: 555, funnelOverriddenAt: new Date("2026-05-20T10:00:00Z").toISOString() });
+    const undoBtn = await screen.findByTestId("button-clear-funnel-override");
+    fireEvent.click(undoBtn);
+    await waitFor(() => {
+      expect(calls.some(c => c.url.includes("/api/leads/555/funnel-override") && c.init?.method === "DELETE")).toBe(true);
+    });
   });
 });

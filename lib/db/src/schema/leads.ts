@@ -66,6 +66,14 @@ export const leadsTable = pgTable("leads", {
   resubmittedAt: timestamp("resubmitted_at"),
   resubmissionCount: integer("resubmission_count").notNull().default(0),
 
+  // Per-lead funnel override (task #549). When set, the lead's funnelId /
+  // leadType are pinned and excluded from alias-driven and rule-driven
+  // re-derive paths so a manual correction made from the attribution drawer
+  // ("Just this lead") survives later tenant-wide alias edits. Cleared by
+  // DELETE /api/leads/:id/funnel-override.
+  funnelOverriddenAt: timestamp("funnel_overridden_at"),
+  funnelOverriddenByUserId: integer("funnel_overridden_by_user_id").references(() => usersTable.id),
+
   assignedAt: timestamp("assigned_at").notNull().defaultNow(),
   bookedAt: timestamp("booked_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

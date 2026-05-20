@@ -73,7 +73,7 @@ router.get("/attribution/events/:id", async (req, res) => {
 
     type MatchedJobRow = { id: number; customerName: string | null; stJobId: string | null; matchLevel: string | null; matchedGclid: string | null; revenue: number; leadId: number | null; ociUploadedAt: Date | null; enhancedConversionUploadedAt: Date | null; capiUploadedAt: Date | null };
     let matchedJob: MatchedJobRow | null = null;
-    let matchedLead: { id: number; firstName: string; lastName: string } | null = null;
+    let matchedLead: { id: number; firstName: string; lastName: string; funnelOverriddenAt: Date | null } | null = null;
 
     const jobSelect = {
       id: jobsTable.id,
@@ -111,7 +111,9 @@ router.get("/attribution/events/:id", async (req, res) => {
             .limit(1);
           if (job) {
             matchedJob = job;
-            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName };
+            const [full] = await db.select({ funnelOverriddenAt: leadsTable.funnelOverriddenAt })
+              .from(leadsTable).where(eq(leadsTable.id, lead.id)).limit(1);
+            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName, funnelOverriddenAt: full?.funnelOverriddenAt ?? null };
             break;
           }
         }
@@ -133,7 +135,9 @@ router.get("/attribution/events/:id", async (req, res) => {
             .limit(1);
           if (job) {
             matchedJob = job;
-            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName };
+            const [full] = await db.select({ funnelOverriddenAt: leadsTable.funnelOverriddenAt })
+              .from(leadsTable).where(eq(leadsTable.id, lead.id)).limit(1);
+            matchedLead = { id: lead.id, firstName: lead.firstName, lastName: lead.lastName, funnelOverriddenAt: full?.funnelOverriddenAt ?? null };
             break;
           }
         }
@@ -168,7 +172,21 @@ router.get("/attribution/events/:id", async (req, res) => {
         id: leadsTable.id,
         firstName: leadsTable.firstName,
         lastName: leadsTable.lastName,
+        funnelOverriddenAt: leadsTable.funnelOverriddenAt,
       }).from(leadsTable).where(eq(leadsTable.id, matchedJob.leadId)).limit(1);
+      if (lead) matchedLead = lead;
+    }
+
+    // Also surface matchedLead via createdLeadId (form_fill events have a
+    // direct link to the lead they created — used by the attribution drawer
+    // to show per-lead override status even when there's no matched job).
+    if (!matchedLead && event.createdLeadId) {
+      const [lead] = await db.select({
+        id: leadsTable.id,
+        firstName: leadsTable.firstName,
+        lastName: leadsTable.lastName,
+        funnelOverriddenAt: leadsTable.funnelOverriddenAt,
+      }).from(leadsTable).where(eq(leadsTable.id, event.createdLeadId)).limit(1);
       if (lead) matchedLead = lead;
     }
 

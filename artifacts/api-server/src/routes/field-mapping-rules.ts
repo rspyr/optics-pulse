@@ -3,7 +3,7 @@ import { db, fieldMappingRulesTable, attributionEventsTable, backgroundJobsTable
 import { eq, and, inArray } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
-import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
 import {
   enqueueReDeriveLeadsForRuleScope,
   enqueueReDeriveSelectedLeads,
@@ -643,6 +643,7 @@ router.post("/field-mapping-rules", async (req, res) => {
   // re-run field detection + funnel normalization for that lead so the open
   // Pulse drawer reflects the new funnel without waiting for the next ingest.
   let leadFunnelChanged = false;
+  let eventDetectionRecomputed = false;
   let resolvedLeadId: number | null = null;
   if (typeof leadId === "number" && Number.isFinite(leadId)) {
     resolvedLeadId = leadId;
@@ -652,6 +653,25 @@ router.post("/field-mapping-rules", async (req, res) => {
       .where(eq(attributionEventsTable.id, attributionEventId));
     if (ev && ev.tenantId === tenantId && ev.createdLeadId) resolvedLeadId = ev.createdLeadId;
   }
+
+  // Task #549: always re-persist the targeted attribution event's
+  // detected_mappings + resolved_funnel when the rule edit was made from an
+  // event drawer. Previously this only happened as a side-effect of
+  // `reDeriveLeadFunnel`, which skipped the event row entirely when the
+  // event had no `created_lead_id` (or it didn't match the lead being
+  // re-derived) — so the "Auto-Detected Fields" panel silently snapped back
+  // to the old mapping on the next refetch. Decoupling this from the lead
+  // writeback fixes the snap-back without changing per-lead writeback
+  // semantics.
+  if (typeof attributionEventId === "number" && Number.isFinite(attributionEventId)) {
+    try {
+      const result = await redetectAndPersistEvent(tenantId, attributionEventId);
+      if (result?.changed) eventDetectionRecomputed = true;
+    } catch (err) {
+      console.error("[field-mapping-rules.POST] redetectAndPersistEvent failed:", err);
+    }
+  }
+
   if (resolvedLeadId) {
     try {
       const rederive = await reDeriveLeadFunnel(tenantId, resolvedLeadId, {
@@ -711,7 +731,7 @@ router.post("/field-mapping-rules", async (req, res) => {
     }
   }
 
-  res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged });
+  res.json({ rule: resultRule, updated: wasUpdate, leadFunnelChanged, eventDetectionRecomputed });
 });
 
 router.delete("/field-mapping-rules/:id", async (req, res) => {

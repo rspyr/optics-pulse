@@ -24,14 +24,107 @@ export interface RederiveResult {
   funnelId: number | null;
   leadType: string | null;
   serviceType: string | null;
+  eventRecomputed: boolean;
+  /** True when the lead has a per-lead override and lead-row funnel columns were left untouched. */
+  leadOverrideRespected: boolean;
+}
+
+export interface EventRedetectionResult {
+  changed: boolean;
+  eventId: number;
+  resolvedFunnel: string | null;
+  detectedMappings: Record<string, unknown> | null;
 }
 
 /**
- * Re-run field detection and funnel normalization for a single lead using its
- * most recent attribution event's form fields, and persist any change to
- * leads.funnelId / leads.leadType / leads.serviceType. Returns the updated
- * denormalized columns and a `changed` flag so callers can decide whether to
- * surface a refreshed lead.
+ * Recompute field detection + funnel normalization for a single attribution
+ * event and persist the result onto that event row's `detected_mappings` +
+ * `resolved_funnel` columns. This is the event-row-only counterpart to
+ * `reDeriveLeadFunnel`: it never touches `leads.*`, so it's safe to call for
+ * events whose `created_lead_id` is null or doesn't match the lead currently
+ * being viewed (the case that previously caused the Auto-Detected Fields
+ * panel to silently snap back after save — task #549).
+ */
+export async function redetectAndPersistEvent(
+  tenantId: number,
+  eventId: number,
+): Promise<EventRedetectionResult | null> {
+  const [event] = await db
+    .select()
+    .from(attributionEventsTable)
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      eq(attributionEventsTable.id, eventId),
+    ))
+    .limit(1);
+  if (!event) return null;
+
+  let nextDetectedMappings: Record<string, unknown> | null = null;
+  let nextResolvedFunnel: string | null = event.resolvedFunnel;
+
+  if (event.formFields && typeof event.formFields === "object") {
+    const detection = await detectFields(
+      tenantId,
+      event.formFields as Record<string, unknown>,
+      event.pageUrl ?? null,
+      event.formId ?? null,
+      event.formName ?? null,
+    );
+    nextDetectedMappings = detection.fields.length > 0
+      ? Object.fromEntries(detection.fields.map(f => [
+          f.fieldName,
+          { mapsTo: f.mapsTo, method: f.method, confidence: f.confidence },
+        ]))
+      : null;
+
+    if (detection.funnelRawValue) {
+      const match = await normalizeFunnel(tenantId, detection.funnelRawValue);
+      // Whether or not an alias matched, the resolved_funnel should reflect
+      // the canonical name when one was found, or fall back to the raw value
+      // so the dropdown / list still surfaces what came in. Only blank out
+      // when nothing was detected at all.
+      nextResolvedFunnel = match ? match.funnelName : detection.funnelRawValue;
+    } else {
+      // No funnel field detected on this event. Leave the existing
+      // resolved_funnel alone — it may have been set by a subdomain rule
+      // or another upstream signal we don't want to clobber here.
+    }
+  }
+
+  const detectedMappingsChanged =
+    JSON.stringify(nextDetectedMappings ?? null) !== JSON.stringify(event.detectedMappings ?? null);
+  const resolvedFunnelChanged = (event.resolvedFunnel ?? null) !== (nextResolvedFunnel ?? null);
+
+  if (detectedMappingsChanged || resolvedFunnelChanged) {
+    await db.update(attributionEventsTable)
+      .set({
+        detectedMappings: nextDetectedMappings,
+        resolvedFunnel: nextResolvedFunnel,
+      })
+      .where(eq(attributionEventsTable.id, event.id));
+  }
+
+  return {
+    changed: detectedMappingsChanged || resolvedFunnelChanged,
+    eventId: event.id,
+    resolvedFunnel: nextResolvedFunnel,
+    detectedMappings: nextDetectedMappings,
+  };
+}
+
+/**
+ * Re-run field detection and funnel normalization for a single lead. When the
+ * caller supplies an `attributionEventId`, that event's `detected_mappings` /
+ * `resolved_funnel` columns are always re-persisted (independent of whether
+ * the event's `created_lead_id` matches the lead — fixes the Auto-Detected
+ * Fields panel snap-back bug from task #549). The lead-row writeback
+ * (`funnelId` / `leadType` / `serviceType`) is always computed off the
+ * lead's *latest* event so a save against a non-latest event can't
+ * retroactively retag the lead with stale data.
+ *
+ * Respects per-lead overrides: when `funnel_overridden_at IS NOT NULL`, the
+ * lead's funnel columns are left untouched. The targeted event row is still
+ * re-persisted (audit) but `changed: false` is reported for the lead.
  */
 export async function reDeriveLeadFunnel(
   tenantId: number,
@@ -42,42 +135,40 @@ export async function reDeriveLeadFunnel(
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) return null;
 
-  // If the caller knows which attribution event the operator was viewing
-  // (e.g. when saving from the "Auto-Detected Fields" panel against a
-  // non-latest event), target that specific row so its `detectedMappings`
-  // column — which the panel reads from — reflects the new rule on refetch.
-  // Otherwise fall back to the lead's latest event (default re-derive path
-  // used by the scope fan-out and other lead-centric callers).
-  const eventQuery = options.attributionEventId
-    ? db.select()
-        .from(attributionEventsTable)
-        .where(and(
-          eq(attributionEventsTable.tenantId, tenantId),
-          eq(attributionEventsTable.id, options.attributionEventId),
-          eq(attributionEventsTable.createdLeadId, leadId),
-        ))
-        .limit(1)
-    : db.select()
-        .from(attributionEventsTable)
-        .where(and(
-          eq(attributionEventsTable.tenantId, tenantId),
-          eq(attributionEventsTable.createdLeadId, leadId),
-        ))
-        .orderBy(desc(attributionEventsTable.createdAt))
-        .limit(1);
-  const [event] = await eventQuery;
+  // (1) Always recompute + persist the targeted event row if one was supplied,
+  // even when its created_lead_id doesn't match the lead being re-derived.
+  // This is what makes the "Auto-Detected Fields" panel reflect the new
+  // saved-rule mapping on refetch.
+  let eventRecomputed = false;
+  if (options.attributionEventId) {
+    const result = await redetectAndPersistEvent(tenantId, options.attributionEventId);
+    if (result) eventRecomputed = true;
+  }
+
+  // (2) Compute the *lead*'s funnel from its latest attribution event. We
+  // deliberately ignore the targeted event id here so a save made against a
+  // historical/non-latest event doesn't move the lead off whatever its most
+  // recent submission says.
+  const [latestEvent] = await db.select()
+    .from(attributionEventsTable)
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      eq(attributionEventsTable.createdLeadId, leadId),
+    ))
+    .orderBy(desc(attributionEventsTable.createdAt))
+    .limit(1);
 
   let nextFunnelId: number | null = lead.funnelId;
   let nextLeadType: string | null = lead.leadType;
   let nextServiceType: string | null = lead.serviceType;
 
-  if (event && event.formFields && typeof event.formFields === "object") {
+  if (latestEvent && latestEvent.formFields && typeof latestEvent.formFields === "object") {
     const detection = await detectFields(
       tenantId,
-      event.formFields as Record<string, unknown>,
-      event.pageUrl ?? null,
-      event.formId ?? null,
-      event.formName ?? null,
+      latestEvent.formFields as Record<string, unknown>,
+      latestEvent.pageUrl ?? null,
+      latestEvent.formId ?? null,
+      latestEvent.formName ?? null,
     );
     if (detection.funnelRawValue) {
       nextServiceType = detection.funnelRawValue;
@@ -88,29 +179,17 @@ export async function reDeriveLeadFunnel(
       }
     }
 
-    // Persist the recomputed detection back to the attribution event's
-    // `detectedMappings` column so the operator-facing "Auto-Detected Fields"
-    // panel — which reads from this column on the event, not from the rule
-    // table — reflects the new saved-rule mapping after a query invalidation.
-    // Without this, a freshly-saved rule (e.g. "Service they need → funnel")
-    // updates `leadsTable.funnelId` but leaves the event row showing the
-    // pre-save `value_pattern → fullName` detection, so the panel appears to
-    // revert to the old mapping on refetch.
-    const nextDetectedMappings = detection.fields.length > 0
-      ? Object.fromEntries(detection.fields.map(f => [
-          f.fieldName,
-          { mapsTo: f.mapsTo, method: f.method, confidence: f.confidence },
-        ]))
-      : null;
-    try {
-      await db.update(attributionEventsTable)
-        .set({ detectedMappings: nextDetectedMappings })
-        .where(eq(attributionEventsTable.id, event.id));
-    } catch (err) {
-      // Non-fatal: lead funnel update below is the source of truth for
-      // downstream behavior. We log so a recurring column/permission issue
-      // surfaces in production, but don't fail the re-derive over it.
-      console.error("[reDeriveLeadFunnel] failed to update event.detectedMappings:", err);
+    // Persist the latest event's detection too — this keeps a refetch of the
+    // lead's most recent event in sync. If the targeted event happened to be
+    // the latest event, redetectAndPersistEvent above already covered it; the
+    // second write here is idempotent (same data) so the cost is one extra
+    // UPDATE in the worst case.
+    if (latestEvent.id !== options.attributionEventId) {
+      try {
+        await redetectAndPersistEvent(tenantId, latestEvent.id);
+      } catch (err) {
+        console.error("[reDeriveLeadFunnel] failed to redetect latest event:", err);
+      }
     }
   }
 
@@ -125,6 +204,22 @@ export async function reDeriveLeadFunnel(
         nextLeadType = match.funnelName;
       }
     }
+  }
+
+  // (3) Respect a per-lead override: never let any re-derive path silently
+  // overwrite a manual correction. We still report `changed: false` so
+  // upstream UI doesn't flash a "lead updated" hint.
+  const leadOverrideRespected = lead.funnelOverriddenAt != null;
+  if (leadOverrideRespected) {
+    return {
+      changed: false,
+      leadId,
+      funnelId: lead.funnelId,
+      leadType: lead.leadType,
+      serviceType: lead.serviceType,
+      eventRecomputed,
+      leadOverrideRespected: true,
+    };
   }
 
   const changed =
@@ -147,6 +242,8 @@ export async function reDeriveLeadFunnel(
     funnelId: nextFunnelId,
     leadType: nextLeadType,
     serviceType: nextServiceType,
+    eventRecomputed,
+    leadOverrideRespected: false,
   };
 }
 

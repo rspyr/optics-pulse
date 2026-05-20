@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable } from "@workspace/db";
+import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable, attributionEventsTable, leadAttributionCorrectionsTable, tenantFunnelTypesTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
+import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitLeadUpdated } from "../socket";
 import { initiateCall, initiateText, getTenantCommConfig, getCommConfigStatus } from "../services/integrations/communication";
@@ -805,6 +807,147 @@ router.patch("/leads/:leadId", async (req, res) => {
 
   emitLeadUpdated(lead.tenantId, lead as unknown as Record<string, unknown>);
   res.json(lead);
+});
+
+// Task #549: per-lead funnel override. Setting an override pins the lead's
+// funnelId / leadType / serviceType and stamps `funnel_overridden_at` so the
+// alias re-resolve and rule-rederive paths leave the row alone. Used by the
+// "Resolved Identity" panel's "Just this lead" save mode so an operator can
+// fix one lead's funnel without retagging every lead in the tenant that
+// matches the same alias.
+router.post("/leads/:leadId/funnel-override", async (req, res) => {
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+  const userId = req.session.userId;
+  const body = req.body as { funnelTypeId?: number; attributionEventId?: number };
+  const funnelTypeId = Number(body.funnelTypeId);
+  if (!Number.isFinite(funnelTypeId) || funnelTypeId <= 0) {
+    res.status(400).json({ error: "funnelTypeId is required" });
+    return;
+  }
+
+  const [existingLead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!existingLead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (existingLead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  const [funnelType] = await db.select({ id: funnelTypesTable.id, name: funnelTypesTable.name })
+    .from(funnelTypesTable).where(eq(funnelTypesTable.id, funnelTypeId)).limit(1);
+  if (!funnelType) {
+    res.status(400).json({ error: "Unknown funnelTypeId" });
+    return;
+  }
+  const [tenantAssoc] = await db.select().from(tenantFunnelTypesTable)
+    .where(and(eq(tenantFunnelTypesTable.tenantId, existingLead.tenantId), eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId)));
+  if (!tenantAssoc) {
+    res.status(400).json({ error: "Funnel type is not enabled for this tenant" });
+    return;
+  }
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(leadsTable).set({
+      funnelId: funnelTypeId,
+      leadType: funnelType.name,
+      funnelOverriddenAt: now,
+      funnelOverriddenByUserId: userId ?? null,
+      updatedAt: now,
+    }).where(eq(leadsTable.id, leadId));
+
+    await tx.insert(leadAttributionCorrectionsTable).values({
+      tenantId: existingLead.tenantId,
+      leadId,
+      field: "funnel",
+      oldValue: existingLead.leadType,
+      newValue: funnelType.name,
+      changedByUserId: userId ?? null,
+    });
+  });
+
+  // If the operator was viewing an attribution event when they made the
+  // override, persist the canonical funnel on that event row too so the
+  // drawer refetch reflects the new value immediately. Tenant-scoped.
+  if (typeof body.attributionEventId === "number" && Number.isFinite(body.attributionEventId)) {
+    try {
+      // Tenant-scope the update in the WHERE clause itself (not via a
+      // preceding select-then-check) so a refactor of either branch can't
+      // accidentally widen the scope to other tenants' events.
+      await db.update(attributionEventsTable)
+        .set({ resolvedFunnel: funnelType.name })
+        .where(and(
+          eq(attributionEventsTable.id, body.attributionEventId),
+          eq(attributionEventsTable.tenantId, existingLead.tenantId),
+        ));
+    } catch (err) {
+      console.error("[funnel-override.POST] failed to update event resolvedFunnel:", err);
+    }
+  }
+
+  // Reroute the lead through the assignment pipeline so any per-funnel
+  // round-robin / sticky CSR logic re-evaluates with the new funnel.
+  try {
+    await reRouteLeadsAfterAttributionChange(existingLead.tenantId, [leadId]);
+  } catch (err) {
+    console.error("[funnel-override.POST] reroute failed:", err);
+  }
+
+  const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  emitLeadUpdated(existingLead.tenantId, updated as unknown as Record<string, unknown>);
+  res.json({ lead: updated, funnelOverriddenAt: now.toISOString() });
+});
+
+// Task #549: clear a per-lead funnel override and re-derive the lead's
+// funnel from its latest attribution event. After clearing, the lead is
+// back in scope for future tenant-wide alias retags.
+router.delete("/leads/:leadId/funnel-override", async (req, res) => {
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+
+  const [existingLead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  if (!existingLead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (existingLead.tenantId !== req.session.tenantId) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+  }
+
+  if (!existingLead.funnelOverriddenAt) {
+    res.json({ lead: existingLead, cleared: false });
+    return;
+  }
+
+  await db.update(leadsTable).set({
+    funnelOverriddenAt: null,
+    funnelOverriddenByUserId: null,
+    updatedAt: new Date(),
+  }).where(eq(leadsTable.id, leadId));
+
+  try {
+    await reDeriveLeadFunnel(existingLead.tenantId, leadId);
+  } catch (err) {
+    console.error("[funnel-override.DELETE] reDeriveLeadFunnel failed:", err);
+  }
+  try {
+    await reRouteLeadsAfterAttributionChange(existingLead.tenantId, [leadId]);
+  } catch (err) {
+    console.error("[funnel-override.DELETE] reroute failed:", err);
+  }
+
+  const [updated] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
+  emitLeadUpdated(existingLead.tenantId, updated as unknown as Record<string, unknown>);
+  res.json({ lead: updated, cleared: true });
 });
 
 router.post("/leads/:leadId/call", async (req, res) => {

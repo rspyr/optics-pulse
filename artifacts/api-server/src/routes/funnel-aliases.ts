@@ -73,6 +73,10 @@ async function reResolveFunnelForLeads(
     .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
+      // Task #549: never overwrite per-lead funnel overrides during a
+      // tenant-wide alias retag. The operator explicitly pinned this lead
+      // ("Just this lead") and that decision must survive a later alias edit.
+      sql`${leadsTable.funnelOverriddenAt} IS NULL`,
       sql`(
         COALESCE(${leadsTable.leadType}, '') <> ${canonicalFunnelName}
         OR ${leadsTable.funnelId} IS DISTINCT FROM ${funnelTypeId}
@@ -138,6 +142,81 @@ function resolveTenantId(req: Request): number | null {
 }
 
 router.use("/funnel-aliases", requireManagerRole);
+
+// Task #549: dry-run preview of what saving a tenant-wide funnel alias would
+// retag. Lets the operator confirm scope before flipping every matching lead
+// when they only meant to fix one lead's funnel. Mirrors the matching logic
+// used by reResolveFunnelForAlias / reResolveFunnelForLeads (alias key
+// matches resolved_funnel OR any value in form_fields), and excludes leads
+// that already carry a per-lead override.
+router.get("/funnel-aliases/preview", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+  const aliasRaw = (req.query.alias ?? "").toString();
+  const funnelTypeIdRaw = (req.query.funnelTypeId ?? "").toString();
+  const key = aliasRaw.toLowerCase().trim();
+  const funnelTypeId = Number(funnelTypeIdRaw);
+  if (!key || !Number.isFinite(funnelTypeId) || funnelTypeId <= 0) {
+    res.status(400).json({ error: "alias and funnelTypeId are required" });
+    return;
+  }
+
+  const [funnelType] = await db.select({ name: funnelTypesTable.name })
+    .from(funnelTypesTable).where(eq(funnelTypesTable.id, funnelTypeId));
+  const canonicalName = funnelType?.name ?? "";
+
+  const eventRes = await db.execute(sql`
+    SELECT COUNT(*)::int AS cnt FROM attribution_events ae
+    WHERE ae.tenant_id = ${tenantId}
+      AND COALESCE(ae.resolved_funnel, '') <> ${canonicalName}
+      AND (
+        LOWER(TRIM(COALESCE(ae.resolved_funnel, ''))) = ${key}
+        OR (
+          (ae.resolved_funnel IS NULL OR TRIM(ae.resolved_funnel) = '')
+          AND ae.form_fields IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM jsonb_each_text(ae.form_fields) AS kv
+            WHERE LOWER(TRIM(kv.value)) = ${key}
+          )
+        )
+      )
+  `);
+  const events = Number((eventRes.rows as { cnt: number }[])[0]?.cnt ?? 0);
+
+  const leadRes = await db.execute(sql`
+    SELECT COUNT(*)::int AS cnt FROM leads l
+    WHERE l.tenant_id = ${tenantId}
+      AND l.funnel_overridden_at IS NULL
+      AND (
+        COALESCE(l.lead_type, '') <> ${canonicalName}
+        OR l.funnel_id IS DISTINCT FROM ${funnelTypeId}
+      )
+      AND (
+        LOWER(TRIM(COALESCE(l.lead_type, ''))) = ${key}
+        OR l.id IN (
+          SELECT ae.created_lead_id FROM attribution_events ae
+          WHERE ae.tenant_id = ${tenantId}
+            AND ae.created_lead_id IS NOT NULL
+            AND (
+              LOWER(TRIM(COALESCE(ae.resolved_funnel, ''))) = ${key}
+              OR (
+                ae.form_fields IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM jsonb_each_text(ae.form_fields) AS kv
+                  WHERE LOWER(TRIM(kv.value)) = ${key}
+                )
+              )
+            )
+        )
+      )
+  `);
+  const leads = Number((leadRes.rows as { cnt: number }[])[0]?.cnt ?? 0);
+
+  res.json({ events, leads, alias: key, funnelTypeId, canonicalName });
+});
 
 router.get("/funnel-aliases", async (req, res) => {
   const tenantId = resolveTenantId(req);
