@@ -24,8 +24,11 @@ vi.mock("@workspace/api-client-react", () => {
     useListTenants: () => ({ data: tenantList }),
     useListAttributionEvents: () => ({ data: undefined }),
     useGetAttributionEvent: () => ({ data: undefined }),
+    useGetAttributionEventFacets: () => ({ data: undefined }),
+    useGetLeadInvoice: () => ({ data: undefined }),
     getListAttributionEventsQueryKey: noop,
     getGetAttributionEventQueryKey: noop,
+    getGetAttributionEventFacetsQueryKey: noop,
   };
 });
 

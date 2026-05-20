@@ -34,6 +34,7 @@ const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoist
       // no-op unsubscribe is sufficient — what matters is that the sheet's
       // useEffect doesn't blow up calling an undefined function.
       onSelectedLeadsRederiveProgress: noop,
+      onSelectedLeadsRederiveCancelled: noop,
       onReconnect: noop,
     })),
   };

@@ -12,11 +12,22 @@ vi.mock("sonner", () => ({
   toast: toastMock,
 }));
 
-const { useOptionalLeadNotificationMock } = vi.hoisted(() => ({
-  useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
-}));
+const { useOptionalLeadNotificationMock, useLeadNotificationMock } = vi.hoisted(() => {
+  const noop = () => () => {};
+  return {
+    useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
+    useLeadNotificationMock: vi.fn(() => ({
+      onSelectedLeadsRederiveComplete: noop,
+      onSelectedLeadsRederiveFailed: noop,
+      onSelectedLeadsRederiveProgress: noop,
+      onSelectedLeadsRederiveCancelled: noop,
+      onReconnect: noop,
+    })),
+  };
+});
 vi.mock("@/contexts/lead-notification-context", () => ({
   useOptionalLeadNotification: useOptionalLeadNotificationMock,
+  useLeadNotification: useLeadNotificationMock,
 }));
 
 import {
