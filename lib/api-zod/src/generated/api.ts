@@ -1040,7 +1040,7 @@ export const listAttributionEventsQueryOffsetDefault = 0;
 export const ListAttributionEventsQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
   matchLevel: zod
-    .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
+    .enum(["diamond", "golden", "silver", "bronze", "manual", "unmatched"])
     .optional(),
   eventType: zod.enum(["click", "call", "form_fill"]).optional(),
   source: zod.coerce.string().optional(),
@@ -1146,7 +1146,7 @@ export const ListAttributionEventsResponse = zod.object({
         ),
       submittedAt: zod.date().nullish(),
       matchLevel: zod
-        .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
+        .enum(["diamond", "golden", "silver", "bronze", "manual", "unmatched"])
         .nullish(),
       matchConfidence: zod.number().nullish(),
       createdAt: zod.date(),
@@ -1265,7 +1265,7 @@ export const GetAttributionEventResponse = zod.object({
       ),
     submittedAt: zod.date().nullish(),
     matchLevel: zod
-      .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
+      .enum(["diamond", "golden", "silver", "bronze", "manual", "unmatched"])
       .nullish(),
     matchConfidence: zod.number().nullish(),
     createdAt: zod.date(),
@@ -1393,7 +1393,7 @@ export const ListJobsResponse = zod.object({
       status: zod.enum(["pending", "in_progress", "completed", "cancelled"]),
       matchedGclid: zod.string().nullish(),
       matchLevel: zod
-        .enum(["diamond", "golden", "silver", "bronze", "unmatched"])
+        .enum(["diamond", "golden", "silver", "bronze", "manual", "unmatched"])
         .nullish(),
       completedAt: zod.date().nullish(),
       ociUploadedAt: zod.date().nullish(),

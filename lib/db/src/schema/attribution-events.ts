@@ -5,7 +5,7 @@ import { tenantsTable } from "./tenants";
 import { leadsTable } from "./leads";
 
 export const eventTypeEnum = pgEnum("event_type", ["click", "call", "form_fill"]);
-export const matchLevelEnum = pgEnum("match_level", ["diamond", "golden", "silver", "bronze", "unmatched"]);
+export const matchLevelEnum = pgEnum("match_level", ["diamond", "golden", "silver", "bronze", "manual", "unmatched"]);
 
 export const attributionEventsTable = pgTable("attribution_events", {
   id: serial("id").primaryKey(),

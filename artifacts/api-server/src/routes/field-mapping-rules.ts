@@ -3,7 +3,7 @@ import { db, fieldMappingRulesTable, attributionEventsTable, backgroundJobsTable
 import { eq, and, inArray } from "drizzle-orm";
 import { invalidateRuleCache } from "../services/field-detection";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
-import { reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
+import { markEventManuallyMatched, reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
 import {
   enqueueReDeriveLeadsForRuleScope,
   enqueueReDeriveSelectedLeads,
@@ -669,6 +669,15 @@ router.post("/field-mapping-rules", async (req, res) => {
       if (result?.changed) eventDetectionRecomputed = true;
     } catch (err) {
       console.error("[field-mapping-rules.POST] redetectAndPersistEvent failed:", err);
+    }
+    // Operator just resolved this event by saving a field-mapping rule, so
+    // promote it from `unmatched` to the new `manual` status (100%
+    // confidence, no "Why unmatched?" panel). Tier rows are preserved by
+    // the guard inside the helper.
+    try {
+      await markEventManuallyMatched(tenantId, attributionEventId);
+    } catch (err) {
+      console.error("[field-mapping-rules.POST] markEventManuallyMatched failed:", err);
     }
   }
 

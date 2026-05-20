@@ -37,6 +37,37 @@ export interface EventRedetectionResult {
 }
 
 /**
+ * Flip an attribution event from `matchLevel = "unmatched"` to
+ * `"manual"` because an operator just resolved it by hand — e.g. saved a
+ * field-mapping rule, set a per-lead funnel override, or otherwise linked
+ * the event to a known lead/funnel/job. Sets confidence to 1.0 and clears
+ * any persisted `unmatchedReason` so the Match Status badge and "Why
+ * unmatched?" panel both reflect the new status.
+ *
+ * Tenant-scoped; only flips currently-unmatched rows so a previously-auto-
+ * matched diamond/golden/silver/bronze event is never demoted to manual.
+ * Returns the number of rows flipped (0 or 1).
+ */
+export async function markEventManuallyMatched(
+  tenantId: number,
+  eventId: number,
+): Promise<number> {
+  const rows = await db.update(attributionEventsTable)
+    .set({
+      matchLevel: "manual",
+      matchConfidence: 1.0,
+      unmatchedReason: null,
+    })
+    .where(and(
+      eq(attributionEventsTable.id, eventId),
+      eq(attributionEventsTable.tenantId, tenantId),
+      eq(attributionEventsTable.matchLevel, "unmatched"),
+    ))
+    .returning({ id: attributionEventsTable.id });
+  return rows.length;
+}
+
+/**
  * Recompute field detection + funnel normalization for a single attribution
  * event and persist the result onto that event row's `detected_mappings` +
  * `resolved_funnel` columns. This is the event-row-only counterpart to
@@ -327,6 +358,15 @@ export async function reDeriveLeadsForRuleScope(
     if (formIdentifier !== "*" && evFormIdent !== formIdentifier) continue;
 
     leadIds.add(ev.createdLeadId);
+    // Flip in-scope unmatched events to `manual` so the badge/filter/
+    // reporting reflect that an operator's saved rule resolved them.
+    // Auto-matched tiers (diamond/golden/etc.) are preserved by the guard
+    // inside `markEventManuallyMatched`.
+    try {
+      await markEventManuallyMatched(tenantId, ev.id);
+    } catch (err) {
+      console.error("[reDeriveLeadsForRuleScope] markEventManuallyMatched failed for event", ev.id, err);
+    }
     if (leadIds.size >= maxLeads) {
       hitLimit = true;
       break;

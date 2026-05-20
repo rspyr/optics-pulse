@@ -640,7 +640,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [diamond, golden, silver, bronze, unmatched]
+            enum: [diamond, golden, silver, bronze, manual, unmatched]
         - name: eventType
           in: query
           schema:
@@ -2573,7 +2573,7 @@ components:
           nullable: true
         matchLevel:
           type: string
-          enum: [diamond, golden, silver, bronze, unmatched]
+          enum: [diamond, golden, silver, bronze, manual, unmatched]
           nullable: true
         matchConfidence:
           type: number
@@ -2747,7 +2747,7 @@ components:
           nullable: true
         matchLevel:
           type: string
-          enum: [diamond, golden, silver, bronze, unmatched]
+          enum: [diamond, golden, silver, bronze, manual, unmatched]
           nullable: true
         completedAt:
           type: string

@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable, attributionEventsTable, leadAttributionCorrectionsTable, tenantFunnelTypesTable, jobsTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
-import { reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
+import { markEventManuallyMatched, reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
 import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
 import { ListLeadsQueryParams, GetLeadParams, UpdateLeadBody } from "@workspace/api-zod";
 import { getHudStats, emitLeadUpdated } from "../socket";
@@ -937,6 +937,15 @@ router.post("/leads/:leadId/funnel-override", async (req, res) => {
         ));
     } catch (err) {
       console.error("[funnel-override.POST] failed to update event resolvedFunnel:", err);
+    }
+    // Operator just resolved this event by setting a per-lead funnel
+    // override, so flip an `unmatched` event to the new `manual` status
+    // (100% confidence, no "Why unmatched?" panel). The guard in the
+    // helper preserves auto-matched diamond/golden/silver/bronze rows.
+    try {
+      await markEventManuallyMatched(existingLead.tenantId, body.attributionEventId);
+    } catch (err) {
+      console.error("[funnel-override.POST] markEventManuallyMatched failed:", err);
     }
   }
 

@@ -97,7 +97,7 @@ export default function Attribution() {
     ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
     ...(filterType !== "all" ? { eventType: filterType as "click" | "call" | "form_fill" } : {}),
     ...(filterMatch !== "all"
-      ? { matchLevel: filterMatch as "diamond" | "golden" | "silver" | "bronze" | "unmatched" }
+      ? { matchLevel: filterMatch as "diamond" | "golden" | "silver" | "bronze" | "manual" | "unmatched" }
       : {}),
     ...(filterSource !== "all" ? { source: filterSource } : {}),
     ...(filterFunnel !== "all" ? { funnel: filterFunnel } : {}),
@@ -307,6 +307,10 @@ export default function Attribution() {
       case 'golden': return <Badge variant="warning">GOLDEN</Badge>;
       case 'silver': return <Badge variant="neutral" className="text-gray-300">SILVER</Badge>;
       case 'bronze': return <Badge variant="danger" className="text-orange-400 border-orange-400/30 bg-orange-400/10">BRONZE</Badge>;
+      // Operator-resolved events (saved field-mapping rule, per-lead funnel
+      // override, etc). Distinct purple styling so it never reads as one of
+      // the auto-match tiers (diamond/golden/silver/bronze) or as unmatched.
+      case 'manual': return <Badge variant="neutral" className="text-purple-300 border-purple-400/40 bg-purple-400/10">MANUAL</Badge>;
       default: return <Badge variant="neutral">UNMATCHED</Badge>;
     }
   };
@@ -531,6 +535,7 @@ export default function Attribution() {
                   <SelectItem value="golden">Golden</SelectItem>
                   <SelectItem value="silver">Silver</SelectItem>
                   <SelectItem value="bronze">Bronze</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
                   <SelectItem value="unmatched">Unmatched</SelectItem>
                 </SelectContent>
               </Select>

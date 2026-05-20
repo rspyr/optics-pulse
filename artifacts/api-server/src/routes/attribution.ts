@@ -29,7 +29,7 @@ router.get("/attribution/events", async (req, res) => {
   }
 
   if (query.matchLevel) {
-    const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "unmatched";
+    const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "manual" | "unmatched";
     conditions.push(eq(attributionEventsTable.matchLevel, level));
   }
 

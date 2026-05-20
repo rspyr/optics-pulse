@@ -14,5 +14,6 @@ export const ListAttributionEventsMatchLevel = {
   golden: "golden",
   silver: "silver",
   bronze: "bronze",
+  manual: "manual",
   unmatched: "unmatched",
 } as const;
