@@ -581,14 +581,24 @@ export default function Internal() {
                     </span>
                   ) : status?.state === "healthy" ? (
                     <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Healthy</span>
-                  ) : status?.state === "error" && status?.latestErrorCode === "rate_limit" ? (
-                    <span
-                      className="flex items-center gap-1 text-xs text-amber-400"
-                      title={`${label} throttled this sync — it will retry on the next scheduled run; no reconnect needed.`}
-                    >
-                      <Clock className="w-3.5 h-3.5" /> Throttled
-                    </span>
-                  ) : status?.state === "error" ? (
+                  ) : status?.state === "error" && (status?.latestErrorCode === "rate_limit" || status?.latestErrorCode === "timeout" || status?.latestErrorCode === "network" || status?.latestErrorCode === "upstream_server_error") ? (() => {
+                    const code = status.latestErrorCode;
+                    const isRateLimit = code === "rate_limit";
+                    const pillLabel = isRateLimit ? "Throttled" : "Retrying";
+                    const PillIcon = isRateLimit ? Clock : AlertTriangle;
+                    const tip = isRateLimit
+                      ? `${label} throttled this sync — it will retry on the next scheduled run; no reconnect needed.`
+                      : code === "timeout"
+                      ? `${label} timed out on this sync — the next scheduled run will retry automatically; no reconnect needed.`
+                      : code === "network"
+                      ? `${label} had a transient network error on this sync — the next scheduled run will retry automatically; no reconnect needed.`
+                      : `${label} returned a transient upstream error — the next scheduled run will retry automatically; no reconnect needed.`;
+                    return (
+                      <span className="flex items-center gap-1 text-xs text-amber-400" title={tip}>
+                        <PillIcon className="w-3.5 h-3.5" /> {pillLabel}
+                      </span>
+                    );
+                  })() : status?.state === "error" ? (
                     <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Error</span>
                   ) : status?.state === "no_credentials" ? (
                     <span className="flex items-center gap-1 text-xs text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> No credentials</span>
@@ -721,12 +731,16 @@ export default function Internal() {
                             </div>
                           )}
                           {bf.errorDetail ? (() => {
-                            const isRateLimit = bf.errorDetail.code === "rate_limit";
-                            // Rate-limit is operator-friendly: the next scheduled sync
-                            // will retry automatically, no reconnect is required, so
-                            // render an amber "throttled" state instead of an alarming
-                            // red one. Partial backfills already use amber.
-                            const tone = isRateLimit || bf.errorDetail.partial ? "amber" : "red";
+                            const code = bf.errorDetail.code;
+                            const isRateLimit = code === "rate_limit";
+                            const isTransient = isRateLimit || code === "timeout" || code === "network" || code === "upstream_server_error";
+                            // Transient upstream failures (rate-limit, timeout,
+                            // network blip, upstream 5xx) are operator-friendly:
+                            // the next scheduled sync will retry automatically,
+                            // no reconnect is required, so render an amber
+                            // non-alarming state instead of an alarming red one.
+                            // Partial backfills already use amber.
+                            const tone = isTransient || bf.errorDetail.partial ? "amber" : "red";
                             const containerCls = tone === "amber"
                               ? "rounded border border-amber-400/30 bg-amber-500/[0.07] p-2 space-y-1"
                               : "rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1";
@@ -734,9 +748,21 @@ export default function Internal() {
                             const Icon = tone === "amber" ? (isRateLimit ? Clock : AlertTriangle) : XCircle;
                             const headline = isRateLimit
                               ? `${label} throttled this sync`
+                              : code === "timeout"
+                              ? `${label} timed out on this sync`
+                              : code === "network"
+                              ? `${label} had a transient network error`
+                              : code === "upstream_server_error"
+                              ? `${label} returned a transient upstream error`
                               : bf.errorDetail.message;
                             const action = isRateLimit
                               ? `${label} rate-limited the request. The next scheduled sync will retry automatically — no reconnect needed.`
+                              : code === "timeout"
+                              ? `${label} took too long to respond. The next scheduled sync will retry automatically — no reconnect needed.`
+                              : code === "network"
+                              ? `A transient network error interrupted the sync. The next scheduled sync will retry automatically — no reconnect needed.`
+                              : code === "upstream_server_error"
+                              ? `${label} returned a transient server error. The next scheduled sync will retry automatically — no reconnect needed.`
                               : bf.errorDetail.suggestedAction;
                             return (
                             <div className={containerCls}>
