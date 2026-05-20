@@ -14,21 +14,6 @@ import { useLeadNotification } from "@/contexts/lead-notification-context";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
-/**
- * localStorage key for a per-scope "operator dismissed the restored cancelled
- * banner" flag. Stores the cancelled jobId (or "*" when the job row pre-dates
- * jobId-threaded snapshots) so a *new* cancellation for the same scope still
- * surfaces a fresh banner — only the exact dismissed snapshot stays hidden.
- * Cleared on the next enqueue for the scope.
- */
-function cancelledBannerDismissKey(
-  tenantId: number,
-  pageUrlPattern: string,
-  formIdentifier: string,
-) {
-  return `pulse:cancelled-rederive-dismissed:${tenantId}:${pageUrlPattern}:${formIdentifier}`;
-}
-
 type PendingLead = {
   id: number;
   firstName: string;
@@ -254,22 +239,9 @@ export function PendingRederiveLeadsSheet({
       } | null) => {
         if (cancelled || !d) return;
         if (d.status !== "cancelled") return;
-        // Honor a per-scope "operator dismissed this banner" flag set via the
-        // Dismiss control on a previous open. We compare the dismissed jobId
-        // against the snapshot's jobId so a *new* cancellation for the same
-        // scope still surfaces a fresh banner. "*" matches any jobId for
-        // older job rows that pre-date jobId-threaded snapshots.
-        try {
-          const dismissed = localStorage.getItem(
-            cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
-          );
-          if (
-            dismissed &&
-            (dismissed === "*" || (d.jobId != null && Number(dismissed) === d.jobId))
-          ) {
-            return;
-          }
-        } catch { /* localStorage unavailable; fall through and restore */ }
+        // The server already 404s this fetch for snapshots the operator
+        // dismissed (via the dismiss endpoint below), so a `d` here means
+        // the snapshot is still active for this operator on any device.
         // Only restore when the operator hasn't already started a new
         // bulk submit in this open — guard against the snapshot fetch
         // racing the initial-load reset and the operator's next click.
@@ -636,18 +608,9 @@ export function PendingRederiveLeadsSheet({
    * enqueued. Calls the server so the dismissal follows the operator across
    * devices (the server marks the in-memory + persisted cancelled snapshot
    * dismissed, and subsequent snapshot lookups skip dismissed entries).
-   * Also writes the legacy localStorage marker so a single-device dismissal
-   * works even if the server call hasn't returned yet — and so older
-   * client builds still respect the dismissal.
    */
   function dismissCancelledBanner() {
     if (bulkResult?.mode !== "queued" || !bulkResult.jobCancelled) return;
-    try {
-      localStorage.setItem(
-        cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
-        bulkResult.jobId != null ? String(bulkResult.jobId) : "*",
-      );
-    } catch { /* best-effort; clearing local state below still hides it */ }
     // Fire-and-forget: the local state flip below already hides the banner
     // in this tab. The server call is what makes the dismissal stick when
     // the operator re-opens the sheet from another device. Errors are
@@ -658,7 +621,7 @@ export function PendingRederiveLeadsSheet({
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pageUrlPattern, formIdentifier }),
-    }).catch(() => { /* best-effort; localStorage still hides it locally */ });
+    }).catch(() => { /* best-effort; banner re-appears on next open if it fails */ });
     setBulkResult(null);
     setSkippedIdsExpanded(false);
   }
@@ -693,16 +656,6 @@ export function PendingRederiveLeadsSheet({
       if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
       const result = d as BulkResult;
       setBulkResult(result);
-      // A successful enqueue (or sync re-derive) for this scope invalidates
-      // any prior dismissal — clear the localStorage marker so the next
-      // cancellation surfaces a fresh banner instead of being silently
-      // suppressed. Only do this on success; a failed submit must not
-      // clear the dismissal of an earlier cancelled job.
-      try {
-        localStorage.removeItem(
-          cancelledBannerDismissKey(tenantId, pageUrlPattern, formIdentifier),
-        );
-      } catch { /* best-effort */ }
       // After a sync re-derive, the succeeded leads are no longer "pending"
       // for this rule scope — drop them from the visible list so the sheet
       // reflects the new state. Failed ones stay (highlighted via
