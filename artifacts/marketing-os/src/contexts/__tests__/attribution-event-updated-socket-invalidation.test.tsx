@@ -49,13 +49,19 @@ vi.mock("socket.io-client", () => ({
   io: vi.fn(() => socketFactory()),
 }));
 
-vi.mock("@/components/auth-context", () => ({
-  useAuth: () => ({
-    user: { id: 1, role: "csr" },
-    effectiveTenantId: 42,
-    isAgency: false,
-  }),
-}));
+vi.mock("@/components/auth-context", async () => {
+  const { mockAuthContextModule, makeAuthStub } = await import(
+    "@/test-utils/auth-context-mocks"
+  );
+  return mockAuthContextModule({
+    useAuth: () =>
+      makeAuthStub({
+        user: { id: 1, role: "csr" } as never,
+        effectiveTenantId: 42,
+        isAgency: false,
+      }),
+  });
+});
 
 vi.mock("@/hooks/use-push-notifications", () => ({
   usePushNotifications: () => ({

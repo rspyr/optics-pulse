@@ -16,17 +16,24 @@ vi.mock("@workspace/api-client-react", async () => {
   });
 });
 
-vi.mock("@/hooks/use-tenant-filter", () => ({
-  useTenantFilter: vi.fn(() => ({ tenantId: 1, tenantName: "Test" })),
-}));
+vi.mock("@/hooks/use-tenant-filter", async () => {
+  const { mockUseTenantFilterModule, makeTenantFilterStub } = await import(
+    "@/test-utils/use-tenant-filter-mocks"
+  );
+  return mockUseTenantFilterModule({
+    useTenantFilter: () => makeTenantFilterStub({ effectiveTenantId: 1 }),
+  });
+});
 
-vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectValue: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock("@/components/ui/select", async () => {
+  const { mockUiSelectAsNative } = await import(
+    "@/test-utils/ui-select-mocks"
+  );
+  // The inline-correction test drives the dropdown via fireEvent.change
+  // against `screen.getByRole("combobox")`, so we want the native-<select>
+  // shim, not a div-passthrough.
+  return mockUiSelectAsNative();
+});
 
 const { sonnerToastMock } = vi.hoisted(() => ({
   sonnerToastMock: {

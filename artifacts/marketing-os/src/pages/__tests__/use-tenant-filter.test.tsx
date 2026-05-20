@@ -16,9 +16,21 @@ const authState = vi.hoisted(() => ({
   isAgency: true,
 }));
 
-vi.mock("@/components/auth-context", () => ({
-  useAuth: () => authState,
-}));
+vi.mock("@/components/auth-context", async () => {
+  const { mockAuthContextModule, makeAuthStub } = await import(
+    "@/test-utils/auth-context-mocks"
+  );
+  return mockAuthContextModule({
+    useAuth: () =>
+      makeAuthStub({
+        selectedTenantId: authState.selectedTenantId,
+        tenantSelectionMade: authState.tenantSelectionMade,
+        setSelectedTenantId: authState.setSelectedTenantId,
+        user: authState.user as never,
+        isAgency: authState.isAgency,
+      }),
+  });
+});
 
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 

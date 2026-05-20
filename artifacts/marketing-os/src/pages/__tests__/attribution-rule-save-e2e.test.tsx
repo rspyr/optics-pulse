@@ -25,16 +25,19 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { getListAttributionEventsQueryKey, getGetAttributionEventQueryKey } from "@workspace/api-client-react";
 
-vi.mock("@/hooks/use-tenant-filter", () => ({
-  useTenantFilter: () => ({
-    tenants: [{ id: 42, name: "Acme" }],
-    localTenantId: 42,
-    effectiveTenantId: 42,
-    setSelectedTenantId: vi.fn(),
-    isAgency: false,
-    tenantsLoading: false,
-  }),
-}));
+vi.mock("@/hooks/use-tenant-filter", async () => {
+  const { mockUseTenantFilterModule, makeTenantFilterStub } = await import(
+    "@/test-utils/use-tenant-filter-mocks"
+  );
+  return mockUseTenantFilterModule({
+    useTenantFilter: () =>
+      makeTenantFilterStub({
+        tenants: [{ id: 42, name: "Acme" }],
+        localTenantId: 42,
+        effectiveTenantId: 42,
+      }),
+  });
+});
 
 vi.mock("@/contexts/lead-notification-context", async () => {
   const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
@@ -51,23 +54,12 @@ vi.mock("@/lib/rule-rederive-subscription", () => ({
 // Render the Select dropdown as a real <select> so userEvent can interact with
 // the "Map field_3 to" combobox. (Radix Select uses portals + pointer events
 // that jsdom doesn't model well.)
-vi.mock("@/components/ui/select", () => ({
-  Select: ({ value, onValueChange, children }: { value: string; onValueChange?: (v: string) => void; children: React.ReactNode }) => (
-    <select
-      data-testid="ui-select"
-      value={value}
-      onChange={(e) => onValueChange?.(e.target.value)}
-    >
-      {children}
-    </select>
-  ),
-  SelectTrigger: () => null,
-  SelectValue: () => null,
-  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
-    <option value={value}>{children}</option>
-  ),
-}));
+vi.mock("@/components/ui/select", async () => {
+  const { mockUiSelectAsNative } = await import(
+    "@/test-utils/ui-select-mocks"
+  );
+  return mockUiSelectAsNative();
+});
 
 // Render Sheet children inline when `open` is true so we can drive the event
 // detail panel without portal/animation timing.
