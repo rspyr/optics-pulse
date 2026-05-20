@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import { pool } from "@workspace/db";
 import { backfillMetaAdCreatives } from "../services/sync-scheduler";
 import { findUsersWithoutTenant } from "../services/broken-account-audit";
+import { backfillDefaultFunnelForTenant } from "../services/backfill-default-funnel";
 
 const router: IRouter = Router();
 
@@ -533,6 +534,32 @@ router.post("/admin/meta/:tenantId/backfill-creatives", ...agencyOnly, async (re
     res.json(result);
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to backfill Meta creatives";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * One-shot backfill for events stamped with the tenant's "default" funnel by
+ * the pre-task-#575 fallback. Idempotent — re-running finds zero candidates
+ * once cleared. Supports `dryRun: true` for spot-checks before writing.
+ *
+ * Body: { dryRun?: boolean }
+ * Returns: BackfillDefaultFunnelResult with counts.
+ */
+router.post("/admin/backfill-default-funnel/:tenantId", ...agencyOnly, async (req, res) => {
+  try {
+    const tenantId = parseInt(String(req.params.tenantId), 10);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      res.status(400).json({ error: "Invalid tenant ID" });
+      return;
+    }
+    const body = (req.body ?? {}) as { dryRun?: unknown };
+    const dryRun = body.dryRun === true;
+
+    const result = await backfillDefaultFunnelForTenant(tenantId, { dryRun });
+    res.json(result);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to backfill default funnel";
     res.status(500).json({ error: msg });
   }
 });
