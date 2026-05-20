@@ -22,7 +22,7 @@ import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
-  Upload, Info, Clock, Lightbulb, Loader2,
+  Upload, Info, Clock, Lightbulb, Loader2, ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -45,6 +45,8 @@ export default function Attribution() {
   const [filterDateRange, setFilterDateRange] = useState<string>("all");
   const [filterSubdomainRule, setFilterSubdomainRule] = useState<string>("all");
   const [searchText, setSearchText] = useState("");
+  const [pageSize, setPageSize] = useState<25 | 50 | 100>(50);
+  const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
   const [highlightSubdomainRule, setHighlightSubdomainRule] = useState<{ subdomain: string; nonce: number } | null>(null);
 
@@ -90,7 +92,9 @@ export default function Attribution() {
   // Don't issue the cross-tenant "give me everything" fetch when the operator
   // hasn't picked a tenant — agency users get a "select a tenant" prompt
   // below instead.
-  const listEventsParams = effectiveTenantId ? { tenantId: effectiveTenantId } : undefined;
+  const listEventsParams = effectiveTenantId
+    ? { tenantId: effectiveTenantId, limit: pageSize, offset: (page - 1) * pageSize }
+    : { limit: pageSize, offset: (page - 1) * pageSize };
   const { data } = useListAttributionEvents(
     listEventsParams,
     {
@@ -240,6 +244,29 @@ export default function Attribution() {
   });
 
   const events: AttributionEvent[] = data?.events || [];
+  const totalEvents: number = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalEvents / pageSize));
+
+  // Reset to page 1 whenever filters, search, page size, or tenant changes —
+  // otherwise users can land on an empty page when the result set shrinks.
+  useEffect(() => {
+    setPage(1);
+  }, [
+    pageSize,
+    filterType,
+    filterMatch,
+    filterSource,
+    filterFunnel,
+    filterDateRange,
+    filterSubdomainRule,
+    searchText,
+    effectiveTenantId,
+  ]);
+
+  // Clamp page back into range if total shrinks below the current page.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const uniqueSources = [...new Set(events.map(ev => ev.resolvedLeadSource || ev.utmSource || "").filter(Boolean))];
   const uniqueFunnels = [...new Set(events.map(ev => ev.resolvedFunnel || "").filter(Boolean))];
@@ -571,7 +598,59 @@ export default function Attribution() {
                 onChange={e => setSearchText(e.target.value)}
                 className="max-w-[260px] bg-white/5 border-white/10 text-sm"
               />
-              <span className="text-xs text-muted-foreground ml-auto">{filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}</span>
+              <div className="flex items-center gap-3 ml-auto">
+                <span className="text-xs text-muted-foreground">
+                  {(() => {
+                    if (totalEvents === 0) return "0 events";
+                    const start = (page - 1) * pageSize + 1;
+                    const end = Math.min(page * pageSize, totalEvents);
+                    const base = `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${totalEvents.toLocaleString()} event${totalEvents !== 1 ? "s" : ""}`;
+                    // Filters are applied client-side to the current page, so
+                    // when active, call out how many of the loaded rows match.
+                    const filtersActive =
+                      filterType !== "all" || filterMatch !== "all" || filterSource !== "all" ||
+                      filterFunnel !== "all" || filterDateRange !== "all" || filterSubdomainRule !== "all" ||
+                      searchText.trim() !== "";
+                    if (!filtersActive) return base;
+                    return `${base} · ${filteredEvents.length} match${filteredEvents.length === 1 ? "" : "es"} on this page`;
+                  })()}
+                </span>
+                <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v) as 25 | 50 | 100)}>
+                  <SelectTrigger className="w-[110px] bg-white/5 border border-white/10 text-sm">
+                    <SelectValue placeholder="Page size" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="25">25 / page</SelectItem>
+                    <SelectItem value="50">50 / page</SelectItem>
+                    <SelectItem value="100">100 / page</SelectItem>
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 bg-white/5 border border-white/10 disabled:opacity-40"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1}
+                    data-testid="button-events-prev-page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <span className="text-xs text-muted-foreground tabular-nums min-w-[72px] text-center">
+                    Page {page} of {totalPages}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 bg-white/5 border border-white/10 disabled:opacity-40"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                    data-testid="button-events-next-page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
           </PremiumCard>
 
