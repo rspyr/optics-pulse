@@ -1320,7 +1320,15 @@ const migrations: Migration[] = [
       "signal after the event (the one most likely to be the cause of the flip). " +
       "Ambiguous rows stay NULL so the legacy fallback line still renders. " +
       "Set env BACKFILL_MANUAL_SOURCE_DRY_RUN=1 to log counts without writing.",
-    run: async () => {
+    run: backfillManualSourceForLegacyEvents,
+  },
+];
+
+// Exported for direct invocation in tests (see
+// one-time-migrations-manual-source.integration.test.ts). The migration
+// entry above delegates to this function so the production code path and
+// the test code path are identical.
+export async function backfillManualSourceForLegacyEvents(): Promise<void> {
       const dryRun = process.env.BACKFILL_MANUAL_SOURCE_DRY_RUN === "1";
 
       const legacyRows = await db
@@ -1504,9 +1512,7 @@ const migrations: Migration[] = [
         `of those nulls — override skipped on weak temporal evidence: ${skippedOverrideNoTemporalMatch}, ` +
         `rule skipped on weak temporal evidence: ${skippedRuleNoTemporalMatch})`,
       );
-    },
-  },
-];
+}
 
 export async function runOneTimeMigrations(): Promise<void> {
   await db.execute(sql`
