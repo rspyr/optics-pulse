@@ -53,6 +53,7 @@ export * from "./dismissTraining200";
 export * from "./getAdminDashboardStatsParams";
 export * from "./getAdminLeaderboardMetric";
 export * from "./getAdminLeaderboardParams";
+export * from "./getAttributionEventFacetsDateRange";
 export * from "./getAttributionEventFacetsParams";
 export * from "./getAutomationAlertCount200";
 export * from "./getCampaignStatsParams";

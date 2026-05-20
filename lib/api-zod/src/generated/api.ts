@@ -1163,11 +1163,17 @@ export const ListAttributionEventsResponse = zod.object({
  */
 export const GetAttributionEventFacetsQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
+  dateRange: zod.enum(["1d", "7d", "30d"]).optional(),
 });
 
 export const GetAttributionEventFacetsResponse = zod.object({
   sources: zod.array(zod.string()),
   funnels: zod.array(zod.string()),
+  unmatchedCount: zod
+    .number()
+    .describe(
+      "Count of events with resolved_funnel = NULL across the tenant's full attribution history. Surfaced as an at-a-glance badge on the Attribution page header (task",
+    ),
 });
 
 /**

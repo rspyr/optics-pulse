@@ -157,7 +157,23 @@ router.get("/attribution/events/facets", async (req, res) => {
   // Distinct source values match the frontend label rule: prefer
   // resolved_lead_source, fall back to utm_source.
   const sourceExpr = sql<string>`COALESCE(${attributionEventsTable.resolvedLeadSource}, ${attributionEventsTable.utmSource})`;
-  const [sourceRows, funnelRows] = await Promise.all([
+  // Count of events that didn't resolve to any funnel — surfaced on the
+  // Attribution page header so operators can see the unmatched bucket at a
+  // glance and triage it via the existing funnel=`__unmatched__` filter
+  // (task #577). The count honors the page's active dateRange filter so the
+  // KPI reflects the same window operators are looking at; sources/funnels
+  // intentionally stay unscoped so the dropdowns still show every value.
+  const unmatchedConditions: SQL[] = [...conditions, isNull(attributionEventsTable.resolvedFunnel)];
+  const rawDateRange = typeof req.query.dateRange === "string" ? req.query.dateRange : null;
+  if (rawDateRange === "1d" || rawDateRange === "7d" || rawDateRange === "30d") {
+    const days = rawDateRange === "1d" ? 1 : rawDateRange === "7d" ? 7 : 30;
+    unmatchedConditions.push(
+      gte(attributionEventsTable.createdAt, new Date(Date.now() - days * 86_400_000)),
+    );
+  }
+  const unmatchedWhere = unmatchedConditions.length > 0 ? and(...unmatchedConditions) : undefined;
+
+  const [sourceRows, funnelRows, unmatchedCountRow] = await Promise.all([
     db
       .selectDistinct({ value: sourceExpr })
       .from(attributionEventsTable)
@@ -166,6 +182,10 @@ router.get("/attribution/events/facets", async (req, res) => {
       .selectDistinct({ value: attributionEventsTable.resolvedFunnel })
       .from(attributionEventsTable)
       .where(where),
+    db
+      .select({ count: count() })
+      .from(attributionEventsTable)
+      .where(unmatchedWhere),
   ]);
 
   const sources = sourceRows
@@ -177,7 +197,7 @@ router.get("/attribution/events/facets", async (req, res) => {
     .filter((v): v is string => typeof v === "string" && v.length > 0)
     .sort((a, b) => a.localeCompare(b));
 
-  res.json({ sources, funnels });
+  res.json({ sources, funnels, unmatchedCount: unmatchedCountRow[0]?.count ?? 0 });
 });
 
 router.get("/attribution/events/:id", async (req, res) => {

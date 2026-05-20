@@ -686,6 +686,8 @@ export interface AttributionEventListResponse {
 export interface AttributionEventFacetsResponse {
   sources: string[];
   funnels: string[];
+  /** Count of events with resolved_funnel = NULL across the tenant's full attribution history. Surfaced as an at-a-glance badge on the Attribution page header (task */
+  unmatchedCount: number;
 }
 
 export interface AttributionMatchedJob {
@@ -1569,7 +1571,17 @@ export const ListAttributionEventsDateRange = {
 
 export type GetAttributionEventFacetsParams = {
   tenantId?: number;
+  dateRange?: GetAttributionEventFacetsDateRange;
 };
+
+export type GetAttributionEventFacetsDateRange =
+  (typeof GetAttributionEventFacetsDateRange)[keyof typeof GetAttributionEventFacetsDateRange];
+
+export const GetAttributionEventFacetsDateRange = {
+  "1d": "1d",
+  "7d": "7d",
+  "30d": "30d",
+} as const;
 
 export type RunReconciliationBody = {
   tenantId?: number;

@@ -287,7 +287,10 @@ export default function Attribution() {
   // Facets are pulled from the full tenant history (not just the current
   // page) so the Source / Funnel dropdowns surface every distinct value,
   // not whichever ones happen to be on this page.
-  const facetsParams = effectiveTenantId ? { tenantId: effectiveTenantId } : {};
+  const facetsParams = {
+    ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
+    ...(filterDateRange !== "all" ? { dateRange: filterDateRange as "1d" | "7d" | "30d" } : {}),
+  };
   const { data: facetsData } = useGetAttributionEventFacets(facetsParams, {
     query: {
       enabled: !isAgency || effectiveTenantId != null,
@@ -296,6 +299,7 @@ export default function Attribution() {
   });
   const uniqueSources = facetsData?.sources ?? [];
   const uniqueFunnels = facetsData?.funnels ?? [];
+  const unmatchedCount = facetsData?.unmatchedCount ?? 0;
 
   // Filtering is now applied server-side via listEventsParams, so the
   // current page already reflects the active filters.
@@ -346,9 +350,48 @@ export default function Attribution() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <GradientHeading className="text-3xl md:text-4xl mb-2">Attribution Log</GradientHeading>
-        <p className="font-sub text-muted-foreground text-sm tracking-wide">RAW EVENT INGESTION & MATCHING WATERFALL</p>
+      <header className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <GradientHeading className="text-3xl md:text-4xl mb-2">Attribution Log</GradientHeading>
+          <p className="font-sub text-muted-foreground text-sm tracking-wide">RAW EVENT INGESTION & MATCHING WATERFALL</p>
+        </div>
+        {(!isAgency || effectiveTenantId != null) && (
+          <button
+            type="button"
+            onClick={() => {
+              setFilterFunnel("__unmatched__");
+              setActiveTab("events");
+            }}
+            aria-label={`${unmatchedCount} unmatched events — click to filter`}
+            className={
+              unmatchedCount > 0
+                ? "flex items-center gap-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-left transition-colors hover:bg-amber-400/15 hover:border-amber-400/50"
+                : "flex items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] px-3 py-2 text-left transition-colors hover:bg-white/[0.04]"
+            }
+          >
+            <AlertTriangle
+              className={
+                unmatchedCount > 0
+                  ? "w-4 h-4 text-amber-400"
+                  : "w-4 h-4 text-white/30"
+              }
+            />
+            <div className="leading-tight">
+              <div
+                className={
+                  unmatchedCount > 0
+                    ? "text-lg font-semibold text-amber-300 tabular-nums"
+                    : "text-lg font-semibold text-white/40 tabular-nums"
+                }
+              >
+                {unmatchedCount}
+              </div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Unmatched
+              </div>
+            </div>
+          </button>
+        )}
       </header>
 
       {isAgency && tenants.length > 0 && (

@@ -5,7 +5,9 @@
  * Optics API - Attribution Engine & Leads Dashboard
  * OpenAPI spec version: 0.1.0
  */
+import type { GetAttributionEventFacetsDateRange } from "./getAttributionEventFacetsDateRange";
 
 export type GetAttributionEventFacetsParams = {
   tenantId?: number;
+  dateRange?: GetAttributionEventFacetsDateRange;
 };

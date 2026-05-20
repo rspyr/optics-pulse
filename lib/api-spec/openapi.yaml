@@ -696,6 +696,11 @@ paths:
           in: query
           schema:
             type: integer
+        - name: dateRange
+          in: query
+          schema:
+            type: string
+            enum: ["1d", "7d", "30d"]
       responses:
         "200":
           description: Distinct facet values for the Source and Funnel filters
@@ -2639,7 +2644,12 @@ components:
           type: array
           items:
             type: string
-      required: [sources, funnels]
+        unmatchedCount:
+          type: integer
+          description: Count of events with resolved_funnel = NULL across the
+            tenant's full attribution history. Surfaced as an at-a-glance
+            badge on the Attribution page header (task #577).
+      required: [sources, funnels, unmatchedCount]
 
     AttributionEventDetailResponse:
       type: object

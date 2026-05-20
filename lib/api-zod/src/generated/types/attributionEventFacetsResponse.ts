@@ -9,4 +9,6 @@
 export interface AttributionEventFacetsResponse {
   sources: string[];
   funnels: string[];
+  /** Count of events with resolved_funnel = NULL across the tenant's full attribution history. Surfaced as an at-a-glance badge on the Attribution page header (task */
+  unmatchedCount: number;
 }
