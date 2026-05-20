@@ -10,4 +10,6 @@ import type { AttributionEvent } from "./attributionEvent";
 export interface AttributionEventListResponse {
   events: AttributionEvent[];
   total: number;
+  /** IDs of createdLeads in this page that are now status=sold. */
+  soldLeadIds: number[];
 }

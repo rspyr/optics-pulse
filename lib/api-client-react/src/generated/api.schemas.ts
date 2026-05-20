@@ -678,6 +678,8 @@ helper as the live socket emit.
 export interface AttributionEventListResponse {
   events: AttributionEvent[];
   total: number;
+  /** IDs of createdLeads in this page that are now status=sold. */
+  soldLeadIds: number[];
 }
 
 export interface AttributionEventFacetsResponse {

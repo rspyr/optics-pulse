@@ -1153,6 +1153,9 @@ export const ListAttributionEventsResponse = zod.object({
     }),
   ),
   total: zod.number(),
+  soldLeadIds: zod
+    .array(zod.number())
+    .describe("IDs of createdLeads in this page that are now status=sold."),
 });
 
 /**

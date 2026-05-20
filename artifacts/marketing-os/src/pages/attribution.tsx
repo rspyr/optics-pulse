@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, useGetLeadInvoice, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -257,6 +257,10 @@ export default function Attribution() {
 
   const events: AttributionEvent[] = data?.events || [];
   const totalEvents: number = data?.total ?? 0;
+  const soldLeadIdSet = useMemo(
+    () => new Set<number>(data?.soldLeadIds ?? []),
+    [data?.soldLeadIds],
+  );
   const totalPages = Math.max(1, Math.ceil(totalEvents / pageSize));
 
   // Reset to page 1 whenever filters, search, page size, or tenant changes —
@@ -713,7 +717,12 @@ export default function Attribution() {
                           <td className="p-4">{getMatchBadge(ev.matchLevel)}</td>
                           <td className="p-4">
                             {ev.createdLeadId ? (
-                              <span className="text-xs text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full">created</span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full">created</span>
+                                {soldLeadIdSet.has(ev.createdLeadId) && (
+                                  <span className="text-xs font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full uppercase tracking-wider">Sold</span>
+                                )}
+                              </div>
                             ) : (
                               <span className="text-white/20">—</span>
                             )}
@@ -903,7 +912,11 @@ export default function Attribution() {
                 </DetailSection>
 
                 {matchedLead && (
-                  <InvoiceDetailsSection leadId={matchedLead.id} />
+                  <InvoiceDetailsSection
+                    leadId={matchedLead.id}
+                    isSold={soldLeadIdSet.has(matchedLead.id)}
+                    stJobId={matchedJob?.stJobId ?? null}
+                  />
                 )}
 
                 {matchedJob && (
@@ -3608,9 +3621,18 @@ function DetailSection({ title, subtitle, icon, children }: { title: string; sub
   );
 }
 
-function InvoiceDetailsSection({ leadId }: { leadId: number }) {
+function InvoiceDetailsSection({
+  leadId,
+  isSold,
+  stJobId,
+}: {
+  leadId: number;
+  isSold: boolean;
+  stJobId?: string | null;
+}) {
   const { data, isLoading, error } = useGetLeadInvoice(leadId);
   const httpStatus = (error as { status?: number } | null)?.status;
+  const stJobUrl = stJobId ? `https://go.servicetitan.com/#/Job/Index/${stJobId}` : null;
 
   if (isLoading) {
     return (
@@ -3620,13 +3642,44 @@ function InvoiceDetailsSection({ leadId }: { leadId: number }) {
     );
   }
 
-  // 404 from the endpoint means there is no invoiced job yet — render
-  // nothing rather than a noisy empty card.
-  if (!data || httpStatus === 404) return null;
+  // 404 from the endpoint with no sold flag means there is no invoiced
+  // job yet and the lead isn't sold — render nothing rather than a noisy
+  // empty card. If the lead is sold but the invoice hasn't synced yet,
+  // show an explicit empty state so the user isn't left wondering.
+  if (!data || httpStatus === 404) {
+    if (!isSold) return null;
+    return (
+      <DetailSection title="Invoice Details" icon={<DollarSign className="w-4 h-4" />}>
+        <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-muted-foreground uppercase tracking-wider">Sold lead</span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 uppercase tracking-wider">Sold</span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Sold, but the invoice hasn't synced from ServiceTitan yet. It will appear after the next reconciliation run.
+          </p>
+          {stJobUrl && (
+            <a
+              href={stJobUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-blue-400 hover:text-blue-300 transition-colors inline-flex items-center gap-1"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Open job in ServiceTitan
+            </a>
+          )}
+        </div>
+      </DetailSection>
+    );
+  }
 
   const fmtMoney = (n?: number | null) =>
     n == null ? "—" : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
   const fmtDate = (d?: string | null) => (d ? format(new Date(d), "MMM d, yyyy") : "—");
+
+  const invoiceStJobId = data.stJobId ?? stJobId ?? null;
+  const invoiceStJobUrl = invoiceStJobId ? `https://go.servicetitan.com/#/Job/Index/${invoiceStJobId}` : null;
 
   return (
     <DetailSection title="Invoice Details" icon={<DollarSign className="w-4 h-4" />}>
@@ -3643,6 +3696,17 @@ function InvoiceDetailsSection({ leadId }: { leadId: number }) {
         <DetailRow label="Balance" value={fmtMoney(data.invoiceBalance)} />
         {data.stInvoiceId && <DetailRow label="ST Invoice ID" value={data.stInvoiceId} mono />}
         {data.stJobId && <DetailRow label="ST Job ID" value={data.stJobId} mono />}
+        {invoiceStJobUrl && (
+          <a
+            href={invoiceStJobUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-blue-400 hover:text-blue-300 transition-colors inline-flex items-center gap-1 pt-1"
+          >
+            <ExternalLink className="w-3 h-3" />
+            Open job in ServiceTitan
+          </a>
+        )}
       </div>
     </DetailSection>
   );

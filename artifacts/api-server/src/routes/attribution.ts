@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, attributionEventsTable, reconciliationRunsTable, jobsTable, leadsTable } from "@workspace/db";
-import { eq, and, or, count, desc, sql, ilike, isNull, gte, SQL } from "drizzle-orm";
+import { eq, and, or, count, desc, sql, ilike, isNull, gte, inArray, SQL } from "drizzle-orm";
 import { ListAttributionEventsQueryParams } from "@workspace/api-zod";
 import { runReconciliation, getReconciliationStatus } from "../services/reconciliation";
 import { requireRole, denyClientUser } from "../middleware/auth";
@@ -104,7 +104,25 @@ router.get("/attribution/events", async (req, res) => {
     db.select({ count: count() }).from(attributionEventsTable).where(where),
   ]);
 
-  res.json({ events, total: totalResult.count });
+  // Compute which of the events' created leads are now `sold` so the UI
+  // can render a Sold badge and treat those rows as terminal. Using a
+  // single roundtrip keyed by id keeps the list endpoint cheap.
+  const createdLeadIds = Array.from(
+    new Set(events.map(e => e.createdLeadId).filter((x): x is number => x != null)),
+  );
+  let soldLeadIds: number[] = [];
+  if (createdLeadIds.length > 0) {
+    const soldRows = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(and(
+        inArray(leadsTable.id, createdLeadIds),
+        eq(leadsTable.status, "sold"),
+      ));
+    soldLeadIds = soldRows.map(r => r.id);
+  }
+
+  res.json({ events, total: totalResult.count, soldLeadIds });
 });
 
 router.get("/attribution/events/facets", async (req, res) => {

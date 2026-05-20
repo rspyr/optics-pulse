@@ -21,7 +21,18 @@ function parseAttributionMode(raw: unknown): AttributionMode {
 // - lead.source matches google / meta / facebook (case-insensitive), OR
 // - lead.matchedGclid is not null, OR
 // - job.matchLevel in (diamond, golden, silver, bronze).
-const leadAttributedExpr = sql`(${leadsTable.source} ILIKE '%google%' OR ${leadsTable.source} ILIKE '%meta%' OR ${leadsTable.source} ILIKE '%facebook%' OR ${leadsTable.matchedGclid} IS NOT NULL)`;
+const leadAttributedExpr = sql`(
+  ${leadsTable.source} ILIKE '%google%'
+  OR ${leadsTable.source} ILIKE '%meta%'
+  OR ${leadsTable.source} ILIKE '%facebook%'
+  OR ${leadsTable.matchedGclid} IS NOT NULL
+  OR EXISTS (
+    SELECT 1 FROM ${jobsTable} aj
+    WHERE aj.lead_id = ${leadsTable.id}
+      AND aj.tenant_id = ${leadsTable.tenantId}
+      AND aj.match_level IN ('diamond','golden','silver','bronze')
+  )
+)`;
 const jobAttributedExpr = sql`(${jobsTable.matchLevel} IN ('diamond','golden','silver','bronze'))`;
 
 async function computeMetrics(

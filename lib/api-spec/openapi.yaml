@@ -2592,7 +2592,12 @@ components:
             $ref: "#/components/schemas/AttributionEvent"
         total:
           type: integer
-      required: [events, total]
+        soldLeadIds:
+          type: array
+          description: IDs of createdLeads in this page that are now status=sold.
+          items:
+            type: integer
+      required: [events, total, soldLeadIds]
 
     AttributionEventFacetsResponse:
       type: object
