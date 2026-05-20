@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { encryptConfig } from "../lib/encryption";
-import { MetaTokenInvalidError } from "./integrations/meta";
+import { MetaTokenInvalidError, MetaApiError } from "./integrations/meta";
 
 // ─── Mock state ──────────────────────────────────────────────────────────────
 
@@ -343,6 +343,48 @@ describe("syncMetaCampaigns — token expired", () => {
     );
     expect(errLog).toBeDefined();
     expect(errLog!.set.errorMessage).toMatch(/Session has expired/);
+  });
+
+  it("does NOT flag metaNeedsReconnect on a Meta rate-limit error (code 17) and writes error_code='rate_limit'", async () => {
+    const { syncMetaCampaigns } = await import("./sync-scheduler");
+
+    state.selectQueue.push([tenantWithMeta()]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.executeQueue.push({ rows: [{ got: true }] });
+
+    // Simulate the meta service exhausting retries on a code-17 rate limit:
+    // the request() loop throws a transient MetaApiError after MAX_RETRIES,
+    // NOT a MetaTokenInvalidError. The sync-scheduler catch must therefore
+    // skip the reconnect-flagging branch.
+    const rateErr = new MetaApiError(
+      "(#17) User request limit reached",
+      400,
+      17,
+      true,
+    );
+    fetchAdSetsMock.mockRejectedValue(rateErr);
+    fetchAdsMock.mockResolvedValue([]);
+    fetchAdDailyInsightsMock.mockResolvedValue([]);
+
+    const result = await syncMetaCampaigns(7);
+
+    expect(result.synced).toBe(0);
+    expect(result.error).toMatch(/User request limit reached/);
+
+    // Critically: the tenant must NOT be flagged for reconnect.
+    const reconnectUpdate = state.updateCalls.find(
+      (u) => u.table === "tenants" && u.set.metaNeedsReconnect === true,
+    );
+    expect(reconnectUpdate).toBeUndefined();
+
+    // Sync log finalized as error with a stable `rate_limit` code so the
+    // Settings panel renders the right copy.
+    const errLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "error",
+    );
+    expect(errLog).toBeDefined();
+    expect(errLog!.set.errorMessage).toMatch(/User request limit reached/);
+    expect(errLog!.set.errorCode).toBe("rate_limit");
   });
 
   it("short-circuits with an error sync log when tenant is already flagged metaNeedsReconnect", async () => {

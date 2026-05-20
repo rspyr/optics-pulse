@@ -157,13 +157,72 @@ describe("MetaAPIService — MetaTokenInvalidError mapping", () => {
     expect(attempts).toBe(1); // never retried
   });
 
-  it("throws MetaTokenInvalidError for OAuthException type even without code 190", async () => {
-    setFetch(async () => mockResponse(403, {
-      error: { message: "OAuth error", type: "OAuthException", code: 200 },
+  it("throws MetaTokenInvalidError for OAuthException with a session-invalidation subcode (463)", async () => {
+    setFetch(async () => mockResponse(401, {
+      error: { message: "Session was invalidated", type: "OAuthException", code: 102, error_subcode: 463 },
     }));
 
     const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
     await expect(runWithTimers(svc.verifyToken())).rejects.toBeInstanceOf(MetaTokenInvalidError);
+  });
+
+  it("does NOT throw MetaTokenInvalidError for OAuthException without code 190 or invalidation subcode", async () => {
+    let attempts = 0;
+    setFetch(async () => {
+      attempts++;
+      return mockResponse(403, {
+        error: { message: "OAuth error", type: "OAuthException", code: 200 },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    let caught: unknown;
+    try { await runWithTimers(svc.verifyToken()); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(MetaApiError);
+    expect(caught).not.toBeInstanceOf(MetaTokenInvalidError);
+    // Non-transient → not retried.
+    expect(attempts).toBe(1);
+  });
+
+  it("treats OAuthException code 17 (User request limit reached) as transient, NOT a token expiry", async () => {
+    let attempts = 0;
+    setFetch(async () => {
+      attempts++;
+      return mockResponse(400, {
+        error: { message: "(#17) User request limit reached", type: "OAuthException", code: 17 },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    let caught: unknown;
+    try { await runWithTimers(svc.verifyToken()); } catch (e) { caught = e; }
+    expect(caught).not.toBeInstanceOf(MetaTokenInvalidError);
+    expect(caught).toBeInstanceOf(MetaApiError);
+    const err = caught as MetaApiError;
+    expect(err.isTransient).toBe(true);
+    expect(err.fbCode).toBe(17);
+    expect(err.message).toMatch(/User request limit reached/);
+    // Retried until MAX_RETRIES (1 initial + 3 retries = 4 total).
+    expect(attempts).toBe(4);
+  });
+
+  it("treats OAuthException code 4 (Application request limit reached) as transient, NOT a token expiry", async () => {
+    let attempts = 0;
+    setFetch(async () => {
+      attempts++;
+      return mockResponse(400, {
+        error: { message: "Application request limit reached", type: "OAuthException", code: 4 },
+      });
+    });
+
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    let caught: unknown;
+    try { await runWithTimers(svc.verifyToken()); } catch (e) { caught = e; }
+    expect(caught).not.toBeInstanceOf(MetaTokenInvalidError);
+    expect(caught).toBeInstanceOf(MetaApiError);
+    expect((caught as MetaApiError).isTransient).toBe(true);
+    expect((caught as MetaApiError).fbCode).toBe(4);
+    expect(attempts).toBe(4);
   });
 });
 

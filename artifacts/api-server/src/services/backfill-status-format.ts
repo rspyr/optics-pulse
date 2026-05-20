@@ -157,7 +157,10 @@ const RULES: Rule[] = [
   },
   {
     code: "rate_limit",
-    test: /\b(rate ?limit(?:ed|ing)?|quota (?:exceeded|exhausted)|too many requests|429|RESOURCE_EXHAUSTED)\b/i,
+    // Includes Meta Graph rate-limit phrasing — codes 4, 17, 32, 613 come
+    // back with `type: "OAuthException"` and messages like "User request
+    // limit reached" / "Application request limit reached" / "(#17) …".
+    test: /\b(rate ?limit(?:ed|ing)?|quota (?:exceeded|exhausted)|too many requests|429|RESOURCE_EXHAUSTED|(?:user|application|api call) request limit reached|request limit reached|calls? to this api have exceeded|\(#(?:4|17|32|613)\))\b/i,
     message: "The upstream API rate-limited or exceeded its quota.",
     suggestedAction: "Wait a few minutes and retry. If it keeps failing, run the backfill in a smaller day range.",
   },

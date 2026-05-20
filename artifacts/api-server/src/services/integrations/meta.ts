@@ -44,11 +44,31 @@ interface MetaErrorEnvelope {
   };
 }
 
+// Meta returns `type: "OAuthException"` for several distinct conditions —
+// genuine token-invalid (code 190 + session-invalidation subcodes) AND
+// rate-limit codes (4, 17, 32, 613). Only the former should flip
+// `metaNeedsReconnect`; the latter are transient throttles.
+const META_RATE_LIMIT_CODES: ReadonlySet<number> = new Set([4, 17, 32, 613]);
+const META_SESSION_INVALIDATION_SUBCODES: ReadonlySet<number> = new Set([
+  458, 459, 460, 463, 464, 467,
+]);
+
 function isOAuthExpired(envelope: MetaErrorEnvelope): boolean {
   const e = envelope.error;
   if (!e) return false;
+  // Genuine token-invalid: code 190 (any subcode) always counts.
   if (e.code === 190) return true;
-  if (e.type === "OAuthException") return true;
+  // For other OAuthException responses, only treat them as expiry when the
+  // subcode is in the documented session-invalidation set. Rate-limit codes
+  // (4, 17, 32, 613) come back with type=OAuthException too but the token
+  // is still valid — those must NOT trigger a reconnect.
+  if (e.type === "OAuthException") {
+    if (typeof e.code === "number" && META_RATE_LIMIT_CODES.has(e.code)) return false;
+    if (typeof e.error_subcode === "number" && META_SESSION_INVALIDATION_SUBCODES.has(e.error_subcode)) {
+      return true;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -56,6 +76,11 @@ function isTransientError(envelope: MetaErrorEnvelope, status: number): boolean 
   if (status === 429 || status >= 500) return true;
   const e = envelope.error;
   if (e?.is_transient === true) return true;
+  // Meta rate-limit OAuthExceptions (user/app/page/API call limits) are
+  // transient — back off and retry rather than failing hard.
+  if (e?.type === "OAuthException" && typeof e.code === "number" && META_RATE_LIMIT_CODES.has(e.code)) {
+    return true;
+  }
   if (e?.message && /temporarily unavailable|please try again|service is unavailable/i.test(e.message)) return true;
   return false;
 }

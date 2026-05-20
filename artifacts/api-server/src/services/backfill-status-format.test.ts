@@ -70,6 +70,13 @@ describe("classifyBackfillError", () => {
     expect(got?.partial).toBe(false);
   });
 
+  it("classifies Meta Graph user/app rate-limit phrasing as rate_limit (not expired_credentials)", () => {
+    expect(classifyBackfillError("User request limit reached")?.code).toBe("rate_limit");
+    expect(classifyBackfillError("(#17) User request limit reached")?.code).toBe("rate_limit");
+    expect(classifyBackfillError("Application request limit reached")?.code).toBe("rate_limit");
+    expect(classifyBackfillError("(#4) Application request limit reached")?.code).toBe("rate_limit");
+  });
+
   it("classifies expired credentials (401 / invalid_grant / token expired)", () => {
     expect(classifyBackfillError("ServiceTitan API error (401): unauthorized")?.code).toBe("expired_credentials");
     expect(classifyBackfillError("invalid_grant")?.code).toBe("expired_credentials");
