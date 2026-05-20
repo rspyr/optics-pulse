@@ -636,6 +636,14 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
     return { synced: 0, error: errorMessage };
   }
 
+  // Task #564: when the nightly window is clamped at META_MAX_CATCHUP_DAYS
+  // (tenant's watermark is months stale), enqueue an async backfill to fill
+  // the gap older than the cap. We compute the request size inside `try`
+  // but actually fire it from `finally` (after `pg_advisory_unlock`), since
+  // `backfillMetaCampaigns` re-acquires the same META lock.
+  let autoBackfillDays: number | null = null;
+  let autoBackfillReason: string | null = null;
+
   try {
     // ── Task #561: incremental nightly window with weekly full refresh ──
     // Meta's default attribution window settles within ~7 days. Re-pulling
@@ -680,6 +688,20 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
     const sinceMs = Math.max(capMs, Math.min(baseSinceMs, watermarkMs));
     const isCatchup = sinceMs < baseSinceMs;
     const windowDays = Math.round((nowMs - sinceMs) / 86400000);
+
+    // Task #564: clamp = nightly was about to widen further than the cap
+    // (i.e. tenant's effective watermark is older than maxCatchupDays). The
+    // missed range from `watermarkMs` back to today must be handled by the
+    // backfill route, which uses Meta's async report endpoint and a
+    // separate rate-limit budget. We stash `autoBackfillDays` here and
+    // dispatch from `finally` after the advisory lock is released.
+    if (tenant.metaLastSyncedAt && watermarkMs < capMs) {
+      const missedDays = Math.min(1095, Math.ceil((nowMs - watermarkMs) / 86400000));
+      if (missedDays > 30) {
+        autoBackfillDays = missedDays;
+        autoBackfillReason = `watermark ${Math.round((nowMs - new Date(tenant.metaLastSyncedAt as Date).getTime()) / 86400000)}d stale > cap ${maxCatchupDays}d`;
+      }
+    }
 
     const endDate = new Date(nowMs).toISOString().split("T")[0];
     const startDate = new Date(sinceMs).toISOString().split("T")[0];
@@ -814,6 +836,46 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
       await db.execute(sql`SELECT pg_advisory_unlock(${0x4d455441}, ${tenantId})`);
     } catch (unlockErr) {
       console.error(`[Sync] Meta tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+
+    // Task #564: dispatch the auto-backfill AFTER releasing the META lock,
+    // since `backfillMetaCampaigns` re-acquires the same lock. De-dupe
+    // against any in-flight `meta/backfill` row so a slow async report
+    // already mid-run isn't shadowed by a fresh enqueue from a subsequent
+    // nightly tick. Fire-and-forget: nightly returns immediately, the
+    // async report continues in the background.
+    if (autoBackfillDays !== null) {
+      try {
+        const [inFlight] = await db.select({ id: integrationSyncLogsTable.id })
+          .from(integrationSyncLogsTable)
+          .where(and(
+            eq(integrationSyncLogsTable.tenantId, tenantId),
+            eq(integrationSyncLogsTable.integration, "meta"),
+            eq(integrationSyncLogsTable.syncType, "backfill"),
+            eq(integrationSyncLogsTable.status, "running"),
+          ))
+          .limit(1);
+        if (inFlight) {
+          console.log(
+            `[Sync] Meta tenant ${tenantId}: nightly clamped (${autoBackfillReason}); skipping auto-backfill — existing meta/backfill log ${inFlight.id} still running`,
+          );
+        } else {
+          console.log(
+            `[Sync] Meta tenant ${tenantId}: nightly clamped (${autoBackfillReason}); auto-enqueuing backfillMetaCampaigns(days=${autoBackfillDays}) linked to sync log ${syncLog.id}`,
+          );
+          void backfillMetaCampaigns(tenantId, autoBackfillDays).catch((err) => {
+            console.error(
+              `[Sync] Meta tenant ${tenantId}: auto-enqueued backfill failed`,
+              err,
+            );
+          });
+        }
+      } catch (dispatchErr) {
+        console.error(
+          `[Sync] Meta tenant ${tenantId}: failed to dispatch auto-backfill`,
+          dispatchErr,
+        );
+      }
     }
   }
 }

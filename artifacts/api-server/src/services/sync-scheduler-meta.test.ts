@@ -539,6 +539,80 @@ describe("syncMetaCampaigns — incremental window (Task #561)", () => {
     }
   });
 
+  it("auto-enqueues a backfill when the catch-up window is clamped at the cap (Task #564)", async () => {
+    // Watermark ~180 days stale → nightly clamps at 90d, missed range
+    // ~180d should be handed off to the async backfill route.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2025-11-21T12:00:00Z") });
+      // In-flight backfill de-dupe check selects from integration_sync_logs:
+      // no row → no skip → auto-enqueue path runs.
+      state.selectQueue.push([]);
+      // The fire-and-forget backfillMetaCampaigns reload-the-tenant select
+      // happens on a microtask; queue an empty row so its early-exit short
+      // circuits cleanly without surfacing unhandled promise noise.
+      state.selectQueue.push([]);
+
+      await syncMetaCampaigns(1);
+
+      const enqueueLog = logSpy.mock.calls.find((c) =>
+        typeof c[0] === "string" && c[0].includes("auto-enqueuing backfillMetaCampaigns"),
+      );
+      expect(enqueueLog).toBeDefined();
+      // requested `days` should be ≥ 90 — the missed range past the cap.
+      expect(String(enqueueLog?.[0])).toMatch(/days=1\d\d/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT auto-enqueue a second backfill when one is already running (Task #564)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2025-11-21T12:00:00Z") });
+      // In-flight backfill exists → de-dupe should short-circuit.
+      state.selectQueue.push([{ id: 42 }]);
+
+      await syncMetaCampaigns(1);
+
+      const skipLog = logSpy.mock.calls.find((c) =>
+        typeof c[0] === "string" && c[0].includes("skipping auto-backfill"),
+      );
+      expect(skipLog).toBeDefined();
+      const enqueueLog = logSpy.mock.calls.find((c) =>
+        typeof c[0] === "string" && c[0].includes("auto-enqueuing backfillMetaCampaigns"),
+      );
+      expect(enqueueLog).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not auto-enqueue a backfill on a fresh tenant whose window was NOT clamped (Task #564)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
+    try {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const { syncMetaCampaigns } = await import("./sync-scheduler");
+      setupHappyPath({ id: 1, metaLastSyncedAt: new Date("2026-05-19T12:00:00Z") });
+
+      await syncMetaCampaigns(1);
+
+      const enqueueLog = logSpy.mock.calls.find((c) =>
+        typeof c[0] === "string" && c[0].includes("auto-enqueuing backfillMetaCampaigns"),
+      );
+      expect(enqueueLog).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not persist any video_* fields in the per-ad-day actions payload (dead fields dropped)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
