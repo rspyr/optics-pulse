@@ -94,7 +94,7 @@ export default function Internal() {
     }>;
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
-  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncLoading, setSyncLoading] = useState<Record<string, boolean>>({});
   // Alias for clarity in the sync/backfill code paths — the global tenant
   // filter at the top of the page drives every per-tenant action.
   const syncTenantId = globalTenantId;
@@ -246,7 +246,7 @@ export default function Internal() {
       return;
     }
     const targetTenantId = syncTenantId;
-    setSyncLoading(true);
+    setSyncLoading((prev) => ({ ...prev, [integration]: true }));
     try {
       const res = await fetch(`${API_BASE}/api/integrations/sync/${integration}`, {
         method: "POST",
@@ -275,8 +275,13 @@ export default function Internal() {
         description: err instanceof Error ? err.message : String(err),
         variant: "destructive",
       });
+    } finally {
+      setSyncLoading((prev) => {
+        const next = { ...prev };
+        delete next[integration];
+        return next;
+      });
     }
-    setSyncLoading(false);
   };
 
   const toggleSort = (key: SortKey) => {
@@ -776,11 +781,11 @@ export default function Internal() {
                 })()}
                 <button
                   onClick={() => triggerSync(integ)}
-                  disabled={syncLoading || !syncTenantId}
+                  disabled={!!syncLoading[integ] || !syncTenantId}
                   title={!syncTenantId ? "Pick a tenant from the selector at the top of the page" : undefined}
                   className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
                 >
-                  {syncLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {syncLoading[integ] ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                   Sync now
                 </button>
               </div>
