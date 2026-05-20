@@ -298,6 +298,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     state: IntegrationState;
     needsReconnect: boolean;
     reconnectReason: string | null;
+    latestErrorCode: string | null;
     syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }>;
   }> = {};
 
@@ -353,6 +354,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       state,
       needsReconnect: reconnectMap[integ]?.needs ?? false,
       reconnectReason: reconnectMap[integ]?.reason ?? null,
+      latestErrorCode: latest?.status === "error" ? (latest.errorCode ?? null) : null,
       syncTypes,
     };
   }

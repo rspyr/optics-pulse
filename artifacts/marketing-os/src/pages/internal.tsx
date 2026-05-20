@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -581,6 +581,13 @@ export default function Internal() {
                     </span>
                   ) : status?.state === "healthy" ? (
                     <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Healthy</span>
+                  ) : status?.state === "error" && status?.latestErrorCode === "rate_limit" ? (
+                    <span
+                      className="flex items-center gap-1 text-xs text-amber-400"
+                      title={`${label} throttled this sync — it will retry on the next scheduled run; no reconnect needed.`}
+                    >
+                      <Clock className="w-3.5 h-3.5" /> Throttled
+                    </span>
                   ) : status?.state === "error" ? (
                     <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Error</span>
                   ) : status?.state === "no_credentials" ? (
@@ -713,23 +720,31 @@ export default function Internal() {
                               </div>
                             </div>
                           )}
-                          {bf.errorDetail ? (
-                            <div
-                              className={
-                                bf.errorDetail.partial
-                                  ? "rounded border border-amber-400/30 bg-amber-500/[0.07] p-2 space-y-1"
-                                  : "rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1"
-                              }
-                            >
-                              <p className={`flex items-center gap-1.5 font-medium ${bf.errorDetail.partial ? "text-amber-300" : "text-red-300"}`}>
-                                {bf.errorDetail.partial ? (
-                                  <AlertTriangle className="w-3 h-3 shrink-0" />
-                                ) : (
-                                  <XCircle className="w-3 h-3 shrink-0" />
-                                )}
-                                <span>{bf.errorDetail.message}</span>
+                          {bf.errorDetail ? (() => {
+                            const isRateLimit = bf.errorDetail.code === "rate_limit";
+                            // Rate-limit is operator-friendly: the next scheduled sync
+                            // will retry automatically, no reconnect is required, so
+                            // render an amber "throttled" state instead of an alarming
+                            // red one. Partial backfills already use amber.
+                            const tone = isRateLimit || bf.errorDetail.partial ? "amber" : "red";
+                            const containerCls = tone === "amber"
+                              ? "rounded border border-amber-400/30 bg-amber-500/[0.07] p-2 space-y-1"
+                              : "rounded border border-red-400/20 bg-red-500/[0.06] p-2 space-y-1";
+                            const headerCls = tone === "amber" ? "text-amber-300" : "text-red-300";
+                            const Icon = tone === "amber" ? (isRateLimit ? Clock : AlertTriangle) : XCircle;
+                            const headline = isRateLimit
+                              ? `${label} throttled this sync`
+                              : bf.errorDetail.message;
+                            const action = isRateLimit
+                              ? `${label} rate-limited the request. The next scheduled sync will retry automatically — no reconnect needed.`
+                              : bf.errorDetail.suggestedAction;
+                            return (
+                            <div className={containerCls}>
+                              <p className={`flex items-center gap-1.5 font-medium ${headerCls}`}>
+                                <Icon className="w-3 h-3 shrink-0" />
+                                <span>{headline}</span>
                               </p>
-                              <p className="text-white/60">{bf.errorDetail.suggestedAction}</p>
+                              <p className="text-white/60">{action}</p>
                               {bf.errorDetail.raw && bf.errorDetail.raw !== bf.errorDetail.message && (
                                 <details className="text-[10px] text-white/40">
                                   <summary className="cursor-pointer hover:text-white/60">Technical details</summary>
@@ -737,7 +752,8 @@ export default function Internal() {
                                 </details>
                               )}
                             </div>
-                          ) : (
+                            );
+                          })() : (
                             !bf.progressDetail && bf.progress && (
                               <p className="text-white/70 font-mono break-all">{bf.progress}</p>
                             )
