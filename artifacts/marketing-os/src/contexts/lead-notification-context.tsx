@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { io as socketIOClient } from "socket.io-client";
+import { useQueryClient } from "@tanstack/react-query";
+import { getListAttributionEventsQueryKey } from "@workspace/api-client-react";
 import { useAuth } from "@/components/auth-context";
 import { toast, useToast } from "@/hooks/use-toast";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
@@ -179,6 +181,7 @@ const SOUND_URLS: Record<SoundType, string> = {
 
 export function LeadNotificationProvider({ children }: { children: React.ReactNode }) {
   const { user, effectiveTenantId, isAgency } = useAuth();
+  const queryClient = useQueryClient();
   const [soundEnabled, setSoundEnabledRaw] = useState(true);
   const [pendingNewLeads, setPendingNewLeads] = useState<LeadNotificationData[]>([]);
   const [newLeadSignal, setNewLeadSignal] = useState(0);
@@ -390,6 +393,22 @@ export function LeadNotificationProvider({ children }: { children: React.ReactNo
       ruleRederiveListenersRef.current.forEach(cb => {
         try { cb(data); } catch (e) { console.warn("[LeadNotification] rule-rederive-complete callback error:", e); }
       });
+      // Task #589: the rule save promoted one (or more) attribution events
+      // from `unmatched` to `manual` on the server. Invalidate the
+      // attribution-events list + detail queries so any open Attribution
+      // page refetches and the row badge flips from UNMATCHED to MANUAL on
+      // its own — without the page having to drive the invalidation itself.
+      // If this wire goes missing, the badge silently stops flipping for
+      // other tenant clients and for the operator after a tab refresh.
+      try {
+        queryClient.invalidateQueries({
+          queryKey: getListAttributionEventsQueryKey() as readonly unknown[],
+          exact: false,
+        });
+        queryClient.invalidateQueries({ queryKey: ["attribution-event"], exact: false });
+      } catch (e) {
+        console.warn("[LeadNotification] attribution-events invalidate failed:", e);
+      }
     });
     socket.on("rule-rederive-failed", (data: RuleRederiveFailedData) => {
       if (tenantIdRef.current && data.tenantId && data.tenantId !== tenantIdRef.current) return;
