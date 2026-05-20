@@ -1639,7 +1639,7 @@ interface BackfillDefaultFunnelResult {
   dryRun: boolean;
 }
 
-function TenantMaintenance({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
+export function TenantMaintenance({ tenantId, apiBase }: { tenantId: number; apiBase: string }) {
   const [running, setRunning] = useState<"idle" | "dryRun" | "writing">("idle");
   const [error, setError] = useState<string | null>(null);
   const [dryRunResult, setDryRunResult] = useState<BackfillDefaultFunnelResult | null>(null);
