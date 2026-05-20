@@ -1,13 +1,26 @@
-import { BlurView } from "expo-blur";
+import { BlurView as _BlurView } from "expo-blur";
 import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs } from "expo-router";
-import { Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
+import { Icon, Label, NativeTabs as _NativeTabs } from "expo-router/unstable-native-tabs";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
 import React from "react";
 import { Platform, StyleSheet, View, useColorScheme } from "react-native";
 
 import { useColors } from "@/hooks/useColors";
+
+// Expo SDK type defs are slightly out of sync with React 19's class-component /
+// children typing (BlurView is declared as a 2-generic React.Component while
+// JSX expects Component<any, any, any>, and NativeTabsProps's PropsWithChildren
+// doesn't line up with React 19's IntrinsicAttributes). Until the upstream
+// types catch up, cast to permissive any-typed components so JSX usage
+// compiles. A prior cleanup commit (147f81f) removed this workaround without
+// fixing the upstream mismatch, which broke `pnpm typecheck` for the mobile
+// artifact — restoring it here keeps the workspace typecheck green.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const BlurView: any = _BlurView;
+const NativeTabs: any = _NativeTabs;
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function NativeTabLayout() {
   return (

@@ -406,10 +406,15 @@ describe("POST /field-mapping-rules", () => {
     expect(enqueueReDeriveLeadsForRuleScopeMock).toHaveBeenCalledTimes(1);
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledTimes(1);
+    // The raw enqueue error message ("queue full") is intentionally sanitized
+    // by `mapReDeriveErrorForOperator` before reaching the operator UI so we
+    // don't leak queue/internal details — unrecognized errors collapse to the
+    // generic "Re-derive failed" phrase. The full error is still logged
+    // server-side (asserted via `errSpy` below).
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, expect.objectContaining({
       pageUrlPattern: "/contact",
       formIdentifier: "contact-form",
-      reason: "queue full",
+      reason: "Re-derive failed",
     }));
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();

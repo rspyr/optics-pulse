@@ -45,8 +45,10 @@ vi.mock("@workspace/db", () => {
         });
         // Awaiting the chain without .returning() should resolve too (used by
         // markRetryOrFailed's branches). We make the chain itself thenable.
-        (chain as unknown as PromiseLike<unknown>).then = (onFulfilled: (v: unknown) => unknown) =>
-          Promise.resolve(undefined).then(onFulfilled);
+        (chain as unknown as PromiseLike<unknown>).then = ((
+          onfulfilled?: ((value: unknown) => unknown) | null,
+          onrejected?: ((reason: unknown) => unknown) | null,
+        ) => Promise.resolve(undefined).then(onfulfilled, onrejected)) as PromiseLike<unknown>["then"];
         return chain;
       }),
     },
