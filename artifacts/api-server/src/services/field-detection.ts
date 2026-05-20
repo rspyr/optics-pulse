@@ -1,5 +1,6 @@
 import { db, fieldMappingRulesTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
+import { DEFAULT_FUNNEL_ALIASES } from "./funnel-normalizer";
 
 export type SemanticField =
   | "firstName"
@@ -166,6 +167,31 @@ function matchFieldName(normalizedKey: string, semantic: SemanticField): boolean
 
 const NAME_REGEX = /^[A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{1,20}){0,3}$/;
 
+const FUNNEL_VALUE_TOKENS: Set<string> = new Set([
+  "hvac", "ac", "a/c", "furnace", "boiler", "heater", "heating", "cooling",
+  "heat", "pump", "ductless", "mini-split", "minisplit", "thermostat",
+  "duct", "vent", "ventilation", "conditioner", "conditioning",
+  "system", "unit", "equipment", "install", "installation", "repair",
+  "maintenance", "service", "emergency", "replacement", "tune-up", "tuneup",
+  "inspection", "commercial", "residential", "plumbing", "electrical",
+  "water", "drain", "sewer", "refrigerant", "compressor",
+]);
+
+const FUNNEL_ALIAS_SET: Set<string> = new Set(
+  DEFAULT_FUNNEL_ALIASES.flatMap((g) => g.aliases.map((a) => a.toLowerCase().trim())),
+);
+
+export function isLikelyFunnelValue(value: string): boolean {
+  const lower = value.toLowerCase().trim();
+  if (!lower) return false;
+  if (FUNNEL_ALIAS_SET.has(lower)) return true;
+  const tokens = lower.split(/[\s\-\/]+/).filter(Boolean);
+  for (const tok of tokens) {
+    if (FUNNEL_VALUE_TOKENS.has(tok)) return true;
+  }
+  return false;
+}
+
 function detectByValuePattern(value: string): SemanticField | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -176,6 +202,7 @@ function detectByValuePattern(value: string): SemanticField | null {
   if (digits.length >= PHONE_DIGIT_MIN && PHONE_REGEX.test(trimmed)) return "phone";
 
   if (NAME_REGEX.test(trimmed) && trimmed.length >= 2 && trimmed.length <= 50) {
+    if (isLikelyFunnelValue(trimmed)) return null;
     const parts = trimmed.split(/\s+/);
     if (parts.length >= 2) return "fullName";
     return "firstName";
