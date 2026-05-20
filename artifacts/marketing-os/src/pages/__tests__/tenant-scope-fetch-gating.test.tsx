@@ -37,15 +37,15 @@ vi.mock("@/contexts/lead-notification-context", async () => {
   return mockLeadNotificationModule();
 });
 
-vi.mock("@workspace/api-client-react", () => {
+vi.mock("@workspace/api-client-react", async () => {
   // The Pulse page reads a Podium timeline via these hooks when a lead is
-  // selected — we never open one in these tests, so empty results are fine.
-  const noop = () => undefined;
-  return {
-    useGetPodiumTimeline: () => ({ data: undefined, isLoading: false }),
-    useGetPodiumConversation: () => ({ data: undefined, isLoading: false }),
-    useSendPodiumMessage: () => ({ mutate: noop, mutateAsync: noop, isPending: false }),
-  };
+  // selected — we never open one in these tests. Use the shared helper so
+  // every other auto-generated hook also defaults to a safe empty result
+  // (drift-proof: new hooks don't require touching this factory).
+  const { mockApiClientReactModule } = await import(
+    "@/test-utils/api-client-react-mocks"
+  );
+  return mockApiClientReactModule();
 });
 
 // Pulled in after the mocks so the page picks up the stubs.

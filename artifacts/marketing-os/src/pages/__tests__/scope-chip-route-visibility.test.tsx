@@ -19,12 +19,21 @@ const tenantList = [
   { id: 22, name: "Beta", isActive: true },
 ];
 
-vi.mock("@workspace/api-client-react", () => ({
+vi.mock("@workspace/api-client-react", async () => {
   // TenantScopeChip reads the tenant list via this hook to populate its
   // dropdown. Returning a small list is enough to exercise the visibility
-  // branch — we never actually open the menu in these tests.
-  useListTenants: () => ({ data: tenantList }),
-}));
+  // branch — we never actually open the menu in these tests. Every other
+  // auto-generated hook stays a safe no-result stub via the shared helper.
+  const { mockApiClientReactModule, makeApiClientHookStub } = await import(
+    "@/test-utils/api-client-react-mocks"
+  );
+  return mockApiClientReactModule({
+    useListTenants: (() => ({
+      ...makeApiClientHookStub(),
+      data: tenantList,
+    })) as unknown as typeof import("@workspace/api-client-react").useListTenants,
+  });
+});
 
 // useBranding pulls in additional API calls we don't care about here.
 vi.mock("@/hooks/use-branding", () => ({ useBranding: () => undefined }));

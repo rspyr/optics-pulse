@@ -86,6 +86,11 @@ vi.mock("@/components/pending-rederive-leads-sheet", () => ({
 
 // We're driving the *real* unmatched-fields-panel for this E2E so don't mock it.
 // Just stub the lead-invoice hook used by the sheet's invoice section.
+// This E2E test intentionally drives the *real* generated react-query hooks
+// (e.g. `useListAttributionEvents`) against the mocked `fetch` backend, so we
+// don't use the drift-proof `mockApiClientReactModule` helper here — it would
+// stub those hooks out. We spread the actual module and override only the
+// lead-invoice hook used by the sheet's invoice section.
 vi.mock("@workspace/api-client-react", async () => {
   const actual = await vi.importActual<typeof import("@workspace/api-client-react")>(
     "@workspace/api-client-react",

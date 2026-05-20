@@ -14,22 +14,16 @@ const tenantList = [
   { id: 22, name: "Beta", isActive: true },
 ];
 
-vi.mock("@workspace/api-client-react", () => {
-  const noop = () => undefined;
-  return {
-    useGetAdminDashboardStats: () => ({ data: undefined, isLoading: false }),
-    useListLeads: () => ({ data: undefined, isLoading: false }),
-    useGetReconciliationStatus: () => ({ data: undefined, refetch: vi.fn() }),
-    useRunReconciliation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-    useListTenants: () => ({ data: tenantList }),
-    useListAttributionEvents: () => ({ data: undefined }),
-    useGetAttributionEvent: () => ({ data: undefined }),
-    useGetAttributionEventFacets: () => ({ data: undefined }),
-    useGetLeadInvoice: () => ({ data: undefined }),
-    getListAttributionEventsQueryKey: noop,
-    getGetAttributionEventQueryKey: noop,
-    getGetAttributionEventFacetsQueryKey: noop,
-  };
+vi.mock("@workspace/api-client-react", async () => {
+  const { mockApiClientReactModule, makeApiClientHookStub } = await import(
+    "@/test-utils/api-client-react-mocks"
+  );
+  return mockApiClientReactModule({
+    useListTenants: (() => ({
+      ...makeApiClientHookStub(),
+      data: tenantList,
+    })) as unknown as typeof import("@workspace/api-client-react").useListTenants,
+  });
 });
 
 import Internal from "../internal";

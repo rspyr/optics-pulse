@@ -30,16 +30,19 @@ const { useListAttributionEventsMock, useGetAttributionEventMock, useGetAttribut
 }));
 
 vi.mock("@workspace/api-client-react", async () => {
-  const actual = await vi.importActual<typeof import("@workspace/api-client-react")>(
-    "@workspace/api-client-react",
+  // Shared helper auto-stubs every other generated hook with a safe
+  // no-result default, so adding new hooks to the client doesn't require
+  // touching this factory.
+  const { mockApiClientReactModule } = await import(
+    "@/test-utils/api-client-react-mocks"
   );
-  return {
-    ...actual,
-    useListAttributionEvents: useListAttributionEventsMock,
-    useGetAttributionEvent: useGetAttributionEventMock,
-    useGetAttributionEventFacets: useGetAttributionEventFacetsMock,
-    useGetLeadInvoice: useGetLeadInvoiceMock,
-  };
+  type ApiMod = typeof import("@workspace/api-client-react");
+  return mockApiClientReactModule({
+    useListAttributionEvents: useListAttributionEventsMock as unknown as ApiMod["useListAttributionEvents"],
+    useGetAttributionEvent: useGetAttributionEventMock as unknown as ApiMod["useGetAttributionEvent"],
+    useGetAttributionEventFacets: useGetAttributionEventFacetsMock as unknown as ApiMod["useGetAttributionEventFacets"],
+    useGetLeadInvoice: useGetLeadInvoiceMock as unknown as ApiMod["useGetLeadInvoice"],
+  });
 });
 
 vi.mock("@/hooks/use-tenant-filter", () => ({

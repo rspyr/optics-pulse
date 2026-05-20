@@ -3,14 +3,17 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("@workspace/api-client-react", async () => {
-  const actual = await vi.importActual<typeof import("@workspace/api-client-react")>(
-    "@workspace/api-client-react",
+  // Shared helper auto-stubs every generated hook with a safe no-result
+  // default, so adding new hooks to the client doesn't require touching this
+  // factory.
+  const { mockApiClientReactModule } = await import(
+    "@/test-utils/api-client-react-mocks"
   );
-  return {
-    ...actual,
-    useListAttributionEvents: vi.fn(),
-    useGetAttributionEvent: vi.fn(),
-  };
+  type ApiMod = typeof import("@workspace/api-client-react");
+  return mockApiClientReactModule({
+    useListAttributionEvents: vi.fn() as unknown as ApiMod["useListAttributionEvents"],
+    useGetAttributionEvent: vi.fn() as unknown as ApiMod["useGetAttributionEvent"],
+  });
 });
 
 vi.mock("@/hooks/use-tenant-filter", () => ({
