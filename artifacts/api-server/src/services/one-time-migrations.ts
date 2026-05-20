@@ -1320,18 +1320,65 @@ const migrations: Migration[] = [
       "signal after the event (the one most likely to be the cause of the flip). " +
       "Ambiguous rows stay NULL so the legacy fallback line still renders. " +
       "Set env BACKFILL_MANUAL_SOURCE_DRY_RUN=1 to log counts without writing.",
-    run: backfillManualSourceForLegacyEvents,
+    run: async () => { await backfillManualSourceForLegacyEvents(); },
   },
 ];
+
+export const BACKFILL_MANUAL_SOURCE_MIGRATION_ID =
+  "2026-05-20_backfill-attribution-event-manual-source";
 
 // Exported for direct invocation in tests (see
 // one-time-migrations-manual-source.integration.test.ts). The migration
 // entry above delegates to this function so the production code path and
 // the test code path are identical.
-export async function backfillManualSourceForLegacyEvents(): Promise<void> {
-      const dryRun = process.env.BACKFILL_MANUAL_SOURCE_DRY_RUN === "1";
+export interface ManualSourceBackfillCounters {
+  totalLegacyManualRows: number;
+  stampedByFunnelOverride: number;
+  stampedByFieldMappingRule: number;
+  leftNullAmbiguous: number;
+  skippedOverrideNoTemporalMatch: number;
+  skippedRuleNoTemporalMatch: number;
+}
 
-      const legacyRows = await db
+export interface ManualSourceBackfillOptions {
+  /** When true, skip writes — pure read-only counter computation. Defaults
+   *  to the `BACKFILL_MANUAL_SOURCE_DRY_RUN=1` env flag for the migration. */
+  dryRun?: boolean;
+  /** Optional tenant filter. When set, only rows for this tenant are
+   *  considered. */
+  tenantId?: number;
+  /** When true, also consider already-stamped manual rows (manual_source
+   *  NOT NULL) in the report. Such rows are classified by their stamp
+   *  prefix (`funnel_override:` vs `field_mapping_rule:`) without re-
+   *  running correlation. NULL rows still go through the heuristic so the
+   *  ambiguous + skip sub-counters reflect what re-running the backfill
+   *  *now* would produce. Used by the admin diagnostics endpoint to
+   *  surface the full legacy cohort, not just the ambiguous tail. */
+  classifyAlreadyStamped?: boolean;
+  /** Only consider rows created strictly before this timestamp. The admin
+   *  endpoint sets this to the migration's executed_at so the report
+   *  describes the legacy cohort, not newer live writes. */
+  cutoffAt?: Date | null;
+}
+
+export async function backfillManualSourceForLegacyEvents(
+  options: ManualSourceBackfillOptions = {},
+): Promise<ManualSourceBackfillCounters> {
+      const dryRun = options.dryRun ?? (process.env.BACKFILL_MANUAL_SOURCE_DRY_RUN === "1");
+      const { tenantId, classifyAlreadyStamped = false, cutoffAt = null } = options;
+
+      const baseConds = [eq(attributionEventsTable.matchLevel, "manual")];
+      if (!classifyAlreadyStamped) {
+        baseConds.push(isNull(attributionEventsTable.manualSource));
+      }
+      if (tenantId != null) {
+        baseConds.push(eq(attributionEventsTable.tenantId, tenantId));
+      }
+      if (cutoffAt) {
+        baseConds.push(sql`${attributionEventsTable.createdAt} < ${cutoffAt}`);
+      }
+
+      const allRows = await db
         .select({
           id: attributionEventsTable.id,
           tenantId: attributionEventsTable.tenantId,
@@ -1342,16 +1389,40 @@ export async function backfillManualSourceForLegacyEvents(): Promise<void> {
           formName: attributionEventsTable.formName,
           formFields: attributionEventsTable.formFields,
           resolvedFunnel: attributionEventsTable.resolvedFunnel,
+          manualSource: attributionEventsTable.manualSource,
         })
         .from(attributionEventsTable)
-        .where(and(
-          eq(attributionEventsTable.matchLevel, "manual"),
-          isNull(attributionEventsTable.manualSource),
-        ));
+        .where(and(...baseConds));
 
-      if (legacyRows.length === 0) {
-        console.log("[Migration] No legacy manual attribution_events to backfill");
-        return;
+      // Partition into (already-stamped, NULL) when classifying. In the
+      // default migration code path nothing is pre-stamped.
+      let preStampedOverride = 0;
+      let preStampedRule = 0;
+      const legacyRows: typeof allRows = [];
+      for (const r of allRows) {
+        if (r.manualSource == null) {
+          legacyRows.push(r);
+        } else if (r.manualSource.startsWith("funnel_override:")) {
+          preStampedOverride++;
+        } else if (r.manualSource.startsWith("field_mapping_rule:")) {
+          preStampedRule++;
+        }
+        // Any other stamp prefix is counted toward total but not into a
+        // sub-bucket — the report's total still includes it.
+      }
+
+      if (allRows.length === 0) {
+        if (!classifyAlreadyStamped) {
+          console.log("[Migration] No legacy manual attribution_events to backfill");
+        }
+        return {
+          totalLegacyManualRows: 0,
+          stampedByFunnelOverride: 0,
+          stampedByFieldMappingRule: 0,
+          leftNullAmbiguous: 0,
+          skippedOverrideNoTemporalMatch: 0,
+          skippedRuleNoTemporalMatch: 0,
+        };
       }
 
       // Normalize field-name keys the same way field-detection does so a
@@ -1505,13 +1576,25 @@ export async function backfillManualSourceForLegacyEvents(): Promise<void> {
         leftNullAmbiguous++;
       }
 
-      const mode = dryRun ? " (DRY-RUN, no writes performed)" : "";
-      console.log(
-        `[Migration]${mode} Backfilled manual_source on ${stampedOverride + stampedRule}/${legacyRows.length} legacy manual attribution event(s) ` +
-        `(funnel_override: ${stampedOverride}, field_mapping_rule: ${stampedRule}, ambiguous left null: ${leftNullAmbiguous}; ` +
-        `of those nulls — override skipped on weak temporal evidence: ${skippedOverrideNoTemporalMatch}, ` +
-        `rule skipped on weak temporal evidence: ${skippedRuleNoTemporalMatch})`,
-      );
+      const totalStampedOverride = stampedOverride + preStampedOverride;
+      const totalStampedRule = stampedRule + preStampedRule;
+      if (!classifyAlreadyStamped) {
+        const mode = dryRun ? " (DRY-RUN, no writes performed)" : "";
+        console.log(
+          `[Migration]${mode} Backfilled manual_source on ${stampedOverride + stampedRule}/${legacyRows.length} legacy manual attribution event(s) ` +
+          `(funnel_override: ${stampedOverride}, field_mapping_rule: ${stampedRule}, ambiguous left null: ${leftNullAmbiguous}; ` +
+          `of those nulls — override skipped on weak temporal evidence: ${skippedOverrideNoTemporalMatch}, ` +
+          `rule skipped on weak temporal evidence: ${skippedRuleNoTemporalMatch})`,
+        );
+      }
+      return {
+        totalLegacyManualRows: allRows.length,
+        stampedByFunnelOverride: totalStampedOverride,
+        stampedByFieldMappingRule: totalStampedRule,
+        leftNullAmbiguous,
+        skippedOverrideNoTemporalMatch,
+        skippedRuleNoTemporalMatch,
+      };
 }
 
 export async function runOneTimeMigrations(): Promise<void> {

@@ -287,4 +287,92 @@ describe("backfillManualSourceForLegacyEvents (real Postgres, task #592)", () =>
       .where(eq(attributionEventsTable.id, eventId));
     expect(stamped.manualSource).toBeNull();
   });
+
+  it("classifyAlreadyStamped=true returns the full legacy cohort (already-stamped + still-NULL) scoped to a tenant — backs the task #596 admin diagnostics endpoint", async () => {
+    const tenantId = await createTestTenant("diag");
+    createdTenants.push(tenantId);
+    const leadOverride = await createTestLead(tenantId);
+    const leadRule = await createTestLead(tenantId);
+    const leadAmbiguous = await createTestLead(tenantId);
+    createdLeads.push(leadOverride, leadRule, leadAmbiguous);
+
+    // Already-stamped: simulate a row the live override path wrote
+    // (manualSource present, prefix "funnel_override:").
+    const stampedOverrideId = await seedLegacyManualEvent({
+      tenantId,
+      leadId: leadOverride,
+      pageUrl: "https://example.com/a",
+      formId: "fa",
+      formFields: { email: "a@b.com" },
+      resolvedFunnel: "Bath",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await db.execute(sql`
+      UPDATE attribution_events SET manual_source = ${`funnel_override:lead/${leadOverride}`}
+      WHERE id = ${stampedOverrideId}
+    `);
+
+    // Will be stamped by the heuristic during the read-only pass
+    // (rule.updatedAt > event.createdAt, field matches).
+    await seedLegacyManualEvent({
+      tenantId,
+      leadId: leadRule,
+      pageUrl: "https://example.com/contact",
+      formId: "contact-form",
+      formFields: { email: "c@d.com" },
+      resolvedFunnel: "Bath",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await db.insert(fieldMappingRulesTable).values({
+      tenantId,
+      pageUrlPattern: "/contact",
+      formIdentifier: "contact-form",
+      fieldName: "email",
+      mapsTo: "email",
+      updatedAt: new Date("2026-02-01T00:00:00Z"),
+    });
+
+    // Ambiguous tail — a rule exists but its updatedAt predates the event,
+    // so the temporal gate must reject it and bump the rule-skip counter
+    // rather than leftNullAmbiguous-only (the report needs the distinction).
+    await seedLegacyManualEvent({
+      tenantId,
+      leadId: leadAmbiguous,
+      pageUrl: "https://example.com/quote",
+      formId: "quote-form",
+      formFields: { phone: "555" },
+      resolvedFunnel: "Roofing",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await db.insert(fieldMappingRulesTable).values({
+      tenantId,
+      pageUrlPattern: "/quote",
+      formIdentifier: "quote-form",
+      fieldName: "phone",
+      mapsTo: "phone",
+      updatedAt: new Date("2025-12-01T00:00:00Z"),
+    });
+
+    const counters = await backfillManualSourceForLegacyEvents({
+      dryRun: true,
+      classifyAlreadyStamped: true,
+      tenantId,
+    });
+
+    expect(counters.totalLegacyManualRows).toBe(3);
+    expect(counters.stampedByFunnelOverride).toBe(1); // already-stamped
+    expect(counters.stampedByFieldMappingRule).toBe(1); // would-stamp on re-run
+    expect(counters.leftNullAmbiguous).toBe(1);
+    expect(counters.skippedRuleNoTemporalMatch).toBe(1);
+    expect(counters.skippedOverrideNoTemporalMatch).toBe(0);
+
+    // dryRun + classifyAlreadyStamped must NOT mutate the table: the
+    // would-be-stamped rule row should still have manual_source IS NULL.
+    const stillNull = await db.select().from(attributionEventsTable)
+      .where(and(
+        eq(attributionEventsTable.tenantId, tenantId),
+        eq(attributionEventsTable.createdLeadId, leadRule),
+      ));
+    expect(stillNull[0].manualSource).toBeNull();
+  });
 });

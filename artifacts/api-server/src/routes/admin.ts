@@ -7,6 +7,10 @@ import { pool } from "@workspace/db";
 import { backfillMetaAdCreatives } from "../services/sync-scheduler";
 import { findUsersWithoutTenant } from "../services/broken-account-audit";
 import { backfillDefaultFunnelForTenant } from "../services/backfill-default-funnel";
+import {
+  backfillManualSourceForLegacyEvents,
+  BACKFILL_MANUAL_SOURCE_MIGRATION_ID,
+} from "../services/one-time-migrations";
 
 const router: IRouter = Router();
 
@@ -560,6 +564,77 @@ router.post("/admin/backfill-default-funnel/:tenantId", ...agencyOnly, async (re
     res.json(result);
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to backfill default funnel";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Read-only diagnostics for the `2026-05-20_backfill-attribution-event-
+ * manual-source` one-time migration. Re-runs the same heuristic in dry-run
+ * mode against the current attribution_events table and classifies any
+ * already-stamped rows by their `manual_source` prefix, so an operator can
+ * see at a glance whether a tenant still has a hand-resolved ambiguous
+ * tail. See task #596.
+ *
+ * Query: ?tenantId=<number> to scope to one tenant; required for non-agency
+ * users (whose session already pins them to a tenant). Returns counts +
+ * the migration's executed_at as the cohort cutoff.
+ */
+router.get("/admin/legacy-manual-source-backfill", requireAuth, async (req, res) => {
+  try {
+    const role = req.session.userRole;
+    const sessionTenantId = req.session.tenantId;
+    const isAgency = role === "super_admin" || role === "agency_user";
+
+    let tenantId: number | undefined;
+    const queryTenant = req.query.tenantId;
+    if (typeof queryTenant === "string" && queryTenant !== "") {
+      const parsed = parseInt(queryTenant, 10);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        res.status(400).json({ error: "Invalid tenant ID" });
+        return;
+      }
+      tenantId = parsed;
+    }
+
+    if (!isAgency) {
+      // Non-agency users can only see their own tenant's tally; ignore any
+      // ?tenantId trying to peek at another tenant.
+      if (!sessionTenantId) {
+        res.status(403).json({ error: "No tenant assigned" });
+        return;
+      }
+      tenantId = sessionTenantId;
+    }
+
+    // Migration's executed_at bounds the "legacy cohort" so newer live
+    // writes don't inflate the report. If the migration hasn't run on
+    // this database yet, fall back to "all manual rows" (cutoffAt=null).
+    const cutoffRow = await db.execute(sql`
+      SELECT executed_at FROM _one_time_migrations
+      WHERE id = ${BACKFILL_MANUAL_SOURCE_MIGRATION_ID}
+      LIMIT 1
+    `);
+    const cutoffAt = cutoffRow.rows.length > 0
+      ? new Date((cutoffRow.rows[0] as { executed_at: Date | string }).executed_at)
+      : null;
+
+    const counters = await backfillManualSourceForLegacyEvents({
+      dryRun: true,
+      classifyAlreadyStamped: true,
+      tenantId,
+      cutoffAt,
+    });
+
+    res.json({
+      tenantId: tenantId ?? null,
+      migrationId: BACKFILL_MANUAL_SOURCE_MIGRATION_ID,
+      cutoffAt: cutoffAt ? cutoffAt.toISOString() : null,
+      computedAt: new Date().toISOString(),
+      ...counters,
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to compute legacy manual-source backfill stats";
     res.status(500).json({ error: msg });
   }
 });

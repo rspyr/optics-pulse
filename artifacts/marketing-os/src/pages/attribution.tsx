@@ -17,6 +17,7 @@ import { subscribeRederiveOnce } from "@/lib/rule-rederive-subscription";
 import { formatLastAttempted } from "./unmatched-fields-panel";
 import { CapturePathBadge } from "@/components/capture-path-badge";
 import { PendingRederiveLeadsSheet } from "@/components/pending-rederive-leads-sheet";
+import { LegacyManualSourceBackfillCard } from "@/components/legacy-manual-source-backfill-card";
 import { format } from "date-fns";
 import {
   Target, AlertTriangle, Globe, MousePointerClick, Phone, FileText, ExternalLink,
@@ -554,6 +555,7 @@ export default function Attribution() {
 
       {activeTab === "events" && (
         <>
+          <LegacyManualSourceBackfillCard tenantId={effectiveTenantId} />
           <PremiumCard className="p-4">
             <div className="flex flex-wrap items-center gap-3">
               <Filter className="w-4 h-4 text-muted-foreground" />
