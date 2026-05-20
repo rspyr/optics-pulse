@@ -53,9 +53,10 @@ vi.mock("@/hooks/use-tenant-filter", () => ({
   }),
 }));
 
-vi.mock("@/contexts/lead-notification-context", () => ({
-  useOptionalLeadNotification: () => null,
-}));
+vi.mock("@/contexts/lead-notification-context", async () => {
+  const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
+  return mockLeadNotificationModule();
+});
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 

@@ -38,23 +38,21 @@ vi.mock("sonner", () => ({
   toast: toastMock,
 }));
 
-const { useOptionalLeadNotificationMock, useLeadNotificationMock } = vi.hoisted(() => {
-  const noop = () => () => {};
-  return {
-    useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
-    useLeadNotificationMock: vi.fn(() => ({
-      onSelectedLeadsRederiveComplete: noop,
-      onSelectedLeadsRederiveFailed: noop,
-      onSelectedLeadsRederiveProgress: noop,
-      onSelectedLeadsRederiveCancelled: noop,
-      onReconnect: noop,
-    })),
-  };
-});
-vi.mock("@/contexts/lead-notification-context", () => ({
-  useOptionalLeadNotification: useOptionalLeadNotificationMock,
-  useLeadNotification: useLeadNotificationMock,
+const { useOptionalLeadNotificationMock, useLeadNotificationMock } = vi.hoisted(() => ({
+  useOptionalLeadNotificationMock: vi.fn(),
+  useLeadNotificationMock: vi.fn(),
 }));
+vi.mock("@/contexts/lead-notification-context", async () => {
+  const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
+  return mockLeadNotificationModule({
+    useOptionalLeadNotification: useOptionalLeadNotificationMock,
+    useLeadNotification: useLeadNotificationMock,
+  });
+});
+
+import { makeLeadNotificationStub } from "@/test-utils/lead-notification-mocks";
+useOptionalLeadNotificationMock.mockReturnValue(null);
+useLeadNotificationMock.mockReturnValue(makeLeadNotificationStub());
 
 import VerifyTracker from "../verify-tracker";
 import { __resetLearnedSuggestionsCacheForTests } from "../unmatched-fields-panel";

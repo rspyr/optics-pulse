@@ -9,14 +9,24 @@ import type {
 type CompleteCb = (data: SelectedLeadsRederiveCompleteData) => void;
 type FailedCb = (data: SelectedLeadsRederiveFailedData) => void;
 
-const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoisted(() => {
-  const completeListeners = new Set<CompleteCb>();
-  const failedListeners = new Set<FailedCb>();
-  const noop = () => () => {};
-  return {
-    completeListeners,
-    failedListeners,
-    useLeadNotificationMock: vi.fn(() => ({
+const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoisted(() => ({
+  completeListeners: new Set<CompleteCb>(),
+  failedListeners: new Set<FailedCb>(),
+  useLeadNotificationMock: vi.fn(),
+}));
+
+vi.mock("@/contexts/lead-notification-context", async () => {
+  const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
+  return mockLeadNotificationModule({ useLeadNotification: useLeadNotificationMock });
+});
+
+import { makeLeadNotificationStub } from "@/test-utils/lead-notification-mocks";
+import { PendingRederiveLeadsSheet } from "../pending-rederive-leads-sheet";
+
+// Re-installed in beforeEach so test resets don't strand the listener refs.
+function installListenerStub() {
+  useLeadNotificationMock.mockReturnValue(
+    makeLeadNotificationStub({
       onSelectedLeadsRederiveComplete: (cb: CompleteCb) => {
         completeListeners.add(cb);
         return () => {
@@ -29,22 +39,10 @@ const { completeListeners, failedListeners, useLeadNotificationMock } = vi.hoist
           failedListeners.delete(cb);
         };
       },
-      // Other context callbacks the sheet subscribes to during queued
-      // re-derives. We don't drive any of them from the tests yet, so a
-      // no-op unsubscribe is sufficient — what matters is that the sheet's
-      // useEffect doesn't blow up calling an undefined function.
-      onSelectedLeadsRederiveProgress: noop,
-      onSelectedLeadsRederiveCancelled: noop,
-      onReconnect: noop,
-    })),
-  };
-});
-
-vi.mock("@/contexts/lead-notification-context", () => ({
-  useLeadNotification: useLeadNotificationMock,
-}));
-
-import { PendingRederiveLeadsSheet } from "../pending-rederive-leads-sheet";
+    }),
+  );
+}
+installListenerStub();
 
 type PendingLead = {
   id: number;
@@ -128,6 +126,7 @@ describe("PendingRederiveLeadsSheet", () => {
   beforeEach(() => {
     completeListeners.clear();
     failedListeners.clear();
+    installListenerStub();
     vi.spyOn(global, "fetch").mockReset();
   });
 

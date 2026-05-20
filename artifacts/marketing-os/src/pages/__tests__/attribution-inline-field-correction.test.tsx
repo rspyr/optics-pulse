@@ -35,23 +35,21 @@ vi.mock("sonner", () => ({
   toast: sonnerToastMock,
 }));
 
-const { useOptionalLeadNotificationMock, useLeadNotificationMock } = vi.hoisted(() => {
-  const noop = () => () => {};
-  return {
-    useOptionalLeadNotificationMock: vi.fn(() => null as unknown),
-    useLeadNotificationMock: vi.fn(() => ({
-      onSelectedLeadsRederiveComplete: noop,
-      onSelectedLeadsRederiveFailed: noop,
-      onSelectedLeadsRederiveProgress: noop,
-      onSelectedLeadsRederiveCancelled: noop,
-      onReconnect: noop,
-    })),
-  };
-});
-vi.mock("@/contexts/lead-notification-context", () => ({
-  useOptionalLeadNotification: useOptionalLeadNotificationMock,
-  useLeadNotification: useLeadNotificationMock,
+const { useOptionalLeadNotificationMock, useLeadNotificationMock } = vi.hoisted(() => ({
+  useOptionalLeadNotificationMock: vi.fn(),
+  useLeadNotificationMock: vi.fn(),
 }));
+vi.mock("@/contexts/lead-notification-context", async () => {
+  const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
+  return mockLeadNotificationModule({
+    useOptionalLeadNotification: useOptionalLeadNotificationMock,
+    useLeadNotification: useLeadNotificationMock,
+  });
+});
+
+import { makeLeadNotificationStub } from "@/test-utils/lead-notification-mocks";
+useOptionalLeadNotificationMock.mockReturnValue(null);
+useLeadNotificationMock.mockReturnValue(makeLeadNotificationStub());
 
 import { InlineFieldCorrection, EditableAutoDetectedFields, FormFieldsList } from "../attribution";
 import type { AttributionEvent } from "@workspace/api-client-react";
@@ -203,7 +201,7 @@ function setupRederiveNotification(): {
       unsubscribe();
     };
   });
-  useOptionalLeadNotificationMock.mockReturnValue({ onRuleRederiveComplete });
+  useOptionalLeadNotificationMock.mockReturnValue(makeLeadNotificationStub({ onRuleRederiveComplete }));
   return {
     emit: (data) => listeners.forEach((cb) => cb(data)),
     unsubscribe,
@@ -569,10 +567,9 @@ function setupRederiveBothNotifications(): {
     failedListeners.add(cb);
     return () => failedListeners.delete(cb);
   });
-  useOptionalLeadNotificationMock.mockReturnValue({
-    onRuleRederiveComplete,
-    onRuleRederiveFailed,
-  });
+  useOptionalLeadNotificationMock.mockReturnValue(
+    makeLeadNotificationStub({ onRuleRederiveComplete, onRuleRederiveFailed }),
+  );
   return {
     emitComplete: (d) => completeListeners.forEach((cb) => cb(d)),
     emitFailed: (d) => failedListeners.forEach((cb) => cb(d)),

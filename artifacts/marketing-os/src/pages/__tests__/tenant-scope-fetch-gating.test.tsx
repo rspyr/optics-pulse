@@ -32,23 +32,10 @@ vi.mock("socket.io-client", () => ({
   }),
 }));
 
-vi.mock("@/contexts/lead-notification-context", () => ({
-  useLeadNotification: () => ({
-    pendingNewLeads: [],
-    dismissNewLead: () => undefined,
-    newLeadSignal: 0,
-    leadUpdatedSignal: 0,
-    soundEnabled: false,
-    setSoundEnabled: () => undefined,
-    onReconnect: () => () => undefined,
-    latestPodiumNotification: null,
-    clearPodiumNotification: () => undefined,
-    onPodiumMessage: () => () => undefined,
-    latestCallbackDue: null,
-    clearCallbackDue: () => undefined,
-    playCallbackSound: () => undefined,
-  }),
-}));
+vi.mock("@/contexts/lead-notification-context", async () => {
+  const { mockLeadNotificationModule } = await import("@/test-utils/lead-notification-mocks");
+  return mockLeadNotificationModule();
+});
 
 vi.mock("@workspace/api-client-react", () => {
   // The Pulse page reads a Podium timeline via these hooks when a lead is

@@ -146,7 +146,7 @@ export interface SelectedLeadsRederiveCancelledData {
 
 type SelectedLeadsRederiveCancelledCallback = (data: SelectedLeadsRederiveCancelledData) => void;
 
-interface LeadNotificationContextType {
+export interface LeadNotificationContextType {
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
   pendingNewLeads: LeadNotificationData[];
