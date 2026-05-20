@@ -27,6 +27,12 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   // with status='cancelled' and the in-flight `recordsProcessed`. The
   // scheduled 15-min sync ignores this flag — short runs don't need cancel.
   cancelRequested: boolean("cancel_requested").notNull().default(false),
+  // Parent sync log id when this row was auto-enqueued by another sync run
+  // (Task #564 nightly catch-up clamp → spawns a `meta/backfill`). Null on
+  // manually-triggered backfills and on the nightly rows themselves. Used
+  // by the Settings panel to badge auto-triggered runs so operators can
+  // explain "why did this tenant just kick off a 6-month backfill?".
+  triggeredBySyncLogId: integer("triggered_by_sync_log_id"),
   metadata: jsonb("metadata"),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),

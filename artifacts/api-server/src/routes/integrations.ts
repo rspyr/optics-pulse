@@ -420,6 +420,11 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
      *  `partial: …` mid-run failure but the outer status hasn't flipped
      *  yet. Null on healthy / completed runs. */
     errorDetail: BackfillErrorDetail | null;
+    /** When non-null, this backfill was auto-enqueued by another sync run
+     *  (e.g. the nightly catch-up clamp in Task #564). The UI uses this to
+     *  badge the row so operators can explain why a 6-month backfill just
+     *  appeared without an operator clicking Run. */
+    triggeredBySyncLogId: number | null;
     startedAt: string | null;
     completedAt: string | null;
   }> = {};
@@ -508,6 +513,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         progress: progressString,
         progressDetail,
         errorDetail,
+        triggeredBySyncLogId: log.triggeredBySyncLogId ?? null,
         startedAt: log.startedAt?.toISOString() ?? null,
         completedAt: log.completedAt?.toISOString() ?? null,
       };

@@ -89,6 +89,7 @@ export default function Internal() {
         suggestedAction: string;
         partial: boolean;
       } | null;
+      triggeredBySyncLogId?: number | null;
       startedAt: string | null;
       completedAt: string | null;
     }>;
@@ -655,7 +656,18 @@ export default function Internal() {
                   return (
                     <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-white/80">Historical backfill</span>
+                        <span className="flex items-center gap-1.5 text-xs font-medium text-white/80">
+                          Historical backfill
+                          {bf?.triggeredBySyncLogId != null && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+                              title={`Auto-enqueued by nightly catch-up (parent sync log #${bf.triggeredBySyncLogId}). Triggered when the tenant's last successful sync was older than the nightly window cap.`}
+                            >
+                              <Clock className="w-3 h-3" />
+                              Auto-triggered by nightly catch-up
+                            </span>
+                          )}
+                        </span>
                         {bf ? (
                           bf.status === "running" ? (
                             <span className="flex items-center gap-2 text-[11px] text-blue-400">

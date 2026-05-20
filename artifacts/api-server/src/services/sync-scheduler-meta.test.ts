@@ -613,6 +613,34 @@ describe("syncMetaCampaigns — incremental window (Task #561)", () => {
     }
   });
 
+  it("stamps triggered_by_sync_log_id on the meta/backfill log when auto-enqueued from nightly (Task #566)", async () => {
+    const { backfillMetaCampaigns } = await import("./sync-scheduler");
+    // Tenant exists but flagged for reconnect → backfillMetaCampaigns
+    // inserts an integration_sync_logs row and short-circuits to error.
+    // That insert MUST carry the triggered_by_sync_log_id we passed in.
+    state.selectQueue.push([tenantWithMeta({ id: 1, metaNeedsReconnect: true, metaReconnectReason: "expired" })]);
+
+    await backfillMetaCampaigns(1, 180, { triggeredBySyncLogId: 4242 });
+
+    const islInserts = state.insertCalls.filter((c) => c.table === "integration_sync_logs");
+    expect(islInserts).toHaveLength(1);
+    const row = islInserts[0].values[0] as Record<string, unknown>;
+    expect(row.syncType).toBe("backfill");
+    expect(row.triggeredBySyncLogId).toBe(4242);
+  });
+
+  it("does not stamp triggered_by_sync_log_id on a manually-triggered backfill (Task #566)", async () => {
+    const { backfillMetaCampaigns } = await import("./sync-scheduler");
+    state.selectQueue.push([tenantWithMeta({ id: 1, metaNeedsReconnect: true, metaReconnectReason: "expired" })]);
+
+    await backfillMetaCampaigns(1, 180);
+
+    const islInserts = state.insertCalls.filter((c) => c.table === "integration_sync_logs");
+    expect(islInserts).toHaveLength(1);
+    const row = islInserts[0].values[0] as Record<string, unknown>;
+    expect(row.triggeredBySyncLogId).toBeNull();
+  });
+
   it("does not persist any video_* fields in the per-ad-day actions payload (dead fields dropped)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));

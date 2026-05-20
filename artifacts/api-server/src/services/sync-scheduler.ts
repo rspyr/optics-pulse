@@ -47,13 +47,20 @@ function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiCon
   }
 }
 
-async function logSync(tenantId: number, integration: string, syncType: string, startedAt: Date) {
+async function logSync(
+  tenantId: number,
+  integration: string,
+  syncType: string,
+  startedAt: Date,
+  options?: { triggeredBySyncLogId?: number | null },
+) {
   const [log] = await db.insert(integrationSyncLogsTable).values({
     tenantId,
     integration,
     syncType,
     status: "running",
     startedAt,
+    triggeredBySyncLogId: options?.triggeredBySyncLogId ?? null,
   }).returning();
   return log;
 }
@@ -991,7 +998,7 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
           console.log(
             `[Sync] Meta tenant ${tenantId}: nightly clamped (${autoBackfillReason}); auto-enqueuing backfillMetaCampaigns(days=${autoBackfillDays}) linked to sync log ${syncLog.id}`,
           );
-          void backfillMetaCampaigns(tenantId, autoBackfillDays).catch((err) => {
+          void backfillMetaCampaigns(tenantId, autoBackfillDays, { triggeredBySyncLogId: syncLog.id }).catch((err) => {
             console.error(
               `[Sync] Meta tenant ${tenantId}: auto-enqueued backfill failed`,
               err,
@@ -1343,7 +1350,9 @@ async function upsertMetaInsightRows(
 export async function backfillMetaCampaigns(
   tenantId: number,
   days: number,
+  options?: { triggeredBySyncLogId?: number | null },
 ): Promise<{ synced: number; chunks: number; error?: string }> {
+  const triggeredBySyncLogId = options?.triggeredBySyncLogId ?? null;
   const requestedDays = Number.isFinite(days) ? Math.floor(days) : 0;
   if (requestedDays <= 30) {
     return { synced: 0, chunks: 0, error: "days must be > 30 (use the nightly sync for the rolling 30-day window)" };
@@ -1355,7 +1364,7 @@ export async function backfillMetaCampaigns(
 
   if (tenant.metaNeedsReconnect) {
     const errorMessage = `Meta needs reconnect: ${tenant.metaReconnectReason || "access token expired"}`;
-    const skippedLog = await logSync(tenantId, "meta", "backfill", new Date());
+    const skippedLog = await logSync(tenantId, "meta", "backfill", new Date(), { triggeredBySyncLogId });
     await completeSyncLog(skippedLog.id, "error", 0, errorMessage);
     return { synced: 0, chunks: 0, error: errorMessage };
   }
@@ -1367,12 +1376,12 @@ export async function backfillMetaCampaigns(
       !config?.metaAdAccountId && "Ad Account selection",
     ].filter(Boolean).join(", ");
     const errorMessage = `Meta not configured (missing: ${missing})`;
-    const missingLog = await logSync(tenantId, "meta", "backfill", new Date());
+    const missingLog = await logSync(tenantId, "meta", "backfill", new Date(), { triggeredBySyncLogId });
     await completeSyncLog(missingLog.id, "error", 0, errorMessage);
     return { synced: 0, chunks: 0, error: errorMessage };
   }
 
-  const syncLog = await logSync(tenantId, "meta", "backfill", new Date());
+  const syncLog = await logSync(tenantId, "meta", "backfill", new Date(), { triggeredBySyncLogId });
   const adAccountId = config.metaAdAccountId.startsWith("act_") ? config.metaAdAccountId : `act_${config.metaAdAccountId}`;
   const accountIdNoPrefix = adAccountId.replace(/^act_/, "");
 
