@@ -2298,6 +2298,7 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
     lastHeartbeat: string | null;
     heartbeatDomain: string | null;
     recentEventCount: number;
+    sheetEventCount: number;
     activeSheetCount: number;
     domains?: Array<{
       domain: string;
@@ -2370,7 +2371,7 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
       {status && (
         <PremiumCard className="p-6">
           <h3 className="text-lg font-medium text-white mb-4">System Health</h3>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
               <div className="flex items-center gap-2 mb-2">
                 <div className={`w-2 h-2 rounded-full ${status.trackerHealthy ? "bg-emerald-400" : "bg-red-400"}`} />
@@ -2390,6 +2391,13 @@ function IngestionModePanel({ tenantId }: { tenantId: number }) {
                 <span className="text-xs text-muted-foreground uppercase tracking-wider">Tracker Events (7d)</span>
               </div>
               <p className="text-2xl text-white font-semibold">{status.recentEventCount}</p>
+            </div>
+            <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Sheet Events (7d)</span>
+              </div>
+              <p className="text-2xl text-white font-semibold">{status.sheetEventCount}</p>
             </div>
             <div className="bg-white/[0.02] border border-white/5 rounded-lg p-4">
               <div className="flex items-center gap-2 mb-2">

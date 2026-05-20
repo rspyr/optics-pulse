@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable, ingestionAuditLogTable } from "@workspace/db";
+import { db, tenantsTable, trackerHeartbeatsTable, attributionEventsTable, googleSheetConfigsTable, ingestionAuditLogTable, leadStatusHistoryTable } from "@workspace/db";
 import { eq, and, gte, isNotNull, ne, sql, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -227,11 +227,21 @@ router.get("/ingestion-mode/status", async (req, res) => {
       isNotNull(googleSheetConfigsTable.columnMapping),
     ));
 
+  const [sheetEventRow] = await db.select({ count: sql<number>`count(*)::int` })
+    .from(leadStatusHistoryTable)
+    .where(and(
+      eq(leadStatusHistoryTable.tenantId, tenantId),
+      eq(leadStatusHistoryTable.reason, "sheet_sync_create"),
+      gte(leadStatusHistoryTable.changedAt, sevenDaysAgo),
+    ));
+  const sheetEventCount = sheetEventRow?.count ?? 0;
+
   res.json({
     trackerHealthy,
     lastHeartbeat: latestHeartbeat?.lastSeenAt || null,
     heartbeatDomain: latestHeartbeat?.domain || null,
     recentEventCount,
+    sheetEventCount,
     activeSheetCount: activeSheets.length,
     domains,
   });
