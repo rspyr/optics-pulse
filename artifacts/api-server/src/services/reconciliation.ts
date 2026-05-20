@@ -344,8 +344,13 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   // run (allMatchedJobIds) and serves as an idempotent backfill for any
   // historical job→lead links that were established before this rule
   // existed.
+  // `appt_booked` is the project-standard terminal positive hub state
+  // and is treated as the sold-equivalent everywhere else in the
+  // codebase (e.g. dashboard close-rate conditions). Promote both the
+  // legacy `status` and `hubStatus` in a single update so terminal-
+  // status assumptions across queues/funnels stay consistent.
   const soldPromotionConditions: SQL[] = [
-    sql`${leadsTable.status} <> 'sold'`,
+    sql`(${leadsTable.status} <> 'sold' OR ${leadsTable.hubStatus} <> 'appt_booked')`,
     sql`EXISTS (
       SELECT 1 FROM ${jobsTable}
       WHERE ${jobsTable.leadId} = ${leadsTable.id}
@@ -356,11 +361,11 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   ];
   if (tenantId) soldPromotionConditions.push(eq(leadsTable.tenantId, tenantId));
   const soldPromotionResult = await db.update(leadsTable)
-    .set({ status: "sold", updatedAt: new Date() })
+    .set({ status: "sold", hubStatus: "appt_booked", updatedAt: new Date() })
     .where(and(...soldPromotionConditions))
     .returning({ id: leadsTable.id });
   if (soldPromotionResult.length > 0) {
-    console.log(`[Reconciliation] Promoted ${soldPromotionResult.length} lead(s) to 'sold' based on invoiced jobs`);
+    console.log(`[Reconciliation] Promoted ${soldPromotionResult.length} lead(s) to sold (status='sold', hubStatus='appt_booked') based on invoiced jobs`);
   }
 
   await db.insert(reconciliationRunsTable).values({
