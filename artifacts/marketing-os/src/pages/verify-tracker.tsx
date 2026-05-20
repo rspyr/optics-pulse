@@ -910,7 +910,7 @@ function LiveEventCard({
                   <Field label="Form" value={[evt.formType, evt.formName].filter(Boolean).join(" / ") || null} />
                 </div>
                 {evt.matchLevel === "unmatched" && (
-                  <UnmatchedFieldsPanel evt={evt} />
+                  <UnmatchedFieldsPanel evt={{ ...evt, attributionEventId: evt.id }} />
                 )}
               </div>
               );

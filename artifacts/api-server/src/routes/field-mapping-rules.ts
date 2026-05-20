@@ -654,7 +654,11 @@ router.post("/field-mapping-rules", async (req, res) => {
   }
   if (resolvedLeadId) {
     try {
-      const rederive = await reDeriveLeadFunnel(tenantId, resolvedLeadId);
+      const rederive = await reDeriveLeadFunnel(tenantId, resolvedLeadId, {
+        attributionEventId: typeof attributionEventId === "number" && Number.isFinite(attributionEventId)
+          ? attributionEventId
+          : undefined,
+      });
       if (rederive?.changed) leadFunnelChanged = true;
     } catch (err) {
       console.error("[field-mapping-rules.POST] reDeriveLeadFunnel failed:", err);

@@ -46,6 +46,17 @@ export interface UnmatchedFieldsPanelEvent {
    * (e.g. live SSE feed) can omit it and the panel renders names only. */
   fieldValues?: Record<string, unknown> | null;
   unmatchedReason?: string | null;
+  /** Attribution event id for the open event. When present, the save POST
+   * forwards it so the server can run an inline re-derive of the associated
+   * lead's funnel/detection against the new rule — without this, the open
+   * lead is excluded from the scope-wide fan-out (which deliberately skips
+   * the current lead) and the "AUTO-DETECTED FIELDS" panel keeps showing
+   * the pre-save `value_pattern → fullName` mapping until next ingest. */
+  attributionEventId?: number | null;
+  /** Lead id for the open event, if known. Takes precedence over
+   * `attributionEventId` when both are provided — the server uses it
+   * directly without an extra DB lookup. */
+  leadId?: number | null;
 }
 
 export { MAP_TO_OPTIONS, type MapToTarget };
@@ -866,7 +877,21 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ pageUrlPattern, formIdentifier, fieldName, mapsTo }),
+        body: JSON.stringify({
+          pageUrlPattern,
+          formIdentifier,
+          fieldName,
+          mapsTo,
+          // Forward the open event/lead context so the server can run an
+          // inline re-derive for *this* lead. The scope-wide fan-out
+          // explicitly excludes the current lead, so without this the
+          // AUTO-DETECTED FIELDS panel keeps showing the pre-save mapping
+          // (e.g. value_pattern → fullName) until the next ingest.
+          ...(typeof evt.leadId === "number" ? { leadId: evt.leadId } : {}),
+          ...(typeof evt.attributionEventId === "number"
+            ? { attributionEventId: evt.attributionEventId }
+            : {}),
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({} as { error?: string }));
@@ -996,6 +1021,10 @@ export function UnmatchedFieldsPanel({ evt }: { evt: UnmatchedFieldsPanelEvent }
           formIdentifier,
           fieldName: last.fieldName,
           mapsTo: last.mapsTo,
+          ...(typeof evt.leadId === "number" ? { leadId: evt.leadId } : {}),
+          ...(typeof evt.attributionEventId === "number"
+            ? { attributionEventId: evt.attributionEventId }
+            : {}),
         }),
       });
       if (!res.ok) {

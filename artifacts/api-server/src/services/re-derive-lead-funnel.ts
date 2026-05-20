@@ -36,19 +36,36 @@ export interface RederiveResult {
 export async function reDeriveLeadFunnel(
   tenantId: number,
   leadId: number,
+  options: { attributionEventId?: number } = {},
 ): Promise<RederiveResult | null> {
   const [lead] = await db.select().from(leadsTable)
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)));
   if (!lead) return null;
 
-  const [event] = await db.select()
-    .from(attributionEventsTable)
-    .where(and(
-      eq(attributionEventsTable.tenantId, tenantId),
-      eq(attributionEventsTable.createdLeadId, leadId),
-    ))
-    .orderBy(desc(attributionEventsTable.createdAt))
-    .limit(1);
+  // If the caller knows which attribution event the operator was viewing
+  // (e.g. when saving from the "Auto-Detected Fields" panel against a
+  // non-latest event), target that specific row so its `detectedMappings`
+  // column — which the panel reads from — reflects the new rule on refetch.
+  // Otherwise fall back to the lead's latest event (default re-derive path
+  // used by the scope fan-out and other lead-centric callers).
+  const eventQuery = options.attributionEventId
+    ? db.select()
+        .from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, tenantId),
+          eq(attributionEventsTable.id, options.attributionEventId),
+          eq(attributionEventsTable.createdLeadId, leadId),
+        ))
+        .limit(1)
+    : db.select()
+        .from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.tenantId, tenantId),
+          eq(attributionEventsTable.createdLeadId, leadId),
+        ))
+        .orderBy(desc(attributionEventsTable.createdAt))
+        .limit(1);
+  const [event] = await eventQuery;
 
   let nextFunnelId: number | null = lead.funnelId;
   let nextLeadType: string | null = lead.leadType;
@@ -69,6 +86,31 @@ export async function reDeriveLeadFunnel(
         nextFunnelId = match.funnelTypeId;
         nextLeadType = match.funnelName;
       }
+    }
+
+    // Persist the recomputed detection back to the attribution event's
+    // `detectedMappings` column so the operator-facing "Auto-Detected Fields"
+    // panel — which reads from this column on the event, not from the rule
+    // table — reflects the new saved-rule mapping after a query invalidation.
+    // Without this, a freshly-saved rule (e.g. "Service they need → funnel")
+    // updates `leadsTable.funnelId` but leaves the event row showing the
+    // pre-save `value_pattern → fullName` detection, so the panel appears to
+    // revert to the old mapping on refetch.
+    const nextDetectedMappings = detection.fields.length > 0
+      ? Object.fromEntries(detection.fields.map(f => [
+          f.fieldName,
+          { mapsTo: f.mapsTo, method: f.method, confidence: f.confidence },
+        ]))
+      : null;
+    try {
+      await db.update(attributionEventsTable)
+        .set({ detectedMappings: nextDetectedMappings })
+        .where(eq(attributionEventsTable.id, event.id));
+    } catch (err) {
+      // Non-fatal: lead funnel update below is the source of truth for
+      // downstream behavior. We log so a recurring column/permission issue
+      // surfaces in production, but don't fail the re-derive over it.
+      console.error("[reDeriveLeadFunnel] failed to update event.detectedMappings:", err);
     }
   }
 

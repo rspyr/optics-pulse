@@ -785,6 +785,7 @@ export default function Attribution() {
                         fieldNames: selectedEvent.fieldNames,
                         fieldValues: (selectedEvent.formFields ?? null) as Record<string, unknown> | null,
                         unmatchedReason: selectedEvent.unmatchedReason,
+                        attributionEventId: selectedEvent.id,
                       }}
                     />
                   </DetailSection>
