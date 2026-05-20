@@ -1294,6 +1294,26 @@ export const GetAttributionEventResponse = zod.object({
 });
 
 /**
+ * Flip an attribution event with `matchLevel = "manual"` back to
+`"unmatched"` and recompute the original `unmatchedReason`. Does not
+delete the underlying field-mapping rule or per-lead funnel override
+that produced the manual match — clearing those is a separate
+operator action.
+
+ * @summary Revert a manually-matched attribution event back to unmatched
+ */
+export const RevertAttributionEventManualMatchParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const RevertAttributionEventManualMatchResponse = zod.object({
+  success: zod.boolean(),
+  eventId: zod.number(),
+  matchLevel: zod.enum(["unmatched"]),
+  unmatchedReason: zod.string().nullable(),
+});
+
+/**
  * @summary Run attribution reconciliation engine
  */
 export const RunReconciliationBody = zod.object({

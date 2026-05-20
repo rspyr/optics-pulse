@@ -68,6 +68,38 @@ export async function markEventManuallyMatched(
 }
 
 /**
+ * Reverse a previous `markEventManuallyMatched` flip: take an event whose
+ * `matchLevel = "manual"` and put it back to `"unmatched"` with the supplied
+ * recomputed `unmatchedReason`. Confidence is reset to 0 so the badge and
+ * "Why unmatched?" panel both reflect that no signal currently resolves the
+ * fill. This does NOT touch any underlying field-mapping rule or per-lead
+ * funnel override — clearing those is a separate operator action — so an
+ * operator can "Unmark as manual" to undo a misclick without losing the rule
+ * they saved alongside it. Tenant-scoped; only flips rows currently in
+ * `manual`, so a row that has since been auto-matched (or already reverted)
+ * is left alone. Returns the number of rows flipped (0 or 1).
+ */
+export async function revertManualMatchToUnmatched(
+  tenantId: number,
+  eventId: number,
+  recomputedUnmatchedReason: string | null,
+): Promise<number> {
+  const rows = await db.update(attributionEventsTable)
+    .set({
+      matchLevel: "unmatched",
+      matchConfidence: 0,
+      unmatchedReason: recomputedUnmatchedReason,
+    })
+    .where(and(
+      eq(attributionEventsTable.id, eventId),
+      eq(attributionEventsTable.tenantId, tenantId),
+      eq(attributionEventsTable.matchLevel, "manual"),
+    ))
+    .returning({ id: attributionEventsTable.id });
+  return rows.length;
+}
+
+/**
  * Recompute field detection + funnel normalization for a single attribution
  * event and persist the result onto that event row's `detected_mappings` +
  * `resolved_funnel` columns. This is the event-row-only counterpart to

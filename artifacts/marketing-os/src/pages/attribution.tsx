@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, useGetLeadInvoice, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey } from "@workspace/api-client-react";
+import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, useGetLeadInvoice, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey, revertAttributionEventManualMatch } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
@@ -809,14 +809,22 @@ export default function Attribution() {
 
               <div className="space-y-6 pt-4">
                 <DetailSection title="Match Status" icon={<Target className="w-4 h-4" />}>
-                  <div className="flex items-center gap-3 mb-3">
+                  <div className="flex items-center gap-3 mb-3 flex-wrap">
                     {getMatchBadge(selectedEvent.matchLevel)}
                     {selectedEvent.matchConfidence != null && (
                       <span className="text-xs text-muted-foreground">
                         {(selectedEvent.matchConfidence * 100).toFixed(0)}% confidence
                       </span>
                     )}
+                    {selectedEvent.matchLevel === "manual" && (
+                      <UnmarkAsManualButton eventId={selectedEvent.id} />
+                    )}
                   </div>
+                  {selectedEvent.matchLevel === "manual" && (
+                    <p className="text-[11px] text-muted-foreground mb-2">
+                      Operator-resolved match. Reverting returns this event to “unmatched” with a recomputed reason. The underlying field-mapping rule or per-lead funnel override is not deleted.
+                    </p>
+                  )}
                   {selectedEvent.gclid && (
                     <DetailRow label="Event GCLID" value={selectedEvent.gclid} mono />
                   )}
@@ -2002,6 +2010,57 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
         excludeLeadId={event.createdLeadId ?? null}
       />
     </DetailSection>
+  );
+}
+
+function UnmarkAsManualButton({ eventId }: { eventId: number }) {
+  const queryClient = useQueryClient();
+  const [reverting, setReverting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onClick = async () => {
+    setReverting(true);
+    setError(null);
+    try {
+      await revertAttributionEventManualMatch(eventId);
+      // Refresh both the detail panel (so the badge + "Why unmatched?" panel
+      // re-render with the recomputed reason) and the list (so the row's
+      // MANUAL badge flips back to UNMATCHED without waiting for a refetch).
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["attribution-event", eventId] }),
+        queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(eventId) }),
+      ]);
+      sonnerToast.success("Manual match reverted. Event is unmatched again.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to revert manual match";
+      setError(message);
+      sonnerToast.error(message);
+    } finally {
+      setReverting(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 text-xs"
+        disabled={reverting}
+        onClick={onClick}
+      >
+        {reverting ? (
+          <>
+            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+            Reverting…
+          </>
+        ) : (
+          "Unmark as manual"
+        )}
+      </Button>
+      {error && <span className="text-[11px] text-red-400">{error}</span>}
+    </div>
   );
 }
 

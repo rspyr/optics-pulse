@@ -713,6 +713,20 @@ export interface AttributionEventDetailResponse {
   matchedLead?: AttributionMatchedLead;
 }
 
+export type RevertManualMatchResponseMatchLevel =
+  (typeof RevertManualMatchResponseMatchLevel)[keyof typeof RevertManualMatchResponseMatchLevel];
+
+export const RevertManualMatchResponseMatchLevel = {
+  unmatched: "unmatched",
+} as const;
+
+export interface RevertManualMatchResponse {
+  success: boolean;
+  eventId: number;
+  matchLevel: RevertManualMatchResponseMatchLevel;
+  unmatchedReason: string | null;
+}
+
 export interface LeadInvoiceDetail {
   jobId: number;
   stJobId?: string | null;

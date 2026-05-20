@@ -127,6 +127,8 @@ export * from "./reconciliationRun";
 export * from "./reconciliationRunStatus";
 export * from "./reconciliationRunTriggerType";
 export * from "./reconciliationStatusResponse";
+export * from "./revertManualMatchResponse";
+export * from "./revertManualMatchResponseMatchLevel";
 export * from "./runReconciliationBody";
 export * from "./sendPodiumMessageInput";
 export * from "./sendPodiumMessageParams";

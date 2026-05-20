@@ -7,6 +7,7 @@ import { requireRole, denyClientUser } from "../middleware/auth";
 import { hashValue, hashPhone } from "../lib/phone-utils";
 import { resolveListTenantScope, assertResourceTenantAccess, NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
 import { extractFieldNamesForOperator, computeUnmatchedReason, extractPiiFromFields } from "./tracker";
+import { revertManualMatchToUnmatched } from "../services/re-derive-lead-funnel";
 
 const router: IRouter = Router();
 
@@ -378,6 +379,86 @@ router.get("/attribution/events/:id", async (req, res) => {
   } catch (error) {
     console.error("[Attribution Event Detail] Error:", error);
     res.status(500).json({ error: "Failed to fetch event detail" });
+  }
+});
+
+// Undo a manual match: flip an event from `matchLevel = "manual"` back to
+// `"unmatched"` and re-emit the original "Why unmatched?" reason. Does NOT
+// delete the underlying field-mapping rule or per-lead funnel override that
+// produced the manual flip in the first place — clearing those is a separate
+// operator action. Tenant-scoped via the same rules as the detail GET above.
+router.post("/attribution/events/:id/revert-manual-match", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "Invalid event ID" });
+      return;
+    }
+
+    const role = req.session.userRole;
+    const userTenantId = req.session.tenantId;
+
+    const conditions: SQL[] = [eq(attributionEventsTable.id, id)];
+    if (role !== "super_admin" && role !== "agency_user") {
+      if (!userTenantId) {
+        res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
+        return;
+      }
+      conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
+    }
+
+    const [event] = await db.select().from(attributionEventsTable).where(and(...conditions)).limit(1);
+    if (!event) {
+      res.status(404).json({ error: "Event not found" });
+      return;
+    }
+
+    if (event.matchLevel !== "manual") {
+      res.status(409).json({
+        error: "Event is not currently manually matched",
+        matchLevel: event.matchLevel,
+      });
+      return;
+    }
+
+    // Recompute the unmatched reason from the event's stored fields so the
+    // "Why unmatched?" panel re-renders with an accurate diagnosis after the
+    // revert. Mirrors the legacy fallback in the detail GET — same signal
+    // sources, same wording.
+    const formFieldsRecord = (event.formFields ?? null) as Record<string, unknown> | null;
+    const piiFromStoredFields = formFieldsRecord
+      ? extractPiiFromFields(formFieldsRecord)
+      : { phone: null, email: null, firstName: null, lastName: null };
+    const recomputedReason = computeUnmatchedReason({
+      matchLevel: "unmatched",
+      hasAnyClickId: !!(event.gclid || event.fbclid || event.wbraid || event.msclkid || event.ttclid || event.liFatId),
+      hasPhoneSignal: !!piiFromStoredFields.phone || !!event.hashedPhone,
+      hasEmailSignal: !!piiFromStoredFields.email || !!event.hashedEmail,
+    });
+
+    const flipped = await revertManualMatchToUnmatched(event.tenantId, event.id, recomputedReason);
+    if (flipped === 0) {
+      // Race: another writer flipped the row out from under us between the
+      // read and the update. Re-read and surface the current state instead of
+      // pretending the revert succeeded.
+      const [fresh] = await db.select({ matchLevel: attributionEventsTable.matchLevel })
+        .from(attributionEventsTable).where(eq(attributionEventsTable.id, event.id)).limit(1);
+      res.status(409).json({
+        error: "Event is not currently manually matched",
+        matchLevel: fresh?.matchLevel ?? null,
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      eventId: event.id,
+      matchLevel: "unmatched" as const,
+      unmatchedReason: recomputedReason,
+    });
+  } catch (error) {
+    console.error("[Attribution Revert Manual Match] Error:", error);
+    res.status(500).json({ error: "Failed to revert manual match" });
   }
 });
 

@@ -725,6 +725,35 @@ paths:
         "404":
           description: Event not found
 
+  /attribution/events/{id}/revert-manual-match:
+    post:
+      operationId: revertAttributionEventManualMatch
+      tags: [attribution]
+      summary: Revert a manually-matched attribution event back to unmatched
+      description: |
+        Flip an attribution event with `matchLevel = "manual"` back to
+        `"unmatched"` and recompute the original `unmatchedReason`. Does not
+        delete the underlying field-mapping rule or per-lead funnel override
+        that produced the manual match — clearing those is a separate
+        operator action.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Revert succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevertManualMatchResponse"
+        "404":
+          description: Event not found
+        "409":
+          description: Event is not currently `manual`
+
   /attribution/reconcile:
     post:
       operationId: runReconciliation
@@ -2622,6 +2651,21 @@ components:
         matchedLead:
           $ref: "#/components/schemas/AttributionMatchedLead"
       required: [event]
+
+    RevertManualMatchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        eventId:
+          type: integer
+        matchLevel:
+          type: string
+          enum: [unmatched]
+        unmatchedReason:
+          type: string
+          nullable: true
+      required: [success, eventId, matchLevel, unmatchedReason]
 
     AttributionMatchedJob:
       type: object

@@ -86,6 +86,7 @@ import type {
   PodiumUsersResponse,
   ReconciliationResult,
   ReconciliationStatusResponse,
+  RevertManualMatchResponse,
   RunReconciliationBody,
   SendPodiumMessageInput,
   SendPodiumMessageParams,
@@ -2675,6 +2676,101 @@ export function useGetAttributionEvent<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Flip an attribution event with `matchLevel = "manual"` back to
+`"unmatched"` and recompute the original `unmatchedReason`. Does not
+delete the underlying field-mapping rule or per-lead funnel override
+that produced the manual match — clearing those is a separate
+operator action.
+
+ * @summary Revert a manually-matched attribution event back to unmatched
+ */
+export const getRevertAttributionEventManualMatchUrl = (id: number) => {
+  return `/api/attribution/events/${id}/revert-manual-match`;
+};
+
+export const revertAttributionEventManualMatch = async (
+  id: number,
+  options?: RequestInit,
+): Promise<RevertManualMatchResponse> => {
+  return customFetch<RevertManualMatchResponse>(
+    getRevertAttributionEventManualMatchUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRevertAttributionEventManualMatchMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof revertAttributionEventManualMatch>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof revertAttributionEventManualMatch>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["revertAttributionEventManualMatch"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof revertAttributionEventManualMatch>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return revertAttributionEventManualMatch(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RevertAttributionEventManualMatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof revertAttributionEventManualMatch>>
+>;
+
+export type RevertAttributionEventManualMatchMutationError = ErrorType<void>;
+
+/**
+ * @summary Revert a manually-matched attribution event back to unmatched
+ */
+export const useRevertAttributionEventManualMatch = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof revertAttributionEventManualMatch>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof revertAttributionEventManualMatch>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(
+    getRevertAttributionEventManualMatchMutationOptions(options),
+  );
+};
 
 /**
  * @summary Run attribution reconciliation engine
