@@ -246,6 +246,25 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
     : Date.now() - FALLBACK_WINDOW_MS;
   const modifiedOnOrAfter = new Date(sinceMs).toISOString();
 
+  // Task #567: clamp detection — if the watermark is older than the 30-day
+  // rolling fallback window, the in-flight `fetchCompletedJobs` page cap can
+  // silently truncate jobs modified during the gap. Stash the missed range
+  // and dispatch a backfill from `finally` after releasing the STAN lock
+  // (the backfill re-acquires the same lock).
+  let autoBackfillDays: number | null = null;
+  let autoBackfillReason: string | null = null;
+  const ST_ROLLING_WINDOW_DAYS = 30;
+  if (lastJobsSync?.completedAt) {
+    const gapDays = Math.ceil((Date.now() - lastJobsSync.completedAt.getTime()) / 86400000);
+    if (gapDays > ST_ROLLING_WINDOW_DAYS) {
+      const missedDays = Math.min(1095, gapDays);
+      if (missedDays > 30) {
+        autoBackfillDays = missedDays;
+        autoBackfillReason = `watermark ${gapDays}d stale > rolling window ${ST_ROLLING_WINDOW_DAYS}d`;
+      }
+    }
+  }
+
   try {
     const stConfig = {
       clientId: config.serviceTitanClientId,
@@ -361,6 +380,45 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       await db.execute(sql`SELECT pg_advisory_unlock(${0x5354414e}, ${tenantId})`);
     } catch (unlockErr) {
       console.error(`[Sync] ServiceTitan tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+
+    // Task #567: dispatch the auto-backfill AFTER releasing the STAN lock,
+    // since `backfillServiceTitanJobs` re-acquires the same lock. De-dupe
+    // against any in-flight `service_titan/backfill` row so a long-running
+    // manual or prior auto-enqueued backfill isn't shadowed by a fresh
+    // enqueue from a subsequent nightly tick. Fire-and-forget.
+    if (autoBackfillDays !== null) {
+      try {
+        const [inFlight] = await db.select({ id: integrationSyncLogsTable.id })
+          .from(integrationSyncLogsTable)
+          .where(and(
+            eq(integrationSyncLogsTable.tenantId, tenantId),
+            eq(integrationSyncLogsTable.integration, "service_titan"),
+            eq(integrationSyncLogsTable.syncType, "backfill"),
+            eq(integrationSyncLogsTable.status, "running"),
+          ))
+          .limit(1);
+        if (inFlight) {
+          console.log(
+            `[Sync] ServiceTitan tenant ${tenantId}: nightly clamped (${autoBackfillReason}); skipping auto-backfill — existing service_titan/backfill log ${inFlight.id} still running`,
+          );
+        } else {
+          console.log(
+            `[Sync] ServiceTitan tenant ${tenantId}: nightly clamped (${autoBackfillReason}); auto-enqueuing backfillServiceTitanJobs(days=${autoBackfillDays}) linked to sync log ${syncLog.id}`,
+          );
+          void backfillServiceTitanJobs(tenantId, autoBackfillDays).catch((err) => {
+            console.error(
+              `[Sync] ServiceTitan tenant ${tenantId}: auto-enqueued backfill failed`,
+              err,
+            );
+          });
+        }
+      } catch (dispatchErr) {
+        console.error(
+          `[Sync] ServiceTitan tenant ${tenantId}: failed to dispatch auto-backfill`,
+          dispatchErr,
+        );
+      }
     }
   }
 }
@@ -525,6 +583,37 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
     return { synced: 0, error: errorMessage };
   }
 
+  // Task #567: nightly/hourly Google Ads sync uses a fixed 90-day rolling
+  // window. A tenant paused for months silently loses any campaign-day rows
+  // older than that window once the next run lands. Look at the last
+  // *completed* sync log as the watermark; if the gap exceeds the rolling
+  // window, stash an auto-backfill request and dispatch it from `finally`
+  // (after we release the GADS lock — `backfillGoogleAdsCampaigns`
+  // re-acquires the same lock).
+  let autoBackfillDays: number | null = null;
+  let autoBackfillReason: string | null = null;
+  const GADS_ROLLING_WINDOW_DAYS = 90;
+  const [lastGadsSync] = await db.select({ completedAt: integrationSyncLogsTable.completedAt })
+    .from(integrationSyncLogsTable)
+    .where(and(
+      eq(integrationSyncLogsTable.tenantId, tenantId),
+      eq(integrationSyncLogsTable.integration, "google_ads"),
+      eq(integrationSyncLogsTable.syncType, "campaigns"),
+      eq(integrationSyncLogsTable.status, "completed"),
+    ))
+    .orderBy(desc(integrationSyncLogsTable.completedAt))
+    .limit(1);
+  if (lastGadsSync?.completedAt) {
+    const gapDays = Math.ceil((Date.now() - lastGadsSync.completedAt.getTime()) / 86400000);
+    if (gapDays > GADS_ROLLING_WINDOW_DAYS) {
+      const missedDays = Math.min(730, gapDays);
+      if (missedDays > 30) {
+        autoBackfillDays = missedDays;
+        autoBackfillReason = `watermark ${gapDays}d stale > rolling window ${GADS_ROLLING_WINDOW_DAYS}d`;
+      }
+    }
+  }
+
   try {
     const endDate = new Date().toISOString().split("T")[0];
     const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
@@ -594,6 +683,45 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
       await db.execute(sql`SELECT pg_advisory_unlock(${0x47414453}, ${tenantId})`);
     } catch (unlockErr) {
       console.error(`[Sync] Google Ads tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+
+    // Task #567: dispatch the auto-backfill AFTER releasing the GADS lock,
+    // since `backfillGoogleAdsCampaigns` re-acquires the same lock. De-dupe
+    // against any in-flight `google_ads/backfill` row so a long-running
+    // manual or prior auto-enqueued backfill isn't shadowed by a fresh
+    // enqueue from a subsequent nightly tick. Fire-and-forget.
+    if (autoBackfillDays !== null) {
+      try {
+        const [inFlight] = await db.select({ id: integrationSyncLogsTable.id })
+          .from(integrationSyncLogsTable)
+          .where(and(
+            eq(integrationSyncLogsTable.tenantId, tenantId),
+            eq(integrationSyncLogsTable.integration, "google_ads"),
+            eq(integrationSyncLogsTable.syncType, "backfill"),
+            eq(integrationSyncLogsTable.status, "running"),
+          ))
+          .limit(1);
+        if (inFlight) {
+          console.log(
+            `[Sync] Google Ads tenant ${tenantId}: nightly clamped (${autoBackfillReason}); skipping auto-backfill — existing google_ads/backfill log ${inFlight.id} still running`,
+          );
+        } else {
+          console.log(
+            `[Sync] Google Ads tenant ${tenantId}: nightly clamped (${autoBackfillReason}); auto-enqueuing backfillGoogleAdsCampaigns(days=${autoBackfillDays}) linked to sync log ${syncLog.id}`,
+          );
+          void backfillGoogleAdsCampaigns(tenantId, autoBackfillDays).catch((err) => {
+            console.error(
+              `[Sync] Google Ads tenant ${tenantId}: auto-enqueued backfill failed`,
+              err,
+            );
+          });
+        }
+      } catch (dispatchErr) {
+        console.error(
+          `[Sync] Google Ads tenant ${tenantId}: failed to dispatch auto-backfill`,
+          dispatchErr,
+        );
+      }
     }
   }
 }
