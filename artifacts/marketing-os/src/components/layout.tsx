@@ -46,6 +46,7 @@ const AGENCY_NAV = [
   { href: "/admin/scripts", label: "Scripts", icon: FileText },
   { href: "/admin/change-logs", label: "Change Log", icon: ClipboardList },
   { href: "/admin/background-jobs", label: "Background Jobs", icon: Activity },
+  { href: "/admin/rederive-jobs", label: "Re-derive Snapshots", icon: Activity },
   { href: "/admin/funnels", label: "Funnels & Scripts", icon: GitBranch },
   { href: "/admin/training", label: "Training & LMS", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -89,6 +90,7 @@ const SCOPE_CHIP_HIDDEN_ROUTES: string[] = [
   "/admin/training",
   "/admin/change-logs",
   "/admin/background-jobs",
+  "/admin/rederive-jobs",
 ];
 
 function isScopeChipHidden(pathname: string): boolean {

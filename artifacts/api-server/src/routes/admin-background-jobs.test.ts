@@ -45,6 +45,15 @@ vi.mock("@workspace/db", () => {
       type: "bj.type",
       status: "bj.status",
       createdAt: "bj.createdAt",
+      completedAt: "bj.completedAt",
+      updatedAt: "bj.updatedAt",
+      payload: "bj.payload",
+      result: "bj.result",
+    },
+    tenantsTable: {
+      __name: "tenants",
+      id: "tenants.id",
+      name: "tenants.name",
     },
   };
 
@@ -58,6 +67,7 @@ vi.mock("@workspace/db", () => {
       call.fromTable = tableName(t);
       return chain;
     });
+    chain.leftJoin = vi.fn().mockImplementation(() => chain);
     chain.where = vi.fn().mockImplementation((w: unknown) => {
       call.whereArg = w;
       return chain;
@@ -122,6 +132,14 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...args: unknown[]) => ({ __op: "and", args })),
   desc: vi.fn((a: unknown) => ({ __op: "desc", a })),
   count: vi.fn(() => ({ __op: "count" })),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ __op: "inArray", col, vals })),
+  isNull: vi.fn((col: unknown) => ({ __op: "isNull", col })),
+}));
+
+const cleanupSpy = vi.fn<(retentionDays: number) => Promise<number>>();
+vi.mock("../services/re-derive-jobs", () => ({
+  REDERIVE_SELECTED_LEADS: "rederive_selected_leads",
+  cleanupOldCancelledSelectedLeadsRederives: (n: number) => cleanupSpy(n),
 }));
 
 // ─── Test app + helpers ──────────────────────────────────────────────────────
@@ -196,6 +214,7 @@ const asClientUser = { userId: 4, userRole: "client_user" };
 
 beforeEach(async () => {
   state.reset();
+  cleanupSpy.mockReset();
   currentSession = { ...asAgency };
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -522,5 +541,175 @@ describe("POST /admin/background-jobs/:id/retry — happy path", () => {
     expect(call.set.runAt).toBeInstanceOf(Date);
     expect(call.set.updatedAt).toBeInstanceOf(Date);
     expect("attempts" in call.set).toBe(false);
+  });
+});
+
+// ─── GET /admin/rederive-jobs/cancelled ──────────────────────────────────────
+
+describe("GET /admin/rederive-jobs/cancelled — role enforcement", () => {
+  it("rejects client_admin with 403", async () => {
+    currentSession = { ...asClientAdmin };
+    const res = await request("GET", "/admin/rederive-jobs/cancelled");
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects client_user with 403", async () => {
+    currentSession = { ...asClientUser };
+    const res = await request("GET", "/admin/rederive-jobs/cancelled");
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects unauthenticated callers with 401", async () => {
+    currentSession = {};
+    const res = await request("GET", "/admin/rederive-jobs/cancelled");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /admin/rederive-jobs/cancelled — list shape", () => {
+  it("returns cancelled rederive jobs with scope + counts and falls back when result is empty", async () => {
+    // 1st select: rows (joined with tenants). 2nd select: count.
+    state.selectQueue.push([
+      {
+        id: 11,
+        tenantId: 5,
+        tenantName: "Acme",
+        payload: {
+          leadIds: [1, 2, 3, 4],
+          pageUrlPattern: "/booking",
+          formIdentifier: "main-form",
+        },
+        result: {
+          total: 4,
+          processed: 2,
+          succeeded: 2,
+          failed: 0,
+          changed: 1,
+        },
+        createdAt: "2026-05-01T00:00:00Z",
+        completedAt: "2026-05-01T00:01:00Z",
+        updatedAt: "2026-05-01T00:01:00Z",
+      },
+      {
+        // Pending-cancel row: handler never ran, result is empty. The
+        // route should fall back to total=leadIds.length and processed=0.
+        id: 12,
+        tenantId: null,
+        tenantName: null,
+        payload: {
+          leadIds: [99, 100],
+          pageUrlPattern: "/foo",
+          formIdentifier: "bar",
+        },
+        result: null,
+        createdAt: "2026-05-02T00:00:00Z",
+        completedAt: null,
+        updatedAt: "2026-05-02T00:00:30Z",
+      },
+    ]);
+    state.selectQueue.push([{ count: 2 }]);
+
+    const res = await request("GET", "/admin/rederive-jobs/cancelled");
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    const jobs = res.body.jobs as Array<Record<string, unknown>>;
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({
+      id: 11,
+      tenantId: 5,
+      tenantName: "Acme",
+      pageUrlPattern: "/booking",
+      formIdentifier: "main-form",
+      total: 4,
+      processed: 2,
+      succeeded: 2,
+      failed: 0,
+      changed: 1,
+    });
+    expect(jobs[1]).toMatchObject({
+      id: 12,
+      tenantId: null,
+      tenantName: null,
+      pageUrlPattern: "/foo",
+      formIdentifier: "bar",
+      total: 2, // fallback to leadIds.length
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      changed: 0,
+    });
+  });
+
+  it("clamps limit to the [1, 500] window", async () => {
+    state.selectQueue.push([]);
+    state.selectQueue.push([{ count: 0 }]);
+    const res = await request(
+      "GET",
+      "/admin/rederive-jobs/cancelled?limit=9999",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(500);
+  });
+});
+
+// ─── POST /admin/rederive-jobs/cleanup ───────────────────────────────────────
+
+describe("POST /admin/rederive-jobs/cleanup — role enforcement", () => {
+  it("rejects client_admin with 403", async () => {
+    currentSession = { ...asClientAdmin };
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {});
+    expect(res.status).toBe(403);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthenticated callers with 401", async () => {
+    currentSession = {};
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {});
+    expect(res.status).toBe(401);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /admin/rederive-jobs/cleanup — happy path & validation", () => {
+  it("defaults retentionDays to 30 and returns the deleted count", async () => {
+    cleanupSpy.mockResolvedValue(7);
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 7, retentionDays: 30 });
+    expect(cleanupSpy).toHaveBeenCalledExactlyOnceWith(30);
+  });
+
+  it("accepts a custom retentionDays override", async () => {
+    cleanupSpy.mockResolvedValue(3);
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {
+      retentionDays: 7,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 3, retentionDays: 7 });
+    expect(cleanupSpy).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("rejects zero or negative retentionDays with 400", async () => {
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {
+      retentionDays: 0,
+    });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/positive number/);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-numeric retentionDays with 400", async () => {
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {
+      retentionDays: "abc",
+    });
+    expect(res.status).toBe(400);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a 500 when the cleanup service throws", async () => {
+    cleanupSpy.mockRejectedValue(new Error("boom"));
+    const res = await request("POST", "/admin/rederive-jobs/cleanup", {});
+    expect(res.status).toBe(500);
+    expect(String(res.body.error)).toMatch(/boom/);
   });
 });

@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, backgroundJobsTable } from "@workspace/db";
+import { db, backgroundJobsTable, tenantsTable } from "@workspace/db";
 import { and, desc, eq, count, inArray, isNull, SQL } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
+import {
+  REDERIVE_SELECTED_LEADS,
+  cleanupOldCancelledSelectedLeadsRederives,
+} from "../services/re-derive-jobs";
 
 const router: IRouter = Router();
 
@@ -272,6 +276,133 @@ router.post("/admin/background-jobs/bulk-cancel", ...agencyOnly, async (req, res
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to bulk-cancel jobs";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * List recent cancelled bulk re-derive jobs (`rederive_selected_leads`)
+ * for the cleanup observability panel. Returns scope (tenant, page pattern,
+ * form identifier), partial counts (processed/total), and age info so the
+ * operator can spot stale snapshots before triggering a manual prune. Joins
+ * to `tenants` so the UI can show tenant name without a second round-trip.
+ */
+router.get("/admin/rederive-jobs/cancelled", ...agencyOnly, async (req, res) => {
+  try {
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit ?? "100"), 10) || 100, 1),
+      500,
+    );
+
+    const rows = await db
+      .select({
+        id: backgroundJobsTable.id,
+        tenantId: backgroundJobsTable.tenantId,
+        tenantName: tenantsTable.name,
+        payload: backgroundJobsTable.payload,
+        result: backgroundJobsTable.result,
+        createdAt: backgroundJobsTable.createdAt,
+        completedAt: backgroundJobsTable.completedAt,
+        updatedAt: backgroundJobsTable.updatedAt,
+      })
+      .from(backgroundJobsTable)
+      .leftJoin(tenantsTable, eq(backgroundJobsTable.tenantId, tenantsTable.id))
+      .where(
+        and(
+          eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+          eq(backgroundJobsTable.status, "cancelled"),
+        ),
+      )
+      .orderBy(desc(backgroundJobsTable.completedAt))
+      .limit(limit);
+
+    const [{ count: total } = { count: 0 }] = await db
+      .select({ count: count() })
+      .from(backgroundJobsTable)
+      .where(
+        and(
+          eq(backgroundJobsTable.type, REDERIVE_SELECTED_LEADS),
+          eq(backgroundJobsTable.status, "cancelled"),
+        ),
+      );
+
+    // Pull scope + partial counts out of jsonb so the UI doesn't need to
+    // know the snapshot shape. `result` is empty for pending-cancel rows
+    // (cancel before the handler ran) — fall back to "total = leadIds
+    // length, processed = 0" so the row still renders sensibly.
+    const jobs = rows.map((r) => {
+      const payload = (r.payload ?? {}) as {
+        leadIds?: unknown;
+        pageUrlPattern?: unknown;
+        formIdentifier?: unknown;
+      };
+      const result = (r.result ?? {}) as {
+        total?: unknown;
+        processed?: unknown;
+        succeeded?: unknown;
+        failed?: unknown;
+        changed?: unknown;
+      };
+      const asNum = (v: unknown, fallback: number) =>
+        typeof v === "number" && Number.isFinite(v) ? v : fallback;
+      const leadIdsLen = Array.isArray(payload.leadIds) ? payload.leadIds.length : 0;
+      return {
+        id: r.id,
+        tenantId: r.tenantId,
+        tenantName: r.tenantName ?? null,
+        pageUrlPattern:
+          typeof payload.pageUrlPattern === "string" ? payload.pageUrlPattern : null,
+        formIdentifier:
+          typeof payload.formIdentifier === "string" ? payload.formIdentifier : null,
+        total: asNum(result.total, leadIdsLen),
+        processed: asNum(result.processed, 0),
+        succeeded: asNum(result.succeeded, 0),
+        failed: asNum(result.failed, 0),
+        changed: asNum(result.changed, 0),
+        createdAt: r.createdAt,
+        completedAt: r.completedAt,
+        updatedAt: r.updatedAt,
+      };
+    });
+
+    res.json({ jobs, total, limit });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to list cancelled re-derive jobs";
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Force-run the cancelled bulk re-derive cleanup sweep. The same sweep
+ * runs daily on a timer (see `startCancelledRederiveCleanupScheduler`),
+ * but an operator may want to prune now — e.g. before debugging a
+ * runaway job, or after manually cancelling a backlog of snapshots.
+ * Returns the number of rows deleted so the UI can show a confirmation.
+ *
+ * `retentionDays` defaults to 30 to match the scheduled sweep; callers
+ * can override it (e.g. for a stricter manual purge), but values <= 0 or
+ * non-finite are rejected to prevent accidental "delete everything".
+ */
+router.post("/admin/rederive-jobs/cleanup", ...agencyOnly, async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as { retentionDays?: unknown };
+    let retentionDays = 30;
+    if (body.retentionDays !== undefined && body.retentionDays !== null) {
+      const n =
+        typeof body.retentionDays === "number"
+          ? body.retentionDays
+          : parseInt(String(body.retentionDays), 10);
+      if (!Number.isFinite(n) || n <= 0) {
+        res.status(400).json({ error: "retentionDays must be a positive number" });
+        return;
+      }
+      retentionDays = n;
+    }
+
+    const deletedCount = await cleanupOldCancelledSelectedLeadsRederives(retentionDays);
+    res.json({ deletedCount, retentionDays });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Failed to run cleanup sweep";
     res.status(500).json({ error: msg });
   }
 });
