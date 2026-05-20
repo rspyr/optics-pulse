@@ -1,10 +1,11 @@
-import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable, leadSourceAliasesTable } from "@workspace/db";
+import { db, tenantsTable, jobsTable, integrationSyncLogsTable, leadsTable, leadSourceAliasesTable, attributionEventsTable, fieldMappingRulesTable, leadAttributionCorrectionsTable } from "@workspace/db";
 import { eq, and, sql, isNull, isNotNull, or, ne, inArray, desc } from "drizzle-orm";
 import { emitLeadUpdated } from "../socket";
 import { APPOINTMENT_JUNK_VALUES } from "../utils/appointment-validation";
 import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
 import { rerouteLeadsStrandedOnPausedStickyCsr } from "./auto-pass-scheduler";
 import { backfillDailyStats } from "./coordinator-stats";
+import { extractPagePath, getFormIdentifier } from "./field-detection";
 
 interface Migration {
   id: string;
@@ -1302,6 +1303,207 @@ const migrations: Migration[] = [
           WHERE funnel_overridden_at IS NOT NULL
       `);
       console.log("[Migration] Added funnel_overridden_at / funnel_overridden_by_user_id to leads");
+    },
+  },
+  {
+    id: "2026-05-20_backfill-attribution-event-manual-source",
+    description:
+      "Backfill attribution_events.manual_source on legacy manual rows written before " +
+      "task #584 added the column. Uses time-bounded, event-correlated evidence only. " +
+      "Funnel-override stamp: requires a `funnel` correction on the event's lead whose " +
+      "changedAt is after the event's createdAt AND whose newValue equals the event's " +
+      "resolved_funnel (the live override path writes that pair in one transaction). " +
+      "Field-mapping-rule stamp: requires a rule whose updatedAt is after the event's " +
+      "createdAt (the rule existed by the time the manual flip happened), whose scope " +
+      "matches the event's (page path, form id/name or `*`), and whose fieldName " +
+      "actually appears in the event's form_fields keys. We pick the EARLIEST qualifying " +
+      "signal after the event (the one most likely to be the cause of the flip). " +
+      "Ambiguous rows stay NULL so the legacy fallback line still renders. " +
+      "Set env BACKFILL_MANUAL_SOURCE_DRY_RUN=1 to log counts without writing.",
+    run: async () => {
+      const dryRun = process.env.BACKFILL_MANUAL_SOURCE_DRY_RUN === "1";
+
+      const legacyRows = await db
+        .select({
+          id: attributionEventsTable.id,
+          tenantId: attributionEventsTable.tenantId,
+          createdAt: attributionEventsTable.createdAt,
+          createdLeadId: attributionEventsTable.createdLeadId,
+          pageUrl: attributionEventsTable.pageUrl,
+          formId: attributionEventsTable.formId,
+          formName: attributionEventsTable.formName,
+          formFields: attributionEventsTable.formFields,
+          resolvedFunnel: attributionEventsTable.resolvedFunnel,
+        })
+        .from(attributionEventsTable)
+        .where(and(
+          eq(attributionEventsTable.matchLevel, "manual"),
+          isNull(attributionEventsTable.manualSource),
+        ));
+
+      if (legacyRows.length === 0) {
+        console.log("[Migration] No legacy manual attribution_events to backfill");
+        return;
+      }
+
+      // Normalize field-name keys the same way field-detection does so a
+      // rule's fieldName ("Email") matches an event payload key ("email",
+      // " e-mail ", "e.mail", etc).
+      const normalizeFieldKey = (key: string): string =>
+        key.toLowerCase().replace(/[\s\-\.]/g, "_");
+
+      // Pre-load per-(tenant, page, form) field-mapping rules sorted
+      // EARLIEST-updatedAt-first. Per-row we then take the first rule whose
+      // updatedAt is after the event's createdAt AND whose fieldName appears
+      // in the event's form_fields — the earliest qualifying rule is the
+      // best candidate for "the save that caused the flip" because later
+      // edits couldn't have flipped a row that was already manual.
+      const ruleCache = new Map<string, { id: number; fieldName: string; updatedAt: Date }[]>();
+      async function rulesFor(tenantId: number, pagePath: string, formIdent: string) {
+        const key = `${tenantId}::${pagePath}::${formIdent}`;
+        const cached = ruleCache.get(key);
+        if (cached) return cached;
+        const matches = await db
+          .select({
+            id: fieldMappingRulesTable.id,
+            fieldName: fieldMappingRulesTable.fieldName,
+            updatedAt: fieldMappingRulesTable.updatedAt,
+          })
+          .from(fieldMappingRulesTable)
+          .where(and(
+            eq(fieldMappingRulesTable.tenantId, tenantId),
+            eq(fieldMappingRulesTable.pageUrlPattern, pagePath),
+            // Wildcard `*` rules apply to any form on the page.
+            inArray(fieldMappingRulesTable.formIdentifier, [formIdent, "*"]),
+          ))
+          .orderBy(fieldMappingRulesTable.updatedAt);
+        ruleCache.set(key, matches);
+        return matches;
+      }
+
+      // Pre-load funnel corrections per lead, sorted earliest-first. For
+      // each event we'll take the earliest correction strictly AFTER the
+      // event's createdAt whose newValue equals the event's resolved_funnel
+      // — that's the correction most plausibly responsible for the flip.
+      const candidateLeadIds = Array.from(new Set(
+        legacyRows.map(r => r.createdLeadId).filter((id): id is number => id != null),
+      ));
+      const correctionsByLead = new Map<number, { newValue: string; changedAt: Date }[]>();
+      if (candidateLeadIds.length > 0) {
+        const rows = await db
+          .select({
+            leadId: leadAttributionCorrectionsTable.leadId,
+            newValue: leadAttributionCorrectionsTable.newValue,
+            changedAt: leadAttributionCorrectionsTable.changedAt,
+          })
+          .from(leadAttributionCorrectionsTable)
+          .where(and(
+            inArray(leadAttributionCorrectionsTable.leadId, candidateLeadIds),
+            eq(leadAttributionCorrectionsTable.field, "funnel"),
+          ))
+          .orderBy(leadAttributionCorrectionsTable.changedAt);
+        for (const r of rows) {
+          if (!r.newValue) continue;
+          let list = correctionsByLead.get(r.leadId);
+          if (!list) { list = []; correctionsByLead.set(r.leadId, list); }
+          list.push({ newValue: r.newValue, changedAt: r.changedAt });
+        }
+      }
+
+      let stampedOverride = 0;
+      let stampedRule = 0;
+      let leftNullAmbiguous = 0;
+      // Sub-counters for why an event was left null, surfaced so an operator
+      // reading the report can tell apart "no signal at all" from "had a
+      // signal but it predated the event" (an event-time-correlation skip).
+      let skippedRuleNoTemporalMatch = 0;
+      let skippedOverrideNoTemporalMatch = 0;
+
+      for (const row of legacyRows) {
+        // Priority 1 — funnel override, time-bounded + value-correlated.
+        // Require a `funnel` correction on this event's lead with
+        //   (a) changedAt > event.createdAt (override happened after the
+        //       event existed — anything earlier can't have flipped this
+        //       specific event), AND
+        //   (b) newValue == event.resolvedFunnel (the override path sets
+        //       the event's resolvedFunnel to the chosen funnel name in
+        //       the same transaction as the correction).
+        // Earliest such correction wins so a later unrelated funnel
+        // re-correction can't claim credit for an older manual flip.
+        if (row.createdLeadId != null && row.resolvedFunnel) {
+          const list = correctionsByLead.get(row.createdLeadId);
+          if (list && list.length > 0) {
+            const match = list.find(c =>
+              c.newValue === row.resolvedFunnel &&
+              c.changedAt.getTime() > row.createdAt.getTime()
+            );
+            if (match) {
+              if (!dryRun) {
+                await db.update(attributionEventsTable)
+                  .set({ manualSource: `funnel_override:lead/${row.createdLeadId}` })
+                  .where(eq(attributionEventsTable.id, row.id));
+              }
+              stampedOverride++;
+              continue;
+            }
+            // Had a funnel correction on this lead but none satisfied the
+            // (post-event + same value) correlation — record as a temporal
+            // skip rather than stamping speculatively.
+            const valueMatchExisted = list.some(c => c.newValue === row.resolvedFunnel);
+            if (valueMatchExisted) skippedOverrideNoTemporalMatch++;
+          }
+        }
+
+        // Priority 2 — field-mapping rule, time-bounded + field-correlated.
+        // Require a rule whose
+        //   (a) scope matches the event's (page path, form id/name or `*`),
+        //   (b) fieldName (normalized) appears in this event's form_fields
+        //       keys (so the rule actually maps something this event
+        //       submitted), AND
+        //   (c) updatedAt > event.createdAt (the rule existed by the time
+        //       the manual flip could have happened — earlier-updated
+        //       rules can't have caused the flip from unmatched->manual).
+        // Earliest qualifying rule wins so a later unrelated rule edit on
+        // the same form can't retroactively claim credit.
+        if (row.formFields && typeof row.formFields === "object") {
+          const eventKeys = new Set(
+            Object.keys(row.formFields as Record<string, unknown>).map(normalizeFieldKey),
+          );
+          const pagePath = extractPagePath(row.pageUrl);
+          const formIdent = getFormIdentifier(row.formId, row.formName);
+          const rules = await rulesFor(row.tenantId, pagePath, formIdent);
+          const qualifying = rules.find(r =>
+            eventKeys.has(normalizeFieldKey(r.fieldName)) &&
+            r.updatedAt.getTime() > row.createdAt.getTime()
+          );
+          if (qualifying) {
+            if (!dryRun) {
+              await db.update(attributionEventsTable)
+                .set({ manualSource: `field_mapping_rule:${qualifying.id}` })
+                .where(eq(attributionEventsTable.id, row.id));
+            }
+            stampedRule++;
+            continue;
+          }
+          // A field-scoped rule exists but none satisfied the temporal
+          // gate. Counted as a skip so the report distinguishes "no rule
+          // in scope" from "rule exists but predates the event".
+          const fieldMatchExisted = rules.some(r =>
+            eventKeys.has(normalizeFieldKey(r.fieldName))
+          );
+          if (fieldMatchExisted) skippedRuleNoTemporalMatch++;
+        }
+
+        leftNullAmbiguous++;
+      }
+
+      const mode = dryRun ? " (DRY-RUN, no writes performed)" : "";
+      console.log(
+        `[Migration]${mode} Backfilled manual_source on ${stampedOverride + stampedRule}/${legacyRows.length} legacy manual attribution event(s) ` +
+        `(funnel_override: ${stampedOverride}, field_mapping_rule: ${stampedRule}, ambiguous left null: ${leftNullAmbiguous}; ` +
+        `of those nulls — override skipped on weak temporal evidence: ${skippedOverrideNoTemporalMatch}, ` +
+        `rule skipped on weak temporal evidence: ${skippedRuleNoTemporalMatch})`,
+      );
     },
   },
 ];
