@@ -79,6 +79,54 @@ export async function emitSyncFailureNotification(tenantId: number, integration:
   console.log(`[Notifications] Created ${severity} notification for ${integration} sync failure (tenant ${tenantId}, ${consecutiveFailures} consecutive)`);
 }
 
+/**
+ * Operator-visible alert when the nightly sync detected a tenant's watermark
+ * had fallen so far behind that the catch-up window was clamped, and an
+ * auto-backfill was enqueued to fill the gap. Distinct `type` ("sync_catchup")
+ * from hard failures so the copy/severity reads as informational, not "broken".
+ *
+ * De-duplication: callers already gate the enqueue on the in-flight backfill
+ * check, so this fires at most once per nightly tick. We additionally apply a
+ * 1h per-(tenant, integration) cooldown to defend against re-emission if the
+ * nightly job somehow runs twice in close succession.
+ */
+export async function emitSyncCatchupNotification(
+  tenantId: number,
+  integration: string,
+  reason: string,
+  days: number,
+) {
+  const cooldownMs = 60 * 60 * 1000;
+  const [recent] = await db.select({ id: notificationsTable.id })
+    .from(notificationsTable)
+    .where(
+      and(
+        eq(notificationsTable.tenantId, tenantId),
+        eq(notificationsTable.type, "sync_catchup"),
+        eq(notificationsTable.integration, integration),
+        sql`${notificationsTable.createdAt} > ${new Date(Date.now() - cooldownMs)}`,
+      ),
+    )
+    .limit(1);
+
+  if (recent) {
+    console.log(`[Notifications] Suppressed duplicate sync catch-up notification for ${integration} (tenant ${tenantId}) — within cooldown`);
+    return;
+  }
+
+  const integrationLabel = integration.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  await createNotification({
+    tenantId,
+    type: "sync_catchup",
+    severity: "warning",
+    title: `${integrationLabel} fell behind — auto-backfill started`,
+    message: `Nightly sync was clamped (${reason}); auto-enqueued a ${days}-day backfill to catch up.`,
+    integration,
+  });
+
+  console.log(`[Notifications] Created sync_catchup notification for ${integration} (tenant ${tenantId}, ${days}d, reason=${reason})`);
+}
+
 export async function checkStaleHeartbeats() {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 

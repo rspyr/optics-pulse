@@ -1,5 +1,5 @@
 import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable, soldEstimatesTable, callAttemptsTable, metaAdsTable, metaAdSetsTable, metaAdDailyStatsTable } from "@workspace/db";
-import { emitSyncFailureNotification } from "./notifications";
+import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
@@ -419,6 +419,11 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
               err,
             );
           });
+          try {
+            await emitSyncCatchupNotification(tenantId, "service_titan", autoBackfillReason ?? "clamped", autoBackfillDays);
+          } catch (notifyErr) {
+            console.error(`[Sync] ServiceTitan tenant ${tenantId}: failed to emit catch-up notification`, notifyErr);
+          }
         }
       } catch (dispatchErr) {
         console.error(
@@ -722,6 +727,11 @@ export async function syncGoogleAdsCampaigns(tenantId: number): Promise<{ synced
               err,
             );
           });
+          try {
+            await emitSyncCatchupNotification(tenantId, "google_ads", autoBackfillReason ?? "clamped", autoBackfillDays);
+          } catch (notifyErr) {
+            console.error(`[Sync] Google Ads tenant ${tenantId}: failed to emit catch-up notification`, notifyErr);
+          }
         }
       } catch (dispatchErr) {
         console.error(
@@ -1004,6 +1014,11 @@ export async function syncMetaCampaigns(tenantId: number): Promise<{ synced: num
               err,
             );
           });
+          try {
+            await emitSyncCatchupNotification(tenantId, "meta", autoBackfillReason ?? "clamped", autoBackfillDays);
+          } catch (notifyErr) {
+            console.error(`[Sync] Meta tenant ${tenantId}: failed to emit catch-up notification`, notifyErr);
+          }
         }
       } catch (dispatchErr) {
         console.error(
