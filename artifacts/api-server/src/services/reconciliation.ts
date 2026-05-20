@@ -1,5 +1,5 @@
 import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and, or, isNull, isNotNull, desc, gte, sql } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, desc, gte, sql, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrations/google-ads";
 import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
@@ -338,6 +338,30 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const totalMatched = results.diamond + results.golden + results.silver + results.bronze;
   const jobsProcessed = unmatchedJobs.length;
   const matchRate = jobsProcessed > 0 ? Math.round((totalMatched / jobsProcessed) * 100 * 10) / 10 : 0;
+
+  // Auto-promote leads to `sold` whenever they are now linked to a job
+  // that has an invoice. This handles both the rows matched in *this*
+  // run (allMatchedJobIds) and serves as an idempotent backfill for any
+  // historical job→lead links that were established before this rule
+  // existed.
+  const soldPromotionConditions: SQL[] = [
+    sql`${leadsTable.status} <> 'sold'`,
+    sql`EXISTS (
+      SELECT 1 FROM ${jobsTable}
+      WHERE ${jobsTable.leadId} = ${leadsTable.id}
+        AND ${jobsTable.tenantId} = ${leadsTable.tenantId}
+        AND ${jobsTable.hasInvoice} = true
+        AND ${jobsTable.matchLevel} IN ('diamond','golden','silver','bronze')
+    )`,
+  ];
+  if (tenantId) soldPromotionConditions.push(eq(leadsTable.tenantId, tenantId));
+  const soldPromotionResult = await db.update(leadsTable)
+    .set({ status: "sold", updatedAt: new Date() })
+    .where(and(...soldPromotionConditions))
+    .returning({ id: leadsTable.id });
+  if (soldPromotionResult.length > 0) {
+    console.log(`[Reconciliation] Promoted ${soldPromotionResult.length} lead(s) to 'sold' based on invoiced jobs`);
+  }
 
   await db.insert(reconciliationRunsTable).values({
     tenantId,

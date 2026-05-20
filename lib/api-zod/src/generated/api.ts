@@ -344,6 +344,36 @@ export const UpdateLeadResponse = zod.object({
 });
 
 /**
+ * Returns header-level invoice fields from the most recent invoiced
+ServiceTitan job linked to this lead. Used by the attribution page
+drawer to show what was actually sold. Returns 404 if the lead has
+no linked job with `hasInvoice = true`.
+
+ * @summary Get the most recent invoiced job linked to a lead
+ */
+export const GetLeadInvoiceParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetLeadInvoiceResponse = zod.object({
+  jobId: zod.number(),
+  stJobId: zod.string().nullish(),
+  stInvoiceId: zod.string().nullish(),
+  invoiceDate: zod.date().nullish(),
+  invoiceTotal: zod.number().nullish(),
+  invoicePaidAmount: zod.number().nullish(),
+  invoicePaidOn: zod.date().nullish(),
+  invoiceBalance: zod.number().nullish(),
+  invoiceRebateAmount: zod.number().nullish(),
+  customerName: zod.string().nullish(),
+  jobTypeName: zod.string().nullish(),
+  hasInvoice: zod.boolean().nullish(),
+  matchLevel: zod.string().nullish(),
+  jobDate: zod.date().nullish(),
+  completedAt: zod.date().nullish(),
+});
+
+/**
  * Returns the cached Podium messages for a single lead, filtered to
 text-style channels (call rows are excluded — those are exposed via
 `/podium/timeline/{leadId}` instead). Each request first attempts a
@@ -1451,10 +1481,18 @@ export const IngestWebhookResponse = zod.object({
 /**
  * @summary Get dashboard KPI overview
  */
+export const getDashboardOverviewQueryAttributionDefault = `attributed`;
+
 export const GetDashboardOverviewQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
   startDate: zod.coerce.string().optional(),
   endDate: zod.coerce.string().optional(),
+  attribution: zod
+    .enum(["attributed", "unattributed", "all"])
+    .default(getDashboardOverviewQueryAttributionDefault)
+    .describe(
+      "Filter metrics by paid attribution status. `attributed` (default)\nincludes only leads\/jobs matched to Google\/Meta\/Facebook paid\nsources or to a job with a non-`unmatched` match level.\n`unattributed` is the inverse. `all` disables the filter.\n",
+    ),
 });
 
 export const GetDashboardOverviewResponse = zod.object({
@@ -1499,10 +1537,18 @@ export const GetDashboardOverviewResponse = zod.object({
 /**
  * @summary Get spend vs revenue time series for charts
  */
+export const getSpendRevenueChartQueryAttributionDefault = `attributed`;
+
 export const GetSpendRevenueChartQueryParams = zod.object({
   tenantId: zod.coerce.number().optional(),
   startDate: zod.coerce.string().optional(),
   endDate: zod.coerce.string().optional(),
+  attribution: zod
+    .enum(["attributed", "unattributed", "all"])
+    .default(getSpendRevenueChartQueryAttributionDefault)
+    .describe(
+      "See `\/dashboard\/overview`. When `unattributed`, spend is forced\nto zero (ad spend is by definition attributed) and revenue is\nlimited to jobs without a paid match.\n",
+    ),
 });
 
 export const GetSpendRevenueChartResponse = zod.object({

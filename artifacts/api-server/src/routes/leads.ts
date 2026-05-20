@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable, attributionEventsTable, leadAttributionCorrectionsTable, tenantFunnelTypesTable } from "@workspace/db";
+import { db, leadsTable, callAttemptsTable, podiumMessagesTable, funnelTypesTable, leadMergesTable, attributionEventsTable, leadAttributionCorrectionsTable, tenantFunnelTypesTable, jobsTable } from "@workspace/db";
 import { eq, and, count, desc, sql, SQL, inArray, gte, lte } from "drizzle-orm";
 import { reDeriveLeadFunnel, redetectAndPersistEvent } from "../services/re-derive-lead-funnel";
 import { reRouteLeadsAfterAttributionChange } from "../services/lead-rerouting";
@@ -616,6 +616,55 @@ router.get("/leads/:leadId", async (req, res) => {
   const access = assertResourceTenantAccess(req, res, lead.tenantId);
   if (!access.ok) return;
   res.json(lead);
+});
+
+router.get("/leads/:leadId/invoice", async (req, res) => {
+  const { leadId } = GetLeadParams.parse({ leadId: req.params.leadId });
+  const [lead] = await db
+    .select({ tenantId: leadsTable.tenantId })
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId));
+  if (!lead) {
+    res.status(404).json({ error: "Lead not found" });
+    return;
+  }
+  const access = assertResourceTenantAccess(req, res, lead.tenantId);
+  if (!access.ok) return;
+
+  // Pick the most recent invoiced job linked to this lead. A lead can map
+  // to multiple jobs in ServiceTitan (e.g. revisit, warranty), so we prefer
+  // the latest invoice and fall back to the latest job date when an invoice
+  // date is missing.
+  const [job] = await db
+    .select({
+      jobId: jobsTable.id,
+      stJobId: jobsTable.stJobId,
+      stInvoiceId: jobsTable.stInvoiceId,
+      invoiceDate: jobsTable.invoiceDate,
+      invoiceTotal: jobsTable.invoiceTotal,
+      invoicePaidAmount: jobsTable.invoicePaidAmount,
+      invoicePaidOn: jobsTable.invoicePaidOn,
+      invoiceBalance: jobsTable.invoiceBalance,
+      invoiceRebateAmount: jobsTable.invoiceRebateAmount,
+      customerName: jobsTable.customerName,
+      jobTypeName: jobsTable.jobTypeName,
+      hasInvoice: jobsTable.hasInvoice,
+      matchLevel: jobsTable.matchLevel,
+      completedAt: jobsTable.completedAt,
+    })
+    .from(jobsTable)
+    .where(and(
+      eq(jobsTable.leadId, leadId),
+      eq(jobsTable.hasInvoice, true),
+    ))
+    .orderBy(desc(sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt})`))
+    .limit(1);
+
+  if (!job) {
+    res.status(404).json({ error: "No invoice found for this lead" });
+    return;
+  }
+  res.json(job);
 });
 
 router.get("/leads/:leadId/merges", async (req, res) => {

@@ -127,6 +127,21 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
   const [filterSource, setFilterSource] = useState("");
   const [filterLeadType, setFilterLeadType] = useState("");
   const [filterSalesperson, setFilterSalesperson] = useState("");
+  const [attributionMode, setAttributionModeState] = useState<"attributed" | "unattributed" | "all">(() => {
+    if (typeof window === "undefined") return "attributed";
+    const v = new URLSearchParams(window.location.search).get("attribution");
+    return v === "unattributed" || v === "all" ? v : "attributed";
+  });
+  const setAttributionMode = useCallback((m: "attributed" | "unattributed" | "all") => {
+    setAttributionModeState(m);
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (m === "attributed") params.delete("attribution");
+      else params.set("attribution", m);
+      const qs = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+    }
+  }, []);
   const [agencyFee, setAgencyFee] = useState(DEFAULT_AGENCY_FEE);
   const [showFeeInput, setShowFeeInput] = useState(false);
   const [quickViews, setQuickViews] = useState<QuickView[]>(loadQuickViews);
@@ -135,13 +150,13 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
 
   const { startDate, endDate } = parseDateRange(dateRange);
 
-  const overviewParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate };
+  const overviewParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate, attribution: attributionMode };
   const { data: rawOverview, isLoading: overviewLoading, isFetching: overviewFetching } = useGetDashboardOverview(
     overviewParams,
     { query: { enabled: hasTenant, queryKey: getGetDashboardOverviewQueryKey(overviewParams) } },
   );
 
-  const chartParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate };
+  const chartParams = { tenantId: effectiveTenantId ?? 0, startDate, endDate, attribution: attributionMode };
   const { data: rawChartData, isLoading: chartLoading, isFetching: chartFetching } = useGetSpendRevenueChart(
     chartParams,
     { query: { enabled: hasTenant, queryKey: getGetSpendRevenueChartQueryKey(chartParams) } },
@@ -628,6 +643,16 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
             })}
           </SelectContent>
         </Select>
+        <Select value={attributionMode} onValueChange={(v) => setAttributionMode(v as "attributed" | "unattributed" | "all")}>
+          <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="attributed">Attributed</SelectItem>
+            <SelectItem value="unattributed">Unattributed</SelectItem>
+            <SelectItem value="all">All</SelectItem>
+          </SelectContent>
+        </Select>
         <Select value={effectiveSalesperson || "__all__"} onValueChange={v => { setFilterSalesperson(v === "__all__" ? "" : v); setActiveNlFilter(prev => ({ ...prev, assignedTo: undefined })); }}>
           <SelectTrigger className="w-auto bg-card border border-white/10 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary/50">
             <SelectValue />
@@ -696,6 +721,13 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-display text-lg text-white">Spend vs Revenue</h3>
+              <p className="text-muted-foreground text-xs">
+                {attributionMode === "attributed"
+                  ? "Attributed revenue only — matched to a paid touch"
+                  : attributionMode === "unattributed"
+                  ? "Unattributed revenue only — organic, referral, or unmatched jobs (ad spend hidden)"
+                  : "All revenue, attributed + unattributed"}
+              </p>
               <p className="text-muted-foreground text-xs">
                 {roiMode === "allcosts"
                   ? `Includes ${formatCurrency(agencyFee)}/mo agency retainer (${formatCurrency(Math.round(agencyFee / 30))}/day)`

@@ -273,6 +273,32 @@ paths:
               schema:
                 $ref: "#/components/schemas/Lead"
 
+  /leads/{leadId}/invoice:
+    get:
+      operationId: getLeadInvoice
+      tags: [leads]
+      summary: Get the most recent invoiced job linked to a lead
+      description: |
+        Returns header-level invoice fields from the most recent invoiced
+        ServiceTitan job linked to this lead. Used by the attribution page
+        drawer to show what was actually sold. Returns 404 if the lead has
+        no linked job with `hasInvoice = true`.
+      parameters:
+        - name: leadId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Invoice header detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadInvoiceDetail"
+        "404":
+          description: Lead not found or has no invoiced job
+
   /podium/conversations/{leadId}:
     get:
       operationId: getPodiumConversation
@@ -828,6 +854,17 @@ paths:
           in: query
           schema:
             type: string
+        - name: attribution
+          in: query
+          description: |
+            Filter metrics by paid attribution status. `attributed` (default)
+            includes only leads/jobs matched to Google/Meta/Facebook paid
+            sources or to a job with a non-`unmatched` match level.
+            `unattributed` is the inverse. `all` disables the filter.
+          schema:
+            type: string
+            enum: [attributed, unattributed, all]
+            default: attributed
 
       responses:
         "200":
@@ -856,6 +893,16 @@ paths:
           in: query
           schema:
             type: string
+        - name: attribution
+          in: query
+          description: |
+            See `/dashboard/overview`. When `unattributed`, spend is forced
+            to zero (ad spend is by definition attributed) and revenue is
+            limited to jobs without a paid match.
+          schema:
+            type: string
+            enum: [attributed, unattributed, all]
+            default: attributed
 
       responses:
         "200":
@@ -2606,6 +2653,59 @@ components:
           format: date-time
           nullable: true
       required: [id, revenue]
+
+    LeadInvoiceDetail:
+      type: object
+      properties:
+        jobId:
+          type: integer
+        stJobId:
+          type: string
+          nullable: true
+        stInvoiceId:
+          type: string
+          nullable: true
+        invoiceDate:
+          type: string
+          format: date-time
+          nullable: true
+        invoiceTotal:
+          type: number
+          nullable: true
+        invoicePaidAmount:
+          type: number
+          nullable: true
+        invoicePaidOn:
+          type: string
+          format: date-time
+          nullable: true
+        invoiceBalance:
+          type: number
+          nullable: true
+        invoiceRebateAmount:
+          type: number
+          nullable: true
+        customerName:
+          type: string
+          nullable: true
+        jobTypeName:
+          type: string
+          nullable: true
+        hasInvoice:
+          type: boolean
+          nullable: true
+        matchLevel:
+          type: string
+          nullable: true
+        jobDate:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [jobId]
 
     AttributionMatchedLead:
       type: object

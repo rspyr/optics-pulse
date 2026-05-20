@@ -5,9 +5,18 @@
  * Optics API - Attribution Engine & Leads Dashboard
  * OpenAPI spec version: 0.1.0
  */
+import type { GetDashboardOverviewAttribution } from "./getDashboardOverviewAttribution";
 
 export type GetDashboardOverviewParams = {
   tenantId?: number;
   startDate?: string;
   endDate?: string;
+  /**
+ * Filter metrics by paid attribution status. `attributed` (default)
+includes only leads/jobs matched to Google/Meta/Facebook paid
+sources or to a job with a non-`unmatched` match level.
+`unattributed` is the inverse. `all` disables the filter.
+
+ */
+  attribution?: GetDashboardOverviewAttribution;
 };

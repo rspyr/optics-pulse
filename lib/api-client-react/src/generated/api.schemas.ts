@@ -710,6 +710,24 @@ export interface AttributionEventDetailResponse {
   matchedLead?: AttributionMatchedLead;
 }
 
+export interface LeadInvoiceDetail {
+  jobId: number;
+  stJobId?: string | null;
+  stInvoiceId?: string | null;
+  invoiceDate?: string | null;
+  invoiceTotal?: number | null;
+  invoicePaidAmount?: number | null;
+  invoicePaidOn?: string | null;
+  invoiceBalance?: number | null;
+  invoiceRebateAmount?: number | null;
+  customerName?: string | null;
+  jobTypeName?: string | null;
+  hasInvoice?: boolean | null;
+  matchLevel?: string | null;
+  jobDate?: string | null;
+  completedAt?: string | null;
+}
+
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus];
 
 export const JobStatus = {
@@ -1563,13 +1581,46 @@ export type GetDashboardOverviewParams = {
   tenantId?: number;
   startDate?: string;
   endDate?: string;
+  /**
+ * Filter metrics by paid attribution status. `attributed` (default)
+includes only leads/jobs matched to Google/Meta/Facebook paid
+sources or to a job with a non-`unmatched` match level.
+`unattributed` is the inverse. `all` disables the filter.
+
+ */
+  attribution?: GetDashboardOverviewAttribution;
 };
+
+export type GetDashboardOverviewAttribution =
+  (typeof GetDashboardOverviewAttribution)[keyof typeof GetDashboardOverviewAttribution];
+
+export const GetDashboardOverviewAttribution = {
+  attributed: "attributed",
+  unattributed: "unattributed",
+  all: "all",
+} as const;
 
 export type GetSpendRevenueChartParams = {
   tenantId?: number;
   startDate?: string;
   endDate?: string;
+  /**
+ * See `/dashboard/overview`. When `unattributed`, spend is forced
+to zero (ad spend is by definition attributed) and revenue is
+limited to jobs without a paid match.
+
+ */
+  attribution?: GetSpendRevenueChartAttribution;
 };
+
+export type GetSpendRevenueChartAttribution =
+  (typeof GetSpendRevenueChartAttribution)[keyof typeof GetSpendRevenueChartAttribution];
+
+export const GetSpendRevenueChartAttribution = {
+  attributed: "attributed",
+  unattributed: "unattributed",
+  all: "all",
+} as const;
 
 export type Logout200 = {
   success?: boolean;

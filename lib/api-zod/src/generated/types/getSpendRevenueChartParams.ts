@@ -5,9 +5,17 @@
  * Optics API - Attribution Engine & Leads Dashboard
  * OpenAPI spec version: 0.1.0
  */
+import type { GetSpendRevenueChartAttribution } from "./getSpendRevenueChartAttribution";
 
 export type GetSpendRevenueChartParams = {
   tenantId?: number;
   startDate?: string;
   endDate?: string;
+  /**
+ * See `/dashboard/overview`. When `unattributed`, spend is forced
+to zero (ad spend is by definition attributed) and revenue is
+limited to jobs without a paid match.
+
+ */
+  attribution?: GetSpendRevenueChartAttribution;
 };

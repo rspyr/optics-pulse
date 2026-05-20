@@ -63,6 +63,7 @@ import type {
   JobListResponse,
   Lead,
   LeadHistoryResponse,
+  LeadInvoiceDetail,
   LeadListResponse,
   LeadStatusHistoryResponse,
   LeaderboardResponse,
@@ -1054,6 +1055,98 @@ export const useUpdateLead = <
 > => {
   return useMutation(getUpdateLeadMutationOptions(options));
 };
+
+/**
+ * Returns header-level invoice fields from the most recent invoiced
+ServiceTitan job linked to this lead. Used by the attribution page
+drawer to show what was actually sold. Returns 404 if the lead has
+no linked job with `hasInvoice = true`.
+
+ * @summary Get the most recent invoiced job linked to a lead
+ */
+export const getGetLeadInvoiceUrl = (leadId: number) => {
+  return `/api/leads/${leadId}/invoice`;
+};
+
+export const getLeadInvoice = async (
+  leadId: number,
+  options?: RequestInit,
+): Promise<LeadInvoiceDetail> => {
+  return customFetch<LeadInvoiceDetail>(getGetLeadInvoiceUrl(leadId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetLeadInvoiceQueryKey = (leadId: number) => {
+  return [`/api/leads/${leadId}/invoice`] as const;
+};
+
+export const getGetLeadInvoiceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getLeadInvoice>>,
+  TError = ErrorType<void>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadInvoice>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetLeadInvoiceQueryKey(leadId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getLeadInvoice>>> = ({
+    signal,
+  }) => getLeadInvoice(leadId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getLeadInvoice>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetLeadInvoiceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getLeadInvoice>>
+>;
+export type GetLeadInvoiceQueryError = ErrorType<void>;
+
+/**
+ * @summary Get the most recent invoiced job linked to a lead
+ */
+
+export function useGetLeadInvoice<
+  TData = Awaited<ReturnType<typeof getLeadInvoice>>,
+  TError = ErrorType<void>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getLeadInvoice>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetLeadInvoiceQueryOptions(leadId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Returns the cached Podium messages for a single lead, filtered to

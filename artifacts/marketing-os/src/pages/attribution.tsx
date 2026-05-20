@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey } from "@workspace/api-client-react";
+import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, useGetLeadInvoice, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
@@ -23,6 +23,7 @@ import {
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
   Upload, Info, Clock, Lightbulb, Loader2, ChevronLeft, ChevronRight,
+  DollarSign,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -900,6 +901,10 @@ export default function Attribution() {
                     <p className="text-sm text-muted-foreground">No matched job or lead found for this event.</p>
                   )}
                 </DetailSection>
+
+                {matchedLead && (
+                  <InvoiceDetailsSection leadId={matchedLead.id} />
+                )}
 
                 {matchedJob && (
                   <DetailSection title="Outbound Push Status" icon={<Upload className="w-4 h-4" />}>
@@ -3600,6 +3605,46 @@ function DetailSection({ title, subtitle, icon, children }: { title: string; sub
       </div>
       <div className="space-y-1 pl-6">{children}</div>
     </div>
+  );
+}
+
+function InvoiceDetailsSection({ leadId }: { leadId: number }) {
+  const { data, isLoading, error } = useGetLeadInvoice(leadId);
+  const httpStatus = (error as { status?: number } | null)?.status;
+
+  if (isLoading) {
+    return (
+      <DetailSection title="Invoice Details" icon={<DollarSign className="w-4 h-4" />}>
+        <p className="text-sm text-muted-foreground">Loading invoice…</p>
+      </DetailSection>
+    );
+  }
+
+  // 404 from the endpoint means there is no invoiced job yet — render
+  // nothing rather than a noisy empty card.
+  if (!data || httpStatus === 404) return null;
+
+  const fmtMoney = (n?: number | null) =>
+    n == null ? "—" : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const fmtDate = (d?: string | null) => (d ? format(new Date(d), "MMM d, yyyy") : "—");
+
+  return (
+    <DetailSection title="Invoice Details" icon={<DollarSign className="w-4 h-4" />}>
+      <div className="bg-white/[0.02] border border-white/5 rounded-lg p-3 space-y-2">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-muted-foreground uppercase tracking-wider">Sold lead</span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 uppercase tracking-wider">Sold</span>
+        </div>
+        <DetailRow label="Customer" value={data.customerName ?? "—"} />
+        <DetailRow label="Job Type" value={data.jobTypeName ?? "—"} />
+        <DetailRow label="Invoice Date" value={fmtDate(data.invoiceDate)} />
+        <DetailRow label="Total" value={fmtMoney(data.invoiceTotal)} />
+        <DetailRow label="Paid" value={fmtMoney(data.invoicePaidAmount)} />
+        <DetailRow label="Balance" value={fmtMoney(data.invoiceBalance)} />
+        {data.stInvoiceId && <DetailRow label="ST Invoice ID" value={data.stInvoiceId} mono />}
+        {data.stJobId && <DetailRow label="ST Job ID" value={data.stJobId} mono />}
+      </div>
+    </DetailSection>
   );
 }
 

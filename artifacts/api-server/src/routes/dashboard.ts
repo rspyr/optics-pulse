@@ -10,10 +10,37 @@ router.use("/dashboard", denyClientUser);
 
 const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
 
-async function computeMetrics(tenantId: number | null, startDate?: string, endDate?: string) {
+export type AttributionMode = "attributed" | "unattributed" | "all";
+
+function parseAttributionMode(raw: unknown): AttributionMode {
+  if (raw === "unattributed" || raw === "all") return raw;
+  return "attributed";
+}
+
+// Attributed = paid-touch leads/jobs.
+// - lead.source matches google / meta / facebook (case-insensitive), OR
+// - lead.matchedGclid is not null, OR
+// - job.matchLevel in (diamond, golden, silver, bronze).
+const leadAttributedExpr = sql`(${leadsTable.source} ILIKE '%google%' OR ${leadsTable.source} ILIKE '%meta%' OR ${leadsTable.source} ILIKE '%facebook%' OR ${leadsTable.matchedGclid} IS NOT NULL)`;
+const jobAttributedExpr = sql`(${jobsTable.matchLevel} IN ('diamond','golden','silver','bronze'))`;
+
+async function computeMetrics(
+  tenantId: number | null,
+  startDate?: string,
+  endDate?: string,
+  attribution: AttributionMode = "attributed",
+) {
   const leadConditions: SQL[] = [];
   const jobConditions: SQL[] = [];
   const spendConditions: SQL[] = [];
+
+  if (attribution === "attributed") {
+    leadConditions.push(leadAttributedExpr);
+    jobConditions.push(jobAttributedExpr);
+  } else if (attribution === "unattributed") {
+    leadConditions.push(sql`NOT ${leadAttributedExpr}`);
+    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = 'unmatched')`);
+  }
 
   if (tenantId) {
     leadConditions.push(eq(leadsTable.tenantId, tenantId));
@@ -40,6 +67,13 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
   if (tenantId) closeRateConditions.push(eq(leadsTable.tenantId, tenantId));
   if (startDate) closeRateConditions.push(gte(leadsTable.createdAt, new Date(startDate)));
   if (endDate) closeRateConditions.push(lte(leadsTable.createdAt, new Date(endDate)));
+  if (attribution === "attributed") closeRateConditions.push(leadAttributedExpr);
+  else if (attribution === "unattributed") closeRateConditions.push(sql`NOT ${leadAttributedExpr}`);
+
+  // Ad spend has no meaning in the unattributed view (it's by definition
+  // attributed to a paid platform). Skip the spend query entirely so ROAS
+  // and CPL fall back to 0 / the unattributed lead count.
+  const skipSpendQuery = attribution === "unattributed";
 
   const [leadStats, jobStats, platformSpendResult, closeRateStats] = await Promise.all([
     db.select({
@@ -54,14 +88,16 @@ async function computeMetrics(tenantId: number | null, startDate?: string, endDa
       invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
       matchedEvents: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} != 'unmatched')`,
     }).from(jobsTable).where(jobWhere),
-    db.select({
-      platform: campaignsTable.platform,
-      total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
-    })
-      .from(campaignDailyStatsTable)
-      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
-      .where(spendWhere)
-      .groupBy(campaignsTable.platform),
+    skipSpendQuery
+      ? Promise.resolve([] as Array<{ platform: string | null; total: number }>)
+      : db.select({
+          platform: campaignsTable.platform,
+          total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
+        })
+          .from(campaignDailyStatsTable)
+          .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+          .where(spendWhere)
+          .groupBy(campaignsTable.platform),
     db.select({
       bookedWithInvoice: sql<number>`COUNT(DISTINCT ${leadsTable.id})`,
     })
@@ -119,12 +155,13 @@ router.get("/dashboard/overview", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+  const attribution = parseAttributionMode(req.query.attribution);
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
 
-  const current = await computeMetrics(tenantId, startDate, endDate);
+  const current = await computeMetrics(tenantId, startDate, endDate, attribution);
 
   let previousPeriod = null;
   if (startDate && endDate) {
@@ -136,7 +173,8 @@ router.get("/dashboard/overview", async (req, res) => {
     previousPeriod = await computeMetrics(
       tenantId,
       prevStart.toISOString().split("T")[0],
-      prevEnd.toISOString().split("T")[0]
+      prevEnd.toISOString().split("T")[0],
+      attribution,
     );
   }
 
@@ -147,6 +185,7 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+  const attribution = parseAttributionMode(req.query.attribution);
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -154,6 +193,13 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
 
   const statsConditions: SQL[] = [];
   const jobConditions: SQL[] = [eq(jobsTable.status, "completed")];
+
+  if (attribution === "attributed") {
+    jobConditions.push(jobAttributedExpr);
+  } else if (attribution === "unattributed") {
+    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = 'unmatched')`);
+  }
+  const skipSpend = attribution === "unattributed";
 
   if (tenantId) {
     statsConditions.push(eq(campaignsTable.tenantId, tenantId));
@@ -176,15 +222,17 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   const statsWhere = statsConditions.length > 0 ? and(...statsConditions) : undefined;
 
   const [stats, revenueByDate, outOfRangeResult] = await Promise.all([
-    db.select({
-      date: campaignDailyStatsTable.date,
-      platform: campaignsTable.platform,
-      spend: campaignDailyStatsTable.spend,
-    })
-      .from(campaignDailyStatsTable)
-      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
-      .where(statsWhere)
-      .orderBy(campaignDailyStatsTable.date),
+    skipSpend
+      ? Promise.resolve([] as Array<{ date: string | Date; platform: string | null; spend: number | null }>)
+      : db.select({
+          date: campaignDailyStatsTable.date,
+          platform: campaignsTable.platform,
+          spend: campaignDailyStatsTable.spend,
+        })
+          .from(campaignDailyStatsTable)
+          .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+          .where(statsWhere)
+          .orderBy(campaignDailyStatsTable.date),
     db.select({
       date: sql<string>`TO_CHAR(${jobDateExpr}, 'YYYY-MM-DD')`,
       revenue: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})), 0)`,
