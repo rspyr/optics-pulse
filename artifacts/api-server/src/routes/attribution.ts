@@ -107,6 +107,50 @@ router.get("/attribution/events", async (req, res) => {
   res.json({ events, total: totalResult.count });
 });
 
+router.get("/attribution/events/facets", async (req, res) => {
+  const conditions: SQL[] = [];
+
+  const role = req.session.userRole;
+  const userTenantId = req.session.tenantId;
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  if (role !== "super_admin" && role !== "agency_user") {
+    if (!userTenantId) {
+      res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
+      return;
+    }
+    conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
+  } else if (queryTenantId) {
+    conditions.push(eq(attributionEventsTable.tenantId, queryTenantId));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  // Distinct source values match the frontend label rule: prefer
+  // resolved_lead_source, fall back to utm_source.
+  const sourceExpr = sql<string>`COALESCE(${attributionEventsTable.resolvedLeadSource}, ${attributionEventsTable.utmSource})`;
+  const [sourceRows, funnelRows] = await Promise.all([
+    db
+      .selectDistinct({ value: sourceExpr })
+      .from(attributionEventsTable)
+      .where(where),
+    db
+      .selectDistinct({ value: attributionEventsTable.resolvedFunnel })
+      .from(attributionEventsTable)
+      .where(where),
+  ]);
+
+  const sources = sourceRows
+    .map(r => r.value)
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+  const funnels = funnelRows
+    .map(r => r.value)
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+
+  res.json({ sources, funnels });
+});
+
 router.get("/attribution/events/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);

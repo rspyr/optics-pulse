@@ -1126,6 +1126,18 @@ export const ListAttributionEventsResponse = zod.object({
 });
 
 /**
+ * @summary Distinct source and funnel values across the tenant's full attribution history
+ */
+export const GetAttributionEventFacetsQueryParams = zod.object({
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetAttributionEventFacetsResponse = zod.object({
+  sources: zod.array(zod.string()),
+  funnels: zod.array(zod.string()),
+});
+
+/**
  * @summary Get attribution event detail with matched job and lead
  */
 export const GetAttributionEventParams = zod.object({

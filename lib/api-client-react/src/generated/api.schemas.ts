@@ -680,6 +680,11 @@ export interface AttributionEventListResponse {
   total: number;
 }
 
+export interface AttributionEventFacetsResponse {
+  sources: string[];
+  funnels: string[];
+}
+
 export interface AttributionMatchedJob {
   id: number;
   customerName?: string | null;
@@ -1524,6 +1529,10 @@ export const ListAttributionEventsDateRange = {
   "7d": "7d",
   "30d": "30d",
 } as const;
+
+export type GetAttributionEventFacetsParams = {
+  tenantId?: number;
+};
 
 export type RunReconciliationBody = {
   tenantId?: number;

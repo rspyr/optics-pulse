@@ -20,6 +20,7 @@ import type {
   AdminDashboardStats,
   AdminUser,
   AttributionEventDetailResponse,
+  AttributionEventFacetsResponse,
   AttributionEventListResponse,
   AuthUser,
   AutomationAlert,
@@ -40,6 +41,7 @@ import type {
   DismissTraining200,
   GetAdminDashboardStatsParams,
   GetAdminLeaderboardParams,
+  GetAttributionEventFacetsParams,
   GetAutomationAlertCount200,
   GetCampaignStatsParams,
   GetDashboardBenchmarksParams,
@@ -2374,6 +2376,115 @@ export function useListAttributionEvents<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListAttributionEventsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Distinct source and funnel values across the tenant's full attribution history
+ */
+export const getGetAttributionEventFacetsUrl = (
+  params?: GetAttributionEventFacetsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/attribution/events/facets?${stringifiedParams}`
+    : `/api/attribution/events/facets`;
+};
+
+export const getAttributionEventFacets = async (
+  params?: GetAttributionEventFacetsParams,
+  options?: RequestInit,
+): Promise<AttributionEventFacetsResponse> => {
+  return customFetch<AttributionEventFacetsResponse>(
+    getGetAttributionEventFacetsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAttributionEventFacetsQueryKey = (
+  params?: GetAttributionEventFacetsParams,
+) => {
+  return [
+    `/api/attribution/events/facets`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetAttributionEventFacetsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAttributionEventFacets>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAttributionEventFacetsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAttributionEventFacets>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAttributionEventFacetsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAttributionEventFacets>>
+  > = ({ signal }) =>
+    getAttributionEventFacets(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAttributionEventFacets>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAttributionEventFacetsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAttributionEventFacets>>
+>;
+export type GetAttributionEventFacetsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Distinct source and funnel values across the tenant's full attribution history
+ */
+
+export function useGetAttributionEventFacets<
+  TData = Awaited<ReturnType<typeof getAttributionEventFacets>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAttributionEventFacetsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAttributionEventFacets>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAttributionEventFacetsQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

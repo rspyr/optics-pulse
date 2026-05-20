@@ -660,6 +660,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/AttributionEventListResponse"
 
+  /attribution/events/facets:
+    get:
+      operationId: getAttributionEventFacets
+      tags: [attribution]
+      summary: Distinct source and funnel values across the tenant's full attribution history
+      parameters:
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Distinct facet values for the Source and Funnel filters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttributionEventFacetsResponse"
+
   /attribution/events/{id}:
     get:
       operationId: getAttributionEvent
@@ -2528,6 +2546,19 @@ components:
         total:
           type: integer
       required: [events, total]
+
+    AttributionEventFacetsResponse:
+      type: object
+      properties:
+        sources:
+          type: array
+          items:
+            type: string
+        funnels:
+          type: array
+          items:
+            type: string
+      required: [sources, funnels]
 
     AttributionEventDetailResponse:
       type: object

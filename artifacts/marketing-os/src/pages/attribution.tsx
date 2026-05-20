@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useListAttributionEvents, useGetAttributionEvent, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey } from "@workspace/api-client-react";
+import { useListAttributionEvents, useGetAttributionEvent, useGetAttributionEventFacets, getListAttributionEventsQueryKey, getGetAttributionEventQueryKey, getGetAttributionEventFacetsQueryKey } from "@workspace/api-client-react";
 import type { AttributionEvent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
@@ -279,8 +279,18 @@ export default function Attribution() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const uniqueSources = [...new Set(events.map(ev => ev.resolvedLeadSource || ev.utmSource || "").filter(Boolean))];
-  const uniqueFunnels = [...new Set(events.map(ev => ev.resolvedFunnel || "").filter(Boolean))];
+  // Facets are pulled from the full tenant history (not just the current
+  // page) so the Source / Funnel dropdowns surface every distinct value,
+  // not whichever ones happen to be on this page.
+  const facetsParams = effectiveTenantId ? { tenantId: effectiveTenantId } : {};
+  const { data: facetsData } = useGetAttributionEventFacets(facetsParams, {
+    query: {
+      enabled: !isAgency || effectiveTenantId != null,
+      queryKey: getGetAttributionEventFacetsQueryKey(facetsParams),
+    },
+  });
+  const uniqueSources = facetsData?.sources ?? [];
+  const uniqueFunnels = facetsData?.funnels ?? [];
 
   // Filtering is now applied server-side via listEventsParams, so the
   // current page already reflects the active filters.
