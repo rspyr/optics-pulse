@@ -162,6 +162,7 @@ interface SyncLogRow {
   progressWindowEnd: string | null;
   errorCode: string | null;
   partial: boolean;
+  triggeredBySyncLogId: number | null;
   startedAt: Date | null;
   completedAt: Date | null;
   createdAt: Date | null;
@@ -182,6 +183,7 @@ function log(overrides: Partial<SyncLogRow>): SyncLogRow {
     progressWindowEnd: null,
     errorCode: null,
     partial: false,
+    triggeredBySyncLogId: null,
     startedAt: null,
     completedAt: null,
     createdAt: new Date("2026-05-01T00:00:00Z"),
@@ -419,6 +421,68 @@ describe("GET /integrations/sync-status — backfillStatus map", () => {
     expect(errorDetail.code).toBe("rate_limit");
     expect(errorDetail.partial).toBe(true);
     expect(String(errorDetail.message)).toMatch(/^Partial backfill:/i);
+  });
+
+  it("materializes triggeredByParent from the dataSyncLogs snapshot when the parent is in-window (Task #569)", async () => {
+    // The auto-triggered badge in the UI is now clickable: it scrolls to
+    // the parent nightly sync row in Recent Activity, or falls back to a
+    // popover. The popover reads `backfillStatus.<integ>.triggeredByParent`,
+    // which the route must materialize whenever `triggered_by_sync_log_id`
+    // is set on the backfill row. Prefer the already-fetched dataSyncLogs
+    // snapshot to avoid an extra DB round-trip.
+    const startedAt = new Date("2026-05-13T03:00:00Z");
+    const completedAt = new Date("2026-05-13T03:05:00Z");
+    queueSyncStatusSelects({
+      dataSyncLogs: [
+        log({
+          id: 200, integration: "meta", syncType: "backfill",
+          status: "running", recordsProcessed: 0,
+          triggeredBySyncLogId: 199,
+          startedAt: new Date("2026-05-13T03:06:00Z"),
+          completedAt: null,
+        }),
+        log({
+          id: 199, integration: "meta", syncType: "daily",
+          status: "completed", recordsProcessed: 12,
+          startedAt, completedAt,
+        }),
+      ],
+    });
+
+    const res = await getJson("/integrations/sync-status");
+    expect(res.status).toBe(200);
+
+    const meta = (res.body.backfillStatus as Record<string, Record<string, unknown>>).meta;
+    expect(meta).toBeDefined();
+    expect(meta.triggeredBySyncLogId).toBe(199);
+    const parent = meta.triggeredByParent as Record<string, unknown>;
+    expect(parent).toBeDefined();
+    expect(parent.id).toBe(199);
+    expect(parent.integration).toBe("meta");
+    expect(parent.syncType).toBe("daily");
+    expect(parent.status).toBe("completed");
+    expect(parent.startedAt).toBe(startedAt.toISOString());
+    expect(parent.completedAt).toBe(completedAt.toISOString());
+  });
+
+  it("leaves triggeredByParent null when triggered_by_sync_log_id is unset (manual backfill, Task #569)", async () => {
+    queueSyncStatusSelects({
+      dataSyncLogs: [
+        log({
+          id: 210, integration: "meta", syncType: "backfill",
+          status: "completed", recordsProcessed: 5,
+          triggeredBySyncLogId: null,
+        }),
+      ],
+    });
+
+    const res = await getJson("/integrations/sync-status");
+    expect(res.status).toBe(200);
+
+    const meta = (res.body.backfillStatus as Record<string, Record<string, unknown>>).meta;
+    expect(meta).toBeDefined();
+    expect(meta.triggeredBySyncLogId).toBeNull();
+    expect(meta.triggeredByParent).toBeNull();
   });
 
   it("metaBackfillStatus back-compat alias is null when meta has no backfill row", async () => {

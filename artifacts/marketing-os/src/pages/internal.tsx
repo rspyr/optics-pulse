@@ -90,6 +90,14 @@ export default function Internal() {
         partial: boolean;
       } | null;
       triggeredBySyncLogId?: number | null;
+      triggeredByParent?: {
+        id: number;
+        integration: string;
+        syncType: string;
+        status: string;
+        startedAt: string | null;
+        completedAt: string | null;
+      } | null;
       startedAt: string | null;
       completedAt: string | null;
     }>;
@@ -152,6 +160,55 @@ export default function Internal() {
     return () => clearInterval(id);
   }, [cancelStartedAt]);
   const FORCE_CANCEL_DELAY_MS = 8000;
+
+  // Auto-trigger badge → Recent Activity jump. When the operator clicks the
+  // "Auto-triggered by nightly catch-up" badge on a backfill row, we look
+  // for the parent nightly sync log in the currently-rendered recent
+  // activity slice. If it's there we scroll to it and pulse-highlight it
+  // for a couple of seconds so the link between the two rows is obvious.
+  // If the parent has already aged out of the visible window, we fall
+  // back to a small inline popover that shows the parent's
+  // integration/syncType/startedAt/completedAt from `triggeredByParent`.
+  const [highlightedLogId, setHighlightedLogId] = useState<number | null>(null);
+  const [parentPopoverFor, setParentPopoverFor] = useState<string | null>(null);
+  const HIGHLIGHT_DURATION_MS = 2500;
+
+  const jumpToParentSyncLog = useCallback((integ: string, parentId: number) => {
+    const el = document.getElementById(`sync-log-row-${parentId}`);
+    if (el) {
+      setParentPopoverFor(null);
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedLogId(parentId);
+      window.setTimeout(() => {
+        setHighlightedLogId((curr) => (curr === parentId ? null : curr));
+      }, HIGHLIGHT_DURATION_MS);
+    } else {
+      // Parent isn't in the recent-activity slice we have loaded — toggle
+      // the popover that shows the materialized parent summary instead.
+      setParentPopoverFor((curr) => (curr === integ ? null : integ));
+    }
+  }, []);
+
+  // Close the popover on outside click / Escape so it behaves like a real
+  // popover rather than a sticky panel.
+  useEffect(() => {
+    if (!parentPopoverFor) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest?.("[data-parent-popover-root]")) {
+        setParentPopoverFor(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setParentPopoverFor(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [parentPopoverFor]);
 
   const cancelBackfill = async (integ: string, logId: number, force = false) => {
     if (!logId) return;
@@ -658,15 +715,76 @@ export default function Internal() {
                       <div className="flex items-center justify-between">
                         <span className="flex items-center gap-1.5 text-xs font-medium text-white/80">
                           Historical backfill
-                          {bf?.triggeredBySyncLogId != null && (
-                            <span
-                              className="inline-flex items-center gap-1 rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
-                              title={`Auto-enqueued by nightly catch-up (parent sync log #${bf.triggeredBySyncLogId}). Triggered when the tenant's last successful sync was older than the nightly window cap.`}
-                            >
-                              <Clock className="w-3 h-3" />
-                              Auto-triggered by nightly catch-up
-                            </span>
-                          )}
+                          {bf?.triggeredBySyncLogId != null && (() => {
+                            const parentId = bf.triggeredBySyncLogId;
+                            const parent = bf.triggeredByParent ?? null;
+                            const popoverOpen = parentPopoverFor === integ;
+                            return (
+                              <span className="relative inline-flex" data-parent-popover-root>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    jumpToParentSyncLog(integ, parentId);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 hover:bg-sky-500/20 hover:border-sky-400/50 transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-sky-400/50"
+                                  title={`Auto-enqueued by nightly catch-up (parent sync log #${parentId}). Click to jump to the parent row in Recent Activity.`}
+                                  aria-haspopup="dialog"
+                                  aria-expanded={popoverOpen}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  Auto-triggered by nightly catch-up
+                                </button>
+                                {popoverOpen && (
+                                  <div
+                                    role="dialog"
+                                    className="absolute left-0 top-full mt-1 z-20 w-64 rounded border border-white/10 bg-background/95 backdrop-blur-sm p-3 shadow-lg text-[11px] space-y-1.5"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-white/80 font-medium">Parent sync log #{parentId}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setParentPopoverFor(null)}
+                                        className="text-white/40 hover:text-white/80"
+                                        aria-label="Close"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    {parent ? (
+                                      <div className="space-y-1 text-muted-foreground">
+                                        <p className="text-white/50">
+                                          Not in the current Recent Activity window — showing summary.
+                                        </p>
+                                        <p>
+                                          <span className="text-white/40">Integration:</span>{" "}
+                                          <span className="text-white/80 capitalize">{parent.integration.replace(/_/g, " ")}</span>
+                                        </p>
+                                        <p>
+                                          <span className="text-white/40">Sync type:</span>{" "}
+                                          <span className="text-white/80 capitalize">{parent.syncType.replace(/_/g, " ")}</span>
+                                        </p>
+                                        <p>
+                                          <span className="text-white/40">Status:</span>{" "}
+                                          <span className="text-white/80 capitalize">{parent.status}</span>
+                                        </p>
+                                        <p>
+                                          <span className="text-white/40">Started:</span>{" "}
+                                          <span className="text-white/80">{parent.startedAt ? new Date(parent.startedAt).toLocaleString() : "—"}</span>
+                                        </p>
+                                        <p>
+                                          <span className="text-white/40">Completed:</span>{" "}
+                                          <span className="text-white/80">{parent.completedAt ? new Date(parent.completedAt).toLocaleString() : "—"}</span>
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <p className="text-muted-foreground">Parent sync log details are no longer available.</p>
+                                    )}
+                                  </div>
+                                )}
+                              </span>
+                            );
+                          })()}
                         </span>
                         {bf ? (
                           bf.status === "running" ? (
@@ -866,8 +984,13 @@ export default function Internal() {
             <div className="space-y-1">
               {syncStatus.recentLogs.slice(0, 12).map((log) => {
                 const isOutbound = OUTBOUND_SYNC_TYPES.includes(log.syncType);
+                const isHighlighted = highlightedLogId === log.id;
                 return (
-                  <div key={log.id} className={`flex items-center justify-between text-xs py-1.5 px-2 rounded hover:bg-white/[0.02] ${isOutbound ? "border-l-2 border-l-orange-400/50" : ""}`}>
+                  <div
+                    key={log.id}
+                    id={`sync-log-row-${log.id}`}
+                    className={`flex items-center justify-between text-xs py-1.5 px-2 rounded transition-colors duration-500 ${isOutbound ? "border-l-2 border-l-orange-400/50" : ""} ${isHighlighted ? "bg-sky-500/15 ring-1 ring-sky-400/50" : "hover:bg-white/[0.02]"}`}
+                  >
                     <div className="flex items-center gap-2">
                       <span className={`w-1.5 h-1.5 rounded-full ${log.status === "completed" ? "bg-emerald-400" : log.status === "error" ? "bg-red-400" : log.status === "partial" ? "bg-amber-400" : "bg-amber-400"}`} />
                       <span className="text-muted-foreground">{log.completedAt ? new Date(log.completedAt).toLocaleString() : "Running..."}</span>

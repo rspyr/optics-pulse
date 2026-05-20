@@ -425,6 +425,18 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
      *  badge the row so operators can explain why a 6-month backfill just
      *  appeared without an operator clicking Run. */
     triggeredBySyncLogId: number | null;
+    /** Materialized parent-run summary when `triggeredBySyncLogId` is set.
+     *  The UI uses this as a popover fallback when the parent row isn't in
+     *  the currently-loaded Recent Activity slice, so operators can still
+     *  see what kicked the backfill off without paging through history. */
+    triggeredByParent: {
+      id: number;
+      integration: string;
+      syncType: string;
+      status: string;
+      startedAt: string | null;
+      completedAt: string | null;
+    } | null;
     startedAt: string | null;
     completedAt: string | null;
   }> = {};
@@ -505,6 +517,42 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         ? progressDetail.raw
         : log.errorMessage;
 
+      // When the row was auto-enqueued, materialize a small summary of the
+      // parent run so the UI can fall back to a popover when the parent
+      // isn't in the currently-loaded Recent Activity slice. Prefer the
+      // in-memory `dataSyncLogs` snapshot (already fetched, no extra DB
+      // round-trip); only hit the DB when the parent is older than the
+      // 60-row window we just loaded.
+      let triggeredByParent: {
+        id: number;
+        integration: string;
+        syncType: string;
+        status: string;
+        startedAt: string | null;
+        completedAt: string | null;
+      } | null = null;
+      if (log.triggeredBySyncLogId != null) {
+        const parentId = log.triggeredBySyncLogId;
+        let parent = dataSyncLogs.find((l) => l.id === parentId);
+        if (!parent) {
+          const [fetched] = await db.select()
+            .from(integrationSyncLogsTable)
+            .where(eq(integrationSyncLogsTable.id, parentId))
+            .limit(1);
+          parent = fetched;
+        }
+        if (parent) {
+          triggeredByParent = {
+            id: parent.id,
+            integration: parent.integration,
+            syncType: parent.syncType,
+            status: parent.status,
+            startedAt: parent.startedAt?.toISOString() ?? null,
+            completedAt: parent.completedAt?.toISOString() ?? null,
+          };
+        }
+      }
+
       backfillStatus[integ] = {
         status: log.status,
         recordsProcessed: log.recordsProcessed,
@@ -514,6 +562,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         progressDetail,
         errorDetail,
         triggeredBySyncLogId: log.triggeredBySyncLogId ?? null,
+        triggeredByParent,
         startedAt: log.startedAt?.toISOString() ?? null,
         completedAt: log.completedAt?.toISOString() ?? null,
       };
