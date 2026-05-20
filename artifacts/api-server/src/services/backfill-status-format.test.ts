@@ -98,6 +98,103 @@ describe("classifyBackfillError", () => {
     expect(classifyBackfillError("fetch failed")?.code).toBe("network");
   });
 
+  describe("timeout classification", () => {
+    const cases = [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "Error: ETIMEDOUT connect timeout",
+      "request timeout",
+      "the request timed out after 30s",
+      "deadline exceeded while awaiting headers",
+      "ServiceTitan API error (504): Gateway Timeout",
+    ];
+    for (const raw of cases) {
+      it(`classifies "${raw}" as timeout with the retry-smaller-range hint`, () => {
+        const got = classifyBackfillError(raw);
+        expect(got?.code).toBe("timeout");
+        expect(got?.message).toBe("The upstream API timed out.");
+        expect(got?.suggestedAction).toBe(
+          "Retry with a smaller day range so each chunk finishes faster.",
+        );
+        expect(got?.partial).toBe(false);
+      });
+    }
+
+    it("preserves the partial flag and prefixes the timeout message", () => {
+      const got = classifyBackfillError("partial: ETIMEDOUT");
+      expect(got?.code).toBe("timeout");
+      expect(got?.partial).toBe(true);
+      expect(got?.message).toBe("Partial backfill: The upstream API timed out.");
+      expect(got?.suggestedAction).toBe(
+        "Retry with a smaller day range so each chunk finishes faster.",
+      );
+    });
+  });
+
+  describe("network classification", () => {
+    const cases = [
+      "ECONNRESET",
+      "Error: socket hang up",
+      "ECONNREFUSED 127.0.0.1:443",
+      "getaddrinfo ENOTFOUND graph.facebook.com",
+      "EAI_AGAIN graph.facebook.com",
+      "TypeError: fetch failed",
+      "network error while contacting upstream",
+    ];
+    for (const raw of cases) {
+      it(`classifies "${raw}" as network with the transient-retry hint`, () => {
+        const got = classifyBackfillError(raw);
+        expect(got?.code).toBe("network");
+        expect(got?.message).toBe("Network error talking to the upstream API.");
+        expect(got?.suggestedAction).toBe(
+          "Retry in a moment. Persistent failures usually clear within a few minutes.",
+        );
+        expect(got?.partial).toBe(false);
+      });
+    }
+
+    it("preserves the partial flag and prefixes the network message", () => {
+      const got = classifyBackfillError("partial: ECONNRESET");
+      expect(got?.code).toBe("network");
+      expect(got?.partial).toBe(true);
+      expect(got?.message).toBe(
+        "Partial backfill: Network error talking to the upstream API.",
+      );
+    });
+  });
+
+  describe("upstream_server_error classification", () => {
+    const cases = [
+      "ServiceTitan API 500",
+      "ServiceTitan API error (500): Internal Server Error",
+      "Google Ads API (502): Bad Gateway",
+      "Bad Gateway",
+      "503 Service Unavailable",
+      "service unavailable",
+      "Internal Server Error",
+    ];
+    for (const raw of cases) {
+      it(`classifies "${raw}" as upstream_server_error with the upstream-wait hint`, () => {
+        const got = classifyBackfillError(raw);
+        expect(got?.code).toBe("upstream_server_error");
+        expect(got?.message).toBe("The upstream API returned a server error.");
+        expect(got?.suggestedAction).toBe(
+          "This is on the upstream provider. Wait a few minutes and retry.",
+        );
+        expect(got?.partial).toBe(false);
+      });
+    }
+
+    it("preserves the partial flag and prefixes the upstream-5xx message", () => {
+      const got = classifyBackfillError("partial: ServiceTitan API 502");
+      expect(got?.code).toBe("upstream_server_error");
+      expect(got?.partial).toBe(true);
+      expect(got?.message).toBe(
+        "Partial backfill: The upstream API returned a server error.",
+      );
+    });
+  });
+
   it("classifies operator-actionable cases (not configured / paused / already running / tenant)", () => {
     expect(classifyBackfillError("Google Ads not configured (missing Customer ID)")?.code).toBe("not_configured");
     expect(classifyBackfillError("ServiceTitan sync is paused for this tenant")?.code).toBe("paused");
