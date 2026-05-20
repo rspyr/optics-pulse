@@ -84,6 +84,16 @@ rows the detail endpoint recomputes on read using the same shared
 helper as the live socket emit.
  */
   unmatchedReason?: string | null;
+  /** When matchLevel === "manual", records *how* the operator resolved
+the event — e.g. `field_mapping_rule:123` or
+`funnel_override:lead/555`. Written alongside the manual flip by
+every operator-action path (saved field-mapping rule, per-lead
+funnel override, rule-scope re-derive fan-out) and surfaced
+inline on the event sheet with a deep-link back to the action
+that produced it (task #584). Null on non-manual rows and on
+legacy `manual` rows written before the column existed.
+ */
+  manualSource?: string | null;
   submittedAt?: Date | null;
   matchLevel?: AttributionEventMatchLevel;
   matchConfidence?: number | null;

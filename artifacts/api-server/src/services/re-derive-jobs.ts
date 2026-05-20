@@ -65,6 +65,12 @@ interface ReDerivePayload {
   pageUrlPattern: string;
   formIdentifier: string;
   excludeLeadId: number | null;
+  // Optional: the id of the field-mapping rule that triggered this fan-out.
+  // Threaded through so each `manual` flip can stamp its
+  // `manualSource = field_mapping_rule:<id>` and the event sheet can
+  // deep-link back to the rule. Legacy enqueue payloads without ruleId
+  // fall back to a generic `field_mapping_rule:scope` marker.
+  ruleId?: number | null;
 }
 
 function parsePayload(p: Record<string, unknown>): ReDerivePayload {
@@ -72,6 +78,7 @@ function parsePayload(p: Record<string, unknown>): ReDerivePayload {
   const pageUrlPattern = p["pageUrlPattern"];
   const formIdentifier = p["formIdentifier"];
   const excludeLeadId = p["excludeLeadId"];
+  const ruleId = p["ruleId"];
   if (
     typeof tenantId !== "number" ||
     typeof pageUrlPattern !== "string" ||
@@ -86,6 +93,7 @@ function parsePayload(p: Record<string, unknown>): ReDerivePayload {
     pageUrlPattern,
     formIdentifier,
     excludeLeadId: typeof excludeLeadId === "number" ? excludeLeadId : null,
+    ruleId: typeof ruleId === "number" ? ruleId : null,
   };
 }
 
@@ -102,7 +110,7 @@ export function registerReDeriveJobHandlers(): void {
           args.tenantId,
           args.pageUrlPattern,
           args.formIdentifier,
-          { excludeLeadId: args.excludeLeadId },
+          { excludeLeadId: args.excludeLeadId, ruleId: args.ruleId },
         );
         succeeded = true;
         break;

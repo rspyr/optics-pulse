@@ -224,4 +224,57 @@ describe("Attribution page — `manual` match-level (Task #580)", () => {
     expect(screen.queryByTestId("unmatched-fields-panel")).not.toBeInTheDocument();
   });
 
+  // Task #584: each of the three flip sites writes a distinct manualSource
+  // stamp, and the event sheet has to surface that stamp as a human-readable
+  // "Resolved by …" line with a deep-link back to the action. These three
+  // assertions lock in the wire-up between the persisted stamp and the
+  // rendered link target.
+  it("renders 'Resolved by field-mapping rule #<id>' with a deep-link when manualSource = 'field_mapping_rule:<id>' (Task #584)", async () => {
+    const ev = makeEvent({ manualSource: "field_mapping_rule:123" });
+    useGetAttributionEventMock.mockReturnValue({
+      data: { event: ev, matchedJob: null, matchedLead: null },
+    });
+    renderPage();
+    const row = await screen.findByText("form fill");
+    fireEvent.click(row.closest("tr") as HTMLTableRowElement);
+    const link = await screen.findByTestId("manual-source-rule-link");
+    expect(link).toHaveTextContent("field-mapping rule #123");
+    expect(link.getAttribute("href")).toContain("ruleId=123");
+  });
+
+  it("renders 'Resolved by per-lead funnel override on lead #<id>' with a deep-link when manualSource = 'funnel_override:lead/<leadId>' (Task #584)", async () => {
+    const ev = makeEvent({ manualSource: "funnel_override:lead/555" });
+    useGetAttributionEventMock.mockReturnValue({
+      data: { event: ev, matchedJob: null, matchedLead: null },
+    });
+    renderPage();
+    const row = await screen.findByText("form fill");
+    fireEvent.click(row.closest("tr") as HTMLTableRowElement);
+    const link = await screen.findByTestId("manual-source-override-link");
+    expect(link).toHaveTextContent("lead #555");
+    expect(link.getAttribute("href")).toContain("leadId=555");
+  });
+
+  it("renders the rule-scope fallback (no link) when manualSource = 'field_mapping_rule:scope' from the historical re-derive fan-out (Task #584)", async () => {
+    const ev = makeEvent({ manualSource: "field_mapping_rule:scope" });
+    useGetAttributionEventMock.mockReturnValue({
+      data: { event: ev, matchedJob: null, matchedLead: null },
+    });
+    renderPage();
+    const row = await screen.findByText("form fill");
+    fireEvent.click(row.closest("tr") as HTMLTableRowElement);
+    expect(await screen.findByTestId("manual-source-rule-scope")).toBeInTheDocument();
+    expect(screen.queryByTestId("manual-source-rule-link")).not.toBeInTheDocument();
+  });
+
+  it("renders a legacy fallback line when manualSource is null on a `manual` row (pre-task #584 events)", async () => {
+    const ev = makeEvent({ manualSource: null });
+    useGetAttributionEventMock.mockReturnValue({
+      data: { event: ev, matchedJob: null, matchedLead: null },
+    });
+    renderPage();
+    const row = await screen.findByText("form fill");
+    fireEvent.click(row.closest("tr") as HTMLTableRowElement);
+    expect(await screen.findByTestId("manual-source-legacy")).toBeInTheDocument();
+  });
 });

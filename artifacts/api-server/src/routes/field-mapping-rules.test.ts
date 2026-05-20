@@ -394,7 +394,13 @@ describe("POST /field-mapping-rules", () => {
     // tenant + event id — that's what surfaces the MANUAL badge and hides
     // the "Why unmatched?" panel for the operator who just saved the rule.
     expect(markEventManuallyMatchedMock).toHaveBeenCalledTimes(1);
-    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(42, 4242);
+    // Task #584: the route stamps `field_mapping_rule:<savedRuleId>` so the
+    // event sheet can deep-link back to the rule that resolved the event.
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(
+      42,
+      4242,
+      expect.stringMatching(/^field_mapping_rule:\d+$/),
+    );
   });
 
   it("does not call markEventManuallyMatched when no attributionEventId is provided (Task #580)", async () => {

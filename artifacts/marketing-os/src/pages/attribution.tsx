@@ -868,6 +868,9 @@ export default function Attribution() {
                       Operator-resolved match. Reverting returns this event to “unmatched” with a recomputed reason. The underlying field-mapping rule or per-lead funnel override is not deleted.
                     </p>
                   )}
+                  {selectedEvent.matchLevel === "manual" && (
+                    <ManualSourceLine manualSource={selectedEvent.manualSource ?? null} />
+                  )}
                   {selectedEvent.gclid && (
                     <DetailRow label="Event GCLID" value={selectedEvent.gclid} mono />
                   )}
@@ -2053,6 +2056,80 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
         excludeLeadId={event.createdLeadId ?? null}
       />
     </DetailSection>
+  );
+}
+
+/**
+ * Inline "Resolved by …" line that renders next to the MANUAL badge on the
+ * attribution event sheet. Parses the `manualSource` stamp written by every
+ * operator-action flip site (`field_mapping_rule:<id>` /
+ * `funnel_override:lead/<leadId>`) and turns it into a human-readable label
+ * + deep-link back to the action that produced the manual match, so the
+ * operator can revisit the rule/override without digging through audit logs
+ * (task #584).
+ *
+ * Legacy `manual` rows without a stamp render a neutral
+ * "Resolved by hand (legacy)" line so the sheet still tells the operator
+ * *something* useful instead of going silent on pre-#584 events.
+ */
+function ManualSourceLine({ manualSource }: { manualSource: string | null }) {
+  if (!manualSource) {
+    return (
+      <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-legacy">
+        Resolved by hand (legacy — no source recorded).
+      </p>
+    );
+  }
+  const ruleMatch = /^field_mapping_rule:(.+)$/.exec(manualSource);
+  if (ruleMatch) {
+    const ruleId = ruleMatch[1];
+    // The rule id "scope" is the fallback the rule-scope fan-out writes
+    // when no specific rule id was threaded through (legacy enqueue
+    // payloads). Render it as a generic label instead of a broken link.
+    if (ruleId === "scope") {
+      return (
+        <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-rule-scope">
+          Resolved by a saved field-mapping rule (historical re-derive fan-out).
+        </p>
+      );
+    }
+    return (
+      <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-rule">
+        Resolved by{" "}
+        <a
+          href={`/settings?tab=field-mapping&ruleId=${encodeURIComponent(ruleId)}`}
+          className="text-purple-300 hover:underline"
+          data-testid="manual-source-rule-link"
+        >
+          field-mapping rule #{ruleId}
+        </a>
+        .
+      </p>
+    );
+  }
+  const overrideMatch = /^funnel_override:lead\/(.+)$/.exec(manualSource);
+  if (overrideMatch) {
+    const leadId = overrideMatch[1];
+    return (
+      <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-override">
+        Resolved by per-lead funnel override on{" "}
+        <a
+          href={`/pulse?leadId=${encodeURIComponent(leadId)}`}
+          className="text-purple-300 hover:underline"
+          data-testid="manual-source-override-link"
+        >
+          lead #{leadId}
+        </a>
+        .
+      </p>
+    );
+  }
+  // Unknown stamp format — surface it verbatim so an operator can still see
+  // *something* without us silently swallowing the audit signal.
+  return (
+    <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-unknown">
+      Resolved by hand (source: <span className="font-mono">{manualSource}</span>).
+    </p>
   );
 }
 

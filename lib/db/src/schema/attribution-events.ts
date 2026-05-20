@@ -47,6 +47,12 @@ export const attributionEventsTable = pgTable("attribution_events", {
   // was added — the read-side fallback in /attribution/events/:id
   // recomputes on demand for those cases.
   unmatchedReason: text("unmatched_reason"),
+  // Task #584: when matchLevel='manual', records *how* the operator
+  // resolved this event — e.g. `field_mapping_rule:123` or
+  // `funnel_override:lead/555`. Null for non-manual rows and for legacy
+  // manual rows written before the column existed. Cleared back to null
+  // by `revertManualMatchToUnmatched` when the operator undoes the flip.
+  manualSource: text("manual_source"),
   createdLeadId: integer("created_lead_id").references(() => leadsTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({

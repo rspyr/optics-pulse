@@ -943,7 +943,14 @@ router.post("/leads/:leadId/funnel-override", async (req, res) => {
     // (100% confidence, no "Why unmatched?" panel). The guard in the
     // helper preserves auto-matched diamond/golden/silver/bronze rows.
     try {
-      await markEventManuallyMatched(existingLead.tenantId, body.attributionEventId);
+      // Stamp `funnel_override:lead/<leadId>` on the event so the sheet can
+      // show "Resolved by per-lead funnel override" and deep-link to the
+      // lead whose override produced the flip (task #584).
+      await markEventManuallyMatched(
+        existingLead.tenantId,
+        body.attributionEventId,
+        `funnel_override:lead/${leadId}`,
+      );
     } catch (err) {
       console.error("[funnel-override.POST] markEventManuallyMatched failed:", err);
     }

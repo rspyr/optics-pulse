@@ -675,7 +675,13 @@ router.post("/field-mapping-rules", async (req, res) => {
     // confidence, no "Why unmatched?" panel). Tier rows are preserved by
     // the guard inside the helper.
     try {
-      await markEventManuallyMatched(tenantId, attributionEventId);
+      // Stamp `field_mapping_rule:<id>` on the event so the sheet can show
+      // "Resolved by field-mapping rule #<id>" and deep-link back to it.
+      await markEventManuallyMatched(
+        tenantId,
+        attributionEventId,
+        `field_mapping_rule:${resultRule.id}`,
+      );
     } catch (err) {
       console.error("[field-mapping-rules.POST] markEventManuallyMatched failed:", err);
     }
@@ -706,6 +712,10 @@ router.post("/field-mapping-rules", async (req, res) => {
       pageUrlPattern: pageUrlPattern as string,
       formIdentifier: formIdentifier as string,
       excludeLeadId: resolvedLeadId,
+      // Pass through so the fan-out's per-event `manual` flips can stamp
+      // `manualSource = field_mapping_rule:<id>` and the event sheet can
+      // deep-link back to the rule that resolved them (task #584).
+      ruleId: resultRule.id,
     });
   } catch (err) {
     console.error("[field-mapping-rules.POST] failed to enqueue rederive job:", err);

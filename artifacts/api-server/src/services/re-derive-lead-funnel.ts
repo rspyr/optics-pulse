@@ -51,12 +51,14 @@ export interface EventRedetectionResult {
 export async function markEventManuallyMatched(
   tenantId: number,
   eventId: number,
+  manualSource: string,
 ): Promise<number> {
   const rows = await db.update(attributionEventsTable)
     .set({
       matchLevel: "manual",
       matchConfidence: 1.0,
       unmatchedReason: null,
+      manualSource,
     })
     .where(and(
       eq(attributionEventsTable.id, eventId),
@@ -89,6 +91,9 @@ export async function revertManualMatchToUnmatched(
       matchLevel: "unmatched",
       matchConfidence: 0,
       unmatchedReason: recomputedUnmatchedReason,
+      // Clear the resolved-by stamp so a future re-flip writes a fresh
+      // source instead of inheriting the previous one.
+      manualSource: null,
     })
     .where(and(
       eq(attributionEventsTable.id, eventId),
@@ -332,7 +337,7 @@ export async function reDeriveLeadsForRuleScope(
   tenantId: number,
   pageUrlPattern: string,
   formIdentifier: string,
-  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null } = {},
+  options: { lookbackDays?: number; maxEvents?: number; maxLeads?: number; excludeLeadId?: number | null; ruleId?: number | null } = {},
 ): Promise<RederiveScopeResult> {
   if (!Number.isInteger(tenantId) || tenantId <= 0) {
     throw new NonRetryableReDeriveError(
@@ -395,7 +400,15 @@ export async function reDeriveLeadsForRuleScope(
     // Auto-matched tiers (diamond/golden/etc.) are preserved by the guard
     // inside `markEventManuallyMatched`.
     try {
-      await markEventManuallyMatched(tenantId, ev.id);
+      // The fan-out is always kicked off by a saved field-mapping rule, so
+      // the manualSource stamp points back at that rule. When the caller
+      // didn't supply a ruleId (legacy enqueue payloads), fall back to a
+      // bare `field_mapping_rule:scope` marker so the badge still renders
+      // something more useful than a blank source.
+      const manualSource = options.ruleId != null
+        ? `field_mapping_rule:${options.ruleId}`
+        : "field_mapping_rule:scope";
+      await markEventManuallyMatched(tenantId, ev.id, manualSource);
     } catch (err) {
       console.error("[reDeriveLeadsForRuleScope] markEventManuallyMatched failed for event", ev.id, err);
     }

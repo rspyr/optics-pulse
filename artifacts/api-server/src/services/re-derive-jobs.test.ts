@@ -123,7 +123,10 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
       42,
       "/contact",
       "ac-breakdown-prevention",
-      { excludeLeadId: 77 },
+      // Task #584: ruleId is now threaded through so the per-event
+      // `manual` flips can stamp `field_mapping_rule:<id>`. Legacy
+      // payloads without ruleId default to null.
+      { excludeLeadId: 77, ruleId: null },
     );
 
     expect(emitRuleRederiveCompleteMock).toHaveBeenCalledTimes(1);

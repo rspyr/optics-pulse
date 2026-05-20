@@ -239,7 +239,14 @@ describe("POST /leads/:leadId/funnel-override — Task #549", () => {
     // lead's tenant + the open event's id, so the badge/filter/no-panel
     // contract holds for per-lead funnel overrides too.
     expect(markEventManuallyMatchedMock).toHaveBeenCalledTimes(1);
-    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(42, 1234);
+    // Task #584: the route stamps `funnel_override:lead/<leadId>` so the
+    // event sheet can deep-link back to the lead whose override flipped
+    // this event to manual.
+    expect(markEventManuallyMatchedMock).toHaveBeenCalledWith(
+      42,
+      1234,
+      "funnel_override:lead/555",
+    );
   });
 
   it("does NOT call markEventManuallyMatched when the override is saved without an attributionEventId (Task #580)", async () => {

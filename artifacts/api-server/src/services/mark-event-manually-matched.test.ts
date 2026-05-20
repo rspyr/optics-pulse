@@ -85,11 +85,11 @@ describe("markEventManuallyMatched", () => {
     updateReturningQueue = [];
   });
 
-  it("flips an unmatched event to manual with 100% confidence and clears unmatchedReason", async () => {
+  it("flips an unmatched event to manual with 100% confidence, clears unmatchedReason, and stamps manualSource (task #584)", async () => {
     const { markEventManuallyMatched } = await import("./re-derive-lead-funnel");
     updateReturningQueue.push([{ id: 123 }]);
 
-    const flipped = await markEventManuallyMatched(42, 123);
+    const flipped = await markEventManuallyMatched(42, 123, "field_mapping_rule:7");
 
     expect(flipped).toBe(1);
     expect(updateCalls).toHaveLength(1);
@@ -97,6 +97,7 @@ describe("markEventManuallyMatched", () => {
       matchLevel: "manual",
       matchConfidence: 1.0,
       unmatchedReason: null,
+      manualSource: "field_mapping_rule:7",
     });
   });
 
@@ -104,7 +105,7 @@ describe("markEventManuallyMatched", () => {
     const { markEventManuallyMatched } = await import("./re-derive-lead-funnel");
     updateReturningQueue.push([{ id: 123 }]);
 
-    await markEventManuallyMatched(42, 123);
+    await markEventManuallyMatched(42, 123, "funnel_override:lead/555");
 
     const eqVals = whereEqValues(updateCalls[0].whereArgs);
     expect(eqVals).toContain(42); // tenantId
@@ -113,12 +114,9 @@ describe("markEventManuallyMatched", () => {
 
   it("only matches currently-unmatched rows so an auto-matched diamond/golden/silver/bronze event is never demoted to manual", async () => {
     const { markEventManuallyMatched } = await import("./re-derive-lead-funnel");
-    // The UPDATE is gated by `matchLevel = 'unmatched'` in the WHERE clause.
-    // An already-tier-matched row therefore matches 0 rows and the helper
-    // returns 0 (no flip). We assert the SQL gate is present.
-    updateReturningQueue.push([]); // 0 rows flipped — already tier-matched
+    updateReturningQueue.push([]);
 
-    const flipped = await markEventManuallyMatched(42, 999);
+    const flipped = await markEventManuallyMatched(42, 999, "field_mapping_rule:1");
 
     expect(flipped).toBe(0);
     const eqVals = whereEqValues(updateCalls[0].whereArgs);
@@ -129,8 +127,30 @@ describe("markEventManuallyMatched", () => {
     const { markEventManuallyMatched } = await import("./re-derive-lead-funnel");
     updateReturningQueue.push([]);
 
-    const flipped = await markEventManuallyMatched(42, 7777);
+    const flipped = await markEventManuallyMatched(42, 7777, "field_mapping_rule:1");
 
     expect(flipped).toBe(0);
+  });
+
+  // Task #584 — regression: each of the three flip sites writes a distinct,
+  // expected manualSource value. The helper is the single chokepoint, so
+  // verifying the stamp lands verbatim here covers the contract that the
+  // three call-site tests below (field-mapping-rules.test.ts,
+  // leads.funnel-override.test.ts, re-derive-jobs.test.ts) lock in for the
+  // routes themselves.
+  it("persists a distinct manualSource verbatim for each of the three operator-action paths (task #584)", async () => {
+    const { markEventManuallyMatched } = await import("./re-derive-lead-funnel");
+
+    updateReturningQueue.push([{ id: 1 }]);
+    await markEventManuallyMatched(42, 1, "field_mapping_rule:123");
+    expect(updateCalls[0].setValues).toMatchObject({ manualSource: "field_mapping_rule:123" });
+
+    updateReturningQueue.push([{ id: 2 }]);
+    await markEventManuallyMatched(42, 2, "funnel_override:lead/555");
+    expect(updateCalls[1].setValues).toMatchObject({ manualSource: "funnel_override:lead/555" });
+
+    updateReturningQueue.push([{ id: 3 }]);
+    await markEventManuallyMatched(42, 3, "field_mapping_rule:scope");
+    expect(updateCalls[2].setValues).toMatchObject({ manualSource: "field_mapping_rule:scope" });
   });
 });
