@@ -34,6 +34,8 @@ The helpers here make that drift a **compile error** instead:
 | `auth-context-mocks.ts` | `@/components/auth-context` | Tests that mount a tree using `useAuth()` but don't care about the real `/api/auth/me` fetch. |
 | `use-tenant-filter-mocks.ts` | `@/hooks/use-tenant-filter` | Tests that render a page reading the tenant-scope filter but don't care about driving its react-query / persistence wiring. |
 | `ui-select-mocks.ts` | `@/components/ui/select` | Tests that drive Radix `Select` via `fireEvent.change` — jsdom can't model the popover, so swap it for a native `<select>`. |
+| `use-toast-mocks.ts` | `@/hooks/use-toast` | Tests that mount a tree which calls `useToast()` / `toast()` but don't care about the real toast queue. |
+| `use-push-notifications-mocks.ts` | `@/hooks/use-push-notifications` | Tests that mount a tree calling `usePushNotifications()` but don't care about driving the real service-worker / VAPID flow. |
 
 ## Pattern
 

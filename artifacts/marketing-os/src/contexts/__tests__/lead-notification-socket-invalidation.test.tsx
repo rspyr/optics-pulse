@@ -63,19 +63,17 @@ vi.mock("@/components/auth-context", async () => {
   });
 });
 
-vi.mock("@/hooks/use-push-notifications", () => ({
-  usePushNotifications: () => ({
-    supported: false,
-    permission: "default",
-    subscribed: false,
-    subscribe: vi.fn(),
-  }),
-}));
+vi.mock("@/hooks/use-push-notifications", async () => {
+  const { mockUsePushNotificationsModule } = await import(
+    "@/test-utils/use-push-notifications-mocks"
+  );
+  return mockUsePushNotificationsModule();
+});
 
-vi.mock("@/hooks/use-toast", () => ({
-  toast: vi.fn(),
-  useToast: () => ({ toasts: [] }),
-}));
+vi.mock("@/hooks/use-toast", async () => {
+  const { mockUseToastModule } = await import("@/test-utils/use-toast-mocks");
+  return mockUseToastModule();
+});
 
 import { LeadNotificationProvider } from "../lead-notification-context";
 
