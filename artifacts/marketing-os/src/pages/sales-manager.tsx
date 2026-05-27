@@ -2793,8 +2793,8 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
               ) : (
                 <div className="space-y-1.5">
                   {columnValues.map(val => (
-                    <div key={val} className="flex items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
-                      <span className="text-[11px] text-white/70 font-mono flex-1 truncate">{val}</span>
+                    <div key={val} className="grid grid-cols-[minmax(0,1fr)_auto_180px] items-center gap-2 px-3 py-1.5 rounded bg-white/[0.02] border border-white/5">
+                      <span className="text-[11px] text-white/70 font-mono truncate">{val}</span>
                       <ArrowUpRight className="w-3 h-3 text-white/20 rotate-90 flex-shrink-0" />
                       <Select
                         value={funnelValueMap[val] != null ? String(funnelValueMap[val]) : "__none__"}
@@ -2805,7 +2805,7 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
                           });
                         }}
                       >
-                        <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-[140px] h-auto">
+                        <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto [&>span]:truncate">
                           <SelectValue placeholder="-- Select Funnel --" />
                         </SelectTrigger>
                         <SelectContent>
