@@ -2447,7 +2447,6 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
         setSavedMapping(mapping);
         if (data.funnelColumn) {
           setFunnelColumn(data.funnelColumn);
-          loadColumnValues(data.funnelColumn);
         } else {
           setFunnelColumn(null);
         }
@@ -2461,20 +2460,31 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
     } finally { setSaving(false); }
   };
 
-  const loadColumnValues = async (colName: string) => {
+  const columnValuesReqIdRef = useRef(0);
+  const loadColumnValues = useCallback(async (colName: string) => {
+    const reqId = ++columnValuesReqIdRef.current;
     setLoadingValues(true);
     try {
       const res = await fetch(`${API_BASE}/sheet-configs/${configId}/column-values/${encodeURIComponent(colName)}`, { credentials: "include" });
       const data = await res.json();
+      if (reqId !== columnValuesReqIdRef.current) return;
       if (res.ok) setColumnValues(data.values || []);
-    } catch {} finally { setLoadingValues(false); }
-  };
+    } catch {
+      // ignore
+    } finally {
+      if (reqId === columnValuesReqIdRef.current) setLoadingValues(false);
+    }
+  }, [configId]);
 
   useEffect(() => {
-    if (funnelColumn && config.columnMapping) {
+    if (funnelColumn) {
       loadColumnValues(funnelColumn);
+    } else {
+      columnValuesReqIdRef.current++;
+      setColumnValues([]);
+      setLoadingValues(false);
     }
-  }, []);
+  }, [funnelColumn, loadColumnValues]);
 
   const handleSaveFunnelMap = async () => {
     if (!funnelColumn) return;
