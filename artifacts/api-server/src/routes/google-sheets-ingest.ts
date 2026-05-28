@@ -60,7 +60,7 @@ function resolveFunnelForRow(
   return defaultFunnelTypeId;
 }
 
-router.post("/sheet-configs/:configId/analyze-mapping", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+router.post("/sheet-configs/:configId/analyze-mapping", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
   const configId = parseInt(String(req.params.configId));
 
   const [config] = await db.select().from(googleSheetConfigsTable)
@@ -176,7 +176,7 @@ Respond with ONLY valid JSON. Example:
   }
 });
 
-router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", "agency_user"), async (req, res): Promise<void> => {
+router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", "agency_user", "client_admin"), async (req, res): Promise<void> => {
   const configId = parseInt(String(req.params.configId));
   const { mapping, headers } = req.body as { mapping: Record<string, string>; headers: string[] };
 
@@ -259,6 +259,8 @@ router.post("/sheet-configs/:configId/save-mapping", requireRole("super_admin", 
       syncPaused: true,
       funnelColumn,
       funnelValueMap: funnelColumn ? (config.funnelValueMap || null) : null,
+      driftDetectedAt: null,
+      driftNotifiedAt: null,
       updatedAt: new Date(),
     })
     .where(eq(googleSheetConfigsTable.id, configId));

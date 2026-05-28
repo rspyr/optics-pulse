@@ -8,6 +8,9 @@ import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "./source-normalizer";
+import { emitSheetDriftNotification } from "./notifications";
+
+const DRIFT_ALERT_THRESHOLD_MS = 10 * 60 * 1000;
 
 const UPDATABLE_FIELDS = [
   "appointmentDate", "appointmentTime", "appointmentBooked",
@@ -186,6 +189,37 @@ async function rescanExistingRows(
   return updated;
 }
 
+async function handleDriftDetected(config: typeof googleSheetConfigsTable.$inferSelect): Promise<void> {
+  const now = new Date();
+  const driftStart = config.driftDetectedAt ?? now;
+
+  if (!config.driftDetectedAt) {
+    await db.update(googleSheetConfigsTable)
+      .set({ driftDetectedAt: now })
+      .where(eq(googleSheetConfigsTable.id, config.id));
+  }
+
+  const driftAgeMs = now.getTime() - driftStart.getTime();
+  if (driftAgeMs < DRIFT_ALERT_THRESHOLD_MS) return;
+  if (config.driftNotifiedAt) return;
+
+  try {
+    const emitted = await emitSheetDriftNotification({
+      tenantId: config.tenantId,
+      sheetConfigId: config.id,
+      sheetName: config.name,
+      driftMinutes: Math.round(driftAgeMs / 60000),
+    });
+    if (emitted) {
+      await db.update(googleSheetConfigsTable)
+        .set({ driftNotifiedAt: now })
+        .where(eq(googleSheetConfigsTable.id, config.id));
+    }
+  } catch (err) {
+    console.error(`[SheetSync] Failed to emit drift notification for sheet config ${config.id}:`, err);
+  }
+}
+
 export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$inferSelect): Promise<number> {
   const sheetId = config.googleSheetId;
   const tab = config.googleSheetTab;
@@ -200,7 +234,15 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
   if (!headersMatch(currentHeaders, savedHeaders)) {
     console.warn(`[SheetSync] Headers changed for sheet config ${config.id} (tenant ${config.tenantId}) — skipping`);
+    await handleDriftDetected(config);
     return -1;
+  }
+
+  if (config.driftDetectedAt) {
+    await db.update(googleSheetConfigsTable)
+      .set({ driftDetectedAt: null, driftNotifiedAt: null })
+      .where(eq(googleSheetConfigsTable.id, config.id));
+    console.log(`[SheetSync] Drift resolved for sheet config ${config.id} (tenant ${config.tenantId}) — headers match again`);
   }
 
   await rescanExistingRows(config, currentHeaders, rawRows, mapping);

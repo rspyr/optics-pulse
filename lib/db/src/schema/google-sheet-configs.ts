@@ -15,6 +15,8 @@ export const googleSheetConfigsTable = pgTable("google_sheet_configs", {
   defaultFunnelTypeId: integer("default_funnel_type_id").references(() => funnelTypesTable.id),
   funnelColumn: text("funnel_column"),
   funnelValueMap: jsonb("funnel_value_map").$type<Record<string, number>>(),
+  driftDetectedAt: timestamp("drift_detected_at"),
+  driftNotifiedAt: timestamp("drift_notified_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

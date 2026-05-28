@@ -10,6 +10,8 @@ interface Notification {
   title: string;
   message: string;
   integration: string | null;
+  actionUrl: string | null;
+  actionLabel: string | null;
   isRead: boolean;
   isDismissed: boolean;
   createdAt: string;
@@ -238,6 +240,20 @@ export function NotificationBell() {
                           </div>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
+                        {n.actionUrl && (
+                          <a
+                            href={`${API_BASE}${n.actionUrl}`}
+                            onClick={() => { if (!n.isRead) markAsRead(n.id); setIsOpen(false); }}
+                            className={cn(
+                              "inline-flex items-center gap-1 mt-2 px-2 py-1 rounded text-[11px] font-medium transition-colors",
+                              n.severity === "critical"
+                                ? "bg-red-500/15 text-red-300 hover:bg-red-500/25"
+                                : "bg-primary/15 text-primary hover:bg-primary/25",
+                            )}
+                          >
+                            {n.actionLabel || "Open"}
+                          </a>
+                        )}
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
                             <Clock className="w-2.5 h-2.5" />

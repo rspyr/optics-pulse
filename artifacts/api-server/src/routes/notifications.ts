@@ -5,7 +5,14 @@ import { requireRole } from "../middleware/auth";
 
 const router: IRouter = Router();
 
-const AGENCY_ROLES = ["super_admin", "agency_user"];
+// `client_admin` (tenant admin) is included so per-tenant alerts —
+// e.g. a lead sheet that stopped importing because its columns drifted —
+// reach the tenant admin even when they aren't a Pulse agency_user. The
+// matching mapping endpoints (analyze-mapping / save-mapping) and the
+// mapping UI also admit client_admin so the "Re-analyze sheet" CTA is
+// actionable end-to-end. tenantScope() below still clamps non-agency
+// users to their own tenant's rows.
+const AGENCY_ROLES = ["super_admin", "agency_user", "client_admin"];
 
 function tenantScope(req: { session: { userRole?: string; tenantId?: number | null } }) {
   const role = req.session.userRole;

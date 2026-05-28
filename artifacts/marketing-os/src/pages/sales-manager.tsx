@@ -2369,10 +2369,12 @@ interface AnalysisResult {
   totalRows: number;
 }
 
-function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funnels }: {
+function ColumnMappingReview({ configId, config, canManage, onMappingSaved, funnels }: {
   configId: number;
   config: SheetConfig;
-  isAgency: boolean;
+  // Agency users always have access; tenant admins (client_admin) are
+  // also admitted so they can resolve the drift alert addressed to them.
+  canManage: boolean;
   onMappingSaved: () => void;
   funnels: FunnelType[];
 }) {
@@ -2575,7 +2577,7 @@ function ColumnMappingReview({ configId, config, isAgency, onMappingSaved, funne
     } catch {} finally { setSaving(false); }
   };
 
-  if (!isAgency) return null;
+  if (!canManage) return null;
 
   const hasExistingMapping = !!config.columnMapping;
   const mappingModified = hasExistingMapping && !analysis && JSON.stringify(mapping) !== JSON.stringify(savedMapping);
@@ -2883,8 +2885,9 @@ function useSheetConfigs(tenantId: number | null) {
   return { configs, loading, refetch: fetchConfigs };
 }
 
-function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void }) {
-  const { isAgency } = useAuth();
+function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void; deepLink?: { configId: number; reanalyze: boolean } | null }) {
+  const { isAgency, user } = useAuth();
+  const canManageMapping = isAgency || user?.role === "client_admin";
   const { configs, loading: configsLoading, refetch: refetchConfigs } = useSheetConfigs(tenantId);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
@@ -2985,6 +2988,27 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   };
 
   const handleRefetch = () => { refetchConfigs(); onRefetch(); };
+
+  // Honour a deep-link from a notification CTA: auto-expand the section,
+  // scroll the targeted sheet card into view, and (if reanalyze=1) fire
+  // the same Re-analyze flow the operator would trigger by hand. Runs
+  // once configs have loaded so the target card is actually in the DOM.
+  const deepLinkConfigId = deepLink?.configId ?? null;
+  const deepLinkReanalyze = deepLink?.reanalyze ?? false;
+  const deepLinkFiredRef = useRef(false);
+  useEffect(() => {
+    if (!deepLinkConfigId || configsLoading) return;
+    if (deepLinkFiredRef.current) return;
+    if (!configs.some(c => c.id === deepLinkConfigId)) return;
+    deepLinkFiredRef.current = true;
+    setSectionExpanded(true);
+    const settle = window.setTimeout(() => {
+      const card = document.getElementById(`sheet-config-${deepLinkConfigId}`);
+      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (deepLinkReanalyze) triggerAnalysis(deepLinkConfigId);
+    }, 100);
+    return () => window.clearTimeout(settle);
+  }, [deepLinkConfigId, deepLinkReanalyze, configs, configsLoading]);
 
   const startEdit = (cfg: SheetConfig) => {
     setEditingId(cfg.id);
@@ -3249,7 +3273,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
 
       <div className="space-y-2">
         {configs.map(cfg => (
-          <PremiumCard key={cfg.id} className="p-4">
+          <PremiumCard key={cfg.id} id={`sheet-config-${cfg.id}`} className="p-4">
             <div className="flex items-center justify-between">
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-white font-medium">{cfg.name}</p>
@@ -3589,7 +3613,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
             <ColumnMappingReview
               configId={cfg.id}
               config={cfg}
-              isAgency={!!isAgency}
+              canManage={canManageMapping}
               onMappingSaved={handleRefetch}
               funnels={funnels}
             />
@@ -4174,7 +4198,7 @@ function LeadSourceAliasSection({ tenantId }: { tenantId: number | null }) {
   );
 }
 
-function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void }) {
+function SettingsTab({ tenantId, funnels, onRefetchFunnels, deepLinkSheetConfig }: { tenantId: number | null; funnels: FunnelType[]; onRefetchFunnels: () => void; deepLinkSheetConfig?: { configId: number; reanalyze: boolean } | null }) {
   return (
     <div className="space-y-6">
       <SpiffConfigSection tenantId={tenantId} funnels={funnels} />
@@ -4188,7 +4212,7 @@ function SettingsTab({ tenantId, funnels, onRefetchFunnels }: { tenantId: number
       </div>
 
       <div className="border-t border-white/5 pt-6">
-        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} />
+        <GoogleSheetConfigSection tenantId={tenantId} funnels={funnels} onRefetch={onRefetchFunnels} deepLink={deepLinkSheetConfig ?? null} />
       </div>
 
       <div className="border-t border-white/5 pt-6">
@@ -4398,6 +4422,29 @@ export default function SalesManager() {
   const [includePreBooked, setIncludePreBooked] = useState(false);
   const { tenants, tenantsLoading } = useTenants();
 
+  // Deep-link from a notification CTA (e.g. "Re-analyze sheet" on a
+  // sheet_headers_drift alert) lands here with
+  // ?tenantId=<n>&sheetConfig=<id>&reanalyze=1 — switch to Settings, and
+  // if the link names a tenant the current user can see, select it so
+  // the Google Sheet Configurations section actually renders. The
+  // GoogleSheetConfigSection picks up the same params to auto-expand,
+  // scroll to, and re-analyze the affected sheet.
+  const [deepLinkSheetConfig, setDeepLinkSheetConfig] = useState<{ configId: number; reanalyze: boolean } | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("sheetConfig");
+    if (!raw) return;
+    const configId = parseInt(raw, 10);
+    if (Number.isNaN(configId)) return;
+    setDeepLinkSheetConfig({ configId, reanalyze: params.get("reanalyze") === "1" });
+    setTab("settings");
+    const rawTenant = params.get("tenantId");
+    if (rawTenant && isAgency) {
+      const tid = parseInt(rawTenant, 10);
+      if (!Number.isNaN(tid) && tid !== globalTenantId) setSelectedTenantId(tid);
+    }
+  }, [isAgency, globalTenantId, setSelectedTenantId]);
+
   // The Tenant <Select> on this page mirrors the global SCOPE chip in the
   // header. We deliberately don't auto-pick a tenant here — that was making
   // the chip "jump" on navigation. Operator must pick one explicitly.
@@ -4538,7 +4585,7 @@ export default function SalesManager() {
           <SpiffsAuditTab tenantId={effectiveTenantId} funnels={funnels} timezone={tenantTz} />
         )}
         {tab === "settings" && (
-          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} />
+          <SettingsTab tenantId={effectiveTenantId} funnels={funnels} onRefetchFunnels={refetchFunnels} deepLinkSheetConfig={deepLinkSheetConfig} />
         )}
       </div>
       </>

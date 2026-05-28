@@ -8,6 +8,8 @@ export async function createNotification(params: {
   title: string;
   message: string;
   integration?: string;
+  actionUrl?: string;
+  actionLabel?: string;
 }) {
   const [notification] = await db.insert(notificationsTable).values({
     tenantId: params.tenantId,
@@ -16,6 +18,8 @@ export async function createNotification(params: {
     title: params.title,
     message: params.message,
     integration: params.integration || null,
+    actionUrl: params.actionUrl || null,
+    actionLabel: params.actionLabel || null,
   }).returning();
   return notification;
 }
@@ -125,6 +129,62 @@ export async function emitSyncCatchupNotification(
   });
 
   console.log(`[Notifications] Created sync_catchup notification for ${integration} (tenant ${tenantId}, ${days}d, reason=${reason})`);
+}
+
+/**
+ * Operator-visible alert when the sheet-sync poller has been drift-skipping
+ * a connected Google Sheet for more than a few cycles — meaning new leads
+ * are NOT being imported because someone added/renamed a column upstream
+ * and the operator-approved mapping no longer fits the live headers.
+ *
+ * De-duplication: callers stamp `drift_notified_at` on the sheet config
+ * once we fire, and only re-call this if drift persists past a fresh
+ * grace window (i.e. the operator has not fixed it). A short
+ * per-(tenant, sheet) cooldown defends against re-emission inside the
+ * same drift episode.
+ */
+export async function emitSheetDriftNotification(params: {
+  tenantId: number;
+  sheetConfigId: number;
+  sheetName: string;
+  driftMinutes: number;
+}) {
+  const { tenantId, sheetConfigId, sheetName, driftMinutes } = params;
+  const cooldownMs = 60 * 60 * 1000;
+  const integrationKey = `google_sheets:${sheetConfigId}`;
+
+  const [recent] = await db.select({ id: notificationsTable.id })
+    .from(notificationsTable)
+    .where(
+      and(
+        eq(notificationsTable.tenantId, tenantId),
+        eq(notificationsTable.type, "sheet_headers_drift"),
+        eq(notificationsTable.integration, integrationKey),
+        sql`${notificationsTable.createdAt} > ${new Date(Date.now() - cooldownMs)}`,
+      ),
+    )
+    .limit(1);
+
+  if (recent) {
+    console.log(`[Notifications] Suppressed duplicate sheet_headers_drift notification for sheet ${sheetConfigId} (tenant ${tenantId}) — within cooldown`);
+    return false;
+  }
+
+  await createNotification({
+    tenantId,
+    type: "sheet_headers_drift",
+    severity: "critical",
+    title: `Lead sheet "${sheetName}" stopped importing — columns changed`,
+    message:
+      `Pulse has skipped ${driftMinutes} minute(s) of new leads from "${sheetName}" because its column headers no longer match the approved mapping. ` +
+      `Re-analyze the sheet to re-approve the mapping and resume imports.`,
+    integration: integrationKey,
+    actionUrl: `/sales-manager?tenantId=${tenantId}&sheetConfig=${sheetConfigId}&reanalyze=1#sheet-config-${sheetConfigId}`,
+    actionLabel: "Re-analyze sheet",
+  });
+
+  console.log(`[Notifications] Created sheet_headers_drift notification for sheet ${sheetConfigId} (tenant ${tenantId}, ${driftMinutes}m drifted)`);
+  return true;
 }
 
 export async function checkStaleHeartbeats() {

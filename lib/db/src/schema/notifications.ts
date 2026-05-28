@@ -9,6 +9,8 @@ export const notificationsTable = pgTable("notifications", {
   title: text("title").notNull(),
   message: text("message").notNull(),
   integration: text("integration"),
+  actionUrl: text("action_url"),
+  actionLabel: text("action_label"),
   isRead: boolean("is_read").notNull().default(false),
   isDismissed: boolean("is_dismissed").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
