@@ -9,7 +9,7 @@ import {
   callAttemptsTable,
   usersTable,
 } from "@workspace/db";
-import { eq, and, isNull, desc, sql } from "drizzle-orm";
+import { eq, and, isNull, desc, sql, inArray } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { assignLeadRoundRobin } from "../services/round-robin";
@@ -71,7 +71,42 @@ router.get(
       .orderBy(desc(unroutedSheetRowsTable.createdAt))
       .limit(500);
 
-    res.json(rows);
+    // Surface a "matches existing lead" hint for unresolved rows whose phone
+    // already belongs to a lead in this tenant. Mirrors the exact-string phone
+    // match used by routeRowToFunnel so the hint reflects what "Send →" would
+    // actually do (resubmit vs. create a new lead).
+    const phoneByRowId = new Map<number, string>();
+    const phones = new Set<string>();
+    for (const r of rows) {
+      if (r.resolvedAt) continue;
+      const data = (r.rowData || {}) as Record<string, string>;
+      const phone = (data.phone || "").trim();
+      if (!phone) continue;
+      phoneByRowId.set(r.id, phone);
+      phones.add(phone);
+    }
+
+    const matchByPhone = new Map<string, number>();
+    if (phones.size > 0) {
+      const matches = await db
+        .select({ id: leadsTable.id, phone: leadsTable.phone })
+        .from(leadsTable)
+        .where(and(
+          eq(leadsTable.tenantId, tenantId),
+          inArray(leadsTable.phone, Array.from(phones)),
+        ));
+      for (const m of matches) {
+        if (m.phone && !matchByPhone.has(m.phone)) matchByPhone.set(m.phone, m.id);
+      }
+    }
+
+    const enriched = rows.map(r => {
+      const phone = phoneByRowId.get(r.id);
+      const matchedLeadId = phone ? matchByPhone.get(phone) ?? null : null;
+      return { ...r, existingLeadIdByPhone: matchedLeadId };
+    });
+
+    res.json(enriched);
   },
 );
 

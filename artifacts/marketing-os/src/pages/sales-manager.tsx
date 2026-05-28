@@ -70,6 +70,7 @@ interface UnroutedSheetRow {
   resolvedByUserName?: string | null;
   resolvedLeadId: number | null;
   resolvedLeadFunnelId?: number | null;
+  existingLeadIdByPhone?: number | null;
 }
 
 interface UnroutedConfirmation {
@@ -3759,11 +3760,18 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                   <p className="text-xs text-white/30 py-2">No unrouted rows.</p>
                 ) : (
                   <>
-                    {isAgency && (
+                    {isAgency && (() => {
+                      const selectedMatches = selectedRows.filter(r => r.existingLeadIdByPhone);
+                      return (
                       <div className="mb-2 p-2 border border-amber-500/20 rounded bg-amber-500/5 flex flex-wrap items-center gap-2">
                         <span className="text-[10px] text-amber-300/80 uppercase tracking-wider">
                           {selectedUnroutedIds.size} selected
                         </span>
+                        {selectedMatches.length > 0 && (
+                          <span className="text-[10px] text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-1.5 py-0.5">
+                            ⚠ {selectedMatches.length} match{selectedMatches.length === 1 ? "es" : ""} existing lead{selectedMatches.length === 1 ? "" : "s"} — will resubmit, not create
+                          </span>
+                        )}
                         <div className="flex-1 min-w-[160px]">
                           <Select
                             value={bulkFunnelChoice ? String(bulkFunnelChoice) : "__none__"}
@@ -3810,7 +3818,8 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                           </span>
                         )}
                       </div>
-                    )}
+                      );
+                    })()}
                   <div className="overflow-x-auto max-h-60 border border-amber-500/20 rounded">
                     <table className="w-full text-[10px]">
                       <thead className="bg-amber-500/5">
@@ -3929,6 +3938,23 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                             <td className="py-1 px-2 text-right align-top">
                               {isAgency && !r.resolvedAt && (
                                 <div className="flex flex-col items-end gap-1 min-w-[180px]">
+                                  {r.existingLeadIdByPhone && (
+                                    <div className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1 max-w-[240px] text-right leading-tight">
+                                      <div className="font-medium">
+                                        ⚠ Matches existing lead{" "}
+                                        <button
+                                          type="button"
+                                          onClick={() => navigate(`/pulse?leadId=${r.existingLeadIdByPhone}`)}
+                                          className="underline hover:text-amber-200"
+                                        >
+                                          #{r.existingLeadIdByPhone}
+                                        </button>
+                                      </div>
+                                      <div className="text-amber-300/70">
+                                        Sending will resubmit, not create a new lead (undo disabled).
+                                      </div>
+                                    </div>
+                                  )}
                                   <Select
                                     value={unroutedFunnelChoice[r.id] ? String(unroutedFunnelChoice[r.id]) : "__none__"}
                                     onValueChange={v => {
