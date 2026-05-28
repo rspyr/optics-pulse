@@ -140,11 +140,20 @@ export default function Internal() {
     ? Object.values(syncStatus.backfillStatus).some((b) => b?.status === "running")
     : false;
   const anyBackfillBusy = Object.values(backfillBusy).some(Boolean);
+  // While a revenue recompute is in flight we want the same live polling the
+  // backfill flow uses. We poll when EITHER (a) we just kicked off the
+  // synchronous recompute POST from this session (`recomputeBusy`), OR (b)
+  // the ServiceTitan invoices/estimates sync types report a `running` status
+  // — the latter keeps progress visible if the panel is reopened mid-run.
+  const stSyncTypes = syncStatus?.statusByIntegration?.service_titan?.syncTypes;
+  const recomputeRunning =
+    stSyncTypes?.invoices?.lastStatus === "running" ||
+    stSyncTypes?.estimates?.lastStatus === "running";
   useEffect(() => {
-    if (!anyBackfillRunning && !anyBackfillBusy) return;
+    if (!anyBackfillRunning && !anyBackfillBusy && !recomputeBusy && !recomputeRunning) return;
     const id = setInterval(() => { fetchSyncStatus(); }, 3000);
     return () => clearInterval(id);
-  }, [anyBackfillRunning, anyBackfillBusy, fetchSyncStatus]);
+  }, [anyBackfillRunning, anyBackfillBusy, recomputeBusy, recomputeRunning, fetchSyncStatus]);
 
   const [cancellingLogIds, setCancellingLogIds] = useState<Record<number, boolean>>({});
   // Timestamp (ms) of when the operator first clicked Cancel for a given
@@ -1015,6 +1024,57 @@ export default function Internal() {
                           <p className="text-[11px] text-muted-foreground">
                             One-time historical fix: re-syncs all invoices &amp; estimates with the corrected rebate logic (adds back only true rebates, keeps discounts subtracted).
                           </p>
+                          {(recomputeBusy || recomputeRunning) && (() => {
+                            // Live progress for an in-flight recompute. The
+                            // endpoint runs invoices first, then estimates;
+                            // each phase's running sync log publishes its
+                            // row tally after every batch, so we read the
+                            // ServiceTitan invoices/estimates sync types and
+                            // render a per-phase line. A phase is "done"
+                            // once its lastStatus flips to completed.
+                            const inv = stSyncTypes?.invoices;
+                            const est = stSyncTypes?.estimates;
+                            const phaseRow = (
+                              name: string,
+                              phase: { lastStatus: string; recordsProcessed: number } | undefined,
+                            ) => {
+                              const status = phase?.lastStatus;
+                              const rows = phase?.recordsProcessed ?? 0;
+                              const isRunning = status === "running";
+                              const isDone = status === "completed";
+                              return (
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1.5 text-white/80">
+                                    {isRunning ? (
+                                      <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                                    ) : isDone ? (
+                                      <CheckCircle className="w-3 h-3 text-emerald-400" />
+                                    ) : (
+                                      <Clock className="w-3 h-3 text-white/40" />
+                                    )}
+                                    {name}
+                                  </span>
+                                  <span className="text-white/50">
+                                    {isRunning
+                                      ? `${rows.toLocaleString()} processed…`
+                                      : isDone
+                                        ? `${rows.toLocaleString()} done`
+                                        : "queued"}
+                                  </span>
+                                </div>
+                              );
+                            };
+                            return (
+                              <div className="mt-1 rounded border border-blue-400/20 bg-blue-500/[0.06] p-2 space-y-1.5 text-[11px]">
+                                <p className="flex items-center gap-1.5 font-medium text-blue-300">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  Recompute in progress
+                                </p>
+                                {phaseRow("Invoices", inv)}
+                                {phaseRow("Estimates", est)}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

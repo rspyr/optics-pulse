@@ -119,6 +119,19 @@ async function updateSyncLogChunkProgress(
 }
 
 /**
+ * Record in-flight row progress for a running sync log without any chunk
+ * metadata. Used by the full re-sync (revenue recompute) path so the
+ * Settings panel can poll `recordsProcessed` and show live progress while
+ * invoices / estimates are being reprocessed batch-by-batch. We don't touch
+ * the chunk columns here — those are reserved for windowed backfills.
+ */
+async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
+  await db.update(integrationSyncLogsTable)
+    .set({ recordsProcessed })
+    .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+/**
  * Record a partial-failure mid-run: a later chunk threw, but some rows
  * already landed. Writes the inner upstream message into `errorMessage`
  * (no `partial:` prefix anymore — `partial` is now a real boolean column)
@@ -2018,6 +2031,14 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
           .where(eq(jobsTable.id, existingJob.id));
         synced++;
       }
+
+      // During a full re-sync (revenue recompute) publish the running tally
+      // to the sync log after each batch so the Settings panel can poll and
+      // show live progress. Skipped on incremental syncs to avoid an extra
+      // write on every 15-min poll where the count barely moves.
+      if (options?.fullResync) {
+        await updateSyncLogRecords(syncLog.id, synced);
+      }
     }
 
     await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch);
@@ -2206,6 +2227,13 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
         }
 
         synced++;
+      }
+
+      // Publish the running tally during a full re-sync so the recompute
+      // progress poll reflects estimates being reprocessed live (see the
+      // invoices path above for the rationale).
+      if (options?.fullResync) {
+        await updateSyncLogRecords(syncLog.id, synced);
       }
     }
 
