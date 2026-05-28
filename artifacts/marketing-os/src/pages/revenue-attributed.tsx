@@ -447,6 +447,7 @@ function AgencyControls({
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [searchError, setSearchError] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const canEditSource = lead != null && isUnknownSource(lead.originalSource);
 
@@ -480,7 +481,7 @@ function AgencyControls({
         .finally(() => { if (!cancelled) setSearching(false); });
     }, 250);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [searchQuery, job.tenantId]);
+  }, [searchQuery, job.tenantId, retryNonce]);
 
   useEffect(() => {
     if (!editingSource) return;
@@ -596,7 +597,22 @@ function AgencyControls({
             <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-white/10 bg-[#0d1117] shadow-xl">
               {results.length === 0 ? (
                 <div className={`px-3 py-2.5 text-xs ${searchError && !searching ? "text-red-400/80" : "text-muted-foreground/60"}`}>
-                  {searching ? "Searching…" : searchError ? "Search failed. Please try again." : "No matching leads."}
+                  {searching ? (
+                    "Searching…"
+                  ) : searchError ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Search failed. Please try again.</span>
+                      <button
+                        type="button"
+                        onClick={() => setRetryNonce((n) => n + 1)}
+                        className="text-ice/80 hover:text-ice underline underline-offset-2 shrink-0"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
+                    "No matching leads."
+                  )}
                 </div>
               ) : (
                 results.map((r) => {

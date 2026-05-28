@@ -392,6 +392,92 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
     expect(screen.queryByText("Searching…")).not.toBeInTheDocument();
   });
 
+  it("re-issues the same query when Retry is clicked after a search failure", async () => {
+    setAgency(true);
+
+    // First search fails; the retry (same query) succeeds with a result.
+    let searchCall = 0;
+    vi.spyOn(global, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/drilldown/revenue-attributed")) {
+          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+        }
+        if (url.includes("/api/drilldown/leads/search")) {
+          searchCallUrls.push(url);
+          searchCall += 1;
+          if (searchCall === 1) {
+            return { ok: false, status: 500, json: async () => ({}) } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [makeSearchResult()],
+          } as Response;
+        }
+        return { ok: true, status: 200, json: async () => ({}) } as Response;
+      },
+    );
+
+    const user = await renderAndExpand();
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+    await user.type(box, "ro");
+
+    // The first attempt failed and surfaces the error with a Retry action.
+    await screen.findByText("Search failed. Please try again.");
+    const retry = screen.getByRole("button", { name: "Retry" });
+
+    // Clicking Retry re-issues the same query without retyping.
+    await user.click(retry);
+
+    // The retry succeeds and replaces the error with the result.
+    await screen.findByText("Road Runner");
+    expect(
+      screen.queryByText("Search failed. Please try again."),
+    ).not.toBeInTheDocument();
+
+    // Two search requests fired, both for the same query.
+    expect(searchCallUrls).toHaveLength(2);
+    expect(searchCallUrls[0]).toContain("q=ro");
+    expect(searchCallUrls[1]).toContain("q=ro");
+  });
+
+  it("shows the in-flight indicator during a retry", async () => {
+    setAgency(true);
+
+    // First search fails; the retry never settles so the spinner stays visible.
+    let searchCall = 0;
+    vi.spyOn(global, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/drilldown/revenue-attributed")) {
+          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+        }
+        if (url.includes("/api/drilldown/leads/search")) {
+          searchCall += 1;
+          if (searchCall === 1) {
+            return { ok: false, status: 500, json: async () => ({}) } as Response;
+          }
+          return await new Promise<Response>(() => {});
+        }
+        return { ok: true, status: 200, json: async () => ({}) } as Response;
+      },
+    );
+
+    const user = await renderAndExpand();
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+    await user.type(box, "ro");
+
+    await screen.findByText("Search failed. Please try again.");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    // While the retry is in flight the dropdown swaps the error for "Searching…".
+    expect(await screen.findByText("Searching…")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Search failed. Please try again."),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not render the search box for a client (read-only) user", async () => {
     setAgency(false);
     installFetch();
