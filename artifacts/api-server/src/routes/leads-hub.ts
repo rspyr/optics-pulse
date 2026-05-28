@@ -1217,12 +1217,7 @@ router.get("/leads-hub/phone-match", async (req, res) => {
     .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
-      sql`CASE
-            WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
-              AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
-            THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
-            ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
-          END = ${normalized}`,
+      eq(leadsTable.phone, normalized),
     ))
     .limit(1);
 
@@ -1258,12 +1253,7 @@ router.post("/leads-hub/create", async (req, res) => {
       .from(leadsTable)
       .where(and(
         eq(leadsTable.tenantId, tenantId),
-        sql`CASE
-              WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
-                AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
-              THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
-              ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
-            END = ${normalizedPhone}`,
+        eq(leadsTable.phone, normalizedPhone),
       ))
       .limit(1);
     if (dup) {
