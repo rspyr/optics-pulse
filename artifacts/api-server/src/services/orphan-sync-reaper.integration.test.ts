@@ -197,6 +197,40 @@ describe("reapOrphanedSyncLogs — real Postgres", () => {
     }
   });
 
+  it("stamps the caller-supplied reason into the orphan error message (periodic sweep path)", async () => {
+    // The periodic scheduler sweep reuses this same logic but passes a long
+    // threshold + a "periodic reaper sweep" reason so the recovered row's
+    // error message reflects how it was reaped (not "server restart"). Seed a
+    // fresh stale orphan and reap it with a custom reason.
+    const [orphan] = await db
+      .insert(integrationSyncLogsTable)
+      .values({
+        tenantId,
+        integration: "meta",
+        syncType: "backfill",
+        status: "running",
+        startedAt: minutesAgo(90),
+      })
+      .returning({ id: integrationSyncLogsTable.id });
+
+    const reaped = await reapOrphanedSyncLogs(60, "periodic reaper sweep");
+    expect(reaped).toBeGreaterThanOrEqual(1);
+
+    const [row] = await db
+      .select({
+        status: integrationSyncLogsTable.status,
+        errorMessage: integrationSyncLogsTable.errorMessage,
+      })
+      .from(integrationSyncLogsTable)
+      .where(eq(integrationSyncLogsTable.id, orphan.id));
+
+    expect(row.status).toBe("error");
+    expect(row.errorMessage ?? "").toMatch(/orphaned by periodic reaper sweep/i);
+    expect(row.errorMessage ?? "").not.toMatch(/server restart/i);
+
+    seeded.push({ id: orphan.id, label: "running-periodic-reaped", expectReaped: true });
+  });
+
   it("is idempotent — a second sweep does not re-touch already-terminal rows", async () => {
     // Snapshot the fresh-running rows; a second sweep should still not reap
     // them (they're inside the window) and must not disturb terminal rows.

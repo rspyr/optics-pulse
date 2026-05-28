@@ -2433,13 +2433,39 @@ export function startSyncScheduler() {
     console.log("[SyncScheduler] Podium review sync PAUSED — integration disabled");
   }, reviewSyncInterval);
 
+  // Periodic orphan-reaper sweep. The startup reaper (src/index.ts) only runs
+  // at boot, so a worker that dies silently while the process stays up (OOM on
+  // a single task, an unhandled rejection in a backfill loop) leaves its
+  // sync_log stuck at status='running' until the next restart. This sweep
+  // recovers those orphans while the server is still alive.
+  //
+  // The threshold is deliberately FAR more conservative than the 15-min
+  // startup reaper: at startup the previous process is definitely dead, but
+  // here the process is live and a legitimate backfill may still be churning.
+  // We only reap rows whose started_at is older than this long threshold so a
+  // genuinely in-flight backfill is never killed. Both interval and threshold
+  // are env-overridable.
+  const orphanReaperIntervalMs = Number(process.env.ORPHAN_REAPER_INTERVAL_MS || String(30 * 60 * 1000));
+  const orphanReaperStaleMinutes = Number(process.env.ORPHAN_REAPER_STALE_MINUTES || "360");
+  const orphanReaperTimer = setInterval(async () => {
+    try {
+      const { reapOrphanedSyncLogs } = await import("./orphan-sync-reaper");
+      const reaped = await reapOrphanedSyncLogs(orphanReaperStaleMinutes, "periodic reaper sweep");
+      if (reaped > 0) {
+        console.log(`[SyncScheduler] Periodic orphan reaper flipped ${reaped} stuck sync_log row(s) to error`);
+      }
+    } catch (err) {
+      console.error("[SyncScheduler] Periodic orphan reaper failed:", err);
+    }
+  }, orphanReaperIntervalMs);
+
   // CallRail intake is webhook-only (POST /api/webhooks/callrail/:tenantId).
   // The previous polling backstop was a permanent no-op timer; it has been
   // removed. If CallRail webhooks ever need a polling safety net,
   // re-enable syncCallRailCalls here on a real interval.
 
-  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer];
-  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail webhook-only`);
+  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer];
+  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail webhook-only, orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
 }
 
 export function stopSyncScheduler() {
