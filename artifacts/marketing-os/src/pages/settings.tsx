@@ -224,6 +224,7 @@ export default function Settings() {
   }, [isAgency, selectedTenantId, tenants, setSelectedTenantId]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
   const [commConfig, setCommConfig] = useState({
     callPlatform: "native" as string,
@@ -232,6 +233,7 @@ export default function Settings() {
   const [commStatus, setCommStatus] = useState<{ callReady: boolean; textReady: boolean; callStatusMessage: string; textStatusMessage: string } | null>(null);
   const [commSaving, setCommSaving] = useState(false);
   const [commSaved, setCommSaved] = useState(false);
+  const [commError, setCommError] = useState<string | null>(null);
   const [commInitial, setCommInitial] = useState({ callPlatform: "native", textPlatform: "native" });
   const commDirty = commConfig.callPlatform !== commInitial.callPlatform || commConfig.textPlatform !== commInitial.textPlatform;
   const [form, setForm] = useState({
@@ -299,6 +301,7 @@ export default function Settings() {
   }, [tenantId, isClientUser]);
 
   function trackField(field: string) {
+    setSaveError(null);
     setDirtyFields(prev => new Set(prev).add(field));
   }
 
@@ -310,6 +313,7 @@ export default function Settings() {
       return;
     }
     setSaving(true);
+    setSaveError(null);
     try {
       const integrationConfig: Record<string, string | null> = {};
       const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "callRailApiKey", "callRailCompanyId", "callRailTrackingNumber", "podiumApiToken", "podiumLocationId"] as const;
@@ -333,8 +337,25 @@ export default function Settings() {
         setSaved(true);
         setDirtyFields(new Set());
         setTimeout(() => setSaved(false), 2000);
+      } else {
+        let message = "Couldn't save configuration. Please try again.";
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string" && data.error.trim()) {
+            message = data.error;
+          } else if (res.status === 403) {
+            message = "You don't have permission to modify these settings.";
+          }
+        } catch {
+          if (res.status === 403) {
+            message = "You don't have permission to modify these settings.";
+          }
+        }
+        setSaveError(message);
       }
-    } catch {}
+    } catch {
+      setSaveError("Couldn't reach the server. Check your connection and try again.");
+    }
     setSaving(false);
   }
 
@@ -400,6 +421,7 @@ export default function Settings() {
   async function handleCommSave() {
     if (!tenantId) return;
     setCommSaving(true);
+    setCommError(null);
     try {
       const res = await fetch(`${API}/api/tenants/${tenantId}`, {
         method: "PATCH",
@@ -416,8 +438,25 @@ export default function Settings() {
           const data = await statusRes.json();
           setCommStatus({ callReady: data.callReady, textReady: data.textReady, callStatusMessage: data.callStatusMessage, textStatusMessage: data.textStatusMessage });
         }
+      } else {
+        let message = "Couldn't save platform settings. Please try again.";
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string" && data.error.trim()) {
+            message = data.error;
+          } else if (res.status === 403) {
+            message = "You don't have permission to modify these settings.";
+          }
+        } catch {
+          if (res.status === 403) {
+            message = "You don't have permission to modify these settings.";
+          }
+        }
+        setCommError(message);
       }
-    } catch {}
+    } catch {
+      setCommError("Couldn't reach the server. Check your connection and try again.");
+    }
     setCommSaving(false);
   }
 
@@ -891,6 +930,12 @@ export default function Settings() {
               <p className="text-xs text-red-400">Must be a valid UUID format</p>
             )}
           </div>
+          {saveError && (
+            <div className="flex items-start gap-2 mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2" role="alert">
+              <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
           <button
             onClick={handleSave}
             disabled={saving || (dirtyFields.size === 0 && !saved)}
@@ -930,7 +975,7 @@ export default function Settings() {
               ].map(opt => (
                 <button
                   key={opt.value}
-                  onClick={() => setCommConfig(c => ({ ...c, callPlatform: opt.value }))}
+                  onClick={() => { setCommError(null); setCommConfig(c => ({ ...c, callPlatform: opt.value })); }}
                   className={cn(
                     "w-full text-left px-4 py-3 rounded-lg border transition-all",
                     commConfig.callPlatform === opt.value
@@ -968,7 +1013,7 @@ export default function Settings() {
               ].map(opt => (
                 <button
                   key={opt.value}
-                  onClick={() => setCommConfig(c => ({ ...c, textPlatform: opt.value }))}
+                  onClick={() => { setCommError(null); setCommConfig(c => ({ ...c, textPlatform: opt.value })); }}
                   className={cn(
                     "w-full text-left px-4 py-3 rounded-lg border transition-all",
                     commConfig.textPlatform === opt.value
@@ -993,6 +1038,12 @@ export default function Settings() {
           </div>
         </div>
 
+        {commError && (
+          <div className="flex items-start gap-2 mt-6 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2" role="alert">
+            <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{commError}</span>
+          </div>
+        )}
         <button
           onClick={handleCommSave}
           disabled={commSaving || (!commDirty && !commSaved)}
