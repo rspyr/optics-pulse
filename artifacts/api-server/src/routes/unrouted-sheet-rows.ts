@@ -7,6 +7,7 @@ import {
   tenantFunnelTypesTable,
   leadsTable,
   callAttemptsTable,
+  usersTable,
 } from "@workspace/db";
 import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
@@ -47,8 +48,25 @@ router.get(
     if (sheetConfigIdParam) conditions.push(eq(unroutedSheetRowsTable.sheetConfigId, sheetConfigIdParam));
 
     const rows = await db
-      .select()
+      .select({
+        id: unroutedSheetRowsTable.id,
+        tenantId: unroutedSheetRowsTable.tenantId,
+        sheetConfigId: unroutedSheetRowsTable.sheetConfigId,
+        funnelColumn: unroutedSheetRowsTable.funnelColumn,
+        unmatchedValue: unroutedSheetRowsTable.unmatchedValue,
+        rowData: unroutedSheetRowsTable.rowData,
+        reason: unroutedSheetRowsTable.reason,
+        source: unroutedSheetRowsTable.source,
+        createdAt: unroutedSheetRowsTable.createdAt,
+        resolvedAt: unroutedSheetRowsTable.resolvedAt,
+        resolvedByUserId: unroutedSheetRowsTable.resolvedByUserId,
+        resolvedLeadId: unroutedSheetRowsTable.resolvedLeadId,
+        resolvedByUserName: usersTable.name,
+        resolvedLeadFunnelId: leadsTable.funnelId,
+      })
       .from(unroutedSheetRowsTable)
+      .leftJoin(usersTable, eq(usersTable.id, unroutedSheetRowsTable.resolvedByUserId))
+      .leftJoin(leadsTable, eq(leadsTable.id, unroutedSheetRowsTable.resolvedLeadId))
       .where(and(...conditions))
       .orderBy(desc(unroutedSheetRowsTable.createdAt))
       .limit(500);

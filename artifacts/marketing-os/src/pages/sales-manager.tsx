@@ -66,7 +66,10 @@ interface UnroutedSheetRow {
   source: string;
   createdAt: string;
   resolvedAt: string | null;
+  resolvedByUserId?: number | null;
+  resolvedByUserName?: string | null;
   resolvedLeadId: number | null;
+  resolvedLeadFunnelId?: number | null;
 }
 
 interface UnroutedConfirmation {
@@ -2940,6 +2943,37 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
   } | null>(null);
   const [unroutedConfirmations, setUnroutedConfirmations] = useState<Record<number, UnroutedConfirmation>>({});
   const [unroutedIncludeResolved, setUnroutedIncludeResolved] = useState<Record<number, boolean>>({});
+  const [recentReroutes, setRecentReroutes] = useState<UnroutedSheetRow[] | null>(null);
+  const [recentReroutesLoading, setRecentReroutesLoading] = useState(false);
+  const [recentReroutesExpanded, setRecentReroutesExpanded] = useState(true);
+
+  const RECENT_REROUTES_LIMIT = 10;
+
+  const loadRecentReroutes = useCallback(async (configId: number) => {
+    if (!tenantId) return;
+    setRecentReroutesLoading(true);
+    try {
+      const params = new URLSearchParams({ sheetConfigId: String(configId), includeResolved: "true" });
+      const res = await fetch(
+        `${API_BASE}/tenants/${tenantId}/unrouted-sheet-rows?${params}`,
+        { credentials: "include" },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const reroutes = (data as UnroutedSheetRow[])
+            .filter(r => r.resolvedAt && r.resolvedLeadId)
+            .sort((a, b) => {
+              const at = a.resolvedAt ? new Date(a.resolvedAt).getTime() : 0;
+              const bt = b.resolvedAt ? new Date(b.resolvedAt).getTime() : 0;
+              return bt - at;
+            })
+            .slice(0, RECENT_REROUTES_LIMIT);
+          setRecentReroutes(reroutes);
+        }
+      }
+    } catch {} finally { setRecentReroutesLoading(false); }
+  }, [tenantId]);
 
   const loadUnroutedRows = useCallback(async (configId: number, includeResolved = false) => {
     if (!tenantId) return;
@@ -2971,6 +3005,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
     if (unroutedOpenId === configId) {
       setUnroutedOpenId(null);
       setUnroutedRows(null);
+      setRecentReroutes(null);
       setSelectedUnroutedIds(new Set());
       setBulkResult(null);
       setBulkError(null);
@@ -2982,6 +3017,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
       setBulkFunnelChoice("");
       setBulkAddToMap(false);
       loadUnroutedRows(configId, !!unroutedIncludeResolved[configId]);
+      loadRecentReroutes(configId);
     }
   };
 
@@ -3051,6 +3087,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
       setBulkResult({ total: data.total, succeeded: data.succeeded, failed: data.failed, perRow });
       setSelectedUnroutedIds(new Set());
       await loadUnroutedRows(configId);
+      loadRecentReroutes(configId);
       handleRefetch();
     } catch {
       setBulkError("Connection error");
@@ -3111,6 +3148,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
               ? { ...row, resolvedAt: new Date().toISOString(), resolvedLeadId }
               : row)
           : prev);
+        loadRecentReroutes(configId);
         handleRefetch();
       } else {
         const data = await res.json().catch(() => ({ error: "Failed to send to funnel" }));
@@ -3594,6 +3632,86 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                 <p className="text-[10px] text-white/40 mb-2">
                   These rows arrived without a value matching the funnel routing map and have no default funnel configured, so they were NOT imported as leads. Map the unmatched value (Settings → Funnel Routing) or set a default funnel, then re-import; dismiss rows you've handled.
                 </p>
+
+                <div className="mb-3 rounded border border-emerald-500/15 bg-emerald-500/[0.03]">
+                  <button
+                    type="button"
+                    onClick={() => setRecentReroutesExpanded(v => !v)}
+                    className="w-full flex items-center justify-between px-2 py-1.5 hover:bg-emerald-500/[0.05] transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {recentReroutesExpanded
+                        ? <ChevronUp className="w-3 h-3 text-emerald-300/60" />
+                        : <ChevronDown className="w-3 h-3 text-emerald-300/60" />}
+                      <span className="text-[10px] text-emerald-300/80 uppercase tracking-wider">
+                        Recent re-routes
+                      </span>
+                      <span className="text-[10px] text-emerald-300/50">
+                        {recentReroutesLoading
+                          ? "loading…"
+                          : `last ${recentReroutes?.length ?? 0}`}
+                      </span>
+                    </div>
+                  </button>
+                  {recentReroutesExpanded && (
+                    <div className="px-2 pb-2">
+                      {recentReroutesLoading && !recentReroutes ? (
+                        <div className="flex items-center gap-2 py-2 text-[10px] text-white/40">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+                        </div>
+                      ) : !recentReroutes || recentReroutes.length === 0 ? (
+                        <p className="text-[10px] text-white/30 py-1">
+                          No re-routes yet for this sheet.
+                        </p>
+                      ) : (
+                        <ul className="divide-y divide-emerald-500/10">
+                          {recentReroutes.map(r => {
+                            const funnelName = r.resolvedLeadFunnelId
+                              ? funnels.find(f => f.id === r.resolvedLeadFunnelId)?.name
+                              : null;
+                            const data = r.rowData || {};
+                            const who = [data.firstName, data.lastName]
+                              .filter(Boolean).join(" ").trim();
+                            return (
+                              <li key={r.id} className="py-1.5 flex items-center gap-2 flex-wrap text-[10px]">
+                                <span className="text-white/40 whitespace-nowrap">
+                                  {r.resolvedAt ? new Date(r.resolvedAt).toLocaleString() : ""}
+                                </span>
+                                <span className="text-white/30">·</span>
+                                <span className="text-white/70">
+                                  by {r.resolvedByUserName || (r.resolvedByUserId ? `user #${r.resolvedByUserId}` : "system")}
+                                </span>
+                                {r.unmatchedValue && (
+                                  <>
+                                    <span className="text-white/30">·</span>
+                                    <span className="font-mono text-amber-300/80">
+                                      {r.unmatchedValue}
+                                    </span>
+                                  </>
+                                )}
+                                <span className="text-white/30">→</span>
+                                <span className="text-violet-300/90 bg-violet-500/10 px-1.5 py-0.5 rounded">
+                                  {funnelName || "Funnel"}
+                                </span>
+                                <span className="text-white/30">·</span>
+                                {r.resolvedLeadId ? (
+                                  <button
+                                    onClick={() => navigate(`/pulse?leadId=${r.resolvedLeadId}`)}
+                                    className="text-emerald-300 hover:text-emerald-200 underline"
+                                  >
+                                    {who || "Lead"} #{r.resolvedLeadId}
+                                  </button>
+                                ) : (
+                                  <span className="text-white/40">dismissed</span>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {unroutedLoading ? (
                   <div className="flex items-center gap-2 py-3 text-[10px] text-white/40">
                     <Loader2 className="w-3 h-3 animate-spin" /> Loading unrouted rows…
