@@ -274,6 +274,58 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
     );
   });
 
+  it("renders the 'No matching leads.' empty state when the search returns no results", async () => {
+    setAgency(true);
+    installFetch({ searchResults: [] });
+    const user = await renderAndExpand();
+
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+    await user.type(box, "zz");
+
+    // The dropdown opens once the (empty) search resolves and shows the
+    // empty-state copy rather than a stale list or a hidden dropdown.
+    expect(await screen.findByText("No matching leads.")).toBeInTheDocument();
+    // The empty array still counts as a completed search request.
+    expect(searchCallUrls).toHaveLength(1);
+  });
+
+  it("shows the transient 'Searching…' indicator while a 2+ character request is in flight", async () => {
+    setAgency(true);
+
+    // First search resolves empty (which opens the dropdown); the second
+    // search is left pending so the in-flight state stays observable.
+    let searchCall = 0;
+    vi.spyOn(global, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/drilldown/revenue-attributed")) {
+          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+        }
+        if (url.includes("/api/drilldown/leads/search")) {
+          searchCall += 1;
+          if (searchCall === 1) {
+            return { ok: true, status: 200, json: async () => [] } as Response;
+          }
+          // Second request never settles, keeping the UI in the searching state.
+          return await new Promise<Response>(() => {});
+        }
+        return { ok: true, status: 200, json: async () => ({}) } as Response;
+      },
+    );
+
+    const user = await renderAndExpand();
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+    await user.type(box, "zz");
+
+    // First request resolved empty -> dropdown is open with the empty state.
+    await screen.findByText("No matching leads.");
+
+    // Typing another character fires a fresh request; while it is in flight the
+    // dropdown swaps the empty copy for the "Searching…" indicator.
+    await user.type(box, "z");
+    expect(await screen.findByText("Searching…")).toBeInTheDocument();
+  });
+
   it("does not render the search box for a client (read-only) user", async () => {
     setAgency(false);
     installFetch();
