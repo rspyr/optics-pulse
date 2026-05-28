@@ -109,6 +109,7 @@ export default function Internal() {
   const syncTenantId = globalTenantId;
   const [backfillDays, setBackfillDays] = useState<Record<string, string>>({});
   const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
+  const [recomputeBusy, setRecomputeBusy] = useState(false);
 
   const BACKFILL_INTEGRATIONS: Record<string, { label: string; max: number; default: string }> = {
     meta: { label: "Meta", max: 1095, default: "365" },
@@ -296,6 +297,55 @@ export default function Internal() {
     // Kick the first poll right away so the just-created 'running' row
     // shows up without waiting a full poll interval.
     setTimeout(() => { fetchSyncStatus(); }, 500);
+  };
+
+  // One-time historical backfill of the corrected rebate logic. Runs a full
+  // re-sync (ignoring the incremental watermark) so older invoice/estimate
+  // rows that added back ALL negative line items are rewritten to add back
+  // only true rebate line items. Synchronous + potentially long-running, so
+  // we surface progress via toasts and refresh the status panel afterward.
+  const recomputeRevenue = () => {
+    if (!syncTenantId) {
+      toast({ title: "Pick a tenant first", description: "Revenue recompute runs against a single tenant — choose one from the selector above.", variant: "destructive" });
+      return;
+    }
+    if (!confirm("Recompute ServiceTitan revenue for this tenant? This runs a full re-sync of all invoices and estimates with the corrected rebate logic and may take several minutes.")) return;
+    setRecomputeBusy(true);
+    toast({
+      title: "Revenue recompute started",
+      description: "Re-syncing all ServiceTitan invoices and estimates with the corrected rebate logic. This may take a few minutes.",
+    });
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/integrations/service_titan/recompute-revenue?tenantId=${syncTenantId}`, {
+          method: "POST",
+          credentials: "include",
+        });
+        let body: { success?: boolean; invoices?: { synced?: number; error?: string }; estimates?: { synced?: number; error?: string }; error?: string } = {};
+        try { body = await res.json(); } catch { /* non-JSON */ }
+        if (!res.ok || body.success === false) {
+          toast({
+            title: "Revenue recompute failed",
+            description: body.invoices?.error || body.estimates?.error || body.error || `HTTP ${res.status}`,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Revenue recompute complete",
+            description: `Recomputed ${body.invoices?.synced ?? 0} invoices and ${body.estimates?.synced ?? 0} estimates.`,
+          });
+        }
+      } catch (err) {
+        toast({
+          title: "Revenue recompute failed",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setRecomputeBusy(false);
+        fetchSyncStatus();
+      }
+    })();
   };
 
   const triggerSync = async (integration: string) => {
@@ -946,6 +996,25 @@ export default function Internal() {
                               : <RefreshCw className="w-3 h-3" />}
                             Run backfill
                           </button>
+                        </div>
+                      )}
+                      {integ === "service_titan" && (
+                        <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-white/80">Revenue recompute</span>
+                            <button
+                              onClick={recomputeRevenue}
+                              disabled={recomputeBusy || !syncTenantId || bf?.status === "running"}
+                              className="text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
+                              title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
+                            >
+                              {recomputeBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                              Recompute revenue
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            One-time historical fix: re-syncs all invoices &amp; estimates with the corrected rebate logic (adds back only true rebates, keeps discounts subtracted).
+                          </p>
                         </div>
                       )}
                     </div>
