@@ -15,6 +15,7 @@ export const unroutedSheetRowsTable = pgTable("unrouted_sheet_rows", {
   resolvedAt: timestamp("resolved_at"),
   resolvedByUserId: integer("resolved_by_user_id"),
   resolvedLeadId: integer("resolved_lead_id"),
+  resolvedVia: text("resolved_via").$type<"new_lead" | "resubmission" | null>(),
 }, (table) => ({
   byConfigUnresolved: index("unrouted_sheet_rows_config_unresolved_idx").on(table.sheetConfigId, table.resolvedAt),
   byTenant: index("unrouted_sheet_rows_tenant_idx").on(table.tenantId),

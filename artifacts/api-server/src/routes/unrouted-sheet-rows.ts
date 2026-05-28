@@ -13,7 +13,7 @@ import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { assignLeadRoundRobin } from "../services/round-robin";
-import { scheduleAutoPass } from "../services/auto-pass-scheduler";
+import { scheduleAutoPass, cancelAutoPass } from "../services/auto-pass-scheduler";
 import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
@@ -244,7 +244,7 @@ async function routeRowToFunnel(
       const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
       await db
         .update(unroutedSheetRowsTable)
-        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: dup.id })
+        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: dup.id, resolvedVia: "resubmission" })
         .where(eq(unroutedSheetRowsTable.id, rowId));
       return { ok: true, rowId, leadId: dup.id, resubmitted: true, valueMapUpdated };
     }
@@ -347,6 +347,7 @@ async function routeRowToFunnel(
       resolvedAt: new Date(),
       resolvedByUserId: userId ?? null,
       resolvedLeadId: lead?.id ?? null,
+      resolvedVia: lead?.id ? "new_lead" : null,
     })
     .where(eq(unroutedSheetRowsTable.id, rowId));
 
@@ -514,6 +515,73 @@ router.post(
           : { rowId: r.rowId, ok: false, error: r.error }
       ),
     });
+  },
+);
+
+const UNDO_WINDOW_MS = 60 * 1000;
+
+router.post(
+  "/unrouted-sheet-rows/:id/undo-route",
+  requireRole("super_admin", "agency_user"),
+  async (req, res): Promise<void> => {
+    const id = parseInt(String(req.params.id));
+    if (Number.isNaN(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+
+    const [row] = await db
+      .select()
+      .from(unroutedSheetRowsTable)
+      .where(eq(unroutedSheetRowsTable.id, id));
+
+    if (!row) {
+      res.status(404).json({ error: "Unrouted row not found" });
+      return;
+    }
+
+    const access = assertResourceTenantAccess(req, res, row.tenantId, {
+      notFoundOnMismatch: true, notFoundMessage: "Unrouted row not found",
+    });
+    if (!access.ok) return;
+
+    if (!row.resolvedAt || !row.resolvedLeadId) {
+      res.status(409).json({ error: "Row is not in an undoable state" });
+      return;
+    }
+
+    // Source of truth for undo eligibility: only "new_lead" resolutions
+    // created the lead in this routing event. "resubmission" rows point at
+    // pre-existing leads whose history must not be destroyed.
+    if (row.resolvedVia !== "new_lead") {
+      res.status(409).json({ error: "Cannot undo a resubmission to an existing lead" });
+      return;
+    }
+
+    const resolvedAtMs = new Date(row.resolvedAt).getTime();
+    if (Date.now() - resolvedAtMs > UNDO_WINDOW_MS) {
+      res.status(409).json({ error: "Undo window has expired" });
+      return;
+    }
+
+    const leadId = row.resolvedLeadId;
+    cancelAutoPass(leadId);
+
+    const result = await db.transaction(async (tx) => {
+      await tx.delete(callAttemptsTable).where(eq(callAttemptsTable.leadId, leadId));
+      const deletedLeads = await tx
+        .delete(leadsTable)
+        .where(eq(leadsTable.id, leadId))
+        .returning({ id: leadsTable.id });
+      const [reopened] = await tx
+        .update(unroutedSheetRowsTable)
+        .set({ resolvedAt: null, resolvedByUserId: null, resolvedLeadId: null, resolvedVia: null })
+        .where(eq(unroutedSheetRowsTable.id, id))
+        .returning();
+      return { reopened, deletedLeadId: deletedLeads[0]?.id ?? null };
+    });
+
+    res.json({ unroutedRow: result.reopened, deletedLeadId: result.deletedLeadId });
   },
 );
 

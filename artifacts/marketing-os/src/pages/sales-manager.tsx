@@ -78,7 +78,10 @@ interface UnroutedConfirmation {
   name: string;
   assignedTo: string | null;
   resubmitted: boolean;
+  routedAt: number;
 }
+
+const UNDO_WINDOW_MS = 30 * 1000;
 
 interface StatsData {
   totalLeads: number;
@@ -2942,6 +2945,17 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
     perRow: Record<number, { ok: boolean; error?: string; leadId?: number | null }>;
   } | null>(null);
   const [unroutedConfirmations, setUnroutedConfirmations] = useState<Record<number, UnroutedConfirmation>>({});
+  const [undoingRowId, setUndoingRowId] = useState<number | null>(null);
+  const [undoError, setUndoError] = useState<{ rowId: number; msg: string } | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const hasActive = Object.values(unroutedConfirmations).some(
+      c => !c.resubmitted && Date.now() - c.routedAt < UNDO_WINDOW_MS,
+    );
+    if (!hasActive) return;
+    const t = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [unroutedConfirmations]);
   const [unroutedIncludeResolved, setUnroutedIncludeResolved] = useState<Record<number, boolean>>({});
   const [recentReroutes, setRecentReroutes] = useState<UnroutedSheetRow[] | null>(null);
   const [recentReroutesLoading, setRecentReroutesLoading] = useState(false);
@@ -3094,6 +3108,30 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
     } finally { setBulkRouting(false); }
   };
 
+  const handleUndoRoute = async (rowId: number, configId: number) => {
+    setUndoingRowId(rowId);
+    setUndoError(null);
+    try {
+      const res = await fetch(`${API_BASE}/unrouted-sheet-rows/${rowId}/undo-route`, {
+        method: "POST", credentials: "include",
+      });
+      if (res.ok) {
+        setUnroutedConfirmations(prev => {
+          const next = { ...prev };
+          delete next[rowId];
+          return next;
+        });
+        await loadUnroutedRows(configId, !!unroutedIncludeResolved[configId]);
+        handleRefetch();
+      } else {
+        const data = await res.json().catch(() => ({ error: "Undo failed" }));
+        setUndoError({ rowId, msg: data.error || "Undo failed" });
+      }
+    } catch {
+      setUndoError({ rowId, msg: "Connection error" });
+    } finally { setUndoingRowId(null); }
+  };
+
   const handleResolveUnrouted = async (rowId: number, configId: number) => {
     setResolvingUnroutedId(rowId);
     try {
@@ -3136,6 +3174,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
               name: data.lead.name || "Lead",
               assignedTo: data.lead.assignedTo ?? null,
               resubmitted: !!data.resubmitted,
+              routedAt: Date.now(),
             },
           }));
         }
@@ -3851,20 +3890,41 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                                   </button>
                                 </div>
                               )}
-                              {confirmation && (
-                                <div className="mt-1 text-[10px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-1">
-                                  {confirmation.resubmitted ? "Re-submitted to existing lead" : "Created lead"}{" "}
-                                  <button
-                                    onClick={() => navigate(`/pulse?leadId=${confirmation.leadId}`)}
-                                    className="underline hover:text-emerald-200 font-medium"
-                                  >
-                                    {confirmation.name} (#{confirmation.leadId})
-                                  </button>
-                                  {confirmation.assignedTo && (
-                                    <span className="text-emerald-300/70"> · assigned to {confirmation.assignedTo}</span>
-                                  )}
-                                </div>
-                              )}
+                              {confirmation && (() => {
+                                const undoMsLeft = confirmation.resubmitted
+                                  ? 0
+                                  : Math.max(0, UNDO_WINDOW_MS - (nowTick - confirmation.routedAt));
+                                const canUndo = !confirmation.resubmitted && undoMsLeft > 0;
+                                return (
+                                  <div className="mt-1 text-[10px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-1">
+                                    {confirmation.resubmitted ? "Re-submitted to existing lead" : "Created lead"}{" "}
+                                    <button
+                                      onClick={() => navigate(`/pulse?leadId=${confirmation.leadId}`)}
+                                      className="underline hover:text-emerald-200 font-medium"
+                                    >
+                                      {confirmation.name} (#{confirmation.leadId})
+                                    </button>
+                                    {confirmation.assignedTo && (
+                                      <span className="text-emerald-300/70"> · assigned to {confirmation.assignedTo}</span>
+                                    )}
+                                    {canUndo && (
+                                      <>
+                                        <span className="text-emerald-300/40"> · </span>
+                                        <button
+                                          onClick={() => handleUndoRoute(r.id, cfg.id)}
+                                          disabled={undoingRowId === r.id}
+                                          className="underline text-amber-300 hover:text-amber-200 disabled:opacity-40"
+                                        >
+                                          {undoingRowId === r.id ? "Undoing…" : `Undo (${Math.ceil(undoMsLeft / 1000)}s)`}
+                                        </button>
+                                      </>
+                                    )}
+                                    {undoError?.rowId === r.id && (
+                                      <div className="mt-0.5 text-red-400">{undoError.msg}</div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="py-1 px-2 text-right align-top">
                               {isAgency && !r.resolvedAt && (
