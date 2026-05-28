@@ -252,21 +252,23 @@ export default function Internal() {
   // phase (invoices or estimates) currently running. Reuses the same
   // cooperative cancel route as backfills; the running phase stops after the
   // current batch and rows already processed are kept.
-  const cancelRecompute = async (logId: number) => {
+  const cancelRecompute = async (logId: number, force = false) => {
     if (!logId) return;
-    if (!confirm("Cancel the running revenue recompute? Rows already reprocessed will be kept.")) return;
+    const prompt = force
+      ? `Force-cancel the revenue recompute? This hard-flips the run to "cancelled" — use only if the worker is unresponsive.`
+      : "Cancel the running revenue recompute? Rows already reprocessed will be kept.";
+    if (!confirm(prompt)) return;
     setCancellingLogIds((s) => ({ ...s, [logId]: true }));
+    if (!force) setCancelStartedAt((s) => (s[logId] ? s : { ...s, [logId]: Date.now() }));
     try {
-      const res = await fetch(`${API_BASE}/api/integrations/sync-logs/${logId}/cancel`, {
-        method: "POST",
-        credentials: "include",
-      });
+      const url = `${API_BASE}/api/integrations/sync-logs/${logId}/cancel${force ? "?force=true" : ""}`;
+      const res = await fetch(url, { method: "POST", credentials: "include" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
       } else {
         toast({
-          title: "Cancel requested",
+          title: body?.forced ? "Run hard-cancelled" : "Cancel requested",
           description: body?.message || "The recompute will stop after the current batch finishes.",
         });
       }
@@ -1137,9 +1139,28 @@ export default function Internal() {
                                     Recompute in progress
                                   </p>
                                   {runningLogId && (
-                                    isCancelling ? (
-                                      <span className="text-amber-400">Cancelling…</span>
-                                    ) : (
+                                    isCancelling ? (() => {
+                                      const startedAt = cancelStartedAt[runningLogId];
+                                      const elapsedMs = startedAt ? Date.now() - startedAt : Number.MAX_SAFE_INTEGER;
+                                      const showForce = !startedAt || elapsedMs > FORCE_CANCEL_DELAY_MS;
+                                      const secondsLeft = startedAt ? Math.max(0, Math.ceil((FORCE_CANCEL_DELAY_MS - elapsedMs) / 1000)) : 0;
+                                      return (
+                                        <span className="flex items-center gap-1.5">
+                                          <span className="text-amber-400">Cancelling…</span>
+                                          {showForce ? (
+                                            <button
+                                              onClick={() => cancelRecompute(runningLogId, true)}
+                                              title="Worker may be stuck — hard-flip the run to cancelled"
+                                              className="text-[10px] px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors"
+                                            >
+                                              Force cancel
+                                            </button>
+                                          ) : (
+                                            <span className="text-[10px] text-white/40">(force in {secondsLeft}s)</span>
+                                          )}
+                                        </span>
+                                      );
+                                    })() : (
                                       <button
                                         onClick={() => cancelRecompute(runningLogId)}
                                         className="text-[11px] py-0.5 px-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-400/30 rounded text-red-300 transition-colors"
