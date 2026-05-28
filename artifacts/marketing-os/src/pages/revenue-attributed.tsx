@@ -61,8 +61,20 @@ type LeadSummary = {
   hubStatus: string | null;
 };
 
+type LeadSearchResult = {
+  id: number;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  source: string | null;
+  status: string | null;
+  createdAt: string;
+};
+
 type RevenueJob = {
   id: number;
+  tenantId: number;
   stJobId: string | null;
   stInvoiceId: string | null;
   customerName: string | null;
@@ -398,10 +410,38 @@ function AgencyControls({
   const [newSource, setNewSource] = useState("");
   const [savingSource, setSavingSource] = useState(false);
 
-  const [matchLeadId, setMatchLeadId] = useState("");
   const [matching, setMatching] = useState(false);
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [results, setResults] = useState<LeadSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+
   const canEditSource = lead != null && isUnknownSource(lead.originalSource);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      const params = new URLSearchParams({ q, tenantId: String(job.tenantId) });
+      fetch(`${API_BASE}/api/drilldown/leads/search?${params.toString()}`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((data: LeadSearchResult[]) => {
+          if (cancelled) return;
+          setResults(data);
+          setShowResults(true);
+        })
+        .catch(() => { if (!cancelled) setResults([]); })
+        .finally(() => { if (!cancelled) setSearching(false); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [searchQuery, job.tenantId]);
 
   useEffect(() => {
     if (!editingSource) return;
@@ -436,23 +476,23 @@ function AgencyControls({
     }
   };
 
-  const matchToLead = async () => {
-    const id = Number(matchLeadId);
-    if (!Number.isFinite(id) || id <= 0) { toast.error("Enter a valid lead ID"); return; }
+  const matchToLead = async (leadId: number) => {
     setMatching(true);
     try {
       const r = await fetch(`${API_BASE}/api/drilldown/jobs/${job.id}/lead`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ leadId: id }),
+        body: JSON.stringify({ leadId }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${r.status}`);
       }
       toast.success("Job matched to lead");
-      setMatchLeadId("");
+      setSearchQuery("");
+      setResults([]);
+      setShowResults(false);
       onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to match job");
@@ -501,18 +541,51 @@ function AgencyControls({
       {/* Manual match */}
       <div>
         <div className="text-muted-foreground text-xs mb-1.5">{lead ? "Re-match to a different lead" : "Manually match to a lead"}</div>
-        <div className="flex items-center gap-2">
+        <div className="relative">
           <Input
-            value={matchLeadId}
-            onChange={(e) => setMatchLeadId(e.target.value)}
-            placeholder="Lead ID"
-            className="h-8 w-28"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => { if (results.length > 0) setShowResults(true); }}
+            placeholder="Search by name, phone, or email"
+            className="h-8"
+            disabled={matching}
           />
-          <Button size="sm" className="h-8" disabled={matching || !matchLeadId} onClick={matchToLead}>
-            {matching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Match"}
-          </Button>
+          {searching && (
+            <Loader2 className="w-3.5 h-3.5 animate-spin absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          )}
+          {showResults && searchQuery.trim().length >= 2 && (
+            <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-white/10 bg-[#0d1117] shadow-xl">
+              {results.length === 0 ? (
+                <div className="px-3 py-2.5 text-xs text-muted-foreground/60">
+                  {searching ? "Searching…" : "No matching leads."}
+                </div>
+              ) : (
+                results.map((r) => {
+                  const name = [r.firstName, r.lastName].filter(Boolean).join(" ") || `Lead #${r.id}`;
+                  const contact = [r.phone, r.email].filter(Boolean).join(" · ");
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      disabled={matching}
+                      onClick={() => matchToLead(r.id)}
+                      className="w-full text-left px-3 py-2 hover:bg-white/[0.04] disabled:opacity-50 border-b border-white/5 last:border-b-0"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm text-white truncate">{name}</span>
+                        <span className="text-[10px] text-muted-foreground/60 font-mono shrink-0">#{r.id}</span>
+                      </div>
+                      {contact && <div className="text-xs text-muted-foreground truncate">{contact}</div>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
-        <p className="text-muted-foreground/50 text-xs mt-1">Sets the job's lead and marks attribution as manual.</p>
+        <p className="text-muted-foreground/50 text-xs mt-1">
+          {matching ? "Matching…" : "Search and pick a lead to set the job's attribution to manual."}
+        </p>
       </div>
     </div>
   );

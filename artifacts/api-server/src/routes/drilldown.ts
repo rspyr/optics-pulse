@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, leadsTable, jobsTable, soldEstimatesTable, type RebateBreakdownItem } from "@workspace/db";
-import { eq, and, gte, lte, desc, SQL, inArray, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, SQL, inArray, sql, or, ilike } from "drizzle-orm";
 import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 // Matches the date expression used by /api/dashboard/spend-revenue so the
@@ -139,6 +139,7 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       : job.revenue;
     return {
       id: job.id,
+      tenantId: job.tenantId,
       stJobId: job.stJobId,
       stInvoiceId: job.stInvoiceId,
       customerName: job.customerName,
@@ -171,6 +172,57 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   });
 
   res.json(result);
+});
+
+// Typeahead lead search for manual job→lead matching. Agency/admin only —
+// the manual-match feature is agency-only (see PATCH below). Results are
+// tenant-scoped: a tenantId must be supplied (the job's tenant) so the
+// search never returns leads from another agency client.
+router.get("/drilldown/leads/search", async (req, res) => {
+  const role = (req.session as { userRole?: string } | undefined)?.userRole;
+  const isAgency = role === "super_admin" || role === "agency_user";
+  if (!isAgency) {
+    res.status(403).json({ error: "Only agency users can search leads for matching." });
+    return;
+  }
+
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  if (queryTenantId == null || !Number.isFinite(queryTenantId)) {
+    res.status(400).json({ error: "A tenantId is required to scope the lead search." });
+    return;
+  }
+
+  const q = ((req.query.q as string | undefined) ?? "").trim();
+  const limit = Math.min(req.query.limit ? Number(req.query.limit) : 10, 25);
+  if (q.length < 2) {
+    res.json([]);
+    return;
+  }
+
+  const term = `%${q}%`;
+  const match = or(
+    ilike(leadsTable.firstName, term),
+    ilike(leadsTable.lastName, term),
+    ilike(leadsTable.phone, term),
+    ilike(leadsTable.email, term),
+    ilike(sql`${leadsTable.firstName} || ' ' || ${leadsTable.lastName}`, term),
+  );
+
+  const leads = await db.select({
+    id: leadsTable.id,
+    firstName: leadsTable.firstName,
+    lastName: leadsTable.lastName,
+    phone: leadsTable.phone,
+    email: leadsTable.email,
+    source: leadsTable.source,
+    status: leadsTable.status,
+    createdAt: leadsTable.createdAt,
+  }).from(leadsTable)
+    .where(and(eq(leadsTable.tenantId, queryTenantId), match))
+    .orderBy(desc(leadsTable.createdAt))
+    .limit(limit);
+
+  res.json(leads);
 });
 
 // Manually match a job to the correct lead when attribution is wrong/missing.
