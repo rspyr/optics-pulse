@@ -326,6 +326,72 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
     expect(await screen.findByText("Searching…")).toBeInTheDocument();
   });
 
+  it("surfaces an error and clears the spinner when the search request itself fails", async () => {
+    setAgency(true);
+    installFetch({ searchOk: false });
+    const user = await renderAndExpand();
+
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+    await user.type(box, "zz");
+
+    // The failed search opens the dropdown with an explicit error rather than a
+    // misleading "No matching leads." empty state.
+    expect(
+      await screen.findByText("Search failed. Please try again."),
+    ).toBeInTheDocument();
+    // The request fired exactly once and the in-flight indicator is gone.
+    expect(searchCallUrls).toHaveLength(1);
+    expect(screen.queryByText("Searching…")).not.toBeInTheDocument();
+    // No stale "No matching leads." copy is shown alongside the error.
+    expect(screen.queryByText("No matching leads.")).not.toBeInTheDocument();
+  });
+
+  it("clears a previously rendered result list when a later search fails", async () => {
+    setAgency(true);
+
+    // First search succeeds with a result; the second search fails (non-OK).
+    let searchCall = 0;
+    vi.spyOn(global, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/drilldown/revenue-attributed")) {
+          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+        }
+        if (url.includes("/api/drilldown/leads/search")) {
+          searchCall += 1;
+          if (searchCall === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => [makeSearchResult()],
+            } as Response;
+          }
+          return { ok: false, status: 500, json: async () => ({}) } as Response;
+        }
+        return { ok: true, status: 200, json: async () => ({}) } as Response;
+      },
+    );
+
+    const user = await renderAndExpand();
+    const box = await screen.findByPlaceholderText("Search by name, phone, or email");
+
+    // First search renders the result.
+    await user.type(box, "ro");
+    await screen.findByText("Road Runner");
+
+    // A further keystroke fires a fresh search that fails.
+    await user.type(box, "x");
+
+    // The stale result is gone and the error is shown instead.
+    await waitFor(() =>
+      expect(screen.queryByText("Road Runner")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Search failed. Please try again."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Searching…")).not.toBeInTheDocument();
+  });
+
   it("does not render the search box for a client (read-only) user", async () => {
     setAgency(false);
     installFetch();

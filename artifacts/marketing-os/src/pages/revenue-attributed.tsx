@@ -446,6 +446,7 @@ function AgencyControls({
   const [results, setResults] = useState<LeadSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [searchError, setSearchError] = useState(false);
 
   const canEditSource = lead != null && isUnknownSource(lead.originalSource);
 
@@ -454,9 +455,11 @@ function AgencyControls({
     if (q.length < 2) {
       setResults([]);
       setSearching(false);
+      setSearchError(false);
       return;
     }
     setSearching(true);
+    setSearchError(false);
     let cancelled = false;
     const handle = setTimeout(() => {
       const params = new URLSearchParams({ q, tenantId: String(job.tenantId) });
@@ -465,9 +468,15 @@ function AgencyControls({
         .then((data: LeadSearchResult[]) => {
           if (cancelled) return;
           setResults(data);
+          setSearchError(false);
           setShowResults(true);
         })
-        .catch(() => { if (!cancelled) setResults([]); })
+        .catch(() => {
+          if (cancelled) return;
+          setResults([]);
+          setSearchError(true);
+          setShowResults(true);
+        })
         .finally(() => { if (!cancelled) setSearching(false); });
     }, 250);
     return () => { cancelled = true; clearTimeout(handle); };
@@ -586,8 +595,8 @@ function AgencyControls({
           {showResults && searchQuery.trim().length >= 2 && (
             <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-white/10 bg-[#0d1117] shadow-xl">
               {results.length === 0 ? (
-                <div className="px-3 py-2.5 text-xs text-muted-foreground/60">
-                  {searching ? "Searching…" : "No matching leads."}
+                <div className={`px-3 py-2.5 text-xs ${searchError && !searching ? "text-red-400/80" : "text-muted-foreground/60"}`}>
+                  {searching ? "Searching…" : searchError ? "Search failed. Please try again." : "No matching leads."}
                 </div>
               ) : (
                 results.map((r) => {
