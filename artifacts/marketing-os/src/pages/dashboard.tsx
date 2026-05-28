@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { formatCurrency, formatPercentage, PLATFORM_COLORS } from "@/lib/utils";
+import { formatCurrency, formatPercentage, round2, PLATFORM_COLORS } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2, X, ExternalLink } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { MetaCampaignBreakdown } from "@/components/MetaCampaignBreakdown";
@@ -319,7 +319,7 @@ function JobRevenueDrilldown({
 
   const totalRevenue = useMemo(() => {
     if (!jobs) return 0;
-    return jobs.reduce((sum, j) => sum + (j.invoiceTotal != null ? j.invoiceTotal + (j.invoiceRebateAmount ?? 0) : j.revenue), 0);
+    return round2(jobs.reduce((sum, j) => sum + (j.invoiceTotal != null ? j.invoiceTotal + (j.invoiceRebateAmount ?? 0) : j.revenue), 0));
   }, [jobs]);
 
   return (
@@ -365,7 +365,7 @@ function JobRevenueDrilldown({
               </thead>
               <tbody className="divide-y divide-white/5">
                 {jobs.map((job) => {
-                  const revenue = job.invoiceTotal != null ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0) : job.revenue;
+                  const revenue = round2(job.invoiceTotal != null ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0) : job.revenue);
                   const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
                   const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "—";
                   return (

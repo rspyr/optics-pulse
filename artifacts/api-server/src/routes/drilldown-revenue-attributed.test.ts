@@ -264,9 +264,10 @@ describe("GET /drilldown/revenue-attributed", () => {
       const attributedTotal = (attributed.json as Array<{ correctedRevenue: number }>)
         .reduce((sum, r) => sum + r.correctedRevenue, 0);
 
-      // /drilldown/jobs run over the same job range — it returns raw rows
-      // and orders by jobRevenueExpr; applying that same formula here must
-      // yield the identical total the drilldown surfaced.
+      // /drilldown/jobs run over the same job range — it rounds each money
+      // field to whole cents and orders by jobRevenueExpr; applying the
+      // corrected formula here must yield the identical total the drilldown
+      // surfaced.
       mockDb.reset();
       vi.clearAllMocks();
       const app2 = await setupApp("super_admin", null);
@@ -375,6 +376,53 @@ describe("GET /drilldown/revenue-attributed", () => {
 
       expect(attributedOrder).toEqual(jobsOrder);
       expect(attributedOrder).toEqual([1, 3, 2]); // 1050.15 > 12.01 > 0.30
+    });
+  });
+
+  // /drilldown/jobs returns the raw job rows (used by the Command Center
+  // revenue drilldown modal). Its money columns (revenue, invoiceTotal,
+  // invoiceRebateAmount) come straight from floating-point `real` DB columns,
+  // so the endpoint must round each to whole cents before returning so the
+  // front-end never displays or aggregates sub-cent drift like 900.1000000001.
+  describe("GET /drilldown/jobs rounds money fields to 2 decimals", () => {
+    const driftJobs = [
+      { id: 1, tenantId: 7, leadId: null, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+        jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+        revenue: 900.1000000001, invoiceTotal: 900.1000000001, invoiceRebateAmount: 150.0499999999,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      { id: 2, tenantId: 7, leadId: null, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+        jobType: "plumb", jobTypeName: "Plumbing", status: "completed",
+        revenue: 12.005, invoiceTotal: null, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+    ];
+
+    it("rounds revenue, invoiceTotal, and invoiceRebateAmount to whole cents", async () => {
+      const app = await setupApp("super_admin", null);
+      mockDb.selectResults = [driftJobs];
+
+      const res = await request(app, "GET", "/drilldown/jobs?tenantId=7&useJobDate=true&sort=revenue");
+
+      expect(res.status).toBe(200);
+      const rows = res.json as Array<{
+        id: number; revenue: number; invoiceTotal: number | null; invoiceRebateAmount: number | null;
+      }>;
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const r1 = byId.get(1)!;
+      expect(r1.revenue).toBe(900.1);
+      expect(r1.invoiceTotal).toBe(900.1);
+      expect(r1.invoiceRebateAmount).toBe(150.05);
+      const r2 = byId.get(2)!;
+      expect(r2.revenue).toBe(12.01); // 12.005 rounds up
+      // null money fields stay null (not coerced to 0)
+      expect(r2.invoiceTotal).toBeNull();
+      expect(r2.invoiceRebateAmount).toBeNull();
+      // No returned money value carries more than 2 decimal places.
+      for (const r of rows) {
+        for (const v of [r.revenue, r.invoiceTotal, r.invoiceRebateAmount]) {
+          if (v == null) continue;
+          expect(v).toBe(Math.round(v * 100) / 100);
+        }
+      }
     });
   });
 

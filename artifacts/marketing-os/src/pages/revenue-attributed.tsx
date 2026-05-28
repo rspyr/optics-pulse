@@ -3,7 +3,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, round2 } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
 import { toast } from "sonner";
@@ -141,7 +141,9 @@ export default function RevenueAttributed() {
       rebates += j.invoiceRebateAmount ?? 0;
       if (j.matchLevel) attributed += j.correctedRevenue;
     }
-    return { revenue, rebates, attributed, count: jobs.length };
+    // Round each summed total to whole cents so accumulated floating-point
+    // drift never surfaces in the summary cards (matches the API rounding).
+    return { revenue: round2(revenue), rebates: round2(rebates), attributed: round2(attributed), count: jobs.length };
   }, [jobs]);
 
   async function handleExportCSV() {

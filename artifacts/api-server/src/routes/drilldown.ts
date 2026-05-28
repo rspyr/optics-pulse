@@ -15,6 +15,10 @@ const jobRevenueExpr = sql<number>`COALESCE(${jobsTable.invoiceTotal} + COALESCE
 // sub-cent precision drift. Matches the `Math.round(n * 100) / 100` money
 // convention used across admin/campaigns/dashboard routes.
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// Nullable variant: leaves null/undefined untouched (e.g. invoiceTotal,
+// invoiceRebateAmount can be null) but rounds any real number to whole cents.
+const round2Nullable = (n: number | null | undefined): number | null =>
+  n == null ? null : round2(n);
 
 const router: IRouter = Router();
 
@@ -81,7 +85,15 @@ router.get("/drilldown/jobs", async (req, res) => {
   const jobs = await db.select().from(jobsTable).where(where)
     .orderBy(orderBy).limit(limit).offset(offset);
 
-  res.json(jobs);
+  // Money columns are floating-point `real`, so they can carry sub-cent drift
+  // (e.g. 900.1000000001). Round every money field to whole cents before
+  // returning so clients never display or aggregate spurious precision.
+  res.json(jobs.map((job) => ({
+    ...job,
+    revenue: round2(job.revenue),
+    invoiceTotal: round2Nullable(job.invoiceTotal),
+    invoiceRebateAmount: round2Nullable(job.invoiceRebateAmount),
+  })));
 });
 
 // Revenue Attributed: completed jobs in a date range, enriched with the
@@ -160,9 +172,9 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       jobType: job.jobType,
       jobTypeName: job.jobTypeName,
       status: job.status,
-      revenue: job.revenue,
-      invoiceTotal: job.invoiceTotal,
-      invoiceRebateAmount: job.invoiceRebateAmount,
+      revenue: round2(job.revenue),
+      invoiceTotal: round2Nullable(job.invoiceTotal),
+      invoiceRebateAmount: round2Nullable(job.invoiceRebateAmount),
       correctedRevenue,
       invoiceDate: job.invoiceDate,
       completedAt: job.completedAt,
