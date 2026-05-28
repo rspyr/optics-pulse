@@ -201,13 +201,19 @@ async function tenantEqArgsFor(table: string): Promise<unknown[]> {
 }
 
 // The corrected-revenue formula the route computes in JS, mirroring the
-// jobRevenueExpr that /drilldown/jobs orders by.
+// jobRevenueExpr that /drilldown/jobs orders by. The route rounds to whole
+// cents (Math.round(n * 100) / 100) so floating-point `real` columns don't
+// leak sub-cent drift like 1050.1500000000001; this helper rounds the same
+// way so reconciliation comparisons match what the endpoint returns.
+const round2 = (n: number) => Math.round(n * 100) / 100;
 function correctedRevenueOf(job: {
   invoiceTotal: number | null;
   invoiceRebateAmount: number | null;
   revenue: number;
 }): number {
-  return job.invoiceTotal != null ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0) : job.revenue;
+  return round2(
+    job.invoiceTotal != null ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0) : job.revenue,
+  );
 }
 
 describe("GET /drilldown/revenue-attributed", () => {
@@ -271,6 +277,104 @@ describe("GET /drilldown/revenue-attributed", () => {
 
       expect(attributedTotal).toBe(jobsTotal);
       expect(attributedTotal).toBe(1050 + 500 + 750);
+    });
+  });
+
+  // Revenue columns are floating-point `real`, so fractional cents can produce
+  // values like 900.10 + 150.05 = 1050.1500000000001 in JS. The endpoint must
+  // round corrected revenue to whole cents (decision: round to 2 decimals
+  // before returning) so clients never see spurious sub-cent precision drift,
+  // and the ordering/reconciliation must stay consistent under fractional values.
+  describe("fractional cents are rounded to 2 decimals (no precision drift)", () => {
+    const fractionalJobs = [
+      // 900.10 + 150.05 = 1050.1500000000001 in raw float → must round to 1050.15
+      { id: 1, tenantId: 7, leadId: null, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+        jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+        revenue: 1000, invoiceTotal: 900.1, invoiceRebateAmount: 150.05,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      // 0.1 + 0.2 = 0.30000000000000004 in raw float → must round to 0.3
+      { id: 2, tenantId: 7, leadId: null, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+        jobType: "plumb", jobTypeName: "Plumbing", status: "completed",
+        revenue: 500, invoiceTotal: 0.1, invoiceRebateAmount: 0.2,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      // fallback to legacy revenue, also fractional
+      { id: 3, tenantId: 7, leadId: null, stJobId: "j3", stInvoiceId: null, customerName: "C",
+        jobType: "elec", jobTypeName: "Electrical", status: "completed",
+        revenue: 12.005, invoiceTotal: null, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+    ];
+
+    it("rounds correctedRevenue to whole cents instead of leaking float drift", async () => {
+      const app = await setupApp("super_admin", null);
+      mockDb.selectResults = [fractionalJobs, [], []];
+
+      const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7");
+
+      expect(res.status).toBe(200);
+      const rows = res.json as Array<{ id: number; correctedRevenue: number }>;
+      const byId = new Map(rows.map((r) => [r.id, r.correctedRevenue]));
+      // Raw float would be 1050.1500000000001 / 0.30000000000000004 / 12.005.
+      expect(byId.get(1)).toBe(1050.15);
+      expect(byId.get(2)).toBe(0.3);
+      expect(byId.get(3)).toBe(12.01); // 12.005 rounds up to 12.01
+      // No value should carry more than 2 decimal places.
+      for (const v of byId.values()) {
+        expect(Number.isInteger(Math.round(v * 100))).toBe(true);
+        expect(v).toBe(Math.round(v * 100) / 100);
+      }
+    });
+
+    it("totals reconcile with /drilldown/jobs under fractional values (both rounded)", async () => {
+      const app1 = await setupApp("super_admin", null);
+      mockDb.selectResults = [fractionalJobs, [], []];
+      const attributed = await request(app1, "GET", "/drilldown/revenue-attributed?tenantId=7");
+      expect(attributed.status).toBe(200);
+      const attributedTotal = round2(
+        (attributed.json as Array<{ correctedRevenue: number }>)
+          .reduce((sum, r) => sum + r.correctedRevenue, 0),
+      );
+
+      mockDb.reset();
+      vi.clearAllMocks();
+      const app2 = await setupApp("super_admin", null);
+      mockDb.selectResults = [fractionalJobs];
+      const jobsRes = await request(app2, "GET", "/drilldown/jobs?tenantId=7&useJobDate=true&sort=revenue");
+      expect(jobsRes.status).toBe(200);
+      const jobsTotal = round2(
+        (jobsRes.json as typeof fractionalJobs).reduce((sum, j) => sum + correctedRevenueOf(j), 0),
+      );
+
+      expect(attributedTotal).toBe(jobsTotal);
+      expect(attributedTotal).toBe(1050.15 + 0.3 + 12.01);
+    });
+
+    it("orders rows by corrected revenue descending, consistent across both endpoints", async () => {
+      // The DB applies the ordering (desc on jobRevenueExpr); both endpoints
+      // use the identical SQL expression, so a stable descending order over
+      // fractional values is the contract. We feed the rows pre-sorted by the
+      // corrected formula and assert both endpoints preserve that order and
+      // that the per-row corrected values rank identically.
+      const sorted = [...fractionalJobs].sort(
+        (a, b) => correctedRevenueOf(b) - correctedRevenueOf(a),
+      );
+
+      const app1 = await setupApp("super_admin", null);
+      mockDb.selectResults = [sorted, [], []];
+      const attributed = await request(app1, "GET", "/drilldown/revenue-attributed?tenantId=7");
+      expect(attributed.status).toBe(200);
+      const attributedOrder = (attributed.json as Array<{ id: number; correctedRevenue: number }>)
+        .map((r) => r.id);
+
+      mockDb.reset();
+      vi.clearAllMocks();
+      const app2 = await setupApp("super_admin", null);
+      mockDb.selectResults = [sorted];
+      const jobsRes = await request(app2, "GET", "/drilldown/jobs?tenantId=7&useJobDate=true&sort=revenue");
+      expect(jobsRes.status).toBe(200);
+      const jobsOrder = (jobsRes.json as typeof fractionalJobs).map((j) => j.id);
+
+      expect(attributedOrder).toEqual(jobsOrder);
+      expect(attributedOrder).toEqual([1, 3, 2]); // 1050.15 > 12.01 > 0.30
     });
   });
 

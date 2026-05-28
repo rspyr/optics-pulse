@@ -8,6 +8,14 @@ import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenan
 const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
 const jobRevenueExpr = sql<number>`COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})`;
 
+// Revenue columns (subtotal, rebateAmount, invoiceTotal, invoiceRebateAmount)
+// are stored as floating-point `real`, so summing them in JS can produce
+// values like 1050.1500000000001 (900.10 + 150.05). We round corrected
+// revenue to whole cents before returning it so clients never see spurious
+// sub-cent precision drift. Matches the `Math.round(n * 100) / 100` money
+// convention used across admin/campaigns/dashboard routes.
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 const router: IRouter = Router();
 
 router.get("/drilldown/leads", async (req, res) => {
@@ -138,9 +146,11 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
     const est = estimateByJobId.get(job.id);
     const lead = job.leadId != null ? leadById.get(job.leadId) : undefined;
     const rebateBreakdown: RebateBreakdownItem[] = (est?.rebateBreakdown as RebateBreakdownItem[] | null) ?? [];
-    const correctedRevenue = job.invoiceTotal != null
-      ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0)
-      : job.revenue;
+    const correctedRevenue = round2(
+      job.invoiceTotal != null
+        ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0)
+        : job.revenue,
+    );
     return {
       id: job.id,
       tenantId: job.tenantId,
