@@ -813,12 +813,22 @@ function LeadCard({ lead, onClick, funnelMap, timezone = "America/New_York", sho
                 {lead.appointmentDate}{lead.appointmentTime ? ` ${lead.appointmentTime}` : ""}
               </span>
             )}
-            {lead.callbackAt && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20">
-                <Phone className="w-2.5 h-2.5" />
-                CB: {formatDateTimeInTz(lead.callbackAt, timezone)}
-              </span>
-            )}
+            {lead.callbackAt && (() => {
+              const overdue = new Date(lead.callbackAt).getTime() <= Date.now();
+              return (
+                <span
+                  className={
+                    overdue
+                      ? "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-500/20 text-red-300 border border-red-500/40"
+                      : "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/20"
+                  }
+                  title={overdue ? "Callback overdue" : "Scheduled callback"}
+                >
+                  <Phone className="w-2.5 h-2.5" />
+                  {overdue ? "OVERDUE: " : "CB: "}{formatDateTimeInTz(lead.callbackAt, timezone)}
+                </span>
+              );
+            })()}
             {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
                 <Calendar className="w-2.5 h-2.5" />

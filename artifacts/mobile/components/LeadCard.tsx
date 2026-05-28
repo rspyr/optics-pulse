@@ -215,14 +215,19 @@ export function LeadCard({ lead, onPress, renderSourceOverride }: LeadCardProps)
             )}
           </View>
 
-          {lead.callbackAt && (
-            <View style={[styles.callbackBadge, { backgroundColor: "#F59E0B20" }]}>
-              <Feather name="clock" size={10} color="#F59E0B" />
-              <Text style={[styles.callbackText, { color: "#F59E0B" }]}>
-                CB {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-              </Text>
-            </View>
-          )}
+          {lead.callbackAt && (() => {
+            const overdue = new Date(lead.callbackAt).getTime() <= Date.now();
+            const tint = overdue ? "#EF4444" : "#F59E0B";
+            return (
+              <View style={[styles.callbackBadge, { backgroundColor: tint + (overdue ? "33" : "20") }]}>
+                <Feather name="clock" size={10} color={tint} />
+                <Text style={[styles.callbackText, { color: tint, fontWeight: overdue ? "700" : "600" }]}>
+                  {overdue ? "OVERDUE " : "CB "}
+                  {new Date(lead.callbackAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                </Text>
+              </View>
+            );
+          })()}
 
           {(lead.hubStatus === "appt_set" || lead.hubStatus === "appt_booked" || lead.hasSoldEstimate) && (
             <View style={[styles.callbackBadge, { backgroundColor: "#10B98120" }]}>
