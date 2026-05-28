@@ -141,7 +141,21 @@ router.post("/integrations/service_titan/recompute-revenue", requireRole("super_
   }
 
   const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
+
+  // If the operator cancelled during the invoices phase, don't start the
+  // estimates phase — the whole recompute is being aborted. Rows already
+  // reprocessed are kept (no rollback).
+  if (invoices.error === "cancelled") {
+    res.json({ success: true, cancelled: true, invoices, estimates: { synced: 0, error: "skipped" } });
+    return;
+  }
+
   const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
+
+  if (estimates.error === "cancelled") {
+    res.json({ success: true, cancelled: true, invoices, estimates });
+    return;
+  }
 
   const firstError = invoices.error || estimates.error;
   if (firstError) {
@@ -327,7 +341,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     needsReconnect: boolean;
     reconnectReason: string | null;
     latestErrorCode: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -336,7 +350,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> = {};
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean }> = {};
     // Union of sync types: from the recent log window (latest run/status info)
     // AND from the cumulative aggregation (which covers full history, so we
     // still show sync types whose last run is older than the 60-row window).
@@ -352,6 +366,11 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         lastStatus: latestOfType?.status || "never",
         recordsProcessed: latestOfType?.recordsProcessed || 0,
         totalRecordsProcessed: cumulativeByKey.get(`${integ}:${st}`) || 0,
+        // Surface the in-flight log id + cancel flag so the recompute card
+        // can POST to `/sync-logs/:id/cancel` and swap to a "Cancelling…"
+        // state. Only meaningful while the latest run is `running`.
+        runningLogId: latestOfType?.status === "running" ? latestOfType.id : null,
+        cancelRequested: latestOfType?.cancelRequested === true,
       };
     }
 

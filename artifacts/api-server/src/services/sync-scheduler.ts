@@ -1967,6 +1967,28 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
     };
 
     let synced = 0;
+    let cancelled = false;
+
+    // Cooperative cancel for the revenue-recompute full re-sync: mirrors the
+    // backfill pattern. The cancel route flips `cancelRequested` on this
+    // sync log; we poll it at batch boundaries and throw a sentinel to
+    // unwind out of `fetchInvoices`, then complete the row as `cancelled`
+    // keeping rows already processed (no rollback). Only armed for full
+    // re-syncs — the 15-min incremental sync is too short to bother.
+    class ResyncCancelled extends Error {
+      constructor() { super("recompute cancelled"); this.name = "ResyncCancelled"; }
+    }
+    async function checkCancel(): Promise<boolean> {
+      try {
+        const [row] = await db.select({ cancel: integrationSyncLogsTable.cancelRequested })
+          .from(integrationSyncLogsTable)
+          .where(eq(integrationSyncLogsTable.id, syncLog.id))
+          .limit(1);
+        return row?.cancel === true;
+      } catch {
+        return false;
+      }
+    }
 
     async function processInvoiceBatch(invoices: STInvoice[]) {
       const jobInvoiceMap = new Map<string, typeof invoices>();
@@ -2038,10 +2060,28 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       // write on every 15-min poll where the count barely moves.
       if (options?.fullResync) {
         await updateSyncLogRecords(syncLog.id, synced);
+
+        // Cooperative cancel check at the batch boundary — frequent enough
+        // that an operator clicking Cancel sees the run stop within seconds.
+        if (await checkCancel()) {
+          cancelled = true;
+          throw new ResyncCancelled();
+        }
       }
     }
 
-    await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch);
+    try {
+      await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch);
+    } catch (innerErr) {
+      // ResyncCancelled is the expected unwind path, not a real failure.
+      if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
+    }
+
+    if (cancelled) {
+      await completeSyncLog(syncLog.id, "cancelled", synced, `Cancelled by operator (${synced} invoices processed)`);
+      console.log(`[Sync] ServiceTitan invoices: cancelled after ${synced} invoices for tenant ${tenantId}`);
+      return { synced, error: "cancelled" };
+    }
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan invoices: synced ${synced} invoices for tenant ${tenantId}`);
@@ -2100,7 +2140,25 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
     };
 
     let synced = 0;
+    let cancelled = false;
     clearEmployeeCache();
+
+    // Cooperative cancel for the revenue-recompute full re-sync — see the
+    // invoices path for the rationale. Only armed when fullResync is set.
+    class ResyncCancelled extends Error {
+      constructor() { super("recompute cancelled"); this.name = "ResyncCancelled"; }
+    }
+    async function checkCancel(): Promise<boolean> {
+      try {
+        const [row] = await db.select({ cancel: integrationSyncLogsTable.cancelRequested })
+          .from(integrationSyncLogsTable)
+          .where(eq(integrationSyncLogsTable.id, syncLog.id))
+          .limit(1);
+        return row?.cancel === true;
+      } catch {
+        return false;
+      }
+    }
 
     const [fallbackUser] = await db.select({ id: sql<number>`id` })
       .from(sql`users`)
@@ -2234,10 +2292,26 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       // invoices path above for the rationale).
       if (options?.fullResync) {
         await updateSyncLogRecords(syncLog.id, synced);
+
+        // Cooperative cancel check at the batch boundary (see invoices path).
+        if (await checkCancel()) {
+          cancelled = true;
+          throw new ResyncCancelled();
+        }
       }
     }
 
-    await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch);
+    try {
+      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch);
+    } catch (innerErr) {
+      if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
+    }
+
+    if (cancelled) {
+      await completeSyncLog(syncLog.id, "cancelled", synced, `Cancelled by operator (${synced} estimates processed)`);
+      console.log(`[Sync] ServiceTitan estimates: cancelled after ${synced} sold estimates for tenant ${tenantId}`);
+      return { synced, error: "cancelled" };
+    }
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan estimates: synced ${synced} sold estimates for tenant ${tenantId}`);

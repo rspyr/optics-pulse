@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number; triggeredBySyncLogId?: number | null }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -248,6 +248,35 @@ export default function Internal() {
     }
   };
 
+  // Cancel an in-flight revenue recompute. Targets the sync log of the
+  // phase (invoices or estimates) currently running. Reuses the same
+  // cooperative cancel route as backfills; the running phase stops after the
+  // current batch and rows already processed are kept.
+  const cancelRecompute = async (logId: number) => {
+    if (!logId) return;
+    if (!confirm("Cancel the running revenue recompute? Rows already reprocessed will be kept.")) return;
+    setCancellingLogIds((s) => ({ ...s, [logId]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/api/integrations/sync-logs/${logId}/cancel`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
+      } else {
+        toast({
+          title: "Cancel requested",
+          description: body?.message || "The recompute will stop after the current batch finishes.",
+        });
+      }
+    } catch (err) {
+      toast({ title: "Cancel failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      fetchSyncStatus();
+    }
+  };
+
   const triggerBackfill = (integ: string) => {
     const meta = BACKFILL_INTEGRATIONS[integ];
     if (!meta) return;
@@ -330,13 +359,18 @@ export default function Internal() {
           method: "POST",
           credentials: "include",
         });
-        let body: { success?: boolean; invoices?: { synced?: number; error?: string }; estimates?: { synced?: number; error?: string }; error?: string } = {};
+        let body: { success?: boolean; cancelled?: boolean; invoices?: { synced?: number; error?: string }; estimates?: { synced?: number; error?: string }; error?: string } = {};
         try { body = await res.json(); } catch { /* non-JSON */ }
         if (!res.ok || body.success === false) {
           toast({
             title: "Revenue recompute failed",
             description: body.invoices?.error || body.estimates?.error || body.error || `HTTP ${res.status}`,
             variant: "destructive",
+          });
+        } else if (body.cancelled) {
+          toast({
+            title: "Revenue recompute cancelled",
+            description: `Stopped after ${body.invoices?.synced ?? 0} invoices and ${body.estimates?.synced ?? 0} estimates. Rows already reprocessed were kept.`,
           });
         } else {
           toast({
@@ -1064,12 +1098,37 @@ export default function Internal() {
                                 </div>
                               );
                             };
+                            // The endpoint runs invoices then estimates,
+                            // one phase running at a time. The cancel button
+                            // targets whichever phase currently owns a
+                            // `running` sync log.
+                            const runningPhase = inv?.lastStatus === "running" ? inv
+                              : est?.lastStatus === "running" ? est
+                                : null;
+                            const runningLogId = runningPhase?.runningLogId ?? null;
+                            const isCancelling = (runningPhase?.cancelRequested ?? false)
+                              || (runningLogId ? !!cancellingLogIds[runningLogId] : false);
                             return (
                               <div className="mt-1 rounded border border-blue-400/20 bg-blue-500/[0.06] p-2 space-y-1.5 text-[11px]">
-                                <p className="flex items-center gap-1.5 font-medium text-blue-300">
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                  Recompute in progress
-                                </p>
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="flex items-center gap-1.5 font-medium text-blue-300">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Recompute in progress
+                                  </p>
+                                  {runningLogId && (
+                                    isCancelling ? (
+                                      <span className="text-amber-400">Cancelling…</span>
+                                    ) : (
+                                      <button
+                                        onClick={() => cancelRecompute(runningLogId)}
+                                        className="text-[11px] py-0.5 px-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-400/30 rounded text-red-300 transition-colors"
+                                        title="Stop the recompute after the current batch. Rows already processed are kept."
+                                      >
+                                        Cancel
+                                      </button>
+                                    )
+                                  )}
+                                </div>
                                 {phaseRow("Invoices", inv)}
                                 {phaseRow("Estimates", est)}
                               </div>
