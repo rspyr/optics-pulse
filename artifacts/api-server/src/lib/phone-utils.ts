@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, type SQL } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { db, leadsTable } from "@workspace/db";
 
@@ -23,25 +23,16 @@ export function hashEmail(email: string): string {
 }
 
 /**
- * SQL expression yielding the normalized (digits-only, leading "1" stripped
- * when length 11) form of a stored phone column. Matches `normalizePhone`.
- */
-export function normalizedPhoneSql(column: PgColumn): SQL {
-  return sql`CASE
-    WHEN LENGTH(regexp_replace(${column}, '[^0-9]', '', 'g')) = 11
-      AND regexp_replace(${column}, '[^0-9]', '', 'g') LIKE '1%'
-    THEN SUBSTRING(regexp_replace(${column}, '[^0-9]', '', 'g') FROM 2)
-    ELSE regexp_replace(${column}, '[^0-9]', '', 'g')
-  END`;
-}
-
-/**
- * SQL predicate: `normalizedPhoneSql(column) = normalizePhone(input)`.
- * Both sides are normalized so legacy/unnormalized stored phones still match.
+ * SQL predicate matching a phone column against `input` after normalization.
+ *
+ * Stored phones are kept in canonical (digits-only, leading "1" stripped)
+ * form via on-write normalization plus the leads.phone backfill migration,
+ * so this is a plain equality against the bare column. Keeping the column
+ * unwrapped lets the planner use the b-tree index on `leads.phone`.
  */
 export function phoneMatchesSql(column: PgColumn, input: string): SQL {
   const normalized = normalizePhone(input);
-  return sql`${normalizedPhoneSql(column)} = ${normalized}`;
+  return eq(column, normalized);
 }
 
 /**

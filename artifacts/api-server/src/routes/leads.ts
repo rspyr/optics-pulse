@@ -417,9 +417,22 @@ router.get("/leads/search", async (req, res) => {
       );
 
       if (isPhoneSearch) {
-        fuzzyConditions.push(
-          sql`(${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%')`
-        );
+        // leads.phone is stored in canonical (digits-only, leading "1"
+        // stripped) form, so we can compare against the bare column. A full
+        // 10-digit input goes through equality (index-friendly); shorter
+        // inputs fall back to a substring LIKE on the canonical column.
+        if (digitsOnly.length >= 10) {
+          const normalized = digitsOnly.length === 11 && digitsOnly.startsWith("1")
+            ? digitsOnly.slice(1)
+            : digitsOnly.slice(-10);
+          fuzzyConditions.push(
+            sql`(${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} = ${normalized})`
+          );
+        } else {
+          fuzzyConditions.push(
+            sql`(${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} LIKE '%' || ${digitsOnly} || '%')`
+          );
+        }
       }
 
       fuzzyConditions.push(
@@ -446,7 +459,7 @@ router.get("/leads/search", async (req, res) => {
           COALESCE(similarity(${leadsTable.lastName}, ${textQuery}), 0),
           COALESCE(similarity(COALESCE(${leadsTable.firstName}, '') || ' ' || COALESCE(${leadsTable.lastName}, ''), ${textQuery}), 0),
           COALESCE(similarity(${leadsTable.email}, ${textQuery}), 0),
-          CASE WHEN ${leadsTable.phone} IS NOT NULL AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
+          CASE WHEN ${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} LIKE '%' || ${digitsOnly} || '%' THEN 0.8 ELSE 0 END,
           CASE WHEN LOWER(COALESCE(${leadsTable.firstName}, '')) LIKE LOWER(${`%${textQuery}%`}) OR LOWER(COALESCE(${leadsTable.lastName}, '')) LIKE LOWER(${`%${textQuery}%`}) THEN 0.5 ELSE 0 END,
           CASE WHEN ${leadsTable.email} IS NOT NULL AND LOWER(${leadsTable.email}) LIKE LOWER(${`%${textQuery}%`}) THEN 0.5 ELSE 0 END,
           COALESCE(similarity(${funnelTypesTable.name}, ${textQuery}), 0),

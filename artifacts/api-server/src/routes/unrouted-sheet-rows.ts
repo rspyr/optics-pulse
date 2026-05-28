@@ -20,7 +20,7 @@ import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
-import { normalizePhone, normalizedPhoneSql, phoneMatchesSql } from "../lib/phone-utils";
+import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 
 const router: IRouter = Router();
 
@@ -90,27 +90,20 @@ router.get(
 
     const matchByNormalizedPhone = new Map<string, number>();
     if (normalizedPhones.size > 0) {
-      // Compare against the normalized form of leads.phone in SQL so this
-      // also catches existing leads whose phone column was stored in a
-      // legacy format (pre-backfill) or via any insert path that did not
-      // normalize.
-      //
-      // NOTE on the IN-list shape: drizzle's `sql` tag spreads a JS array
-      // passed via `${arr}` into separate bind params (`$2, $3, ...`),
-      // which makes the natural-looking `= ANY(${arr})` produce invalid
-      // SQL (`ANY(($2, $3))`) and 500 the request the moment any
-      // unresolved row carries a phone. Build an explicit IN-list via
-      // sql.join so each phone is a real positional param.
+      // leads.phone is stored in canonical form (digits-only, leading "1"
+      // stripped) via on-write normalization plus the leads.phone backfill
+      // migration, so a plain IN-list against the bare column suffices and
+      // lets the b-tree index on leads.phone be used by the planner.
       const phonesList = Array.from(normalizedPhones);
       const matches = await db
         .select({ id: leadsTable.id, phone: leadsTable.phone })
         .from(leadsTable)
         .where(and(
           eq(leadsTable.tenantId, tenantId),
-          sql`${normalizedPhoneSql(leadsTable.phone)} IN (${sql.join(phonesList.map(p => sql`${p}`), sql`, `)})`,
+          inArray(leadsTable.phone, phonesList),
         ));
       for (const m of matches) {
-        const key = normalizePhone(m.phone || "");
+        const key = m.phone || "";
         if (key && !matchByNormalizedPhone.has(key)) matchByNormalizedPhone.set(key, m.id);
       }
     }

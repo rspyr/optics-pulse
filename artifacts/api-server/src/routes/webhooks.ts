@@ -867,13 +867,16 @@ router.post("/webhooks/podium", webhookLimiter, async (req, res): Promise<void> 
     }
 
     if (phoneIdentifier) {
-      const cleanPhone = phoneIdentifier.replace(/[^0-9]/g, "");
-      if (cleanPhone.length >= 7) {
+      const normalizedPhone = normalizePhone(phoneIdentifier);
+      if (normalizedPhone.length === 10) {
+        // leads.phone is stored in canonical (10-digit, leading "1" stripped)
+        // form, so a direct equality lookup uses the b-tree index on
+        // leads.phone instead of forcing a seq scan via regexp_replace.
         const leads = await db.select({ id: leadsTable.id })
           .from(leadsTable)
           .where(and(
             eq(leadsTable.tenantId, matchedTenantId),
-            sql`REGEXP_REPLACE(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '%' || ${cleanPhone.slice(-10)}`
+            eq(leadsTable.phone, normalizedPhone),
           ))
           .limit(1);
         if (leads.length > 0) {

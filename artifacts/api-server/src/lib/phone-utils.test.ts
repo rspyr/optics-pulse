@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { normalizePhone, normalizedPhoneSql, phoneMatchesSql } from "./phone-utils";
+import type { SQL } from "drizzle-orm";
+import { normalizePhone, phoneMatchesSql } from "./phone-utils";
 import { leadsTable } from "@workspace/db";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 const dialect = new PgDialect();
-function render(frag: ReturnType<typeof normalizedPhoneSql>): { sql: string; params: unknown[] } {
+function render(frag: SQL): { sql: string; params: unknown[] } {
   const q = dialect.sqlToQuery(frag);
   return { sql: q.sql, params: q.params };
 }
@@ -23,17 +24,18 @@ describe("normalizePhone", () => {
   });
 });
 
-describe("normalizedPhoneSql / phoneMatchesSql", () => {
-  it("normalizedPhoneSql renders a regexp_replace CASE over the column", () => {
-    const { sql } = render(normalizedPhoneSql(leadsTable.phone));
-    expect(sql).toMatch(/regexp_replace/);
-    expect(sql).toMatch(/CASE/);
+describe("phoneMatchesSql", () => {
+  it("renders a plain equality against the bare column (index-friendly)", () => {
+    const { sql } = render(phoneMatchesSql(leadsTable.phone, "(415) 555-1212"));
+    expect(sql).not.toMatch(/regexp_replace/i);
+    expect(sql).not.toMatch(/CASE/);
+    expect(sql).toMatch(/=\s*\$1/);
   });
-  it("phoneMatchesSql passes the digits-only input as a bound param", () => {
+  it("passes the digits-only input as a bound param", () => {
     const { params } = render(phoneMatchesSql(leadsTable.phone, "(415) 555-1212"));
     expect(params).toContain("4155551212");
   });
-  it("phoneMatchesSql strips a leading 1 from the input param", () => {
+  it("strips a leading 1 from the input param", () => {
     const { params } = render(phoneMatchesSql(leadsTable.phone, "+1-415-555-1212"));
     expect(params).toContain("4155551212");
     expect(params).not.toContain("14155551212");
