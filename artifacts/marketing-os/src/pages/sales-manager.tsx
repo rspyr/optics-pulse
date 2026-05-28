@@ -66,6 +66,15 @@ interface UnroutedSheetRow {
   source: string;
   createdAt: string;
   resolvedAt: string | null;
+  resolvedLeadId: number | null;
+}
+
+interface UnroutedConfirmation {
+  rowId: number;
+  leadId: number;
+  name: string;
+  assignedTo: string | null;
+  resubmitted: boolean;
 }
 
 interface StatsData {
@@ -2886,6 +2895,7 @@ function useSheetConfigs(tenantId: number | null) {
 }
 
 function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { tenantId: number | null; funnels: FunnelType[]; onRefetch: () => void; deepLink?: { configId: number; reanalyze: boolean } | null }) {
+  const [, navigate] = useLocation();
   const { isAgency, user } = useAuth();
   const canManageMapping = isAgency || user?.role === "client_admin";
   const { configs, loading: configsLoading, refetch: refetchConfigs } = useSheetConfigs(tenantId);
@@ -2928,14 +2938,18 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
     failed: number;
     perRow: Record<number, { ok: boolean; error?: string; leadId?: number | null }>;
   } | null>(null);
+  const [unroutedConfirmations, setUnroutedConfirmations] = useState<Record<number, UnroutedConfirmation>>({});
+  const [unroutedIncludeResolved, setUnroutedIncludeResolved] = useState<Record<number, boolean>>({});
 
-  const loadUnroutedRows = useCallback(async (configId: number) => {
+  const loadUnroutedRows = useCallback(async (configId: number, includeResolved = false) => {
     if (!tenantId) return;
     setUnroutedLoading(true);
     setUnroutedRows(null);
     try {
+      const params = new URLSearchParams({ sheetConfigId: String(configId) });
+      if (includeResolved) params.set("includeResolved", "true");
       const res = await fetch(
-        `${API_BASE}/tenants/${tenantId}/unrouted-sheet-rows?sheetConfigId=${configId}`,
+        `${API_BASE}/tenants/${tenantId}/unrouted-sheet-rows?${params}`,
         { credentials: "include" },
       );
       if (res.ok) {
@@ -2967,8 +2981,14 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
       setBulkError(null);
       setBulkFunnelChoice("");
       setBulkAddToMap(false);
-      loadUnroutedRows(configId);
+      loadUnroutedRows(configId, !!unroutedIncludeResolved[configId]);
     }
+  };
+
+  const handleToggleIncludeResolved = (configId: number) => {
+    const next = !unroutedIncludeResolved[configId];
+    setUnroutedIncludeResolved(prev => ({ ...prev, [configId]: next }));
+    loadUnroutedRows(configId, next);
   };
 
   const toggleRowSelected = (rowId: number) => {
@@ -3044,7 +3064,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
         method: "POST", credentials: "include",
       });
       if (res.ok) {
-        await loadUnroutedRows(configId);
+        await loadUnroutedRows(configId, !!unroutedIncludeResolved[configId]);
         handleRefetch();
       }
     } catch {} finally { setResolvingUnroutedId(null); }
@@ -3069,7 +3089,28 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
         }),
       });
       if (res.ok) {
-        await loadUnroutedRows(configId);
+        const data = await res.json().catch(() => null);
+        if (data?.leadId && data?.lead) {
+          setUnroutedConfirmations(prev => ({
+            ...prev,
+            [rowId]: {
+              rowId,
+              leadId: data.leadId,
+              name: data.lead.name || "Lead",
+              assignedTo: data.lead.assignedTo ?? null,
+              resubmitted: !!data.resubmitted,
+            },
+          }));
+        }
+        // Optimistically mark the row resolved in-place so the confirmation
+        // banner stays visible (a full reload would drop the row when
+        // includeResolved is off, hiding the just-shown "Became lead" info).
+        const resolvedLeadId = data?.leadId ?? null;
+        setUnroutedRows(prev => prev
+          ? prev.map(row => row.id === rowId
+              ? { ...row, resolvedAt: new Date().toISOString(), resolvedLeadId }
+              : row)
+          : prev);
         handleRefetch();
       } else {
         const data = await res.json().catch(() => ({ error: "Failed to send to funnel" }));
@@ -3384,13 +3425,21 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                       Routes by: {cfg.funnelColumn}
                     </span>
                   )}
-                  {(cfg.unroutedCount || 0) > 0 && (
+                  {(cfg.unroutedCount || 0) > 0 ? (
                     <button
                       onClick={() => handleToggleUnrouted(cfg.id)}
                       className="text-[10px] text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30"
                       title="Rows that arrived without a matching funnel and were not imported"
                     >
                       ⚠ {cfg.unroutedCount} unrouted lead{cfg.unroutedCount === 1 ? "" : "s"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleToggleUnrouted(cfg.id)}
+                      className="text-[10px] text-white/40 hover:text-white/70 hover:bg-white/5 px-1.5 py-0.5 rounded border border-white/10"
+                      title="View previously unrouted rows and the leads they became"
+                    >
+                      Unrouted history
                     </button>
                   )}
                 </div>
@@ -3524,12 +3573,23 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                   <p className="text-[10px] text-amber-300 uppercase tracking-wider">
                     Unrouted Leads {unroutedRows ? `(${unroutedRows.length})` : ""}
                   </p>
-                  <button
-                    onClick={() => handleToggleUnrouted(cfg.id)}
-                    className="text-[10px] text-white/30 hover:text-white/50"
-                  >
-                    Close
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1 text-[10px] text-white/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!unroutedIncludeResolved[cfg.id]}
+                        onChange={() => handleToggleIncludeResolved(cfg.id)}
+                        className="h-3 w-3 accent-primary"
+                      />
+                      Include resolved
+                    </label>
+                    <button
+                      onClick={() => handleToggleUnrouted(cfg.id)}
+                      className="text-[10px] text-white/30 hover:text-white/50"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
                 <p className="text-[10px] text-white/40 mb-2">
                   These rows arrived without a value matching the funnel routing map and have no default funnel configured, so they were NOT imported as leads. Map the unmatched value (Settings → Funnel Routing) or set a default funnel, then re-import; dismiss rows you've handled.
@@ -3621,6 +3681,7 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                       <tbody>
                         {unroutedRows.map(r => {
                           const rowResult = bulkResult?.perRow[r.id];
+                          const confirmation = unroutedConfirmations[r.id];
                           return (
                           <tr key={r.id} className="border-b border-white/[0.03] align-top">
                             {isAgency && (
@@ -3642,6 +3703,11 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                                   {rowResult.ok ? "✓ Sent" : `✗ ${rowResult.error || "Failed"}`}
                                 </div>
                               )}
+                              {r.resolvedAt && (
+                                <div className="text-[9px] text-emerald-400/70 mt-0.5">
+                                  resolved {new Date(r.resolvedAt).toLocaleString()}
+                                </div>
+                              )}
                             </td>
                             <td className="py-1 px-2 text-amber-300/90 font-mono">
                               {r.unmatchedValue || <span className="text-white/30 italic">(empty)</span>}
@@ -3656,9 +3722,34 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                                   .map(([k, v]) => `${k}: ${v}`)
                                   .join("\n")}
                               </pre>
+                              {r.resolvedLeadId && !confirmation && (
+                                <div className="mt-1 text-[10px] text-emerald-400/80">
+                                  Became lead{" "}
+                                  <button
+                                    onClick={() => navigate(`/pulse?leadId=${r.resolvedLeadId}`)}
+                                    className="underline hover:text-emerald-300"
+                                  >
+                                    #{r.resolvedLeadId}
+                                  </button>
+                                </div>
+                              )}
+                              {confirmation && (
+                                <div className="mt-1 text-[10px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-1">
+                                  {confirmation.resubmitted ? "Re-submitted to existing lead" : "Created lead"}{" "}
+                                  <button
+                                    onClick={() => navigate(`/pulse?leadId=${confirmation.leadId}`)}
+                                    className="underline hover:text-emerald-200 font-medium"
+                                  >
+                                    {confirmation.name} (#{confirmation.leadId})
+                                  </button>
+                                  {confirmation.assignedTo && (
+                                    <span className="text-emerald-300/70"> · assigned to {confirmation.assignedTo}</span>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             <td className="py-1 px-2 text-right align-top">
-                              {isAgency && (
+                              {isAgency && !r.resolvedAt && (
                                 <div className="flex flex-col items-end gap-1 min-w-[180px]">
                                   <Select
                                     value={unroutedFunnelChoice[r.id] ? String(unroutedFunnelChoice[r.id]) : "__none__"}

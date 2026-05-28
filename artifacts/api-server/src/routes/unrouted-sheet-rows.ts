@@ -226,7 +226,7 @@ async function routeRowToFunnel(
       const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
       await db
         .update(unroutedSheetRowsTable)
-        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
+        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: dup.id })
         .where(eq(unroutedSheetRowsTable.id, rowId));
       return { ok: true, rowId, leadId: dup.id, resubmitted: true, valueMapUpdated };
     }
@@ -325,7 +325,11 @@ async function routeRowToFunnel(
 
   await db
     .update(unroutedSheetRowsTable)
-    .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
+    .set({
+      resolvedAt: new Date(),
+      resolvedByUserId: userId ?? null,
+      resolvedLeadId: lead?.id ?? null,
+    })
     .where(eq(unroutedSheetRowsTable.id, rowId));
 
   return { ok: true, rowId, leadId: lead?.id ?? null, valueMapUpdated };
@@ -379,11 +383,32 @@ router.post(
       .from(unroutedSheetRowsTable)
       .where(eq(unroutedSheetRowsTable.id, id));
 
+    let leadInfo: { id: number; name: string; assignedTo: string | null } | null = null;
+    if (result.leadId) {
+      const [leadRow] = await db
+        .select({
+          id: leadsTable.id,
+          firstName: leadsTable.firstName,
+          lastName: leadsTable.lastName,
+          assignedTo: leadsTable.assignedTo,
+        })
+        .from(leadsTable)
+        .where(eq(leadsTable.id, result.leadId));
+      if (leadRow) {
+        leadInfo = {
+          id: leadRow.id,
+          name: `${leadRow.firstName || ""} ${leadRow.lastName || ""}`.trim() || "Lead",
+          assignedTo: leadRow.assignedTo ?? null,
+        };
+      }
+    }
+
     res.json({
       unroutedRow: updated,
       leadId: result.leadId,
       resubmitted: result.resubmitted,
       valueMapUpdated: result.valueMapUpdated,
+      lead: leadInfo,
     });
   },
 );
