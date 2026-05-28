@@ -156,6 +156,181 @@ router.delete(
   },
 );
 
+type RouteResult =
+  | { ok: true; rowId: number; leadId: number | null; resubmitted?: boolean; valueMapUpdated: boolean }
+  | { ok: false; rowId: number; status: number; error: string };
+
+async function routeRowToFunnel(
+  rowId: number,
+  funnelId: number,
+  addToValueMap: boolean,
+  userId: number | undefined,
+  expectedTenantId: number,
+): Promise<RouteResult> {
+  const [row] = await db
+    .select()
+    .from(unroutedSheetRowsTable)
+    .where(eq(unroutedSheetRowsTable.id, rowId));
+
+  if (!row) return { ok: false, rowId, status: 404, error: "Unrouted row not found" };
+  if (row.tenantId !== expectedTenantId) {
+    return { ok: false, rowId, status: 404, error: "Unrouted row not found" };
+  }
+  if (row.resolvedAt) {
+    return { ok: false, rowId, status: 409, error: "Row has already been resolved" };
+  }
+
+  const [funnelAccess] = await db
+    .select({ id: funnelTypesTable.id, name: funnelTypesTable.name, isActive: funnelTypesTable.isActive })
+    .from(funnelTypesTable)
+    .innerJoin(
+      tenantFunnelTypesTable,
+      and(
+        eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id),
+        eq(tenantFunnelTypesTable.tenantId, row.tenantId),
+      ),
+    )
+    .where(eq(funnelTypesTable.id, funnelId));
+
+  if (!funnelAccess || !funnelAccess.isActive) {
+    return { ok: false, rowId, status: 400, error: "Funnel not available for this tenant" };
+  }
+
+  const [config] = await db
+    .select()
+    .from(googleSheetConfigsTable)
+    .where(eq(googleSheetConfigsTable.id, row.sheetConfigId));
+  if (!config) {
+    return { ok: false, rowId, status: 404, error: "Sheet config not found" };
+  }
+
+  const data = (row.rowData || {}) as Record<string, string>;
+  const normalizedPhone = (data.phone || "").replace(/[^0-9]/g, "");
+
+  if (normalizedPhone) {
+    const [dup] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(and(
+        eq(leadsTable.tenantId, row.tenantId),
+        eq(leadsTable.phone, data.phone),
+      ));
+    if (dup) {
+      try {
+        await handleResubmission(row.tenantId, dup.id, "Google Sheets");
+        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
+        if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
+      } catch (err) {
+        console.warn("[UnroutedRoute] Resubmission failed for lead", dup.id, err);
+      }
+      const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
+      await db
+        .update(unroutedSheetRowsTable)
+        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
+        .where(eq(unroutedSheetRowsTable.id, rowId));
+      return { ok: true, rowId, leadId: dup.id, resubmitted: true, valueMapUpdated };
+    }
+  }
+
+  const isPreBooked = isPreBookedCellValue(data.appointmentBooked);
+  const hasApptDetails = isValidAppointmentValue(data.appointmentDate) || isValidAppointmentValue(data.appointmentTime);
+  const effectivePreBooked = isPreBooked || hasApptDetails;
+
+  const customMapping = (config.columnMapping || {}) as Record<string, string>;
+  const customMappingValues = Object.values(customMapping);
+  const hasApptFieldsMapped = customMappingValues.some(f => f === "appointmentDate" || f === "appointmentTime" || f === "addOns");
+  const visibleAfter = hasApptFieldsMapped && !effectivePreBooked
+    ? new Date(Date.now() + 3 * 60 * 1000)
+    : null;
+
+  const normalizedIntakeSource = await normalizeSource(row.tenantId, data.source || "Unknown");
+
+  const [lead] = await db.insert(leadsTable).values({
+    tenantId: row.tenantId,
+    firstName: data.firstName || "Unknown",
+    lastName: data.lastName || "",
+    phone: data.phone || null,
+    email: data.email || null,
+    source: normalizedIntakeSource,
+    originalSource: normalizedIntakeSource,
+    serviceType: data.serviceType || null,
+    notes: data.notes || null,
+    address: data.address || null,
+    city: data.city || null,
+    state: data.state || null,
+    zip: data.zip || null,
+    appointmentDate: data.appointmentDate || null,
+    appointmentTime: data.appointmentTime || null,
+    addOns: data.addOns || null,
+    visibleAfter,
+    funnelId,
+    leadType: funnelAccess.name || null,
+    hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
+    dayInSequence: 1,
+    status: "new",
+    preBooked: effectivePreBooked,
+    contactPreferences: [],
+  }).returning();
+
+  if (lead) {
+    const { recordLeadStatusChange } = await import("../services/lead-status-history");
+    await recordLeadStatusChange({
+      leadId: lead.id,
+      tenantId: row.tenantId,
+      fromStatus: null,
+      toStatus: lead.hubStatus,
+      changedAt: lead.createdAt ?? undefined,
+      reason: "unrouted_row_reroute",
+    });
+
+    try {
+      const result = await assignLeadRoundRobin(row.tenantId, lead.id, funnelId);
+      if (result.assignedCsrId && result.passIntervalMinutes != null) {
+        const passIntervalMs = result.passIntervalMinutes * 60 * 1000;
+        const visibilityDelayMs = visibleAfter ? Math.max(0, visibleAfter.getTime() - Date.now()) : 0;
+        scheduleAutoPass(lead.id, passIntervalMs + visibilityDelayMs);
+
+        await db.insert(callAttemptsTable).values({
+          leadId: lead.id,
+          userId: result.assignedCsrId,
+          method: "system",
+          outcome: "initial_assignment",
+          platform: "native",
+          actionType: "system",
+          notes: `System: Lead initially assigned to ${result.csrName}`,
+        });
+
+        if (visibleAfter) {
+          await db.insert(callAttemptsTable).values({
+            leadId: lead.id,
+            userId: result.assignedCsrId,
+            method: "system",
+            outcome: "visibility_delay",
+            platform: "native",
+            actionType: "system",
+            notes: `System: Lead visibility delayed 3 minutes (auto-book window)`,
+          });
+        }
+      } else if (!result.assignedCsrId) {
+        console.warn(`[UnroutedRoute] Lead ${lead.id} not assigned: ${result.reason}`);
+      }
+    } catch (err) {
+      console.warn("[UnroutedRoute] Auto-assign failed for lead", lead.id, err);
+    }
+
+    scheduleOrEmitNewLead(lead.id, (lead.visibleAfter as Date | null) ?? null);
+  }
+
+  const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
+
+  await db
+    .update(unroutedSheetRowsTable)
+    .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
+    .where(eq(unroutedSheetRowsTable.id, rowId));
+
+  return { ok: true, rowId, leadId: lead?.id ?? null, valueMapUpdated };
+}
+
 router.post(
   "/unrouted-sheet-rows/:id/route-to-funnel",
   requireRole("super_admin", "agency_user"),
@@ -177,7 +352,7 @@ router.post(
     }
 
     const [row] = await db
-      .select()
+      .select({ tenantId: unroutedSheetRowsTable.tenantId })
       .from(unroutedSheetRowsTable)
       .where(eq(unroutedSheetRowsTable.id, id));
 
@@ -191,170 +366,110 @@ router.post(
     });
     if (!access.ok) return;
 
-    if (row.resolvedAt) {
-      res.status(409).json({ error: "Row has already been resolved" });
-      return;
-    }
-
-    const [funnelAccess] = await db
-      .select({ id: funnelTypesTable.id, name: funnelTypesTable.name, isActive: funnelTypesTable.isActive })
-      .from(funnelTypesTable)
-      .innerJoin(
-        tenantFunnelTypesTable,
-        and(
-          eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id),
-          eq(tenantFunnelTypesTable.tenantId, row.tenantId),
-        ),
-      )
-      .where(eq(funnelTypesTable.id, funnelId));
-
-    if (!funnelAccess || !funnelAccess.isActive) {
-      res.status(400).json({ error: "Funnel not available for this tenant" });
-      return;
-    }
-
-    const [config] = await db
-      .select()
-      .from(googleSheetConfigsTable)
-      .where(eq(googleSheetConfigsTable.id, row.sheetConfigId));
-    if (!config) {
-      res.status(404).json({ error: "Sheet config not found" });
-      return;
-    }
-
-    const data = (row.rowData || {}) as Record<string, string>;
     const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+    const result = await routeRowToFunnel(id, funnelId, !!addToValueMap, userId, row.tenantId);
 
-    const normalizedPhone = (data.phone || "").replace(/[^0-9]/g, "");
-
-    if (normalizedPhone) {
-      const [dup] = await db
-        .select({ id: leadsTable.id })
-        .from(leadsTable)
-        .where(and(
-          eq(leadsTable.tenantId, row.tenantId),
-          eq(leadsTable.phone, data.phone),
-        ));
-      if (dup) {
-        try {
-          await handleResubmission(row.tenantId, dup.id, "Google Sheets");
-          const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
-          if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
-        } catch (err) {
-          console.warn("[UnroutedRoute] Resubmission failed for lead", dup.id, err);
-        }
-        await maybeUpdateValueMap(config, row, funnelId, !!addToValueMap);
-        const [updated] = await db
-          .update(unroutedSheetRowsTable)
-          .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
-          .where(eq(unroutedSheetRowsTable.id, id))
-          .returning();
-        res.json({ unroutedRow: updated, leadId: dup.id, resubmitted: true });
-        return;
-      }
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
     }
-
-    const isPreBooked = isPreBookedCellValue(data.appointmentBooked);
-    const hasApptDetails = isValidAppointmentValue(data.appointmentDate) || isValidAppointmentValue(data.appointmentTime);
-    const effectivePreBooked = isPreBooked || hasApptDetails;
-
-    const customMapping = (config.columnMapping || {}) as Record<string, string>;
-    const customMappingValues = Object.values(customMapping);
-    const hasApptFieldsMapped = customMappingValues.some(f => f === "appointmentDate" || f === "appointmentTime" || f === "addOns");
-    const visibleAfter = hasApptFieldsMapped && !effectivePreBooked
-      ? new Date(Date.now() + 3 * 60 * 1000)
-      : null;
-
-    const normalizedIntakeSource = await normalizeSource(row.tenantId, data.source || "Unknown");
-
-    const [lead] = await db.insert(leadsTable).values({
-      tenantId: row.tenantId,
-      firstName: data.firstName || "Unknown",
-      lastName: data.lastName || "",
-      phone: data.phone || null,
-      email: data.email || null,
-      source: normalizedIntakeSource,
-      originalSource: normalizedIntakeSource,
-      serviceType: data.serviceType || null,
-      notes: data.notes || null,
-      address: data.address || null,
-      city: data.city || null,
-      state: data.state || null,
-      zip: data.zip || null,
-      appointmentDate: data.appointmentDate || null,
-      appointmentTime: data.appointmentTime || null,
-      addOns: data.addOns || null,
-      visibleAfter,
-      funnelId,
-      leadType: funnelAccess.name || null,
-      hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
-      dayInSequence: 1,
-      status: "new",
-      preBooked: effectivePreBooked,
-      contactPreferences: [],
-    }).returning();
-
-    if (lead) {
-      const { recordLeadStatusChange } = await import("../services/lead-status-history");
-      await recordLeadStatusChange({
-        leadId: lead.id,
-        tenantId: row.tenantId,
-        fromStatus: null,
-        toStatus: lead.hubStatus,
-        changedAt: lead.createdAt ?? undefined,
-        reason: "unrouted_row_reroute",
-      });
-
-      try {
-        const result = await assignLeadRoundRobin(row.tenantId, lead.id, funnelId);
-        if (result.assignedCsrId && result.passIntervalMinutes != null) {
-          const passIntervalMs = result.passIntervalMinutes * 60 * 1000;
-          const visibilityDelayMs = visibleAfter ? Math.max(0, visibleAfter.getTime() - Date.now()) : 0;
-          scheduleAutoPass(lead.id, passIntervalMs + visibilityDelayMs);
-
-          await db.insert(callAttemptsTable).values({
-            leadId: lead.id,
-            userId: result.assignedCsrId,
-            method: "system",
-            outcome: "initial_assignment",
-            platform: "native",
-            actionType: "system",
-            notes: `System: Lead initially assigned to ${result.csrName}`,
-          });
-
-          if (visibleAfter) {
-            await db.insert(callAttemptsTable).values({
-              leadId: lead.id,
-              userId: result.assignedCsrId,
-              method: "system",
-              outcome: "visibility_delay",
-              platform: "native",
-              actionType: "system",
-              notes: `System: Lead visibility delayed 3 minutes (auto-book window)`,
-            });
-          }
-        } else if (!result.assignedCsrId) {
-          console.warn(`[UnroutedRoute] Lead ${lead.id} not assigned: ${result.reason}`);
-        }
-      } catch (err) {
-        console.warn("[UnroutedRoute] Auto-assign failed for lead", lead.id, err);
-      }
-
-      scheduleOrEmitNewLead(lead.id, (lead.visibleAfter as Date | null) ?? null);
-    }
-
-    const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, !!addToValueMap);
 
     const [updated] = await db
-      .update(unroutedSheetRowsTable)
-      .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null })
-      .where(eq(unroutedSheetRowsTable.id, id))
-      .returning();
+      .select()
+      .from(unroutedSheetRowsTable)
+      .where(eq(unroutedSheetRowsTable.id, id));
 
     res.json({
       unroutedRow: updated,
-      leadId: lead?.id ?? null,
-      valueMapUpdated,
+      leadId: result.leadId,
+      resubmitted: result.resubmitted,
+      valueMapUpdated: result.valueMapUpdated,
+    });
+  },
+);
+
+router.post(
+  "/unrouted-sheet-rows/bulk-route-to-funnel",
+  requireRole("super_admin", "agency_user"),
+  async (req, res): Promise<void> => {
+    const { rowIds: rowIdsRaw, funnelId: funnelIdRaw, addToValueMap } = req.body as {
+      rowIds?: Array<number | string>;
+      funnelId?: number | string;
+      addToValueMap?: boolean;
+    };
+
+    const funnelId = typeof funnelIdRaw === "string" ? parseInt(funnelIdRaw) : funnelIdRaw;
+    if (!funnelId || Number.isNaN(funnelId)) {
+      res.status(400).json({ error: "funnelId is required" });
+      return;
+    }
+
+    if (!Array.isArray(rowIdsRaw) || rowIdsRaw.length === 0) {
+      res.status(400).json({ error: "rowIds must be a non-empty array" });
+      return;
+    }
+    if (rowIdsRaw.length > 200) {
+      res.status(400).json({ error: "Cannot bulk-route more than 200 rows at once" });
+      return;
+    }
+
+    const rowIds = Array.from(new Set(
+      rowIdsRaw
+        .map(r => typeof r === "string" ? parseInt(r) : r)
+        .filter((n): n is number => typeof n === "number" && Number.isFinite(n)),
+    ));
+    if (rowIds.length === 0) {
+      res.status(400).json({ error: "rowIds must be a non-empty array" });
+      return;
+    }
+
+    const rows = await db
+      .select({ id: unroutedSheetRowsTable.id, tenantId: unroutedSheetRowsTable.tenantId })
+      .from(unroutedSheetRowsTable)
+      .where(sql`${unroutedSheetRowsTable.id} = ANY(${rowIds})`);
+
+    const tenantIds = new Set(rows.map(r => r.tenantId));
+    if (tenantIds.size !== 1) {
+      res.status(400).json({ error: "All rows must belong to the same tenant" });
+      return;
+    }
+    const tenantId = rows[0].tenantId;
+
+    const access = assertResourceTenantAccess(req, res, tenantId, {
+      notFoundOnMismatch: true, notFoundMessage: "Unrouted row not found",
+    });
+    if (!access.ok) return;
+
+    const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+    const knownIds = new Set(rows.map(r => r.id));
+    const results: RouteResult[] = [];
+
+    for (const rid of rowIds) {
+      if (!knownIds.has(rid)) {
+        results.push({ ok: false, rowId: rid, status: 404, error: "Unrouted row not found" });
+        continue;
+      }
+      try {
+        const r = await routeRowToFunnel(rid, funnelId, !!addToValueMap, userId, tenantId);
+        results.push(r);
+      } catch (err) {
+        console.error("[UnroutedBulkRoute] Row failed", rid, err);
+        results.push({ ok: false, rowId: rid, status: 500, error: err instanceof Error ? err.message : "Unknown error" });
+      }
+    }
+
+    const succeeded = results.filter(r => r.ok).length;
+    const failed = results.length - succeeded;
+
+    res.json({
+      total: results.length,
+      succeeded,
+      failed,
+      results: results.map(r =>
+        r.ok
+          ? { rowId: r.rowId, ok: true, leadId: r.leadId, resubmitted: r.resubmitted ?? false, valueMapUpdated: r.valueMapUpdated }
+          : { rowId: r.rowId, ok: false, error: r.error }
+      ),
     });
   },
 );

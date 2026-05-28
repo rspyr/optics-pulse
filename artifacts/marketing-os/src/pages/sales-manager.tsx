@@ -2917,6 +2917,17 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
   const [unroutedFunnelChoice, setUnroutedFunnelChoice] = useState<Record<number, number | "">>({});
   const [unroutedAddToMap, setUnroutedAddToMap] = useState<Record<number, boolean>>({});
   const [unroutedError, setUnroutedError] = useState<{ rowId: number; msg: string } | null>(null);
+  const [selectedUnroutedIds, setSelectedUnroutedIds] = useState<Set<number>>(new Set());
+  const [bulkFunnelChoice, setBulkFunnelChoice] = useState<number | "">("");
+  const [bulkAddToMap, setBulkAddToMap] = useState(false);
+  const [bulkRouting, setBulkRouting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<{
+    total: number;
+    succeeded: number;
+    failed: number;
+    perRow: Record<number, { ok: boolean; error?: string; leadId?: number | null }>;
+  } | null>(null);
 
   const loadUnroutedRows = useCallback(async (configId: number) => {
     if (!tenantId) return;
@@ -2929,7 +2940,15 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
       );
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) setUnroutedRows(data);
+        if (Array.isArray(data)) {
+          setUnroutedRows(data);
+          setSelectedUnroutedIds(prev => {
+            const valid = new Set<number>();
+            const ids = new Set<number>((data as UnroutedSheetRow[]).map(r => r.id));
+            prev.forEach(id => { if (ids.has(id)) valid.add(id); });
+            return valid;
+          });
+        }
       }
     } catch {} finally { setUnroutedLoading(false); }
   }, [tenantId]);
@@ -2938,10 +2957,84 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
     if (unroutedOpenId === configId) {
       setUnroutedOpenId(null);
       setUnroutedRows(null);
+      setSelectedUnroutedIds(new Set());
+      setBulkResult(null);
+      setBulkError(null);
     } else {
       setUnroutedOpenId(configId);
+      setSelectedUnroutedIds(new Set());
+      setBulkResult(null);
+      setBulkError(null);
+      setBulkFunnelChoice("");
+      setBulkAddToMap(false);
       loadUnroutedRows(configId);
     }
+  };
+
+  const toggleRowSelected = (rowId: number) => {
+    setSelectedUnroutedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId); else next.add(rowId);
+      return next;
+    });
+    setBulkResult(null);
+  };
+
+  const toggleSelectAll = () => {
+    if (!unroutedRows) return;
+    const selectable = unroutedRows.filter(r => !r.resolvedAt);
+    setSelectedUnroutedIds(prev => {
+      if (selectable.every(r => prev.has(r.id))) return new Set();
+      return new Set(selectable.map(r => r.id));
+    });
+    setBulkResult(null);
+  };
+
+  const selectedRows = (unroutedRows || []).filter(r => selectedUnroutedIds.has(r.id));
+  const sharedUnmatchedValue: string | null = (() => {
+    if (selectedRows.length === 0) return null;
+    const first = (selectedRows[0].unmatchedValue || "").trim();
+    if (!first) return null;
+    const sameCol = selectedRows.every(r => r.funnelColumn && r.funnelColumn === selectedRows[0].funnelColumn);
+    const sameVal = selectedRows.every(r => (r.unmatchedValue || "").trim() === first);
+    return sameCol && sameVal ? first : null;
+  })();
+
+  const handleBulkRouteToFunnel = async (configId: number) => {
+    if (!bulkFunnelChoice || selectedRows.length === 0) {
+      setBulkError("Pick a funnel and at least one row");
+      return;
+    }
+    setBulkRouting(true);
+    setBulkError(null);
+    setBulkResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/unrouted-sheet-rows/bulk-route-to-funnel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          rowIds: selectedRows.map(r => r.id),
+          funnelId: bulkFunnelChoice,
+          addToValueMap: !!sharedUnmatchedValue && bulkAddToMap,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        setBulkError((data && data.error) || "Bulk send failed");
+        return;
+      }
+      const perRow: Record<number, { ok: boolean; error?: string; leadId?: number | null }> = {};
+      for (const r of data.results || []) {
+        perRow[r.rowId] = { ok: !!r.ok, error: r.error, leadId: r.leadId ?? null };
+      }
+      setBulkResult({ total: data.total, succeeded: data.succeeded, failed: data.failed, perRow });
+      setSelectedUnroutedIds(new Set());
+      await loadUnroutedRows(configId);
+      handleRefetch();
+    } catch {
+      setBulkError("Connection error");
+    } finally { setBulkRouting(false); }
   };
 
   const handleResolveUnrouted = async (rowId: number, configId: number) => {
@@ -3448,10 +3541,77 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                 ) : !unroutedRows || unroutedRows.length === 0 ? (
                   <p className="text-xs text-white/30 py-2">No unrouted rows.</p>
                 ) : (
+                  <>
+                    {isAgency && (
+                      <div className="mb-2 p-2 border border-amber-500/20 rounded bg-amber-500/5 flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-amber-300/80 uppercase tracking-wider">
+                          {selectedUnroutedIds.size} selected
+                        </span>
+                        <div className="flex-1 min-w-[160px]">
+                          <Select
+                            value={bulkFunnelChoice ? String(bulkFunnelChoice) : "__none__"}
+                            onValueChange={v => {
+                              setBulkFunnelChoice(v === "__none__" ? "" : Number(v));
+                              setBulkError(null);
+                            }}
+                          >
+                            <SelectTrigger className="h-7 w-full bg-white/5 border border-white/10 rounded px-2 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                              <SelectValue placeholder="Send selected to funnel…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Send selected to funnel…</SelectItem>
+                              {funnels.filter(f => f.isActive).map(f => (
+                                <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {sharedUnmatchedValue && (
+                          <label className="flex items-center gap-1 text-[10px] text-white/60 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={bulkAddToMap}
+                              onChange={e => setBulkAddToMap(e.target.checked)}
+                              className="h-3 w-3 accent-primary"
+                            />
+                            Also map “{sharedUnmatchedValue}” → funnel
+                          </label>
+                        )}
+                        <button
+                          onClick={() => handleBulkRouteToFunnel(cfg.id)}
+                          disabled={bulkRouting || selectedUnroutedIds.size === 0 || !bulkFunnelChoice}
+                          className="text-[10px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 disabled:hover:bg-emerald-500/20"
+                        >
+                          {bulkRouting ? "Sending…" : `Send selected to funnel →`}
+                        </button>
+                        {bulkError && (
+                          <span className="text-[10px] text-red-400">{bulkError}</span>
+                        )}
+                        {bulkResult && (
+                          <span className={`text-[10px] ${bulkResult.failed === 0 ? "text-emerald-300" : "text-amber-300"}`}>
+                            {bulkResult.succeeded}/{bulkResult.total} sent{bulkResult.failed > 0 ? `, ${bulkResult.failed} failed` : ""}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   <div className="overflow-x-auto max-h-60 border border-amber-500/20 rounded">
                     <table className="w-full text-[10px]">
                       <thead className="bg-amber-500/5">
                         <tr className="border-b border-amber-500/20">
+                          {isAgency && (
+                            <th className="text-left py-1 px-2 text-amber-300/70 w-6">
+                              <input
+                                type="checkbox"
+                                aria-label="Select all unrouted rows"
+                                className="h-3 w-3 accent-primary"
+                                checked={
+                                  unroutedRows.filter(r => !r.resolvedAt).length > 0 &&
+                                  unroutedRows.filter(r => !r.resolvedAt).every(r => selectedUnroutedIds.has(r.id))
+                                }
+                                onChange={toggleSelectAll}
+                              />
+                            </th>
+                          )}
                           <th className="text-left py-1 px-2 text-amber-300/70">Received</th>
                           <th className="text-left py-1 px-2 text-amber-300/70">Unmatched value</th>
                           <th className="text-left py-1 px-2 text-amber-300/70">Row data</th>
@@ -3459,10 +3619,29 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                         </tr>
                       </thead>
                       <tbody>
-                        {unroutedRows.map(r => (
+                        {unroutedRows.map(r => {
+                          const rowResult = bulkResult?.perRow[r.id];
+                          return (
                           <tr key={r.id} className="border-b border-white/[0.03] align-top">
+                            {isAgency && (
+                              <td className="py-1 px-2 align-top">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select unrouted row ${r.id}`}
+                                  className="h-3 w-3 accent-primary mt-1"
+                                  disabled={!!r.resolvedAt}
+                                  checked={selectedUnroutedIds.has(r.id)}
+                                  onChange={() => toggleRowSelected(r.id)}
+                                />
+                              </td>
+                            )}
                             <td className="py-1 px-2 text-white/50 whitespace-nowrap">
                               {new Date(r.createdAt).toLocaleString()}
+                              {rowResult && (
+                                <div className={`mt-0.5 text-[10px] ${rowResult.ok ? "text-emerald-400" : "text-red-400"}`}>
+                                  {rowResult.ok ? "✓ Sent" : `✗ ${rowResult.error || "Failed"}`}
+                                </div>
+                              )}
                             </td>
                             <td className="py-1 px-2 text-amber-300/90 font-mono">
                               {r.unmatchedValue || <span className="text-white/30 italic">(empty)</span>}
@@ -3534,10 +3713,12 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch, deepLink }: { 
                               )}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
               </div>
             )}
