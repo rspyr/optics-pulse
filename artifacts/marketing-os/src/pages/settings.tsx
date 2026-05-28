@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useTenants } from "@/hooks/use-tenants";
+import { toast } from "@/hooks/use-toast";
 import { useGetPodiumUsers, useLinkPodiumUser } from "@workspace/api-client-react";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -263,7 +264,7 @@ export default function Settings() {
   // revenue" button surfaces in the internal admin page: the recompute runs
   // ServiceTitan invoices first, then estimates, each publishing a running
   // row tally (and an estimated total) to its sync log.
-  type RecomputePhase = { lastStatus: string; recordsProcessed: number; totalRecords: number | null; lastRun: string | null };
+  type RecomputePhase = { lastStatus: string; recordsProcessed: number; totalRecords: number | null; lastRun: string | null; runningLogId: number | null; cancelRequested: boolean };
   const [recomputePhases, setRecomputePhases] = useState<{ invoices: RecomputePhase; estimates: RecomputePhase } | null>(null);
   const [recomputeArmed, setRecomputeArmed] = useState(false);
   const [recomputeOutcome, setRecomputeOutcome] = useState<null | "success" | "failed">(null);
@@ -272,6 +273,20 @@ export default function Settings() {
   const recomputeBaseline = useRef<{ inv: string | null; est: string | null } | null>(null);
   const recomputeSawRunning = useRef(false);
   const recomputeArmedAt = useRef(0);
+
+  // Cancel handshake state for the running recompute phase. Mirrors the
+  // internal admin page: optimistically flip to a "Cancelling…" state, then
+  // reveal a "Force cancel" affordance after a short delay so the cooperative
+  // cancel has time to unwind before suggesting a hard kill.
+  const [cancellingLogIds, setCancellingLogIds] = useState<Record<number, boolean>>({});
+  const [cancelStartedAt, setCancelStartedAt] = useState<Record<number, number>>({});
+  const [, setCancelNowTick] = useState(0);
+  useEffect(() => {
+    if (Object.keys(cancelStartedAt).length === 0) return;
+    const id = setInterval(() => setCancelNowTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [cancelStartedAt]);
+  const FORCE_CANCEL_DELAY_MS = 8000;
 
   const recomputeRunning = recomputePhases
     ? recomputePhases.invoices.lastStatus === "running" || recomputePhases.estimates.lastStatus === "running"
@@ -284,6 +299,8 @@ export default function Settings() {
       recordsProcessed: typeof p.recordsProcessed === "number" ? p.recordsProcessed : 0,
       totalRecords: typeof p.totalRecords === "number" ? p.totalRecords : null,
       lastRun: typeof p.lastRun === "string" ? p.lastRun : null,
+      runningLogId: typeof p.runningLogId === "number" ? p.runningLogId : null,
+      cancelRequested: p.cancelRequested === true,
     };
   };
 
@@ -300,6 +317,37 @@ export default function Settings() {
       });
     } catch { /* ignore */ }
   }, [tenantId]);
+
+  // Cancel the in-flight recompute. Targets the sync log of whichever phase
+  // (invoices or estimates) currently owns a running row. Reuses the same
+  // cooperative cancel route the internal admin page uses; rows already
+  // reprocessed are kept and the run stops after the current batch.
+  const cancelRecompute = async (logId: number, force = false) => {
+    if (!logId) return;
+    const prompt = force
+      ? `Force-cancel the revenue recompute? This hard-flips the run to "cancelled" — use only if the worker is unresponsive.`
+      : "Cancel the running revenue recompute? Rows already reprocessed will be kept.";
+    if (!confirm(prompt)) return;
+    setCancellingLogIds((s) => ({ ...s, [logId]: true }));
+    if (!force) setCancelStartedAt((s) => (s[logId] ? s : { ...s, [logId]: Date.now() }));
+    try {
+      const url = `${API_BASE}/api/integrations/sync-logs/${logId}/cancel${force ? "?force=true" : ""}`;
+      const res = await fetch(url, { method: "POST", credentials: "include" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
+      } else {
+        toast({
+          title: body?.forced ? "Run hard-cancelled" : "Cancel requested",
+          description: body?.message || "The recompute will stop after the current batch finishes.",
+        });
+      }
+    } catch (err) {
+      toast({ title: "Cancel failed", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      fetchRecomputeStatus();
+    }
+  };
 
   // Poll while we're waiting on a recompute we armed OR while a recompute is
   // observed running (covers reopening the panel mid-run).
@@ -994,12 +1042,55 @@ export default function Settings() {
                   </div>
                 );
               };
+              // The endpoint runs invoices then estimates, one phase running
+              // at a time. The cancel button targets whichever phase currently
+              // owns a `running` sync log.
+              const runningPhase = inv?.lastStatus === "running" ? inv
+                : est?.lastStatus === "running" ? est
+                  : null;
+              const runningLogId = runningPhase?.runningLogId ?? null;
+              const isCancelling = (runningPhase?.cancelRequested ?? false)
+                || (runningLogId ? !!cancellingLogIds[runningLogId] : false);
               return (
                 <div className="mt-3 rounded-lg border border-blue-400/20 bg-blue-500/[0.06] p-3 space-y-2">
-                  <p className="flex items-center gap-1.5 text-xs font-medium text-blue-300">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Recomputing historical revenue…
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 text-xs font-medium text-blue-300">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Recomputing historical revenue…
+                    </p>
+                    {runningLogId && (
+                      isCancelling ? (() => {
+                        const startedAt = cancelStartedAt[runningLogId];
+                        const elapsedMs = startedAt ? Date.now() - startedAt : Number.MAX_SAFE_INTEGER;
+                        const showForce = !startedAt || elapsedMs > FORCE_CANCEL_DELAY_MS;
+                        const secondsLeft = startedAt ? Math.max(0, Math.ceil((FORCE_CANCEL_DELAY_MS - elapsedMs) / 1000)) : 0;
+                        return (
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-amber-400">Cancelling…</span>
+                            {showForce ? (
+                              <button
+                                onClick={() => cancelRecompute(runningLogId, true)}
+                                title="Worker may be stuck — hard-flip the run to cancelled"
+                                className="text-[10px] px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors"
+                              >
+                                Force cancel
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-white/40">(force in {secondsLeft}s)</span>
+                            )}
+                          </span>
+                        );
+                      })() : (
+                        <button
+                          onClick={() => cancelRecompute(runningLogId)}
+                          className="text-[11px] py-0.5 px-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-400/30 rounded text-red-300 transition-colors"
+                          title="Stop the recompute after the current batch. Rows already processed are kept."
+                        >
+                          Cancel
+                        </button>
+                      )
+                    )}
+                  </div>
                   <p className="text-[11px] text-gray-500">
                     Re-applying the rebate program list to existing invoices and estimates. You can leave this page — it'll keep running.
                   </p>
