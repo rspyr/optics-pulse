@@ -17,6 +17,12 @@ import { useApi } from "@/hooks/useApi";
 
 interface PhoneMatch { id: number; name: string }
 
+const CONTACT_PREF_OPTIONS: { key: string; label: string; icon: keyof typeof Feather.glyphMap; color: string }[] = [
+  { key: "text_only", label: "Text Only", icon: "message-square", color: "#3B82F6" },
+  { key: "spanish_speaking", label: "Spanish", icon: "globe", color: "#8B5CF6" },
+  { key: "do_not_call", label: "DNC", icon: "phone-off", color: "#EF4444" },
+];
+
 interface CreatedLead { id: number; name: string }
 
 interface AddLeadModalProps {
@@ -50,6 +56,8 @@ export function AddLeadModal({
   const [showSourceOptions, setShowSourceOptions] = useState(false);
   const [showFunnelOptions, setShowFunnelOptions] = useState(false);
 
+  const [contactPreferences, setContactPreferences] = useState<string[]>([]);
+
   const [phoneMatch, setPhoneMatch] = useState<PhoneMatch | null>(null);
   const [phoneChecking, setPhoneChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -63,6 +71,7 @@ export function AddLeadModal({
       setEmail("");
       setSource("");
       setFunnelId(null);
+      setContactPreferences([]);
       setPhoneMatch(null);
       setPhoneChecking(false);
       setSubmitting(false);
@@ -130,6 +139,7 @@ export function AddLeadModal({
           email: email.trim() || null,
           source: source.trim(),
           funnelId,
+          contactPreferences,
         }),
       });
       const created: CreatedLead = {
@@ -290,6 +300,36 @@ export function AddLeadModal({
               </View>
             )}
 
+            <View>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>CONTACT PREFERENCES</Text>
+              <View style={styles.prefsRow}>
+                {CONTACT_PREF_OPTIONS.map(opt => {
+                  const selected = contactPreferences.includes(opt.key);
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      style={[
+                        styles.prefBadge,
+                        {
+                          backgroundColor: selected ? opt.color + "20" : colors.secondary + "40",
+                          borderColor: selected ? opt.color + "60" : colors.border,
+                        },
+                      ]}
+                      onPress={() => setContactPreferences(prev =>
+                        prev.includes(opt.key) ? prev.filter(k => k !== opt.key) : [...prev, opt.key],
+                      )}
+                      activeOpacity={0.7}
+                    >
+                      <Feather name={opt.icon} size={11} color={selected ? opt.color : colors.mutedForeground} />
+                      <Text style={[styles.prefText, { color: selected ? opt.color : colors.mutedForeground }]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
             {error && (
               <View style={styles.errorBox}>
                 <Feather name="x-circle" size={12} color="#EF4444" />
@@ -352,6 +392,9 @@ const styles = StyleSheet.create({
   optionList: { borderRadius: 8, borderWidth: 1, marginTop: 4, overflow: "hidden" },
   option: { paddingHorizontal: 12, paddingVertical: 10 },
   optionText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  prefsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  prefBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, borderWidth: 1 },
+  prefText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   errorBox: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 6, backgroundColor: "#EF444415", borderWidth: 1, borderColor: "#EF444440" },
   errorText: { fontSize: 12, fontFamily: "Inter_500Medium", color: "#EF4444", flex: 1 },
   footer: { flexDirection: "row", justifyContent: "flex-end", gap: 8, padding: 12, borderTopWidth: 1 },
