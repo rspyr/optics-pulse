@@ -1,0 +1,55 @@
+Here is the transcription of the conversation from the file **CleanShot 2026-05-28 at 14.27.30@2x.jpg**:
+
+**Blue:**
+Hey bro! Can you remind me again - do you guys create multiple ‘jobs’ that are quotes for a particular customer and then only the sold one gets made into an invoice? Or the sold one is marked ‘sold’?
+
+We talked about what I’d need to look at to see the correct revenue number and rebate line items but I of course I didn’t write it down and then the project got pushed off and now I forget what the plan was lol.
+*[Reaction: HA HA]*
+
+**Blue:**
+I can call too if it’s easier to talk out over the phone!
+
+**Grey:**
+Estimates all get nested under whatever job the tech is on! They can provide multiple estimates and then choose which one is sold
+
+**Blue:**
+And then where does the ‘sold’ record live? On the estimate that was sold, on the invoice, both? And are rebate line items only on the invoices?
+*(Edited)*
+
+**Grey:**
+And I think the only weird thing with the correct revenue is Energy Trust of Oregon rebates get taken out of the total in service titan, so you just have to see if there’s any line items that are labeled “ETO $xxx”
+
+**Grey:**
+If you got to a job on the right hand side there’ll be a section labeled estimates and it’ll show each estimate and their total
+
+**Grey:**
+We crate a project out of the sold estimate, the project includes all the ‘jobs’ including the estimate job with all the estimates attached and then the install job
+
+**Grey:**
+The right hand side thing shows a “sold” on whatever one is sold too
+
+**Grey:**
+I think it’s like highlighted green
+
+**Blue:**
+
+> And I think the only weird thing with the correct revenue is Energy Trust of Oregon rebates get taken out of the total in service titan, so you just have to see if there’s any line items that are labeled “ETO $xxx”
+
+Where does this live? In an invoice or the sold estimate or in the project?
+
+**Grey:**
+It’ll be inside the estimate itself and on the invoice if it gets turned into a project/install job
+
+**Grey:**
+Technically it’s in the project too since the project is essentially a container that holds associated jobs etc
+
+**Grey:**
+An install job gets created from the invoice and everything that is on the estimate copy pasted onto the install invoice
+
+**Grey:**
+Sorry a project gets created from the estimate* which includes an install job with that invoice with all the line items that were on the estimate
+*(Edited)*
+
+**Grey:**
+I can’t edit and I text and send before I think 😂 jk now it’s letting me edit
+*(Edited)*
