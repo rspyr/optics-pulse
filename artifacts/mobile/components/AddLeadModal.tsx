@@ -12,10 +12,12 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useColors } from "@/hooks/useColors";
 import { useApi } from "@/hooks/useApi";
 
 interface PhoneMatch { id: number; name: string }
+interface CsrOption { id: number; name: string }
 
 const CONTACT_PREF_OPTIONS: { key: string; label: string; icon: keyof typeof Feather.glyphMap; color: string }[] = [
   { key: "text_only", label: "Text Only", icon: "message-square", color: "#3B82F6" },
@@ -58,6 +60,14 @@ export function AddLeadModal({
 
   const [contactPreferences, setContactPreferences] = useState<string[]>([]);
 
+  const [callbackAt, setCallbackAt] = useState<Date | null>(null);
+  const [showCallbackDate, setShowCallbackDate] = useState(false);
+  const [showCallbackTime, setShowCallbackTime] = useState(false);
+
+  const [csrs, setCsrs] = useState<CsrOption[]>([]);
+  const [assignedCsrId, setAssignedCsrId] = useState<number | null>(null);
+  const [showCsrOptions, setShowCsrOptions] = useState(false);
+
   const [phoneMatch, setPhoneMatch] = useState<PhoneMatch | null>(null);
   const [phoneChecking, setPhoneChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -72,6 +82,11 @@ export function AddLeadModal({
       setSource("");
       setFunnelId(null);
       setContactPreferences([]);
+      setCallbackAt(null);
+      setShowCallbackDate(false);
+      setShowCallbackTime(false);
+      setAssignedCsrId(null);
+      setShowCsrOptions(false);
       setPhoneMatch(null);
       setPhoneChecking(false);
       setSubmitting(false);
@@ -95,6 +110,16 @@ export function AddLeadModal({
         );
       })
       .catch(() => setFunnels([]));
+    apiFetch(`/api/leads-hub/csrs?tenantId=${tenantId}`)
+      .then((d: any) => {
+        const list = Array.isArray(d?.csrs) ? d.csrs : [];
+        setCsrs(
+          list
+            .filter((c: { role?: string }) => c.role === "client_user" || c.role === "client_admin")
+            .map((c: { id: number; name: string }) => ({ id: c.id, name: c.name })),
+        );
+      })
+      .catch(() => setCsrs([]));
   }, [visible, tenantId, apiFetch]);
 
   useEffect(() => {
@@ -140,6 +165,8 @@ export function AddLeadModal({
           source: source.trim(),
           funnelId,
           contactPreferences,
+          callbackAt: callbackAt ? callbackAt.toISOString() : null,
+          assignedCsrId,
         }),
       });
       const created: CreatedLead = {
@@ -301,6 +328,100 @@ export function AddLeadModal({
             )}
 
             <View>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>CALLBACK AT</Text>
+              <View style={styles.callbackRow}>
+                <TouchableOpacity
+                  style={[styles.callbackBtn, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => setShowCallbackDate(true)}
+                  activeOpacity={0.7}
+                >
+                  <Feather name="calendar" size={14} color="#F59E0B" />
+                  <Text style={[styles.callbackBtnText, { color: callbackAt ? colors.foreground : colors.mutedForeground }]}>
+                    {callbackAt ? callbackAt.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "Pick date"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.callbackBtn, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => setShowCallbackTime(true)}
+                  activeOpacity={0.7}
+                >
+                  <Feather name="clock" size={14} color="#F59E0B" />
+                  <Text style={[styles.callbackBtnText, { color: callbackAt ? colors.foreground : colors.mutedForeground }]}>
+                    {callbackAt ? callbackAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "Pick time"}
+                  </Text>
+                </TouchableOpacity>
+                {callbackAt && (
+                  <TouchableOpacity
+                    style={styles.callbackClearBtn}
+                    onPress={() => setCallbackAt(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Feather name="x" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {showCallbackDate && (
+                <DateTimePicker
+                  value={callbackAt ?? new Date(Date.now() + 3600000)}
+                  mode="date"
+                  minimumDate={new Date()}
+                  onChange={(_: unknown, date?: Date) => {
+                    setShowCallbackDate(false);
+                    if (date) {
+                      const base = callbackAt ?? new Date(Date.now() + 3600000);
+                      const updated = new Date(base);
+                      updated.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                      setCallbackAt(updated);
+                    }
+                  }}
+                />
+              )}
+              {showCallbackTime && (
+                <DateTimePicker
+                  value={callbackAt ?? new Date(Date.now() + 3600000)}
+                  mode="time"
+                  onChange={(_: unknown, date?: Date) => {
+                    setShowCallbackTime(false);
+                    if (date) {
+                      const base = callbackAt ?? new Date(Date.now() + 3600000);
+                      const updated = new Date(base);
+                      updated.setHours(date.getHours(), date.getMinutes());
+                      setCallbackAt(updated);
+                    }
+                  }}
+                />
+              )}
+            </View>
+
+            {csrs.length > 0 && (
+              <View>
+                <Text style={[styles.label, { color: colors.mutedForeground }]}>ASSIGN TO</Text>
+                <TouchableOpacity
+                  style={[styles.input, styles.selectInput, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+                  onPress={() => setShowCsrOptions(v => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.selectText, { color: assignedCsrId ? colors.foreground : colors.mutedForeground }]}>
+                    {assignedCsrId ? csrs.find(c => c.id === assignedCsrId)?.name || "Auto / round-robin" : "Auto / round-robin"}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                {showCsrOptions && (
+                  <View style={[styles.optionList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <TouchableOpacity style={styles.option} onPress={() => { setAssignedCsrId(null); setShowCsrOptions(false); }}>
+                      <Text style={[styles.optionText, { color: colors.foreground }]}>Auto / round-robin</Text>
+                    </TouchableOpacity>
+                    {csrs.map(c => (
+                      <TouchableOpacity key={c.id} style={styles.option} onPress={() => { setAssignedCsrId(c.id); setShowCsrOptions(false); }}>
+                        <Text style={[styles.optionText, { color: assignedCsrId === c.id ? colors.primary : colors.foreground }]}>{c.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            <View>
               <Text style={[styles.label, { color: colors.mutedForeground }]}>CONTACT PREFERENCES</Text>
               <View style={styles.prefsRow}>
                 {CONTACT_PREF_OPTIONS.map(opt => {
@@ -393,6 +514,10 @@ const styles = StyleSheet.create({
   option: { paddingHorizontal: 12, paddingVertical: 10 },
   optionText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   prefsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  callbackRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  callbackBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, borderWidth: 1, flex: 1 },
+  callbackBtnText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  callbackClearBtn: { padding: 4 },
   prefBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, borderWidth: 1 },
   prefText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   errorBox: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 6, backgroundColor: "#EF444415", borderWidth: 1, borderColor: "#EF444440" },

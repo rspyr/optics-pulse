@@ -21,6 +21,7 @@ interface Lead {
   attemptCount?: number;
   contactPreferences?: string[];
   assignedUserName?: string;
+  assignedTo?: string | null;
   hasSoldEstimate?: boolean;
   resubmittedAt?: string | null;
 }
@@ -235,9 +236,9 @@ export function LeadCard({ lead, onPress, renderSourceOverride }: LeadCardProps)
           )}
         </View>
 
-        {lead.assignedUserName && (
+        {(lead.assignedUserName || lead.assignedTo) && (
           <Text style={[styles.assignedText, { color: colors.mutedForeground }]} numberOfLines={1}>
-            {lead.assignedUserName}
+            {lead.assignedUserName || lead.assignedTo}
           </Text>
         )}
       </View>

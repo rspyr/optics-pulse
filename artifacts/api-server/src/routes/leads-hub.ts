@@ -1239,7 +1239,7 @@ router.post("/leads-hub/create", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) { res.status(400).json({ error: "No tenant context" }); return; }
 
-  const { firstName, lastName, phone, email, source, serviceType, funnelId, assignedCsrId, contactPreferences } = req.body;
+  const { firstName, lastName, phone, email, source, serviceType, funnelId, assignedCsrId, contactPreferences, callbackAt } = req.body;
   if (!firstName || !lastName || !source) {
     res.status(400).json({ error: "firstName, lastName, and source are required" });
     return;
@@ -1295,6 +1295,16 @@ router.post("/leads-hub/create", async (req, res) => {
 
   const normalizedSource = await normalizeSource(tenantId, source);
 
+  let parsedCallbackAt: Date | null = null;
+  if (callbackAt) {
+    const d = new Date(callbackAt);
+    if (Number.isNaN(d.getTime())) {
+      res.status(400).json({ error: "Invalid callbackAt" });
+      return;
+    }
+    parsedCallbackAt = d;
+  }
+
   const [lead] = await db.insert(leadsTable).values({
     tenantId,
     firstName,
@@ -1311,6 +1321,7 @@ router.post("/leads-hub/create", async (req, res) => {
     hubStatus: "day_1",
     dayInSequence: 1,
     status: "new",
+    callbackAt: parsedCallbackAt,
   }).returning();
 
   await recordLeadStatusChange({
