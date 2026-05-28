@@ -160,7 +160,7 @@ export async function readRawSheetData(
   spreadsheetId: string,
   tabName: string,
 ): Promise<{ headers: string[]; rawRows: string[][] }> {
-  const range = `${tabName}!A:Z`;
+  const range = tabName;
 
   let client = await getUncachableGoogleSheetClient();
   let response;
