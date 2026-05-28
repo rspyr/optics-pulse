@@ -18,6 +18,7 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { recordLeadStatusChange } from "../services/lead-status-history";
 import { resetBookingCache } from "../services/lead-booking-cache";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
+import { handleResubmission } from "../services/lead-resubmission";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -1193,6 +1194,44 @@ router.post("/leads-hub/batch-transfer", async (req, res) => {
   res.json({ transferred: updatedLeads.length, message: `${updatedLeads.length} leads transferred from ${sourceUser.name} to ${targetUser.name}` });
 });
 
+// Look up whether a phone already belongs to a lead in the current tenant.
+// Used by the manual Add Lead form to warn operators before they create a
+// duplicate. Phones are normalized on both sides (digits-only, leading "1"
+// stripped) via normalizePhone, mirroring the unrouted-rows panel so the
+// hint matches what /leads-hub/create will actually do regardless of input
+// formatting ("(555) 123-4567" vs "5551234567" vs "1-555-123-4567"), and
+// also catches existing leads stored in a legacy/unnormalized format.
+router.get("/leads-hub/phone-match", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) { res.json({ match: null }); return; }
+
+  const normalized = normalizePhone(String(req.query.phone ?? ""));
+  if (!normalized) { res.json({ match: null }); return; }
+
+  const [match] = await db
+    .select({
+      id: leadsTable.id,
+      firstName: leadsTable.firstName,
+      lastName: leadsTable.lastName,
+    })
+    .from(leadsTable)
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      sql`CASE
+            WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
+              AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
+            THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
+            ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
+          END = ${normalized}`,
+    ))
+    .limit(1);
+
+  if (!match) { res.json({ match: null }); return; }
+
+  const name = [match.firstName, match.lastName].filter(Boolean).join(" ").trim() || "Lead";
+  res.json({ match: { id: match.id, name } });
+});
+
 router.post("/leads-hub/create", async (req, res) => {
   const userId = req.session?.userId;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
@@ -1204,6 +1243,40 @@ router.post("/leads-hub/create", async (req, res) => {
   if (!firstName || !lastName || !source) {
     res.status(400).json({ error: "firstName, lastName, and source are required" });
     return;
+  }
+
+  // Mirror routeRowToFunnel / unrouted-sheet-rows: if the phone already
+  // belongs to a lead in this tenant, treat the manual submit as a
+  // resubmission instead of creating a duplicate. Matching is done on the
+  // normalized form (digits-only, leading "1" stripped) on both sides so
+  // formatted input like "(555) 123-4567" still catches an existing
+  // "5551234567" lead.
+  const normalizedPhone = normalizePhone(typeof phone === "string" ? phone : "");
+  if (normalizedPhone) {
+    const [dup] = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(and(
+        eq(leadsTable.tenantId, tenantId),
+        sql`CASE
+              WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
+                AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
+              THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
+              ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
+            END = ${normalizedPhone}`,
+      ))
+      .limit(1);
+    if (dup) {
+      try {
+        await handleResubmission(tenantId, dup.id, "Manual Add Lead");
+      } catch (err) {
+        console.warn("[LeadsHub Create] Resubmission failed for lead", dup.id, err);
+      }
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
+      if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+      res.status(200).json({ ...(refreshed ?? { id: dup.id }), resubmitted: true });
+      return;
+    }
   }
 
   let validatedCsrId: number | null = null;

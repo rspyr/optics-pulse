@@ -2728,6 +2728,247 @@ function ArchiveView({ tenantId, timezone = "America/New_York" }: { tenantId: nu
   );
 }
 
+interface PhoneMatch { id: number; name: string }
+
+function AddLeadModal({
+  tenantId,
+  onClose,
+  onCreated,
+  onResubmitted,
+  onOpenLead,
+}: {
+  tenantId: number;
+  onClose: () => void;
+  onCreated: (lead: { id: number; name: string }) => void;
+  onResubmitted: (lead: { id: number; name: string }) => void;
+  onOpenLead: (id: number) => void;
+}) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [source, setSource] = useState("");
+  const [funnelId, setFunnelId] = useState<number | "">("");
+  const [sources, setSources] = useState<string[]>([]);
+  const [funnels, setFunnels] = useState<{ id: number; name: string }[]>([]);
+  const [phoneMatch, setPhoneMatch] = useState<PhoneMatch | null>(null);
+  const [phoneChecking, setPhoneChecking] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load tenant-scoped sources + funnels for the form pickers.
+  useEffect(() => {
+    fetch(`${API_BASE}/leads-hub/canonical-sources?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : { sources: [] })
+      .then(d => setSources(Array.isArray(d.sources) ? d.sources : []))
+      .catch(() => {});
+    fetch(`${API_BASE}/funnel-types?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setFunnels(Array.isArray(d) ? d.filter((f: { isActive?: boolean }) => f.isActive !== false).map((f: { id: number; name: string }) => ({ id: f.id, name: f.name })) : []))
+      .catch(() => {});
+  }, [tenantId]);
+
+  // Debounced duplicate-phone lookup. Mirrors the unrouted-rows panel hint:
+  // the same exact-string match the server uses, so the warning reflects what
+  // "Create" will actually do (resubmit vs. create new).
+  useEffect(() => {
+    const trimmed = phone.trim();
+    if (!trimmed) { setPhoneMatch(null); setPhoneChecking(false); return; }
+    setPhoneChecking(true);
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/leads-hub/phone-match?tenantId=${tenantId}&phone=${encodeURIComponent(trimmed)}`,
+          { credentials: "include" },
+        );
+        if (!res.ok) { if (!cancelled) setPhoneMatch(null); return; }
+        const data = await res.json();
+        if (!cancelled) setPhoneMatch(data?.match ?? null);
+      } catch {
+        if (!cancelled) setPhoneMatch(null);
+      } finally {
+        if (!cancelled) setPhoneChecking(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [phone, tenantId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting) return;
+    setError(null);
+    if (!firstName.trim() || !lastName.trim() || !source.trim()) {
+      setError("First name, last name, and source are required.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/leads-hub/create?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim() || null,
+          email: email.trim() || null,
+          source: source.trim(),
+          funnelId: funnelId === "" ? null : funnelId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data?.error || "Failed to create lead.");
+        return;
+      }
+      const created = {
+        id: data.id,
+        name: [data.firstName, data.lastName].filter(Boolean).join(" ").trim() || `${firstName} ${lastName}`.trim(),
+      };
+      if (data.resubmitted) onResubmitted(created);
+      else onCreated(created);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create lead.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-[#0a0a0f] border border-white/10 rounded-2xl shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+          <div className="flex items-center gap-2">
+            <UserPlus className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-display text-white">Add Lead</h2>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-white/40 hover:text-white/80" aria-label="Close">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[10px] text-white/40 uppercase tracking-wider">First name *</span>
+              <input
+                value={firstName}
+                onChange={e => setFirstName(e.target.value)}
+                className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+                autoFocus
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-white/40 uppercase tracking-wider">Last name *</span>
+              <input
+                value={lastName}
+                onChange={e => setLastName(e.target.value)}
+                className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-[10px] text-white/40 uppercase tracking-wider">Phone</span>
+            <input
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              inputMode="tel"
+              placeholder="e.g. 555-123-4567"
+              className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            {phone.trim() && phoneMatch && (
+              <div className="mt-2 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1.5 leading-tight">
+                <div className="font-medium flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  Matches existing lead{" "}
+                  <button
+                    type="button"
+                    onClick={() => { onOpenLead(phoneMatch.id); onClose(); }}
+                    className="underline hover:text-amber-200"
+                  >
+                    #{phoneMatch.id} ({phoneMatch.name})
+                  </button>
+                </div>
+                <div className="text-amber-300/70 mt-0.5">
+                  Create will resubmit this lead, not add a new one.
+                </div>
+              </div>
+            )}
+            {phone.trim() && !phoneMatch && !phoneChecking && (
+              <div className="mt-1 text-[10px] text-white/30">No existing lead with this phone.</div>
+            )}
+          </label>
+          <label className="block">
+            <span className="text-[10px] text-white/40 uppercase tracking-wider">Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] text-white/40 uppercase tracking-wider">Source *</span>
+            <input
+              list="add-lead-source-options"
+              value={source}
+              onChange={e => setSource(e.target.value)}
+              placeholder="e.g. Facebook, Walk-in"
+              className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            <datalist id="add-lead-source-options">
+              {sources.map(s => <option key={s} value={s} />)}
+            </datalist>
+          </label>
+          {funnels.length > 0 && (
+            <label className="block">
+              <span className="text-[10px] text-white/40 uppercase tracking-wider">Funnel</span>
+              <select
+                value={funnelId === "" ? "" : String(funnelId)}
+                onChange={e => setFunnelId(e.target.value === "" ? "" : Number(e.target.value))}
+                className="mt-1 w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50"
+              >
+                <option value="">Auto / none</option>
+                {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </label>
+          )}
+          {error && (
+            <div className="text-[11px] text-red-400 bg-red-500/10 border border-red-500/30 rounded px-2 py-1.5">{error}</div>
+          )}
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-xs text-white/60 hover:text-white/90 rounded"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className={cn(
+                "px-3 py-1.5 text-xs font-semibold rounded border transition-colors",
+                phoneMatch
+                  ? "bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25"
+                  : "bg-primary/15 border-primary/30 text-primary hover:bg-primary/25",
+                submitting && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              {submitting ? "Saving…" : phoneMatch ? "Resubmit existing lead" : "Create lead"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function Leads() {
   const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter();
   const { user } = useAuth();
@@ -2735,6 +2976,8 @@ export default function Leads() {
   const isClientUser = user?.role === "client_user";
   const [selectedCsrId, setSelectedCsrId] = useState<number | null>(null);
   const [csrList, setCsrList] = useState<CsrOption[]>([]);
+  const [addLeadOpen, setAddLeadOpen] = useState(false);
+  const [addLeadToast, setAddLeadToast] = useState<{ kind: "created" | "resubmitted"; id: number; name: string } | null>(null);
 
   useEffect(() => {
     if (!isAdmin || !effectiveTenantId) { setCsrList([]); return; }
@@ -3284,6 +3527,16 @@ export default function Leads() {
               {myPauseState.isPaused ? "PAUSED" : "ACTIVE"}
             </button>
           )}
+          {isAdmin && effectiveTenantId && (
+            <button
+              onClick={() => setAddLeadOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-primary/30 bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
+              title="Manually create a lead"
+            >
+              <UserPlus className="w-4 h-4" />
+              Add Lead
+            </button>
+          )}
           <button
             onClick={() => { refetch(); refetchStats(); }}
             className="p-2 rounded-lg border border-white/10 text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
@@ -3704,6 +3957,62 @@ export default function Leads() {
           </PremiumCard>
         </div>
       </div>
+
+      {addLeadOpen && effectiveTenantId && (
+        <AddLeadModal
+          tenantId={effectiveTenantId}
+          onClose={() => setAddLeadOpen(false)}
+          onCreated={lead => { setAddLeadToast({ kind: "created", id: lead.id, name: lead.name }); refetch(); refetchStats(); }}
+          onResubmitted={lead => { setAddLeadToast({ kind: "resubmitted", id: lead.id, name: lead.name }); refetch(); }}
+          onOpenLead={async id => {
+            try {
+              const r = await fetch(`${API_BASE}/leads/${id}?tenantId=${effectiveTenantId}`, { credentials: "include" });
+              if (r.ok) setSelectedLead(await r.json() as LeadData);
+            } catch {}
+          }}
+        />
+      )}
+
+      <AnimatePresence>
+        {addLeadToast && (
+          <motion.div
+            key={`add-lead-toast-${addLeadToast.id}`}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[150]"
+            onAnimationComplete={() => { setTimeout(() => setAddLeadToast(null), 5000); }}
+          >
+            <div className={cn(
+              "px-4 py-3 rounded-lg border shadow-lg backdrop-blur",
+              addLeadToast.kind === "created"
+                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                : "bg-amber-500/15 border-amber-500/30 text-amber-300",
+            )}>
+              <div className="text-xs flex items-center gap-2">
+                {addLeadToast.kind === "created" ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                <span>
+                  {addLeadToast.kind === "created" ? "Lead created" : "Existing lead resubmitted"}:{" "}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const id = addLeadToast.id;
+                      setAddLeadToast(null);
+                      try {
+                        const r = await fetch(`${API_BASE}/leads/${id}?tenantId=${effectiveTenantId}`, { credentials: "include" });
+                        if (r.ok) setSelectedLead(await r.json() as LeadData);
+                      } catch {}
+                    }}
+                    className="font-semibold underline hover:opacity-80"
+                  >
+                    #{addLeadToast.id} {addLeadToast.name}
+                  </button>
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
