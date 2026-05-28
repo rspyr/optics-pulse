@@ -6,6 +6,7 @@ import { scheduleOrEmitNewLead } from "./lead-notify-scheduler";
 import { assignLeadRoundRobin } from "./round-robin";
 import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "./source-normalizer";
 
 const UPDATABLE_FIELDS = [
@@ -133,7 +134,7 @@ async function rescanExistingRows(
     const newCity = row.city || null;
     const newState = row.state || null;
     const newZip = row.zip || null;
-    const newApptBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+    const newApptBooked = isPreBookedCellValue(row.appointmentBooked);
 
     if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
     if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
@@ -255,7 +256,7 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
     if (normalizedPhone) existingPhones.add(normalizedPhone);
 
-    const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+    const isPreBooked = isPreBookedCellValue(row.appointmentBooked);
     const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
     const effectivePreBooked = isPreBooked || hasApptDetails;
     const funnelName = allFunnels[resolvedFunnelId]?.name;

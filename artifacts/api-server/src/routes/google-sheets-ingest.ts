@@ -8,6 +8,7 @@ import { ai } from "@workspace/integrations-gemini-ai";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
@@ -26,7 +27,7 @@ const INTERNAL_FIELDS = [
   { field: "__funnel__", label: "Funnel", description: "Routes leads to different funnels based on column values — use when a single sheet contains leads for multiple funnel types" },
   { field: "status", label: "Status", description: "Lead status (e.g., new, contacted, booked)" },
   { field: "notes", label: "Notes", description: "Additional notes or comments about the lead" },
-  { field: "appointmentBooked", label: "Appointment Booked", description: "Whether lead has a pre-booked appointment (yes/no)" },
+  { field: "appointmentBooked", label: "Appointment Booked", description: "Whether lead has a pre-booked appointment (yes/booked)" },
   { field: "address", label: "Address", description: "Street address" },
   { field: "city", label: "City", description: "City" },
   { field: "state", label: "State", description: "State/province" },
@@ -422,7 +423,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
 
       if (normalizedPhone) existingPhoneToLeadId.set(normalizedPhone, 0);
 
-      const isPreBooked = (row.appointmentBooked || "").toLowerCase().trim() === "yes";
+      const isPreBooked = isPreBookedCellValue(row.appointmentBooked);
       const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
       const effectivePreBooked = isPreBooked || hasApptDetails;
       const funnelName = allFunnels[resolvedFunnelId]?.name;

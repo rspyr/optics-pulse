@@ -15,6 +15,7 @@ import { assignLeadRoundRobin } from "./round-robin";
 import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { scheduleOrEmitNewLead } from "./lead-notify-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
+import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizePhone } from "../lib/phone-utils";
 
 /**
@@ -264,7 +265,7 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
       hashedPhone ? "golden" : hashedEmail ? "silver" : "unmatched";
     const matchConfidence = matchLevel === "golden" ? 0.9 : matchLevel === "silver" ? 0.8 : 0;
 
-    const isPreBooked = mapped.appointmentBooked.toLowerCase() === "yes"
+    const isPreBooked = isPreBookedCellValue(mapped.appointmentBooked)
       || isValidAppointmentValue(mapped.appointmentDate)
       || isValidAppointmentValue(mapped.appointmentTime);
 
