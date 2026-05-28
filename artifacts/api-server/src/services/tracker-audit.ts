@@ -1,5 +1,5 @@
 import { db, trackerSubmitAttemptsTable, tenantsTable } from "@workspace/db";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Request } from "express";
 
 /**
@@ -267,7 +267,7 @@ export async function getDomainSubmitBreakdown(args: {
       gte(trackerSubmitAttemptsTable.createdAt, since),
     ];
     if (tenantIds && tenantIds.length > 0) {
-      conds.push(sql`${trackerSubmitAttemptsTable.tenantId} = ANY(${tenantIds})`);
+      conds.push(inArray(trackerSubmitAttemptsTable.tenantId, tenantIds));
     }
     const rows = await db
       .select({ httpStatus: trackerSubmitAttemptsTable.httpStatus })
@@ -328,7 +328,7 @@ export async function getDomainHealthRollup(args: {
   if (args.tenantIds && args.tenantIds.length === 0) return [];
   try {
     const tenantFilter = args.tenantIds && args.tenantIds.length > 0
-      ? sql`AND tsa.tenant_id = ANY(${args.tenantIds}::int[])`
+      ? sql`AND tsa.tenant_id IN (${sql.join(args.tenantIds.map(t => sql`${t}`), sql`, `)})`
       : sql``;
     const result = await db.execute(sql`
       WITH recent AS (

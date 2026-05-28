@@ -520,7 +520,7 @@ router.post(
     const rows = await db
       .select({ id: unroutedSheetRowsTable.id, tenantId: unroutedSheetRowsTable.tenantId })
       .from(unroutedSheetRowsTable)
-      .where(sql`${unroutedSheetRowsTable.id} = ANY(${rowIds})`);
+      .where(inArray(unroutedSheetRowsTable.id, rowIds));
 
     const tenantIds = new Set(rows.map(r => r.tenantId));
     if (tenantIds.size !== 1) {
