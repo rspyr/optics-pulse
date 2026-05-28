@@ -2910,6 +2910,10 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   const [unroutedRows, setUnroutedRows] = useState<UnroutedSheetRow[] | null>(null);
   const [unroutedLoading, setUnroutedLoading] = useState(false);
   const [resolvingUnroutedId, setResolvingUnroutedId] = useState<number | null>(null);
+  const [routingUnroutedId, setRoutingUnroutedId] = useState<number | null>(null);
+  const [unroutedFunnelChoice, setUnroutedFunnelChoice] = useState<Record<number, number | "">>({});
+  const [unroutedAddToMap, setUnroutedAddToMap] = useState<Record<number, boolean>>({});
+  const [unroutedError, setUnroutedError] = useState<{ rowId: number; msg: string } | null>(null);
 
   const loadUnroutedRows = useCallback(async (configId: number) => {
     if (!tenantId) return;
@@ -2948,6 +2952,36 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
         handleRefetch();
       }
     } catch {} finally { setResolvingUnroutedId(null); }
+  };
+
+  const handleRouteUnroutedToFunnel = async (rowId: number, configId: number) => {
+    const funnelId = unroutedFunnelChoice[rowId];
+    if (!funnelId) {
+      setUnroutedError({ rowId, msg: "Pick a funnel first" });
+      return;
+    }
+    setRoutingUnroutedId(rowId);
+    setUnroutedError(null);
+    try {
+      const res = await fetch(`${API_BASE}/unrouted-sheet-rows/${rowId}/route-to-funnel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          funnelId,
+          addToValueMap: !!unroutedAddToMap[rowId],
+        }),
+      });
+      if (res.ok) {
+        await loadUnroutedRows(configId);
+        handleRefetch();
+      } else {
+        const data = await res.json().catch(() => ({ error: "Failed to send to funnel" }));
+        setUnroutedError({ rowId, msg: data.error || "Failed to send to funnel" });
+      }
+    } catch {
+      setUnroutedError({ rowId, msg: "Connection error" });
+    } finally { setRoutingUnroutedId(null); }
   };
 
   const handleRefetch = () => { refetchConfigs(); onRefetch(); };
@@ -3420,15 +3454,59 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                                   .join("\n")}
                               </pre>
                             </td>
-                            <td className="py-1 px-2 text-right">
+                            <td className="py-1 px-2 text-right align-top">
                               {isAgency && (
-                                <button
-                                  onClick={() => handleResolveUnrouted(r.id, cfg.id)}
-                                  disabled={resolvingUnroutedId === r.id}
-                                  className="text-[10px] text-white/40 hover:text-emerald-400 disabled:opacity-50"
-                                >
-                                  {resolvingUnroutedId === r.id ? "…" : "Dismiss"}
-                                </button>
+                                <div className="flex flex-col items-end gap-1 min-w-[180px]">
+                                  <Select
+                                    value={unroutedFunnelChoice[r.id] ? String(unroutedFunnelChoice[r.id]) : "__none__"}
+                                    onValueChange={v => {
+                                      const next = v === "__none__" ? "" : Number(v);
+                                      setUnroutedFunnelChoice(prev => ({ ...prev, [r.id]: next }));
+                                      setUnroutedError(prev => prev?.rowId === r.id ? null : prev);
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-7 w-full bg-white/5 border border-white/10 rounded px-2 text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
+                                      <SelectValue placeholder="Send to funnel…" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__none__">Send to funnel…</SelectItem>
+                                      {funnels.filter(f => f.isActive).map(f => (
+                                        <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {r.funnelColumn && r.unmatchedValue && (
+                                    <label className="flex items-center gap-1 text-[10px] text-white/50 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!unroutedAddToMap[r.id]}
+                                        onChange={e => setUnroutedAddToMap(prev => ({ ...prev, [r.id]: e.target.checked }))}
+                                        className="h-3 w-3 accent-primary"
+                                      />
+                                      Also map “{r.unmatchedValue}” → funnel
+                                    </label>
+                                  )}
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => handleRouteUnroutedToFunnel(r.id, cfg.id)}
+                                      disabled={routingUnroutedId === r.id || !unroutedFunnelChoice[r.id]}
+                                      className="text-[10px] text-emerald-400 hover:text-emerald-300 disabled:opacity-40 disabled:hover:text-emerald-400"
+                                    >
+                                      {routingUnroutedId === r.id ? "Sending…" : "Send →"}
+                                    </button>
+                                    <span className="text-white/20">·</span>
+                                    <button
+                                      onClick={() => handleResolveUnrouted(r.id, cfg.id)}
+                                      disabled={resolvingUnroutedId === r.id || routingUnroutedId === r.id}
+                                      className="text-[10px] text-white/40 hover:text-white/60 disabled:opacity-50"
+                                    >
+                                      {resolvingUnroutedId === r.id ? "…" : "Dismiss"}
+                                    </button>
+                                  </div>
+                                  {unroutedError?.rowId === r.id && (
+                                    <span className="text-[10px] text-red-400 max-w-[200px] text-right">{unroutedError.msg}</span>
+                                  )}
+                                </div>
                               )}
                             </td>
                           </tr>
