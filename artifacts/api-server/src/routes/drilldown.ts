@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, jobsTable } from "@workspace/db";
+import { db, leadsTable, jobsTable, soldEstimatesTable, type RebateBreakdownItem } from "@workspace/db";
 import { eq, and, gte, lte, desc, SQL, inArray, sql } from "drizzle-orm";
-import { resolveListTenantScope } from "../lib/tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 // Matches the date expression used by /api/dashboard/spend-revenue so the
 // drilldown returns the same jobs that the chart's revenue bar aggregated.
@@ -74,6 +74,149 @@ router.get("/drilldown/jobs", async (req, res) => {
     .orderBy(orderBy).limit(limit).offset(offset);
 
   res.json(jobs);
+});
+
+// Revenue Attributed: completed jobs in a date range, enriched with the
+// originating lead summary, the salesperson + itemized rebate breakdown from
+// sold_estimates, and the corrected (rebate-inclusive) revenue. Uses the same
+// date/revenue math as /drilldown/jobs so totals reconcile with Command Center.
+router.get("/drilldown/revenue-attributed", async (req, res) => {
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
+  const limit = req.query.limit ? Number(req.query.limit) : 200;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
+  const conditions: SQL[] = [];
+  if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
+  conditions.push(eq(jobsTable.status, "completed"));
+  if (startDate) conditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
+  if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
+
+  const where = and(...conditions);
+  const jobs = await db.select().from(jobsTable).where(where)
+    .orderBy(desc(jobRevenueExpr)).limit(limit);
+
+  const jobIds = jobs.map((j) => j.id);
+  const leadIds = [...new Set(jobs.map((j) => j.leadId).filter((v): v is number => v != null))];
+
+  // Sold estimates carry the itemized rebate breakdown + salesperson name.
+  const estimates = jobIds.length > 0
+    ? await db.select().from(soldEstimatesTable).where(inArray(soldEstimatesTable.jobId, jobIds))
+    : [];
+  const estimateByJobId = new Map<number, typeof estimates[number]>();
+  for (const est of estimates) {
+    if (est.jobId == null) continue;
+    const existing = estimateByJobId.get(est.jobId);
+    // Prefer the estimate with the largest rebate breakdown (most informative).
+    if (!existing || (est.rebateAmount ?? 0) > (existing.rebateAmount ?? 0)) {
+      estimateByJobId.set(est.jobId, est);
+    }
+  }
+
+  const leads = leadIds.length > 0
+    ? await db.select({
+        id: leadsTable.id,
+        firstName: leadsTable.firstName,
+        lastName: leadsTable.lastName,
+        source: leadsTable.source,
+        originalSource: leadsTable.originalSource,
+        status: leadsTable.status,
+        hubStatus: leadsTable.hubStatus,
+        assignedTo: leadsTable.assignedTo,
+      }).from(leadsTable).where(inArray(leadsTable.id, leadIds))
+    : [];
+  const leadById = new Map(leads.map((l) => [l.id, l]));
+
+  const result = jobs.map((job) => {
+    const est = estimateByJobId.get(job.id);
+    const lead = job.leadId != null ? leadById.get(job.leadId) : undefined;
+    const rebateBreakdown: RebateBreakdownItem[] = (est?.rebateBreakdown as RebateBreakdownItem[] | null) ?? [];
+    const correctedRevenue = job.invoiceTotal != null
+      ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0)
+      : job.revenue;
+    return {
+      id: job.id,
+      stJobId: job.stJobId,
+      stInvoiceId: job.stInvoiceId,
+      customerName: job.customerName,
+      jobType: job.jobType,
+      jobTypeName: job.jobTypeName,
+      status: job.status,
+      revenue: job.revenue,
+      invoiceTotal: job.invoiceTotal,
+      invoiceRebateAmount: job.invoiceRebateAmount,
+      correctedRevenue,
+      invoiceDate: job.invoiceDate,
+      completedAt: job.completedAt,
+      createdAt: job.createdAt,
+      matchLevel: job.matchLevel,
+      matchedGclid: job.matchedGclid,
+      rebateBreakdown,
+      soldByName: est?.soldByName ?? lead?.assignedTo ?? null,
+      lead: lead
+        ? {
+            id: lead.id,
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            source: lead.source,
+            originalSource: lead.originalSource,
+            status: lead.status,
+            hubStatus: lead.hubStatus,
+          }
+        : null,
+    };
+  });
+
+  res.json(result);
+});
+
+// Manually match a job to the correct lead when attribution is wrong/missing.
+// Agency/admin only — clients have read-only access to revenue attribution.
+router.patch("/drilldown/jobs/:id/lead", async (req, res) => {
+  const role = (req.session as { userRole?: string } | undefined)?.userRole;
+  const isAgency = role === "super_admin" || role === "agency_user";
+  if (!isAgency) {
+    res.status(403).json({ error: "Only agency users can manually match jobs to leads." });
+    return;
+  }
+
+  const jobId = Number(req.params.id);
+  if (!Number.isFinite(jobId)) { res.status(400).json({ error: "Invalid job id" }); return; }
+
+  const rawLeadId = req.body?.leadId;
+  const leadId = rawLeadId == null ? null : Number(rawLeadId);
+  if (leadId != null && !Number.isFinite(leadId)) {
+    res.status(400).json({ error: "Invalid leadId" });
+    return;
+  }
+
+  const [job] = await db.select({ id: jobsTable.id, tenantId: jobsTable.tenantId }).from(jobsTable)
+    .where(eq(jobsTable.id, jobId));
+  if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+
+  const jobAccess = assertResourceTenantAccess(req, res, job.tenantId, {
+    notFoundOnMismatch: true, notFoundMessage: "Job not found",
+  });
+  if (!jobAccess.ok) return;
+
+  if (leadId != null) {
+    const [lead] = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId }).from(leadsTable)
+      .where(eq(leadsTable.id, leadId));
+    if (!lead || lead.tenantId !== job.tenantId) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+  }
+
+  const [updated] = await db.update(jobsTable)
+    .set({ leadId, matchLevel: leadId != null ? "manual" : null, updatedAt: new Date() })
+    .where(eq(jobsTable.id, jobId))
+    .returning();
+
+  res.json(updated);
 });
 
 export default router;

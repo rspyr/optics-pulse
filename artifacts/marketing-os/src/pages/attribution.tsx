@@ -353,7 +353,7 @@ export default function Attribution() {
     <div className="space-y-6">
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <GradientHeading className="text-3xl md:text-4xl mb-2">Attribution Log</GradientHeading>
+          <GradientHeading className="text-3xl md:text-4xl mb-2">Lead Attribution</GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-wide">RAW EVENT INGESTION & MATCHING WATERFALL</p>
         </div>
         {(!isAgency || effectiveTenantId != null) && (

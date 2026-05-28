@@ -14,6 +14,7 @@ import Leads from "@/pages/pulse";
 import Clients from "@/pages/clients";
 import Internal from "@/pages/internal";
 import Attribution from "@/pages/attribution";
+import RevenueAttributed from "@/pages/revenue-attributed";
 import VerifyTracker from "@/pages/verify-tracker";
 import Settings from "@/pages/settings";
 import AdminTenants from "@/pages/admin-tenants";
@@ -101,7 +102,7 @@ function AuthenticatedRoutes() {
     return <ImmediateRedirect to="/" />;
   }
 
-  const clientUserAllowedPaths = ["/pulse", "/training", "/settings"];
+  const clientUserAllowedPaths = ["/pulse", "/training", "/settings", "/revenue-attributed"];
   if (user?.role === "client_user" && !clientUserAllowedPaths.includes(location)) {
     return <ImmediateRedirect to="/pulse" />;
   }
@@ -114,6 +115,7 @@ function AuthenticatedRoutes() {
         <Route path="/pulse" component={Leads} />
         <Route path="/leads">{() => <ImmediateRedirect to="/pulse" />}</Route>
         <Route path="/attribution" component={Attribution} />
+        <Route path="/revenue-attributed" component={RevenueAttributed} />
         <Route path="/verify-tracker">{() => <AgencyGuard><VerifyTracker /></AgencyGuard>}</Route>
         <Route path="/settings" component={Settings} />
         <Route path="/internal">{() => <AgencyGuard><Internal /></AgencyGuard>}</Route>

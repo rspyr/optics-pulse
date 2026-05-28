@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -54,6 +55,7 @@ function getDateRange(range: DateRange): { startDate: string; endDate: string; l
 }
 
 export default function Dashboard() {
+  const [, navigate] = useLocation();
   const [dateRange, setDateRange] = useState<DateRange>("last30");
   const [exporting, setExporting] = useState(false);
   // When set, opens the JobRevenueDrilldown modal scoped to this date range.
@@ -132,7 +134,9 @@ export default function Dashboard() {
     setExporting(false);
   }
 
-  const openRevenueDrilldown = () => setDrilldown({ startDate, endDate, title: `Revenue (${startDate} → ${endDate})` });
+  // Total Revenue drills into the dedicated Revenue Attributed page (same
+  // date-range preset) so the figures reconcile with that page's job list.
+  const openRevenueDrilldown = () => navigate(`/revenue-attributed?range=${dateRange}`);
   const metrics: Array<{ label: string; value: string; icon: typeof DollarSign; sub?: string; onClick?: () => void }> = [
     { label: "Total Revenue", value: formatCurrency(overview.totalRevenue), icon: DollarSign, sub: overview.paidRevenue > 0 || overview.unpaidRevenue > 0 ? `${formatCurrency(overview.paidRevenue)} paid · ${formatCurrency(overview.unpaidRevenue)} unpaid` : undefined, onClick: openRevenueDrilldown },
     { label: "Ad Spend", value: formatCurrency(overview.totalSpend), icon: Activity },

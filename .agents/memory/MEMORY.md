@@ -1,0 +1,1 @@
+- [Revenue attribution data model](revenue-attribution-data-model.md) — rebate-corrected revenue math + itemized rebate breakdown lives only on sold_estimates, not jobs.

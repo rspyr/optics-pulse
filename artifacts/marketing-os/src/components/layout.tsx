@@ -23,6 +23,7 @@ import {
   FileText,
   BarChart3,
   Activity,
+  DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -38,7 +39,8 @@ const AGENCY_NAV = [
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/clients", label: "Client Portal", icon: Building2 },
-  { href: "/attribution", label: "Attribution", icon: LinkIcon },
+  { href: "/attribution", label: "Lead Attribution", icon: LinkIcon },
+  { href: "/revenue-attributed", label: "Revenue Attributed", icon: DollarSign },
   { href: "/admin/tenants", label: "Tenants", icon: Building },
   { href: "/admin/users", label: "Users", icon: UserCog },
   { href: "/leaderboards", label: "Leaderboards", icon: Trophy },
@@ -55,6 +57,7 @@ const AGENCY_NAV = [
 const CLIENT_NAV_ADMIN_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
+  { href: "/revenue-attributed", label: "Revenue Attributed", icon: DollarSign },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -62,6 +65,7 @@ const CLIENT_NAV_ADMIN_BASE = [
 
 const CLIENT_NAV_BASE = [
   { href: "/pulse", label: "Leads Hub", icon: Zap },
+  { href: "/revenue-attributed", label: "Revenue Attributed", icon: DollarSign },
   { href: "/training", label: "Training", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
