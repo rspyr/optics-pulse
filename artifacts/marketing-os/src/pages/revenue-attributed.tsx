@@ -9,7 +9,7 @@ import { useAuth } from "@/components/auth-context";
 import { toast } from "sonner";
 import {
   DollarSign, Loader2, ChevronDown, ChevronRight, ExternalLink,
-  Tag, User, Link2, Pencil, Check, X,
+  Tag, User, Link2, Pencil, Check, X, Download,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -83,6 +83,11 @@ type RevenueJob = {
   lead: LeadSummary | null;
 };
 
+function csvCell(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
 function isUnknownSource(src: string | null | undefined): boolean {
   if (!src) return true;
   const s = src.trim().toLowerCase();
@@ -126,6 +131,39 @@ export default function RevenueAttributed() {
     return { revenue, rebates, attributed, count: jobs.length };
   }, [jobs]);
 
+  function handleExportCSV() {
+    if (!jobs || jobs.length === 0) return;
+    const header = [
+      "Date", "Customer", "Job Type", "ST Job", "Match Tier",
+      "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
+    ];
+    const rows = jobs.map((job) => {
+      const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
+      const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "";
+      return [
+        dateStr,
+        job.customerName || "",
+        job.jobTypeName || job.jobType || "",
+        job.stJobId || `#${job.id}`,
+        job.matchLevel || "unmatched",
+        String(job.invoiceRebateAmount ?? 0),
+        String(job.correctedRevenue),
+        job.lead?.source || "",
+        job.soldByName || "",
+      ];
+    });
+    const csv = [header, ...rows]
+      .map((r) => r.map(csvCell).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `revenue-attributed-${startDate}-${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between gap-4 flex-wrap">
@@ -135,15 +173,25 @@ export default function RevenueAttributed() {
             ATTRIBUTED REVENUE BY JOB · REBATE-CORRECTED · {label.toUpperCase()}
           </p>
         </div>
-        <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
-          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="last7">Last 7 Days</SelectItem>
-            <SelectItem value="last30">Last 30 Days</SelectItem>
-            <SelectItem value="thisMonth">This Month</SelectItem>
-            <SelectItem value="lastMonth">Last Month</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-3">
+          <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
+            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="last7">Last 7 Days</SelectItem>
+              <SelectItem value="last30">Last 30 Days</SelectItem>
+              <SelectItem value="thisMonth">This Month</SelectItem>
+              <SelectItem value="lastMonth">Last Month</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            onClick={handleExportCSV}
+            disabled={!jobs || jobs.length === 0}
+            className="gap-2"
+          >
+            <Download className="w-4 h-4" /> Download CSV
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
