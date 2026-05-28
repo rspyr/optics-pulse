@@ -2368,6 +2368,67 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
   }
 }
 
+export interface RecomputeRevenueResult {
+  invoices: { synced: number; error?: string };
+  estimates: { synced: number; error?: string };
+  /** True when another recompute already held the lock, so this call was a
+   *  no-op (coalesced). The caller can surface a 409 / log instead of
+   *  stacking a duplicate full re-sync. */
+  alreadyRunning?: boolean;
+  /** True when the operator cancelled mid-run (invoices or estimates phase). */
+  cancelled?: boolean;
+}
+
+/**
+ * Run the historical revenue recompute (full re-sync of invoices then
+ * estimates) for a tenant under a per-tenant advisory lock so concurrent
+ * triggers can't stack overlapping full re-syncs.
+ *
+ * This is the single shared guard for BOTH recompute triggers: the
+ * auto-trigger after a rebate-label change (PATCH /tenants/:id) and the manual
+ * recompute-revenue route. Saving the rebate list several times in quick
+ * succession — or saving while a manual recompute is already in flight —
+ * previously fired multiple uncoordinated full re-syncs, doubling ServiceTitan
+ * API load and racing on the same invoice/estimate/job row updates.
+ *
+ * Uses a DEDICATED lock key (0x53545256 = 'STRV', ServiceTitan ReVenue),
+ * distinct from the STAN jobs lock (0x5354414e): the scheduled jobs sync nests
+ * an incremental invoice sync inside the STAN lock, so reusing STAN here would
+ * either be refused (pooled connection mismatch) or deadlock. The incremental
+ * 15-min invoice/estimate sync is intentionally NOT gated by this lock — only
+ * the heavyweight full re-sync path is.
+ */
+export async function recomputeServiceTitanRevenue(tenantId: number): Promise<RecomputeRevenueResult> {
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x53545256}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const message = "A revenue recompute is already running for this tenant";
+    return {
+      alreadyRunning: true,
+      invoices: { synced: 0, error: message },
+      estimates: { synced: 0, error: "skipped" },
+    };
+  }
+
+  try {
+    const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
+    if (invoices.error === "cancelled") {
+      return { invoices, estimates: { synced: 0, error: "skipped" }, cancelled: true };
+    }
+    const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
+    if (estimates.error === "cancelled") {
+      return { invoices, estimates, cancelled: true };
+    }
+    return { invoices, estimates };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x53545256}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[Recompute] ServiceTitan tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+  }
+}
+
 let syncTimers: ReturnType<typeof setInterval>[] = [];
 
 export function startSyncScheduler() {

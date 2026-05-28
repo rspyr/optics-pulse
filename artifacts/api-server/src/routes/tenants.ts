@@ -7,7 +7,7 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
 import { DEFAULT_REBATE_LABELS } from "../services/integrations/service-titan";
-import { syncServiceTitanInvoices, syncServiceTitanEstimates } from "../services/sync-scheduler";
+import { recomputeServiceTitanRevenue } from "../services/sync-scheduler";
 
 const router: IRouter = Router();
 
@@ -327,14 +327,17 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     void (async () => {
       try {
         console.log(`[Tenants] Rebate labels changed for tenant ${tenantId}; recomputing historical revenue`);
-        const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
-        if (invoices.error === "cancelled") {
-          console.log(`[Tenants] Rebate recompute cancelled during invoices phase for tenant ${tenantId}`);
+        const result = await recomputeServiceTitanRevenue(tenantId);
+        if (result.alreadyRunning) {
+          console.log(`[Tenants] Rebate recompute coalesced for tenant ${tenantId}: another recompute is already running`);
           return;
         }
-        const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
+        if (result.cancelled) {
+          console.log(`[Tenants] Rebate recompute cancelled for tenant ${tenantId}`);
+          return;
+        }
         console.log(
-          `[Tenants] Rebate recompute done for tenant ${tenantId}: ${invoices.synced} invoices, ${estimates.synced} estimates re-evaluated`,
+          `[Tenants] Rebate recompute done for tenant ${tenantId}: ${result.invoices.synced} invoices, ${result.estimates.synced} estimates re-evaluated`,
         );
       } catch (err) {
         console.error(`[Tenants] Rebate recompute failed for tenant ${tenantId}:`, (err as Error).message);

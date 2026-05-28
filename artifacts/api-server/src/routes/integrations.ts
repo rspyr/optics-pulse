@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, syncServiceTitanEstimates, syncServiceTitanInvoices } from "../services/sync-scheduler";
+import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
 import { parseBackfillProgress, classifyBackfillError, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
@@ -140,19 +140,20 @@ router.post("/integrations/service_titan/recompute-revenue", requireRole("super_
     return;
   }
 
-  const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
+  // Shared guard with the auto-trigger after a rebate-label change: a single
+  // per-tenant advisory lock ensures only one full revenue recompute runs at a
+  // time. If one is already in flight, coalesce gracefully with a 409 instead
+  // of stacking a duplicate full re-sync.
+  const { invoices, estimates, alreadyRunning, cancelled } = await recomputeServiceTitanRevenue(tenantId);
 
-  // If the operator cancelled during the invoices phase, don't start the
-  // estimates phase — the whole recompute is being aborted. Rows already
-  // reprocessed are kept (no rollback).
-  if (invoices.error === "cancelled") {
-    res.json({ success: true, cancelled: true, invoices, estimates: { synced: 0, error: "skipped" } });
+  if (alreadyRunning) {
+    res.status(409).json({ success: false, alreadyRunning: true, error: invoices.error, invoices, estimates });
     return;
   }
 
-  const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
-
-  if (estimates.error === "cancelled") {
+  // If the operator cancelled during either phase, the whole recompute is
+  // aborted. Rows already reprocessed are kept (no rollback).
+  if (cancelled) {
     res.json({ success: true, cancelled: true, invoices, estimates });
     return;
   }
