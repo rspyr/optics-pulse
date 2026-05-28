@@ -1909,7 +1909,7 @@ export async function backfillServiceTitanJobs(
   }
 }
 
-export async function syncServiceTitanInvoices(tenantId: number): Promise<{ synced: number; error?: string }> {
+export async function syncServiceTitanInvoices(tenantId: number, options?: { fullResync?: boolean }): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
@@ -1941,7 +1941,7 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
     .orderBy(desc(integrationSyncLogsTable.completedAt))
     .limit(1);
 
-  const modifiedOnOrAfter = lastSuccessfulSync?.completedAt?.toISOString() ?? undefined;
+  const modifiedOnOrAfter = options?.fullResync ? undefined : (lastSuccessfulSync?.completedAt?.toISOString() ?? undefined);
 
   const syncLog = await logSync(tenantId, "service_titan", "invoices", new Date());
 
@@ -2034,7 +2034,7 @@ export async function syncServiceTitanInvoices(tenantId: number): Promise<{ sync
   }
 }
 
-export async function syncServiceTitanEstimates(tenantId: number): Promise<{ synced: number; error?: string }> {
+export async function syncServiceTitanEstimates(tenantId: number, options?: { fullResync?: boolean }): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
   if (!tenant) return { synced: 0, error: "Tenant not found" };
 
@@ -2066,7 +2066,7 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
     .orderBy(desc(integrationSyncLogsTable.completedAt))
     .limit(1);
 
-  const modifiedOnOrAfter = lastSuccessfulSync?.completedAt?.toISOString() ?? undefined;
+  const modifiedOnOrAfter = options?.fullResync ? undefined : (lastSuccessfulSync?.completedAt?.toISOString() ?? undefined);
 
   const syncLog = await logSync(tenantId, "service_titan", "estimates", new Date());
 
@@ -2138,6 +2138,7 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
               subtotal: parsed.subtotal,
               rebateAmount: parsed.rebateAmount,
               totalAmount: parsed.totalAmount,
+              rebateBreakdown: parsed.rebateBreakdown,
               updatedAt: new Date(),
             })
             .where(eq(soldEstimatesTable.id, existing.id));
@@ -2174,6 +2175,7 @@ export async function syncServiceTitanEstimates(tenantId: number): Promise<{ syn
             subtotal: parsed.subtotal,
             rebateAmount: parsed.rebateAmount,
             totalAmount: parsed.totalAmount,
+            rebateBreakdown: parsed.rebateBreakdown,
           });
 
           if (matchedLeadId) {

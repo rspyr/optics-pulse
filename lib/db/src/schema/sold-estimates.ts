@@ -1,7 +1,12 @@
-import { pgTable, serial, integer, text, timestamp, real, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { leadsTable } from "./leads";
 import { jobsTable } from "./jobs";
+
+export interface RebateBreakdownItem {
+  label: string;
+  amount: number;
+}
 
 export const soldEstimatesTable = pgTable("sold_estimates", {
   id: serial("id").primaryKey(),
@@ -13,9 +18,14 @@ export const soldEstimatesTable = pgTable("sold_estimates", {
   soldByName: text("sold_by_name"),
   soldByStEmployeeId: integer("sold_by_st_employee_id"),
   soldOn: timestamp("sold_on"),
+  // ServiceTitan-reported total (rebates already subtracted out).
   subtotal: real("subtotal").default(0),
+  // Sum of rebate line items (ETO, ODEE, ...) added back as true revenue.
   rebateAmount: real("rebate_amount").default(0),
+  // Corrected sold revenue = subtotal + rebateAmount.
   totalAmount: real("total_amount").default(0),
+  // Audit trail of which line items were counted as rebates.
+  rebateBreakdown: jsonb("rebate_breakdown").$type<RebateBreakdownItem[]>(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

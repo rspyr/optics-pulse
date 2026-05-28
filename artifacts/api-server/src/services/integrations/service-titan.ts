@@ -446,7 +446,17 @@ export async function fetchInvoices(
     }
 
     page++;
-    if (page > 100) break;
+    // Safety cap: 1000 pages × 50 = 50,000 invoices per single call. The
+    // incremental sync only walks recent (post-watermark) pages so this never
+    // fires there; a full re-sync (recompute-revenue) can walk the whole
+    // history, so log loudly if we truncate instead of silently leaving old
+    // rows on the pre-fix revenue logic.
+    if (page > 1000) {
+      console.warn(
+        `[ServiceTitan] fetchInvoices hit 1000-page safety cap (modifiedAfter=${modifiedAfter ?? "none"}); more invoices remain unfetched — full re-sync is incomplete.`,
+      );
+      break;
+    }
   }
 
   if (batchInvoices.length > 0) {
@@ -460,15 +470,46 @@ export async function fetchInvoices(
   return allInvoices;
 }
 
+// ServiceTitan subtracts certain rebates (e.g. Energy Trust of Oregon "ETO"
+// and ODEE) from the estimate/invoice total even though the company still
+// collects that money — so those rebate line items are real revenue and must
+// be added back. Genuine discounts/coupons are also negative line items but
+// are NOT real revenue, so only line items whose label matches a known rebate
+// pattern are added back. Add new rebate programs here as they come up.
+export const REBATE_LABEL_PATTERNS: RegExp[] = [
+  /\beto\b/i,
+  /energy\s*trust/i,
+  /\bodee\b/i,
+];
+
+export interface RebateLineItem {
+  label: string;
+  amount: number;
+}
+
+/**
+ * Returns true when a line item label identifies a rebate (real revenue ST
+ * removed from the total) rather than a genuine discount. Matches against any
+ * of the provided labels (description, SKU name, etc.).
+ */
+export function isRebateLineItem(...labels: Array<string | null | undefined>): boolean {
+  const text = labels.filter(Boolean).join(" ").trim();
+  if (!text) return false;
+  return REBATE_LABEL_PATTERNS.some((p) => p.test(text));
+}
+
 export function parseInvoiceData(invoice: STInvoice) {
   const total = parseFloat(invoice.total) || 0;
   const balance = parseFloat(invoice.balance) || 0;
 
   let rebateAmount = 0;
+  const rebateBreakdown: RebateLineItem[] = [];
   for (const item of invoice.items || []) {
     const itemTotal = parseFloat(item.total) || 0;
-    if (itemTotal < 0) {
-      rebateAmount += Math.abs(itemTotal);
+    if (itemTotal < 0 && isRebateLineItem(item.description, item.skuName)) {
+      const amount = Math.abs(itemTotal);
+      rebateAmount += amount;
+      rebateBreakdown.push({ label: item.skuName || item.description || "Rebate", amount });
     }
   }
 
@@ -478,6 +519,7 @@ export function parseInvoiceData(invoice: STInvoice) {
     stInvoiceId: String(invoice.id),
     invoiceTotal: total,
     invoiceRebateAmount: rebateAmount,
+    invoiceRebateBreakdown: rebateBreakdown,
     invoicePaidAmount: paidAmount > 0 ? paidAmount : 0,
     invoiceBalance: balance,
     invoiceDate: invoice.invoiceDate ? new Date(invoice.invoiceDate) : null,
@@ -603,7 +645,17 @@ export async function fetchSoldEstimates(
     }
 
     page++;
-    if (page > 100) break;
+    // Safety cap: 1000 pages × 50 = 50,000 estimates per single call. The
+    // incremental sync only walks recent (post-watermark) pages so this never
+    // fires there; a full re-sync (recompute-revenue) can walk the whole
+    // history, so log loudly if we truncate instead of silently leaving old
+    // rows on the pre-fix revenue logic.
+    if (page > 1000) {
+      console.warn(
+        `[ServiceTitan] fetchSoldEstimates hit 1000-page safety cap (modifiedAfter=${modifiedAfter ?? "none"}); more estimates remain unfetched — full re-sync is incomplete.`,
+      );
+      break;
+    }
   }
 
   if (batchEstimates.length > 0) {
@@ -655,13 +707,19 @@ export function clearEmployeeCache() {
 }
 
 export function parseEstimateData(estimate: STEstimate) {
+  // `subtotal` is the ServiceTitan-reported total, which already has rebate
+  // line items subtracted out. We add back only the rebate line items (ETO,
+  // ODEE, etc.) — genuine discounts stay subtracted — to get true revenue.
   const subtotal = estimate.subtotal || 0;
 
   let rebateAmount = 0;
+  const rebateBreakdown: RebateLineItem[] = [];
   for (const item of estimate.items || []) {
     const itemTotal = item.total || 0;
-    if (itemTotal < 0) {
-      rebateAmount += Math.abs(itemTotal);
+    if (itemTotal < 0 && isRebateLineItem(item.description, item.skuName)) {
+      const amount = Math.abs(itemTotal);
+      rebateAmount += amount;
+      rebateBreakdown.push({ label: item.skuName || item.description || "Rebate", amount });
     }
   }
 
@@ -673,6 +731,7 @@ export function parseEstimateData(estimate: STEstimate) {
     subtotal,
     rebateAmount,
     totalAmount,
+    rebateBreakdown,
     soldOn: estimate.soldOn ? new Date(estimate.soldOn) : null,
     soldByEmployeeId: estimate.soldBy,
   };

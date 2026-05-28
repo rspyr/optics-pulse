@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs } from "../services/sync-scheduler";
+import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, syncServiceTitanEstimates, syncServiceTitanInvoices } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
 import { parseBackfillProgress, classifyBackfillError, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
@@ -124,6 +124,34 @@ router.post("/integrations/service_titan/backfill", requireRole("super_admin", "
     return;
   }
   res.json({ success: true, ...result });
+});
+
+/**
+ * Recompute sold-estimate and invoice revenue with the corrected rebate logic.
+ * Runs a full re-sync (ignoring the incremental watermark) so historical rows
+ * that added back ALL negative line items are rewritten to add back only true
+ * rebate line items (ETO, ODEE, ...). Genuine discounts stay subtracted.
+ */
+router.post("/integrations/service_titan/recompute-revenue", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+
+  const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
+  const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
+
+  const firstError = invoices.error || estimates.error;
+  if (firstError) {
+    const status = /not found/i.test(firstError) ? 404
+      : /not configured|paused/i.test(firstError) ? 400
+      : 502;
+    res.status(status).json({ success: false, invoices, estimates });
+    return;
+  }
+  res.json({ success: true, invoices, estimates });
 });
 
 // Flip the cooperative cancel flag on a running backfill sync log. The
