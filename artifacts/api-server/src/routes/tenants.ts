@@ -7,6 +7,7 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
 import { DEFAULT_REBATE_LABELS } from "../services/integrations/service-titan";
+import { syncServiceTitanInvoices, syncServiceTitanEstimates } from "../services/sync-scheduler";
 
 const router: IRouter = Router();
 
@@ -178,6 +179,12 @@ router.patch("/tenants/:tenantId", async (req, res) => {
 
   const body = UpdateTenantBody.parse(req.body);
   const updateData: Partial<typeof tenantsTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
+  // Tracks whether the staff-editable rebate program list actually changed in
+  // this PATCH. When it does, the tenant's already-synced invoices/estimates
+  // are re-evaluated against the new patterns (fire-and-forget after the
+  // response) so historical revenue totals reflect the change without waiting
+  // for the next full sync.
+  let rebateLabelsChanged = false;
   if (body.name !== undefined) updateData.name = body.name;
   if (body.serviceTitanId !== undefined) updateData.serviceTitanId = body.serviceTitanId;
   if (body.timezone !== undefined) updateData.timezone = body.timezone;
@@ -281,6 +288,21 @@ router.patch("/tenants/:tenantId", async (req, res) => {
       }
       const [existingForRev] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
       const existingRev = (existingForRev?.revenueConfig || {}) as Record<string, unknown>;
+      // Resolve both the old and new label lists to their EFFECTIVE patterns
+      // (an empty stored list falls back to the seeded defaults) before
+      // comparing, so toggling between "empty → defaults" and an explicit
+      // copy of the defaults doesn't needlessly trigger a recompute, while a
+      // real edit does.
+      const existingLabels = Array.isArray(existingRev.rebateLabels)
+        ? (existingRev.rebateLabels as unknown[]).filter(
+            (l): l is string => typeof l === "string" && l.trim().length > 0,
+          )
+        : [];
+      const effectiveExisting = existingLabels.length > 0 ? existingLabels : [...DEFAULT_REBATE_LABELS];
+      const effectiveNew = cleaned.length > 0 ? cleaned : [...DEFAULT_REBATE_LABELS];
+      const norm = (labels: string[]) =>
+        [...labels].map((l) => l.toLowerCase()).sort().join("\u0000");
+      rebateLabelsChanged = norm(effectiveExisting) !== norm(effectiveNew);
       (updateData as Record<string, unknown>).revenueConfig = { ...existingRev, rebateLabels: cleaned };
     }
   }
@@ -291,6 +313,34 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     return;
   }
   res.json(sanitizeTenant(tenant));
+
+  // The rebate program list drives which negative line items are added back as
+  // real revenue. Changing it only affects future syncs by default, so when it
+  // actually changed we re-evaluate the tenant's already-synced
+  // invoices/estimates against the new patterns right away. This reuses the
+  // full re-sync (revenue recompute) path — scoped to this tenant only — and
+  // runs fire-and-forget so the PATCH response isn't blocked by what can be a
+  // long-running reprocess. Errors are swallowed (logged) since the response
+  // has already been sent; the same recompute can also be triggered manually
+  // from the integrations admin UI.
+  if (rebateLabelsChanged) {
+    void (async () => {
+      try {
+        console.log(`[Tenants] Rebate labels changed for tenant ${tenantId}; recomputing historical revenue`);
+        const invoices = await syncServiceTitanInvoices(tenantId, { fullResync: true });
+        if (invoices.error === "cancelled") {
+          console.log(`[Tenants] Rebate recompute cancelled during invoices phase for tenant ${tenantId}`);
+          return;
+        }
+        const estimates = await syncServiceTitanEstimates(tenantId, { fullResync: true });
+        console.log(
+          `[Tenants] Rebate recompute done for tenant ${tenantId}: ${invoices.synced} invoices, ${estimates.synced} estimates re-evaluated`,
+        );
+      } catch (err) {
+        console.error(`[Tenants] Rebate recompute failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+    })();
+  }
 });
 
 router.get("/tenants/:tenantId/callrail-status", async (req, res) => {
