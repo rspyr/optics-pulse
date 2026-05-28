@@ -94,12 +94,20 @@ router.get(
       // also catches existing leads whose phone column was stored in a
       // legacy format (pre-backfill) or via any insert path that did not
       // normalize.
+      //
+      // NOTE on the IN-list shape: drizzle's `sql` tag spreads a JS array
+      // passed via `${arr}` into separate bind params (`$2, $3, ...`),
+      // which makes the natural-looking `= ANY(${arr})` produce invalid
+      // SQL (`ANY(($2, $3))`) and 500 the request the moment any
+      // unresolved row carries a phone. Build an explicit IN-list via
+      // sql.join so each phone is a real positional param.
+      const phonesList = Array.from(normalizedPhones);
       const matches = await db
         .select({ id: leadsTable.id, phone: leadsTable.phone })
         .from(leadsTable)
         .where(and(
           eq(leadsTable.tenantId, tenantId),
-          sql`${normalizedPhoneSql(leadsTable.phone)} = ANY(${Array.from(normalizedPhones)})`,
+          sql`${normalizedPhoneSql(leadsTable.phone)} IN (${sql.join(phonesList.map(p => sql`${p}`), sql`, `)})`,
         ));
       for (const m of matches) {
         const key = normalizePhone(m.phone || "");
