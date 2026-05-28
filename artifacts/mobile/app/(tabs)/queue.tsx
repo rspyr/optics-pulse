@@ -27,6 +27,7 @@ import { useCsrFilter } from "@/contexts/CsrFilterContext";
 import { usePauseState } from "@/hooks/usePauseState";
 import { LeadCard } from "@/components/LeadCard";
 import { EditableSourcePicker } from "@/components/EditableSourcePicker";
+import { AddLeadModal } from "@/components/AddLeadModal";
 
 type Tab = "new" | "reengagement" | "callbacks" | "old" | "recently_booked" | "archive";
 
@@ -95,6 +96,17 @@ export default function QueueScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const isWeb = Platform.OS === "web";
   const [csrDropdownOpen, setCsrDropdownOpen] = useState(false);
+  const [addLeadOpen, setAddLeadOpen] = useState(false);
+  const [addLeadToast, setAddLeadToast] = useState<{ kind: "created" | "resubmitted"; id: number; name: string } | null>(null);
+  const addLeadToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showAddLeadToast = useCallback((toast: { kind: "created" | "resubmitted"; id: number; name: string }) => {
+    setAddLeadToast(toast);
+    if (addLeadToastTimerRef.current) clearTimeout(addLeadToastTimerRef.current);
+    addLeadToastTimerRef.current = setTimeout(() => setAddLeadToast(null), 5000);
+  }, []);
+  useEffect(() => {
+    return () => { if (addLeadToastTimerRef.current) clearTimeout(addLeadToastTimerRef.current); };
+  }, []);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchActive, setSearchActive] = useState(false);
@@ -352,26 +364,36 @@ export default function QueueScreen() {
               <Text style={[styles.totalText, { color: colors.primary }]}>{queue.total} active</Text>
             </View>
           </View>
-          {isCsr && (
+          <View style={styles.headerActions}>
             <TouchableOpacity
-              onPress={() => { togglePause(); if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
-              disabled={pauseToggling || isManagerPaused}
+              onPress={() => { setAddLeadOpen(true); if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
               activeOpacity={0.7}
-              style={[
-                styles.pauseButton,
-                {
-                  backgroundColor: isPaused ? "#F59E0B20" : "#10B98120",
-                  borderColor: isPaused ? "#F59E0B40" : "#10B98140",
-                  opacity: pauseToggling || isManagerPaused ? 0.5 : 1,
-                },
-              ]}
+              style={[styles.addLeadButton, { backgroundColor: colors.primary + "20", borderColor: colors.primary + "40" }]}
             >
-              <Feather name={isPaused ? "pause" : "play"} size={14} color={isPaused ? "#F59E0B" : "#10B981"} />
-              <Text style={[styles.pauseButtonText, { color: isPaused ? "#F59E0B" : "#10B981" }]}>
-                {isPaused ? "PAUSED" : "ACTIVE"}
-              </Text>
+              <Feather name="user-plus" size={14} color={colors.primary} />
+              <Text style={[styles.addLeadButtonText, { color: colors.primary }]}>ADD</Text>
             </TouchableOpacity>
-          )}
+            {isCsr && (
+              <TouchableOpacity
+                onPress={() => { togglePause(); if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+                disabled={pauseToggling || isManagerPaused}
+                activeOpacity={0.7}
+                style={[
+                  styles.pauseButton,
+                  {
+                    backgroundColor: isPaused ? "#F59E0B20" : "#10B98120",
+                    borderColor: isPaused ? "#F59E0B40" : "#10B98140",
+                    opacity: pauseToggling || isManagerPaused ? 0.5 : 1,
+                  },
+                ]}
+              >
+                <Feather name={isPaused ? "pause" : "play"} size={14} color={isPaused ? "#F59E0B" : "#10B981"} />
+                <Text style={[styles.pauseButtonText, { color: isPaused ? "#F59E0B" : "#10B981" }]}>
+                  {isPaused ? "PAUSED" : "ACTIVE"}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </View>
 
@@ -695,6 +717,33 @@ export default function QueueScreen() {
         />
       )}
 
+      <AddLeadModal
+        visible={addLeadOpen}
+        tenantId={effectiveTenantId}
+        onClose={() => setAddLeadOpen(false)}
+        onCreated={(lead) => { showAddLeadToast({ kind: "created", id: lead.id, name: lead.name }); fetchQueue(); }}
+        onResubmitted={(lead) => { showAddLeadToast({ kind: "resubmitted", id: lead.id, name: lead.name }); fetchQueue(); }}
+        onOpenLead={(id) => router.push({ pathname: "/lead/[id]", params: { id: String(id) } })}
+      />
+
+      {addLeadToast && (
+        <View style={[styles.addLeadToast, { bottom: (isWeb ? 34 : insets.bottom) + 90, backgroundColor: addLeadToast.kind === "created" ? "#10B981" : "#F59E0B" }]}>
+          <Feather name={addLeadToast.kind === "created" ? "check-circle" : "refresh-cw"} size={16} color="#000" />
+          <View style={styles.addLeadToastTextWrap}>
+            <Text style={styles.addLeadToastTitle}>
+              {addLeadToast.kind === "created" ? "Lead created" : "Lead resubmitted"}
+            </Text>
+            <TouchableOpacity onPress={() => { setAddLeadToast(null); router.push({ pathname: "/lead/[id]", params: { id: String(addLeadToast.id) } }); }}>
+              <Text style={styles.addLeadToastLink} numberOfLines={1}>
+                #{addLeadToast.id} {addLeadToast.name} — open
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity onPress={() => setAddLeadToast(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Feather name="x" size={16} color="#000" />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
@@ -709,6 +758,13 @@ const styles = StyleSheet.create({
   totalText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   pauseButton: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
   pauseButtonText: { fontSize: 12, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  addLeadButton: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
+  addLeadButtonText: { fontSize: 12, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  addLeadToast: { position: "absolute", left: 16, right: 16, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10 },
+  addLeadToastTextWrap: { flex: 1 },
+  addLeadToastTitle: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#000" },
+  addLeadToastLink: { fontSize: 12, fontFamily: "Inter_500Medium", color: "#000", opacity: 0.85, textDecorationLine: "underline" },
   csrSelector: { marginHorizontal: 16, marginBottom: 8, borderRadius: 10, borderWidth: 1, padding: 12, gap: 8 },
   csrHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
   csrLabel: { fontSize: 10, fontFamily: "Inter_700Bold", letterSpacing: 1 },
