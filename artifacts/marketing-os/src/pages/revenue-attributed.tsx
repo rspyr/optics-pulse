@@ -116,6 +116,7 @@ export default function RevenueAttributed() {
   const [jobs, setJobs] = useState<RevenueJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
@@ -143,13 +144,39 @@ export default function RevenueAttributed() {
     return { revenue, rebates, attributed, count: jobs.length };
   }, [jobs]);
 
-  function handleExportCSV() {
-    if (!jobs || jobs.length === 0) return;
+  async function handleExportCSV() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      // Fetch the full result set for the selected range directly, so the CSV
+      // always includes every attributed job regardless of any UI paging/limit.
+      const params = new URLSearchParams({ startDate, endDate, limit: "all" });
+      if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+      const res = await fetch(
+        `${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const exportJobs: RevenueJob[] = await res.json();
+      if (exportJobs.length === 0) {
+        toast.error("No jobs to export for this range.");
+        return;
+      }
+      buildAndDownloadCSV(exportJobs);
+      toast.success(`Exported ${exportJobs.length} jobs`);
+    } catch (e) {
+      toast.error(e instanceof Error ? `Export failed: ${e.message}` : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function buildAndDownloadCSV(exportJobs: RevenueJob[]) {
     const header = [
       "Date", "Customer", "Job Type", "ST Job", "Match Tier",
       "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
     ];
-    const rows = jobs.map((job) => {
+    const rows = exportJobs.map((job) => {
       const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
       const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "";
       return [
@@ -198,10 +225,11 @@ export default function RevenueAttributed() {
           <Button
             variant="outline"
             onClick={handleExportCSV}
-            disabled={!jobs || jobs.length === 0}
+            disabled={!jobs || jobs.length === 0 || exporting}
             className="gap-2"
           >
-            <Download className="w-4 h-4" /> Download CSV
+            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {exporting ? "Exporting…" : "Download CSV"}
           </Button>
         </div>
       </header>

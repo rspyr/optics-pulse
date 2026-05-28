@@ -84,7 +84,11 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
-  const limit = req.query.limit ? Number(req.query.limit) : 200;
+  // `limit=all` (or 0/negative) returns every matching row — used by the CSV
+  // export so it always covers the full date range regardless of UI paging.
+  const rawLimit = req.query.limit;
+  const noLimit = rawLimit === "all" || (rawLimit != null && Number(rawLimit) <= 0);
+  const limit = noLimit ? null : rawLimit ? Number(rawLimit) : 200;
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -96,8 +100,8 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
 
   const where = and(...conditions);
-  const jobs = await db.select().from(jobsTable).where(where)
-    .orderBy(desc(jobRevenueExpr)).limit(limit);
+  const baseQuery = db.select().from(jobsTable).where(where).orderBy(desc(jobRevenueExpr));
+  const jobs = limit == null ? await baseQuery : await baseQuery.limit(limit);
 
   const jobIds = jobs.map((j) => j.id);
   const leadIds = [...new Set(jobs.map((j) => j.leadId).filter((v): v is number => v != null))];
