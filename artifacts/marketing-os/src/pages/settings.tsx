@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff, Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
@@ -257,6 +257,92 @@ export default function Settings() {
   const [rebateError, setRebateError] = useState<string | null>(null);
   const rebateDirty = JSON.stringify(rebateLabels) !== JSON.stringify(rebateInitial);
 
+  // Live progress for the historical revenue recompute that the server kicks
+  // off (fire-and-forget) when the rebate program list actually changes. We
+  // reuse the same sync-status / percent-bar plumbing the manual "Recompute
+  // revenue" button surfaces in the internal admin page: the recompute runs
+  // ServiceTitan invoices first, then estimates, each publishing a running
+  // row tally (and an estimated total) to its sync log.
+  type RecomputePhase = { lastStatus: string; recordsProcessed: number; totalRecords: number | null; lastRun: string | null };
+  const [recomputePhases, setRecomputePhases] = useState<{ invoices: RecomputePhase; estimates: RecomputePhase } | null>(null);
+  const [recomputeArmed, setRecomputeArmed] = useState(false);
+  const [recomputeOutcome, setRecomputeOutcome] = useState<null | "success" | "failed">(null);
+  // Pre-recompute baseline of each phase's last completion timestamp. A phase
+  // is considered freshly finished once its `lastRun` differs from this.
+  const recomputeBaseline = useRef<{ inv: string | null; est: string | null } | null>(null);
+  const recomputeSawRunning = useRef(false);
+  const recomputeArmedAt = useRef(0);
+
+  const recomputeRunning = recomputePhases
+    ? recomputePhases.invoices.lastStatus === "running" || recomputePhases.estimates.lastStatus === "running"
+    : false;
+
+  const readRecomputePhase = (raw: unknown): RecomputePhase => {
+    const p = (raw || {}) as Record<string, unknown>;
+    return {
+      lastStatus: typeof p.lastStatus === "string" ? p.lastStatus : "never",
+      recordsProcessed: typeof p.recordsProcessed === "number" ? p.recordsProcessed : 0,
+      totalRecords: typeof p.totalRecords === "number" ? p.totalRecords : null,
+      lastRun: typeof p.lastRun === "string" ? p.lastRun : null,
+    };
+  };
+
+  const fetchRecomputeStatus = useCallback(async () => {
+    if (!tenantId) return;
+    try {
+      const res = await fetch(`${API}/api/integrations/sync-status?tenantId=${tenantId}`, { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const st = data?.statusByIntegration?.service_titan?.syncTypes || {};
+      setRecomputePhases({
+        invoices: readRecomputePhase(st.invoices),
+        estimates: readRecomputePhase(st.estimates),
+      });
+    } catch { /* ignore */ }
+  }, [tenantId]);
+
+  // Poll while we're waiting on a recompute we armed OR while a recompute is
+  // observed running (covers reopening the panel mid-run).
+  useEffect(() => {
+    if (!recomputeArmed && !recomputeRunning) return;
+    const id = setInterval(() => { fetchRecomputeStatus(); }, 3000);
+    return () => clearInterval(id);
+  }, [recomputeArmed, recomputeRunning, fetchRecomputeStatus]);
+
+  // Resolve the armed recompute to a terminal outcome once both phases have
+  // produced fresh terminal rows (their `lastRun` moved past the baseline) and
+  // nothing is running. If we never see it start within a short grace window,
+  // assume the edit was a no-op server-side (no recompute triggered) and clear.
+  useEffect(() => {
+    if (!recomputeArmed || !recomputePhases) return;
+    const { invoices: inv, estimates: est } = recomputePhases;
+    const running = inv.lastStatus === "running" || est.lastStatus === "running";
+    if (running) {
+      recomputeSawRunning.current = true;
+      return;
+    }
+    const base = recomputeBaseline.current;
+    const invDone = !base || inv.lastRun !== base.inv;
+    const estDone = !base || est.lastRun !== base.est;
+    if (recomputeSawRunning.current && invDone && estDone) {
+      const failed = inv.lastStatus === "error" || est.lastStatus === "error";
+      setRecomputeOutcome(failed ? "failed" : "success");
+      setRecomputeArmed(false);
+      recomputeSawRunning.current = false;
+      return;
+    }
+    if (!recomputeSawRunning.current && Date.now() - recomputeArmedAt.current > 15000) {
+      setRecomputeArmed(false);
+    }
+  }, [recomputePhases, recomputeArmed]);
+
+  // Auto-dismiss the success note; failures persist until the next save.
+  useEffect(() => {
+    if (recomputeOutcome !== "success") return;
+    const t = setTimeout(() => setRecomputeOutcome(null), 8000);
+    return () => clearTimeout(t);
+  }, [recomputeOutcome]);
+
   useEffect(() => {
     if (!tenantId || isClientUser) return;
     fetch(`${API}/api/tenants/${tenantId}`, { credentials: "include" })
@@ -378,6 +464,25 @@ export default function Settings() {
 
   async function handleRebateSave() {
     if (!tenantId) return;
+    // The server only kicks off a historical recompute when the list actually
+    // changes; mirror that here so we don't arm a progress indicator for a
+    // no-op save.
+    const willRecompute = rebateDirty;
+    // Capture each phase's last-completion timestamp BEFORE the save so we can
+    // tell a fresh recompute apart from a stale earlier run.
+    let baseInv: string | null = null;
+    let baseEst: string | null = null;
+    if (willRecompute) {
+      try {
+        const sres = await fetch(`${API}/api/integrations/sync-status?tenantId=${tenantId}`, { credentials: "include" });
+        if (sres.ok) {
+          const sdata = await sres.json();
+          const st = sdata?.statusByIntegration?.service_titan?.syncTypes || {};
+          baseInv = typeof st.invoices?.lastRun === "string" ? st.invoices.lastRun : null;
+          baseEst = typeof st.estimates?.lastRun === "string" ? st.estimates.lastRun : null;
+        }
+      } catch { /* baseline best-effort */ }
+    }
     setRebateSaving(true);
     setRebateError(null);
     try {
@@ -396,6 +501,14 @@ export default function Settings() {
         setRebateUsingDefaults(rc.usingDefaults !== false);
         setRebateSaved(true);
         setTimeout(() => setRebateSaved(false), 2000);
+        if (willRecompute) {
+          recomputeBaseline.current = { inv: baseInv, est: baseEst };
+          recomputeSawRunning.current = false;
+          recomputeArmedAt.current = Date.now();
+          setRecomputeOutcome(null);
+          setRecomputeArmed(true);
+          fetchRecomputeStatus();
+        }
       } else {
         let message = "Couldn't save rebate programs. Please try again.";
         try {
@@ -828,9 +941,90 @@ export default function Settings() {
             </button>
             )}
             {isAgency && (
-            <p className="text-xs text-gray-500 mt-1">
-              After changing this list, run "Recompute Revenue" to re-apply it to existing invoices and estimates.
-            </p>
+            <>
+            {!(recomputeArmed || recomputeRunning) && recomputeOutcome === null && (
+              <p className="text-xs text-gray-500 mt-1">
+                Saving a changed list automatically re-applies it to existing invoices and estimates.
+              </p>
+            )}
+            {(recomputeArmed || recomputeRunning) && (() => {
+              const inv = recomputePhases?.invoices;
+              const est = recomputePhases?.estimates;
+              const phaseRow = (name: string, phase: RecomputePhase | undefined) => {
+                const status = phase?.lastStatus;
+                const rows = phase?.recordsProcessed ?? 0;
+                const total = phase?.totalRecords ?? null;
+                const isRunning = status === "running";
+                const isDone = status === "completed" || status === "error";
+                const percent =
+                  isRunning && total && total > 0
+                    ? Math.max(0, Math.min(100, Math.round((rows / total) * 100)))
+                    : null;
+                return (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="flex items-center gap-1.5 text-gray-300">
+                        {isRunning ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                        ) : isDone ? (
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Clock className="w-3.5 h-3.5 text-gray-500" />
+                        )}
+                        {name}
+                      </span>
+                      <span className="text-gray-500">
+                        {isRunning
+                          ? percent != null
+                            ? `${rows.toLocaleString()} / ~${total!.toLocaleString()} (${percent}%)`
+                            : `${rows.toLocaleString()} processed…`
+                          : isDone
+                            ? `${rows.toLocaleString()} done`
+                            : "queued"}
+                      </span>
+                    </div>
+                    {isRunning && (
+                      <div className="h-1.5 w-full bg-white/10 rounded overflow-hidden">
+                        <div
+                          className={cn("h-full bg-blue-400/70 transition-all", percent == null && "animate-pulse")}
+                          style={{ width: `${percent ?? 100}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+              return (
+                <div className="mt-3 rounded-lg border border-blue-400/20 bg-blue-500/[0.06] p-3 space-y-2">
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-blue-300">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Recomputing historical revenue…
+                  </p>
+                  <p className="text-[11px] text-gray-500">
+                    Re-applying the rebate program list to existing invoices and estimates. You can leave this page — it'll keep running.
+                  </p>
+                  {phaseRow("Invoices", inv)}
+                  {phaseRow("Estimates", est)}
+                </div>
+              );
+            })()}
+            {!(recomputeArmed || recomputeRunning) && recomputeOutcome === "success" && (
+              <div className="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-500/[0.06] p-3">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-300">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  Revenue recompute complete — historical totals now reflect the updated rebate programs.
+                </p>
+              </div>
+            )}
+            {!(recomputeArmed || recomputeRunning) && recomputeOutcome === "failed" && (
+              <div className="mt-3 rounded-lg border border-red-400/20 bg-red-500/[0.06] p-3">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-red-300">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Revenue recompute failed. The rebate list was saved, but historical totals weren't updated — retry from the integrations admin page.
+                </p>
+              </div>
+            )}
+            </>
             )}
           </div>
           <div className="space-y-2">
