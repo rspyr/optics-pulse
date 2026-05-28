@@ -6,6 +6,7 @@ import { requireRole } from "../middleware/auth";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
+import { DEFAULT_REBATE_LABELS } from "../services/integrations/service-titan";
 
 const router: IRouter = Router();
 
@@ -69,6 +70,18 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
   result.leaderboardConfig = {
     visible: rawLbConfig.visible !== undefined ? Boolean(rawLbConfig.visible) : false,
     displayMode: rawLbConfig.displayMode === "named" ? "named" : "anonymized",
+  };
+  const rawRevConfig = (tenant.revenueConfig || {}) as Record<string, unknown>;
+  const storedLabels = Array.isArray(rawRevConfig.rebateLabels)
+    ? (rawRevConfig.rebateLabels as unknown[]).filter(
+        (l): l is string => typeof l === "string" && l.trim().length > 0,
+      )
+    : null;
+  result.revenueConfig = {
+    // Surface the seeded defaults when the tenant hasn't customized its list so
+    // the admin UI always shows the rebate programs currently in effect.
+    rebateLabels: storedLabels && storedLabels.length > 0 ? storedLabels : [...DEFAULT_REBATE_LABELS],
+    usingDefaults: !(storedLabels && storedLabels.length > 0),
   };
   return result;
 }
@@ -233,6 +246,43 @@ router.patch("/tenants/:tenantId", async (req, res) => {
     const [existingForLb] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     const existingLb = (existingForLb?.leaderboardConfig || {}) as Record<string, unknown>;
     (updateData as Record<string, unknown>).leaderboardConfig = { ...existingLb, ...lbConfig };
+  }
+  if (req.body.revenueConfig && typeof req.body.revenueConfig === "object") {
+    if (role !== "super_admin" && role !== "agency_user") {
+      res.status(403).json({ error: "Only agency users can modify revenue settings" });
+      return;
+    }
+    const rawRev = req.body.revenueConfig as Record<string, unknown>;
+    if (rawRev.rebateLabels !== undefined) {
+      if (!Array.isArray(rawRev.rebateLabels)) {
+        res.status(400).json({ error: "rebateLabels must be an array of strings" });
+        return;
+      }
+      // Normalize: trim, drop blanks, de-dupe case-insensitively. Storing an
+      // empty list means "fall back to defaults" (handled on read), so we don't
+      // persist an empty array as a meaningful override.
+      const seen = new Set<string>();
+      const cleaned: string[] = [];
+      for (const raw of rawRev.rebateLabels as unknown[]) {
+        if (typeof raw !== "string") {
+          res.status(400).json({ error: "rebateLabels must be an array of strings" });
+          return;
+        }
+        const label = raw.trim();
+        if (!label) continue;
+        if (label.length > 100) {
+          res.status(400).json({ error: "Each rebate label must be 100 characters or fewer" });
+          return;
+        }
+        const key = label.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cleaned.push(label);
+      }
+      const [existingForRev] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+      const existingRev = (existingForRev?.revenueConfig || {}) as Record<string, unknown>;
+      (updateData as Record<string, unknown>).revenueConfig = { ...existingRev, rebateLabels: cleaned };
+    }
   }
 
   const [tenant] = await db.update(tenantsTable).set(updateData).where(eq(tenantsTable.id, tenantId)).returning();

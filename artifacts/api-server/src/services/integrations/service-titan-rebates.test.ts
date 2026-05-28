@@ -3,6 +3,10 @@ import {
   isRebateLineItem,
   parseEstimateData,
   parseInvoiceData,
+  compileRebatePattern,
+  compileRebatePatterns,
+  DEFAULT_REBATE_LABELS,
+  REBATE_LABEL_PATTERNS,
   type STEstimate,
   type STEstimateItem,
   type STInvoice,
@@ -64,44 +68,94 @@ function invoice(items: STInvoiceItem[], total: number, balance = 0): STInvoice 
   };
 }
 
-describe("isRebateLineItem", () => {
+describe("isRebateLineItem (default patterns)", () => {
   it("matches ETO (Energy Trust of Oregon) labels", () => {
-    expect(isRebateLineItem("ETO Rebate")).toBe(true);
-    expect(isRebateLineItem("eto credit")).toBe(true);
-    expect(isRebateLineItem("Energy Trust rebate")).toBe(true);
-    expect(isRebateLineItem("Energy  Trust of Oregon")).toBe(true);
+    expect(isRebateLineItem(["ETO Rebate"])).toBe(true);
+    expect(isRebateLineItem(["eto credit"])).toBe(true);
+    expect(isRebateLineItem(["Energy Trust rebate"])).toBe(true);
+    expect(isRebateLineItem(["Energy  Trust of Oregon"])).toBe(true);
   });
 
   it("matches ODEE labels", () => {
-    expect(isRebateLineItem("ODEE Rebate")).toBe(true);
-    expect(isRebateLineItem("odee incentive")).toBe(true);
+    expect(isRebateLineItem(["ODEE Rebate"])).toBe(true);
+    expect(isRebateLineItem(["odee incentive"])).toBe(true);
   });
 
   it("matches when any of multiple labels matches (description or SKU)", () => {
-    expect(isRebateLineItem("Generic line", "ETO Rebate SKU")).toBe(true);
-    expect(isRebateLineItem(null, "ODEE")).toBe(true);
-    expect(isRebateLineItem(undefined, "energy trust")).toBe(true);
+    expect(isRebateLineItem(["Generic line", "ETO Rebate SKU"])).toBe(true);
+    expect(isRebateLineItem([null, "ODEE"])).toBe(true);
+    expect(isRebateLineItem([undefined, "energy trust"])).toBe(true);
   });
 
   it("does NOT match generic discounts/coupons", () => {
-    expect(isRebateLineItem("Discount")).toBe(false);
-    expect(isRebateLineItem("Coupon")).toBe(false);
-    expect(isRebateLineItem("Senior Discount")).toBe(false);
-    expect(isRebateLineItem("Promo code")).toBe(false);
-    expect(isRebateLineItem("$50 off")).toBe(false);
+    expect(isRebateLineItem(["Discount"])).toBe(false);
+    expect(isRebateLineItem(["Coupon"])).toBe(false);
+    expect(isRebateLineItem(["Senior Discount"])).toBe(false);
+    expect(isRebateLineItem(["Promo code"])).toBe(false);
+    expect(isRebateLineItem(["$50 off"])).toBe(false);
   });
 
   it("does NOT match on partial/embedded word collisions", () => {
-    expect(isRebateLineItem("Veto power adjustment")).toBe(false);
-    expect(isRebateLineItem("Metodee service")).toBe(false);
+    expect(isRebateLineItem(["Veto power adjustment"])).toBe(false);
+    expect(isRebateLineItem(["Metodee service"])).toBe(false);
   });
 
   it("returns false for empty/blank/nullish input", () => {
-    expect(isRebateLineItem()).toBe(false);
-    expect(isRebateLineItem(null)).toBe(false);
-    expect(isRebateLineItem(undefined)).toBe(false);
-    expect(isRebateLineItem("")).toBe(false);
-    expect(isRebateLineItem("   ")).toBe(false);
+    expect(isRebateLineItem([])).toBe(false);
+    expect(isRebateLineItem([null])).toBe(false);
+    expect(isRebateLineItem([undefined])).toBe(false);
+    expect(isRebateLineItem([""])).toBe(false);
+    expect(isRebateLineItem(["   "])).toBe(false);
+  });
+});
+
+describe("compileRebatePattern / compileRebatePatterns", () => {
+  it("compiles a plain label into a case-insensitive, word-boundary regex", () => {
+    const pattern = compileRebatePattern("ETO");
+    expect(pattern).not.toBeNull();
+    expect(pattern!.test("ETO Rebate")).toBe(true);
+    expect(pattern!.test("eto credit")).toBe(true);
+    expect(pattern!.test("Veto power")).toBe(false);
+  });
+
+  it("allows flexible internal whitespace for multi-word labels", () => {
+    const pattern = compileRebatePattern("Energy Trust")!;
+    expect(pattern.test("Energy Trust")).toBe(true);
+    expect(pattern.test("Energy  Trust of Oregon")).toBe(true);
+    expect(pattern.test("EnergyTrust")).toBe(true);
+  });
+
+  it("escapes regex special characters so they are matched literally", () => {
+    const pattern = compileRebatePattern("PGE+ Rebate")!;
+    expect(pattern.test("PGE+ Rebate applied")).toBe(true);
+    expect(pattern.test("PGEEEE Rebate")).toBe(false);
+  });
+
+  it("returns null for blank labels and drops them from the list", () => {
+    expect(compileRebatePattern("")).toBeNull();
+    expect(compileRebatePattern("   ")).toBeNull();
+    expect(compileRebatePatterns(["ETO", "", "  ", "ODEE"])).toHaveLength(2);
+  });
+
+  it("the seeded defaults compile from DEFAULT_REBATE_LABELS", () => {
+    expect(DEFAULT_REBATE_LABELS).toEqual(["ETO", "Energy Trust", "ODEE"]);
+    expect(REBATE_LABEL_PATTERNS).toHaveLength(3);
+    expect(isRebateLineItem(["ETO Rebate"], REBATE_LABEL_PATTERNS)).toBe(true);
+  });
+});
+
+describe("isRebateLineItem (custom configurable patterns)", () => {
+  it("matches a newly configured rebate program that defaults would miss", () => {
+    const custom = compileRebatePatterns(["PGE Rebate", "Avista"]);
+    expect(isRebateLineItem(["PGE Rebate"], custom)).toBe(true);
+    expect(isRebateLineItem(["Avista incentive"], custom)).toBe(true);
+    // ETO is not in the custom list, so it should NOT match anymore.
+    expect(isRebateLineItem(["ETO Rebate"], custom)).toBe(false);
+  });
+
+  it("treats an empty pattern list as 'no rebates'", () => {
+    expect(isRebateLineItem(["ETO Rebate"], [])).toBe(false);
+    expect(isRebateLineItem(["Energy Trust"], [])).toBe(false);
   });
 });
 

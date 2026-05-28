@@ -246,6 +246,13 @@ export default function Settings() {
     podiumApiToken: "",
     podiumLocationId: "",
   });
+  const [rebateLabels, setRebateLabels] = useState<string[]>([]);
+  const [rebateInitial, setRebateInitial] = useState<string[]>([]);
+  const [rebateUsingDefaults, setRebateUsingDefaults] = useState(true);
+  const [rebateInput, setRebateInput] = useState("");
+  const [rebateSaving, setRebateSaving] = useState(false);
+  const [rebateSaved, setRebateSaved] = useState(false);
+  const rebateDirty = JSON.stringify(rebateLabels) !== JSON.stringify(rebateInitial);
 
   useEffect(() => {
     if (!tenantId || isClientUser) return;
@@ -253,6 +260,11 @@ export default function Settings() {
       .then(r => r.json())
       .then(data => {
         const lc = data.loadableConfig || {};
+        const rc = data.revenueConfig || {};
+        const labels = Array.isArray(rc.rebateLabels) ? rc.rebateLabels : [];
+        setRebateLabels(labels);
+        setRebateInitial(labels);
+        setRebateUsingDefaults(rc.usingDefaults !== false);
         setForm(f => ({
           ...f,
           serviceTitanId: data.serviceTitanId || "",
@@ -323,6 +335,45 @@ export default function Settings() {
       }
     } catch {}
     setSaving(false);
+  }
+
+  function addRebateLabel() {
+    const label = rebateInput.trim();
+    if (!label) return;
+    if (rebateLabels.some(l => l.toLowerCase() === label.toLowerCase())) {
+      setRebateInput("");
+      return;
+    }
+    setRebateLabels(prev => [...prev, label]);
+    setRebateInput("");
+  }
+
+  function removeRebateLabel(index: number) {
+    setRebateLabels(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleRebateSave() {
+    if (!tenantId) return;
+    setRebateSaving(true);
+    try {
+      const res = await fetch(`${API}/api/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ revenueConfig: { rebateLabels } }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const rc = data.revenueConfig || {};
+        const labels = Array.isArray(rc.rebateLabels) ? rc.rebateLabels : [];
+        setRebateLabels(labels);
+        setRebateInitial(labels);
+        setRebateUsingDefaults(rc.usingDefaults !== false);
+        setRebateSaved(true);
+        setTimeout(() => setRebateSaved(false), 2000);
+      }
+    } catch {}
+    setRebateSaving(false);
   }
 
   async function handleCommSave() {
@@ -643,6 +694,65 @@ export default function Settings() {
               className={inputClass}
               placeholder="e.g. 123456"
             />
+          </div>
+          <div className="space-y-2 border border-white/10 rounded-lg p-4 bg-white/5">
+            <label className="text-sm font-medium text-gray-300">Rebate Programs Counted as Revenue</label>
+            <p className="text-xs text-gray-500">
+              ServiceTitan subtracts these rebates (e.g. ETO, Energy Trust, ODEE) from the invoice total,
+              but the company still collects the money — so they're added back as real revenue. Genuine
+              discounts and coupons are never added back. Add a program's name as it appears on the line item.
+            </p>
+            {rebateUsingDefaults && (
+              <p className="text-xs text-amber-400/80">Currently using the default programs. Editing creates a custom list for this client.</p>
+            )}
+            <div className="flex flex-wrap gap-2 mt-2">
+              {rebateLabels.length === 0 && (
+                <span className="text-xs text-gray-500 italic">No rebate programs — no rebates will be added back to revenue.</span>
+              )}
+              {rebateLabels.map((label, i) => (
+                <span key={`${label}-${i}`} className="inline-flex items-center gap-1.5 bg-primary/15 border border-primary/30 text-white text-sm px-3 py-1.5 rounded-full">
+                  {label}
+                  <button
+                    type="button"
+                    onClick={() => removeRebateLabel(i)}
+                    className="text-gray-400 hover:text-red-400 transition-colors"
+                    aria-label={`Remove ${label}`}
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-2">
+              <input
+                type="text"
+                value={rebateInput}
+                onChange={e => setRebateInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addRebateLabel(); } }}
+                className={inputClass}
+                placeholder="e.g. PGE Rebate"
+              />
+              <button
+                type="button"
+                onClick={addRebateLabel}
+                disabled={!rebateInput.trim()}
+                className="bg-white/10 hover:bg-white/20 text-white font-medium px-4 py-2 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                Add
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={handleRebateSave}
+              disabled={rebateSaving || (!rebateDirty && !rebateSaved)}
+              className="bg-primary hover:bg-primary/90 text-white font-medium px-4 py-2 rounded-lg transition-all mt-3 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {rebateSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : rebateSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+              {rebateSaved ? "Saved!" : "Save Rebate Programs"}
+            </button>
+            <p className="text-xs text-gray-500 mt-1">
+              After changing this list, run "Recompute Revenue" to re-apply it to existing invoices and estimates.
+            </p>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">Google Ads Customer ID</label>

@@ -2,7 +2,7 @@ import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyS
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
+import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -46,6 +46,21 @@ function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiCon
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves the compiled rebate label patterns for a tenant. Reads the
+ * staff-editable list from `tenant.revenueConfig.rebateLabels`, falling back to
+ * the seeded defaults (ETO, Energy Trust, ODEE) when the tenant has not
+ * configured its own list. Used when parsing invoices/estimates so the rebate
+ * add-back logic is configurable without code changes.
+ */
+function getTenantRebatePatterns(tenant: typeof tenantsTable.$inferSelect): RegExp[] {
+  const config = (tenant.revenueConfig || {}) as { rebateLabels?: unknown };
+  const labels = Array.isArray(config.rebateLabels)
+    ? config.rebateLabels.filter((l): l is string => typeof l === "string" && l.trim().length > 0)
+    : null;
+  return compileRebatePatterns(labels && labels.length > 0 ? labels : DEFAULT_REBATE_LABELS);
 }
 
 async function logSync(
@@ -2004,6 +2019,8 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       }
     }
 
+    const rebatePatterns = getTenantRebatePatterns(tenant);
+
     async function processInvoiceBatch(invoices: STInvoice[]) {
       const jobInvoiceMap = new Map<string, typeof invoices>();
       for (const invoice of invoices) {
@@ -2040,7 +2057,7 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
         let latestPaidOn: Date | null = null;
 
         for (const inv of sorted) {
-          const parsed = parseInvoiceData(inv);
+          const parsed = parseInvoiceData(inv, rebatePatterns);
           totalInvoiceAmount += parsed.invoiceTotal;
           totalRebate += parsed.invoiceRebateAmount;
           totalPaid += parsed.invoicePaidAmount;
@@ -2050,7 +2067,7 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
           }
         }
 
-        const latestInvoice = parseInvoiceData(sorted[0]);
+        const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
 
         await db.update(jobsTable)
           .set({
@@ -2162,6 +2179,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
     let synced = 0;
     let cancelled = false;
     clearEmployeeCache();
+    const rebatePatterns = getTenantRebatePatterns(tenant);
 
     // Cooperative cancel for the revenue-recompute full re-sync — see the
     // invoices path for the rationale. Only armed when fullResync is set.
@@ -2188,7 +2206,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
 
     async function processEstimateBatch(estimates: STEstimate[]) {
       for (const estimate of estimates) {
-        const parsed = parseEstimateData(estimate);
+        const parsed = parseEstimateData(estimate, rebatePatterns);
         if (!parsed.stEstimateId) continue;
 
         const [existing] = await db.select({ id: soldEstimatesTable.id, leadId: soldEstimatesTable.leadId })

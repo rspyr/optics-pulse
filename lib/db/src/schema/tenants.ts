@@ -12,6 +12,7 @@ export const tenantsTable = pgTable("tenants", {
   alertConfig: jsonb("alert_config"),
   communicationConfig: jsonb("communication_config"),
   leaderboardConfig: jsonb("leaderboard_config"),
+  revenueConfig: jsonb("revenue_config"),
   spiffConfig: jsonb("spiff_config"),
   oldLeadThreshold: integer("old_lead_threshold"),
   isActive: boolean("is_active").notNull().default(true),

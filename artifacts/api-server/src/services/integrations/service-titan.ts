@@ -485,12 +485,40 @@ export async function fetchInvoices(
 // collects that money — so those rebate line items are real revenue and must
 // be added back. Genuine discounts/coupons are also negative line items but
 // are NOT real revenue, so only line items whose label matches a known rebate
-// pattern are added back. Add new rebate programs here as they come up.
-export const REBATE_LABEL_PATTERNS: RegExp[] = [
-  /\beto\b/i,
-  /energy\s*trust/i,
-  /\bodee\b/i,
-];
+// program are added back.
+//
+// The list of rebate programs is configurable per tenant (DB-backed, editable
+// from the integrations admin UI). These are the seeded defaults used when a
+// tenant has not customized its own list — see `getTenantRebatePatterns` in
+// sync-scheduler.ts for how the per-tenant list is resolved.
+export const DEFAULT_REBATE_LABELS: string[] = ["ETO", "Energy Trust", "ODEE"];
+
+/**
+ * Compiles a plain, staff-entered rebate program label into a case-insensitive,
+ * word-boundary regex. Staff enter human-readable names (e.g. "Energy Trust"),
+ * not regex — special characters are escaped and internal whitespace is allowed
+ * to vary (matching "Energy Trust", "Energy  Trust" and "EnergyTrust"). Returns
+ * null for blank labels.
+ */
+export function compileRebatePattern(label: string): RegExp | null {
+  const trimmed = (label || "").trim();
+  if (!trimmed) return null;
+  const escaped = trimmed
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s*");
+  return new RegExp(`\\b${escaped}\\b`, "i");
+}
+
+/** Compiles a list of rebate labels into regexes, dropping any blank entries. */
+export function compileRebatePatterns(labels: string[]): RegExp[] {
+  return labels
+    .map(compileRebatePattern)
+    .filter((p): p is RegExp => p !== null);
+}
+
+// Compiled defaults, exported for callers/tests that need the seeded behavior
+// without resolving a tenant's custom configuration.
+export const REBATE_LABEL_PATTERNS: RegExp[] = compileRebatePatterns(DEFAULT_REBATE_LABELS);
 
 export interface RebateLineItem {
   label: string;
@@ -499,16 +527,20 @@ export interface RebateLineItem {
 
 /**
  * Returns true when a line item label identifies a rebate (real revenue ST
- * removed from the total) rather than a genuine discount. Matches against any
- * of the provided labels (description, SKU name, etc.).
+ * removed from the total) rather than a genuine discount. Matches the combined
+ * labels (description, SKU name, etc.) against the provided rebate patterns,
+ * defaulting to the seeded defaults when none are supplied.
  */
-export function isRebateLineItem(...labels: Array<string | null | undefined>): boolean {
+export function isRebateLineItem(
+  labels: Array<string | null | undefined>,
+  patterns: RegExp[] = REBATE_LABEL_PATTERNS,
+): boolean {
   const text = labels.filter(Boolean).join(" ").trim();
   if (!text) return false;
-  return REBATE_LABEL_PATTERNS.some((p) => p.test(text));
+  return patterns.some((p) => p.test(text));
 }
 
-export function parseInvoiceData(invoice: STInvoice) {
+export function parseInvoiceData(invoice: STInvoice, patterns: RegExp[] = REBATE_LABEL_PATTERNS) {
   const total = parseFloat(invoice.total) || 0;
   const balance = parseFloat(invoice.balance) || 0;
 
@@ -516,7 +548,7 @@ export function parseInvoiceData(invoice: STInvoice) {
   const rebateBreakdown: RebateLineItem[] = [];
   for (const item of invoice.items || []) {
     const itemTotal = parseFloat(item.total) || 0;
-    if (itemTotal < 0 && isRebateLineItem(item.description, item.skuName)) {
+    if (itemTotal < 0 && isRebateLineItem([item.description, item.skuName], patterns)) {
       const amount = Math.abs(itemTotal);
       rebateAmount += amount;
       rebateBreakdown.push({ label: item.skuName || item.description || "Rebate", amount });
@@ -725,7 +757,7 @@ export function clearEmployeeCache() {
   employeeCache.clear();
 }
 
-export function parseEstimateData(estimate: STEstimate) {
+export function parseEstimateData(estimate: STEstimate, patterns: RegExp[] = REBATE_LABEL_PATTERNS) {
   // `subtotal` is the ServiceTitan-reported total, which already has rebate
   // line items subtracted out. We add back only the rebate line items (ETO,
   // ODEE, etc.) — genuine discounts stay subtracted — to get true revenue.
@@ -735,7 +767,7 @@ export function parseEstimateData(estimate: STEstimate) {
   const rebateBreakdown: RebateLineItem[] = [];
   for (const item of estimate.items || []) {
     const itemTotal = item.total || 0;
-    if (itemTotal < 0 && isRebateLineItem(item.description, item.skuName)) {
+    if (itemTotal < 0 && isRebateLineItem([item.description, item.skuName], patterns)) {
       const amount = Math.abs(itemTotal);
       rebateAmount += amount;
       rebateBreakdown.push({ label: item.skuName || item.description || "Rebate", amount });
