@@ -253,6 +253,120 @@ describe("reapOrphanedSyncLogs — real Postgres", () => {
   });
 });
 
+describe("reapOrphanedSyncLogs — inactivity-keyed periodic sweep", () => {
+  // These tests pin the end-to-end periodic-sweep contract: staleness keys off
+  // INACTIVITY — `COALESCE(progress_updated_at, started_at)` — not absolute
+  // age. The periodic scheduler sweep (`reapOrphanedSyncLogs(threshold,
+  // "periodic reaper sweep")`) recovers a backfill that stamped progress then
+  // silently died, while a backfill that keeps stamping progress survives an
+  // arbitrarily long run.
+
+  async function insertRunningBackfill(opts: {
+    startedAt: Date;
+    progressUpdatedAt: Date | null;
+  }): Promise<number> {
+    const [row] = await db
+      .insert(integrationSyncLogsTable)
+      .values({
+        tenantId,
+        integration: "meta",
+        syncType: "backfill",
+        status: "running",
+        startedAt: opts.startedAt,
+        progressUpdatedAt: opts.progressUpdatedAt,
+        progressCurrentChunk: 4,
+        progressTotalChunks: 12,
+      })
+      .returning({ id: integrationSyncLogsTable.id });
+    // Track for afterAll cleanup.
+    seeded.push({ id: row.id, label: "inactivity-keyed", expectReaped: false });
+    return row.id;
+  }
+
+  async function statusOf(id: number): Promise<string | undefined> {
+    const [row] = await db
+      .select({ status: integrationSyncLogsTable.status })
+      .from(integrationSyncLogsTable)
+      .where(eq(integrationSyncLogsTable.id, id));
+    return row?.status;
+  }
+
+  it("recovers a backfill that stamped progress and then died, once it crosses the inactivity threshold", async () => {
+    // A backfill that started long ago (well past the threshold) but is still
+    // actively stamping progress: last activity is recent, so the sweep must
+    // leave it running even though `started_at` is ancient.
+    const id = await insertRunningBackfill({
+      startedAt: minutesAgo(120),
+      progressUpdatedAt: minutesAgo(2),
+    });
+
+    let reaped = await reapOrphanedSyncLogs(STALE_MINUTES, "periodic reaper sweep");
+    expect(reaped).toBeGreaterThanOrEqual(0);
+    expect(
+      await statusOf(id),
+      "a backfill still stamping progress must not be reaped despite an old started_at",
+    ).toBe("running");
+
+    // Now it "dies": its last progress stamp ages past the inactivity
+    // threshold (no further progress writes). The next periodic sweep must
+    // recover it to a terminal error state.
+    await db
+      .update(integrationSyncLogsTable)
+      .set({ progressUpdatedAt: minutesAgo(STALE_MINUTES + 1) })
+      .where(eq(integrationSyncLogsTable.id, id));
+
+    reaped = await reapOrphanedSyncLogs(STALE_MINUTES, "periodic reaper sweep");
+    expect(reaped).toBeGreaterThanOrEqual(1);
+
+    const [row] = await db
+      .select({
+        status: integrationSyncLogsTable.status,
+        errorMessage: integrationSyncLogsTable.errorMessage,
+        completedAt: integrationSyncLogsTable.completedAt,
+        progressCurrentChunk: integrationSyncLogsTable.progressCurrentChunk,
+        progressTotalChunks: integrationSyncLogsTable.progressTotalChunks,
+      })
+      .from(integrationSyncLogsTable)
+      .where(eq(integrationSyncLogsTable.id, id));
+
+    expect(row.status, "a dead backfill must be reaped to error").toBe("error");
+    expect(row.errorMessage ?? "").toMatch(/orphaned by periodic reaper sweep/i);
+    expect(row.completedAt).not.toBeNull();
+    // Stuck progress metadata is cleared so the UI doesn't render a frozen bar.
+    expect(row.progressCurrentChunk).toBeNull();
+    expect(row.progressTotalChunks).toBeNull();
+  });
+
+  it("never reaps a run that keeps refreshing progress past the old 6-hour mark", async () => {
+    // Started 8 hours ago — well past the legacy 6-hour (360-min) cutoff that
+    // an absolute-age reaper would have killed. Because it keeps stamping
+    // progress, every periodic sweep at the 360-min threshold must leave it
+    // running, no matter how long the run goes.
+    const PERIODIC_THRESHOLD = 360;
+    const id = await insertRunningBackfill({
+      startedAt: minutesAgo(8 * 60),
+      progressUpdatedAt: minutesAgo(1),
+    });
+
+    // Simulate several scheduler ticks: each time the backfill refreshes
+    // `progress_updated_at` just before the sweep runs, it survives — even
+    // though `started_at` keeps getting older.
+    for (let tick = 0; tick < 3; tick++) {
+      await db
+        .update(integrationSyncLogsTable)
+        .set({ progressUpdatedAt: new Date() })
+        .where(eq(integrationSyncLogsTable.id, id));
+
+      await reapOrphanedSyncLogs(PERIODIC_THRESHOLD, "periodic reaper sweep");
+
+      expect(
+        await statusOf(id),
+        `tick ${tick}: a backfill refreshing progress must outlive the 6-hour mark`,
+      ).toBe("running");
+    }
+  });
+});
+
 function specStatusFor(label: string): string {
   if (label.startsWith("running")) return "running";
   if (label.startsWith("completed")) return "completed";

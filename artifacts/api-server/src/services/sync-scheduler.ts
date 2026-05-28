@@ -127,6 +127,9 @@ async function updateSyncLogChunkProgress(
       progressTotalChunks: totalChunks,
       progressWindowStart: windowStart,
       progressWindowEnd: windowEnd,
+      // Stamp inactivity watermark so the orphan reaper keeps this long-running
+      // backfill alive while it's making progress, and reaps it once it stops.
+      progressUpdatedAt: new Date(),
       errorMessage: null,
       errorCode: null,
       partial: false,
@@ -143,7 +146,9 @@ async function updateSyncLogChunkProgress(
  */
 async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
   await db.update(integrationSyncLogsTable)
-    .set({ recordsProcessed })
+    // Stamp inactivity watermark so the orphan reaper treats a row that's still
+    // publishing record progress as alive (see updateSyncLogChunkProgress).
+    .set({ recordsProcessed, progressUpdatedAt: new Date() })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 

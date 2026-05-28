@@ -19,6 +19,14 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   progressTotalChunks: integer("progress_total_chunks"),
   progressWindowStart: text("progress_window_start"),
   progressWindowEnd: text("progress_window_end"),
+  // Last time a running backfill stamped forward progress (chunk advance, batch
+  // of records processed). The orphan reaper keys staleness off inactivity —
+  // `COALESCE(progress_updated_at, started_at)` — rather than `started_at`
+  // alone, so a long-but-healthy backfill that keeps stamping progress is never
+  // reaped, while one that stamps progress and then silently dies is recovered
+  // once it crosses the inactivity threshold. Null until the first progress
+  // write, at which point the reaper falls back to `started_at`.
+  progressUpdatedAt: timestamp("progress_updated_at"),
   // Estimated total record count for non-chunked progress (full re-sync /
   // revenue recompute). Populated from the upstream total-count header so the
   // Settings panel can render a percent-complete bar by dividing

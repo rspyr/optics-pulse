@@ -2,6 +2,17 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import { db, integrationSyncLogsTable } from "@workspace/db";
 
 /**
+ * A run is an orphan if it has been `status='running'` with no forward progress
+ * for longer than the threshold. Staleness keys off INACTIVITY, not absolute
+ * age: `COALESCE(progress_updated_at, started_at)`. A backfill that keeps
+ * stamping `progress_updated_at` survives an arbitrarily long run, while one
+ * that stamps progress then dies is reaped once it crosses the threshold.
+ * `progress_updated_at` is null until the first progress write, so until then
+ * we fall back to `started_at`.
+ */
+const lastActivityExpr = sql`COALESCE(${integrationSyncLogsTable.progressUpdatedAt}, ${integrationSyncLogsTable.startedAt})`;
+
+/**
  * Mark any `status='running'` sync log rows older than the threshold as
  * orphaned — the worker that owned them is gone (deploy, crash, OOM, a
  * silently-dead backfill loop). Without this, the row sits at "running"
@@ -26,7 +37,7 @@ export async function reapOrphanedSyncLogs(
   const cutoff = new Date(Date.now() - staleMinutes * 60_000);
   const orphans = await db.select({ id: integrationSyncLogsTable.id, integration: integrationSyncLogsTable.integration, tenantId: integrationSyncLogsTable.tenantId, recordsProcessed: integrationSyncLogsTable.recordsProcessed })
     .from(integrationSyncLogsTable)
-    .where(and(eq(integrationSyncLogsTable.status, "running"), lt(integrationSyncLogsTable.startedAt, cutoff)));
+    .where(and(eq(integrationSyncLogsTable.status, "running"), lt(lastActivityExpr, cutoff)));
 
   if (orphans.length === 0) return 0;
 
@@ -41,7 +52,7 @@ export async function reapOrphanedSyncLogs(
       progressWindowStart: null,
       progressWindowEnd: null,
     })
-    .where(and(eq(integrationSyncLogsTable.status, "running"), lt(integrationSyncLogsTable.startedAt, cutoff)));
+    .where(and(eq(integrationSyncLogsTable.status, "running"), lt(lastActivityExpr, cutoff)));
 
   for (const row of orphans) {
     console.warn(`[OrphanReaper] Marked sync log #${row.id} (${row.integration}, tenant ${row.tenantId}, ${row.recordsProcessed} rows) as orphaned — ${reason}`);
