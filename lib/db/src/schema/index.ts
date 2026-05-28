@@ -22,6 +22,7 @@ export * from "./tracker-submit-attempts";
 export * from "./scripts";
 export * from "./routing-config";
 export * from "./google-sheet-configs";
+export * from "./unrouted-sheet-rows";
 export * from "./lead-source-aliases";
 export * from "./funnel-aliases";
 export * from "./field-mapping-rules";

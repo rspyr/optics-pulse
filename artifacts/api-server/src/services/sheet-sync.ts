@@ -1,4 +1,4 @@
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable, unroutedSheetRowsTable } from "@workspace/db";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitLeadUpdated } from "../socket";
@@ -250,7 +250,21 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
     const resolvedFunnelId = resolveFunnelForRow(row, funnelColumn, funnelValueMap, defaultFunnelTypeId);
     if (!resolvedFunnelId) {
-      console.warn(`[SheetSync] Skipping row in sheet config ${config.id} — no matching funnel for value "${funnelColumn ? row[funnelColumn] : "N/A"}"`);
+      const unmatchedValue = funnelColumn ? (row[funnelColumn] || "").trim() : "";
+      console.warn(`[SheetSync] Unrouted row in sheet config ${config.id} — no matching funnel for value "${unmatchedValue || "N/A"}"; persisting to admin queue`);
+      try {
+        await db.insert(unroutedSheetRowsTable).values({
+          tenantId: config.tenantId,
+          sheetConfigId: config.id,
+          funnelColumn: funnelColumn || null,
+          unmatchedValue: unmatchedValue || null,
+          rowData: row as Record<string, string>,
+          reason: "no_funnel_match",
+          source: "sheet_sync",
+        });
+      } catch (err) {
+        console.error(`[SheetSync] Failed to record unrouted row for sheet config ${config.id}:`, err);
+      }
       continue;
     }
 

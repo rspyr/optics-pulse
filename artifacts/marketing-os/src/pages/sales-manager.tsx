@@ -52,6 +52,20 @@ interface SheetConfig {
   funnelColumn: string | null;
   funnelValueMap: Record<string, number> | null;
   defaultFunnel?: { id: number; name: string; slug: string } | null;
+  unroutedCount?: number;
+}
+
+interface UnroutedSheetRow {
+  id: number;
+  tenantId: number;
+  sheetConfigId: number;
+  funnelColumn: string | null;
+  unmatchedValue: string | null;
+  rowData: Record<string, string>;
+  reason: string;
+  source: string;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 interface StatsData {
@@ -2892,6 +2906,49 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
   const [togglingPause, setTogglingPause] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [sectionExpanded, setSectionExpanded] = useState(false);
+  const [unroutedOpenId, setUnroutedOpenId] = useState<number | null>(null);
+  const [unroutedRows, setUnroutedRows] = useState<UnroutedSheetRow[] | null>(null);
+  const [unroutedLoading, setUnroutedLoading] = useState(false);
+  const [resolvingUnroutedId, setResolvingUnroutedId] = useState<number | null>(null);
+
+  const loadUnroutedRows = useCallback(async (configId: number) => {
+    if (!tenantId) return;
+    setUnroutedLoading(true);
+    setUnroutedRows(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/tenants/${tenantId}/unrouted-sheet-rows?sheetConfigId=${configId}`,
+        { credentials: "include" },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setUnroutedRows(data);
+      }
+    } catch {} finally { setUnroutedLoading(false); }
+  }, [tenantId]);
+
+  const handleToggleUnrouted = (configId: number) => {
+    if (unroutedOpenId === configId) {
+      setUnroutedOpenId(null);
+      setUnroutedRows(null);
+    } else {
+      setUnroutedOpenId(configId);
+      loadUnroutedRows(configId);
+    }
+  };
+
+  const handleResolveUnrouted = async (rowId: number, configId: number) => {
+    setResolvingUnroutedId(rowId);
+    try {
+      const res = await fetch(`${API_BASE}/unrouted-sheet-rows/${rowId}/resolve`, {
+        method: "POST", credentials: "include",
+      });
+      if (res.ok) {
+        await loadUnroutedRows(configId);
+        handleRefetch();
+      }
+    } catch {} finally { setResolvingUnroutedId(null); }
+  };
 
   const handleRefetch = () => { refetchConfigs(); onRefetch(); };
 
@@ -3176,6 +3233,15 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                       Routes by: {cfg.funnelColumn}
                     </span>
                   )}
+                  {(cfg.unroutedCount || 0) > 0 && (
+                    <button
+                      onClick={() => handleToggleUnrouted(cfg.id)}
+                      className="text-[10px] text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30"
+                      title="Rows that arrived without a matching funnel and were not imported"
+                    >
+                      ⚠ {cfg.unroutedCount} unrouted lead{cfg.unroutedCount === 1 ? "" : "s"}
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -3292,6 +3358,79 @@ function GoogleSheetConfigSection({ tenantId, funnels, onRefetch }: { tenantId: 
                             {previewData.columns.map(col => (
                               <td key={col} className="py-1 px-2 text-white/50 truncate max-w-[150px]">{row[col] || ""}</td>
                             ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {unroutedOpenId === cfg.id && (
+              <div className="mt-3 pt-3 border-t border-white/5">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] text-amber-300 uppercase tracking-wider">
+                    Unrouted Leads {unroutedRows ? `(${unroutedRows.length})` : ""}
+                  </p>
+                  <button
+                    onClick={() => handleToggleUnrouted(cfg.id)}
+                    className="text-[10px] text-white/30 hover:text-white/50"
+                  >
+                    Close
+                  </button>
+                </div>
+                <p className="text-[10px] text-white/40 mb-2">
+                  These rows arrived without a value matching the funnel routing map and have no default funnel configured, so they were NOT imported as leads. Map the unmatched value (Settings → Funnel Routing) or set a default funnel, then re-import; dismiss rows you've handled.
+                </p>
+                {unroutedLoading ? (
+                  <div className="flex items-center gap-2 py-3 text-[10px] text-white/40">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Loading unrouted rows…
+                  </div>
+                ) : !unroutedRows || unroutedRows.length === 0 ? (
+                  <p className="text-xs text-white/30 py-2">No unrouted rows.</p>
+                ) : (
+                  <div className="overflow-x-auto max-h-60 border border-amber-500/20 rounded">
+                    <table className="w-full text-[10px]">
+                      <thead className="bg-amber-500/5">
+                        <tr className="border-b border-amber-500/20">
+                          <th className="text-left py-1 px-2 text-amber-300/70">Received</th>
+                          <th className="text-left py-1 px-2 text-amber-300/70">Unmatched value</th>
+                          <th className="text-left py-1 px-2 text-amber-300/70">Row data</th>
+                          <th className="text-right py-1 px-2 text-amber-300/70">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unroutedRows.map(r => (
+                          <tr key={r.id} className="border-b border-white/[0.03] align-top">
+                            <td className="py-1 px-2 text-white/50 whitespace-nowrap">
+                              {new Date(r.createdAt).toLocaleString()}
+                            </td>
+                            <td className="py-1 px-2 text-amber-300/90 font-mono">
+                              {r.unmatchedValue || <span className="text-white/30 italic">(empty)</span>}
+                              {r.funnelColumn && (
+                                <span className="ml-1 text-white/30">in “{r.funnelColumn}”</span>
+                              )}
+                            </td>
+                            <td className="py-1 px-2 text-white/50 font-mono max-w-[400px]">
+                              <pre className="whitespace-pre-wrap break-words text-[10px]">
+                                {Object.entries(r.rowData)
+                                  .filter(([, v]) => v && String(v).trim())
+                                  .map(([k, v]) => `${k}: ${v}`)
+                                  .join("\n")}
+                              </pre>
+                            </td>
+                            <td className="py-1 px-2 text-right">
+                              {isAgency && (
+                                <button
+                                  onClick={() => handleResolveUnrouted(r.id, cfg.id)}
+                                  disabled={resolvingUnroutedId === r.id}
+                                  className="text-[10px] text-white/40 hover:text-emerald-400 disabled:opacity-50"
+                                >
+                                  {resolvingUnroutedId === r.id ? "…" : "Dismiss"}
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

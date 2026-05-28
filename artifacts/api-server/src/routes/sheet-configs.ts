@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, googleSheetConfigsTable, funnelTypesTable, tenantFunnelTypesTable } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { db, googleSheetConfigsTable, funnelTypesTable, tenantFunnelTypesTable, unroutedSheetRowsTable } from "@workspace/db";
+import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { readRawSheetData } from "../services/integrations/google-sheets";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
@@ -39,9 +39,27 @@ router.get("/tenants/:tenantId/sheet-configs", requireRole("super_admin", "agenc
     }
   }
 
+  const unroutedCounts = configs.length > 0
+    ? await db.select({
+        sheetConfigId: unroutedSheetRowsTable.sheetConfigId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(unroutedSheetRowsTable)
+      .where(and(
+        eq(unroutedSheetRowsTable.tenantId, tenantId),
+        isNull(unroutedSheetRowsTable.resolvedAt),
+        inArray(unroutedSheetRowsTable.sheetConfigId, configs.map(c => c.id)),
+      ))
+      .groupBy(unroutedSheetRowsTable.sheetConfigId)
+    : [];
+
+  const unroutedByConfig = new Map<number, number>();
+  for (const c of unroutedCounts) unroutedByConfig.set(c.sheetConfigId, c.count || 0);
+
   const enriched = configs.map(c => ({
     ...c,
     defaultFunnel: c.defaultFunnelTypeId ? funnelMap[c.defaultFunnelTypeId] || null : null,
+    unroutedCount: unroutedByConfig.get(c.id) || 0,
   }));
 
   res.json(enriched);

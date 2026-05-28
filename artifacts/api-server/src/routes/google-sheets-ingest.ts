@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable } from "@workspace/db";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, unroutedSheetRowsTable } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { readSheetRows, readRawSheetData } from "../services/integrations/google-sheets";
 import { requireRole } from "../middleware/auth";
@@ -416,6 +416,20 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
 
       const resolvedFunnelId = resolveFunnelForRow(row, funnelColumn, funnelValueMap, defaultFunnelTypeId);
       if (!resolvedFunnelId) {
+        const unmatchedValue = funnelColumn ? (row[funnelColumn] || row["__funnel__"] || "").trim() : "";
+        try {
+          await db.insert(unroutedSheetRowsTable).values({
+            tenantId: config.tenantId,
+            sheetConfigId: config.id,
+            funnelColumn: funnelColumn || null,
+            unmatchedValue: unmatchedValue || null,
+            rowData: row as unknown as Record<string, string>,
+            reason: "no_funnel_match",
+            source: "sheet_ingest",
+          });
+        } catch (err) {
+          console.error(`[SheetsIngest] Failed to record unrouted row for sheet config ${config.id}:`, err);
+        }
         noFunnelSkipped++;
         skipped++;
         continue;
