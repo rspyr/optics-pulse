@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean; totalRecords?: number | null }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number; triggeredBySyncLogId?: number | null }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -1070,31 +1070,52 @@ export default function Internal() {
                             const est = stSyncTypes?.estimates;
                             const phaseRow = (
                               name: string,
-                              phase: { lastStatus: string; recordsProcessed: number } | undefined,
+                              phase: { lastStatus: string; recordsProcessed: number; totalRecords?: number | null } | undefined,
                             ) => {
                               const status = phase?.lastStatus;
                               const rows = phase?.recordsProcessed ?? 0;
+                              const total = phase?.totalRecords ?? null;
                               const isRunning = status === "running";
                               const isDone = status === "completed";
+                              // Percent only when running against a known total
+                              // (captured from the upstream total-count). Clamp
+                              // to [0,100] — the processed count can exceed the
+                              // estimate since `total` is an estimate.
+                              const percent =
+                                isRunning && total && total > 0
+                                  ? Math.max(0, Math.min(100, Math.round((rows / total) * 100)))
+                                  : null;
                               return (
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="flex items-center gap-1.5 text-white/80">
-                                    {isRunning ? (
-                                      <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
-                                    ) : isDone ? (
-                                      <CheckCircle className="w-3 h-3 text-emerald-400" />
-                                    ) : (
-                                      <Clock className="w-3 h-3 text-white/40" />
-                                    )}
-                                    {name}
-                                  </span>
-                                  <span className="text-white/50">
-                                    {isRunning
-                                      ? `${rows.toLocaleString()} processed…`
-                                      : isDone
-                                        ? `${rows.toLocaleString()} done`
-                                        : "queued"}
-                                  </span>
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="flex items-center gap-1.5 text-white/80">
+                                      {isRunning ? (
+                                        <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                                      ) : isDone ? (
+                                        <CheckCircle className="w-3 h-3 text-emerald-400" />
+                                      ) : (
+                                        <Clock className="w-3 h-3 text-white/40" />
+                                      )}
+                                      {name}
+                                    </span>
+                                    <span className="text-white/50">
+                                      {isRunning
+                                        ? percent != null
+                                          ? `${rows.toLocaleString()} / ~${total!.toLocaleString()} (${percent}%)`
+                                          : `${rows.toLocaleString()} processed…`
+                                        : isDone
+                                          ? `${rows.toLocaleString()} done`
+                                          : "queued"}
+                                    </span>
+                                  </div>
+                                  {isRunning && (
+                                    <div className="h-1.5 w-full bg-white/5 rounded overflow-hidden">
+                                      <div
+                                        className={`h-full bg-blue-400/70 transition-all ${percent == null ? "animate-pulse" : ""}`}
+                                        style={{ width: `${percent ?? 100}%` }}
+                                      />
+                                    </div>
+                                  )}
                                 </div>
                               );
                             };

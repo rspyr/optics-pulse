@@ -409,12 +409,14 @@ export async function fetchInvoices(
   config: STAuthConfig,
   modifiedAfter?: string,
   processBatch?: (invoices: STInvoice[]) => Promise<void>,
+  onTotalCount?: (totalCount: number) => void,
 ): Promise<STInvoice[]> {
   let page = 1;
   const pageSize = 50;
   let hasMore = true;
   const allInvoices: STInvoice[] = [];
   let batchInvoices: STInvoice[] = [];
+  let reportedTotal = false;
 
   while (hasMore) {
     const params = new URLSearchParams({
@@ -431,6 +433,14 @@ export async function fetchInvoices(
       {},
       "accounting",
     );
+
+    // Surface the upstream total-count once (first page) so callers can show a
+    // percent-complete bar. ServiceTitan returns the same totalCount on every
+    // page; we only fire the callback once to avoid redundant writes.
+    if (!reportedTotal && onTotalCount && typeof response.totalCount === "number") {
+      reportedTotal = true;
+      onTotalCount(response.totalCount);
+    }
 
     const jobInvoices = response.data.filter((inv) => inv.job && inv.active !== false);
     batchInvoices.push(...jobInvoices);
@@ -607,12 +617,14 @@ export async function fetchSoldEstimates(
   config: STAuthConfig,
   modifiedAfter?: string,
   processBatch?: (estimates: STEstimate[]) => Promise<void>,
+  onTotalCount?: (totalCount: number) => void,
 ): Promise<STEstimate[]> {
   let page = 1;
   const pageSize = 50;
   let hasMore = true;
   const allEstimates: STEstimate[] = [];
   let batchEstimates: STEstimate[] = [];
+  let reportedTotal = false;
 
   while (hasMore) {
     const params = new URLSearchParams({
@@ -630,6 +642,13 @@ export async function fetchSoldEstimates(
       {},
       "sales",
     );
+
+    // Surface the upstream total-count once (first page) so callers can show a
+    // percent-complete bar. See fetchInvoices for rationale.
+    if (!reportedTotal && onTotalCount && typeof response.totalCount === "number") {
+      reportedTotal = true;
+      onTotalCount(response.totalCount);
+    }
 
     const activeEstimates = response.data.filter((est) => est.active !== false);
     batchEstimates.push(...activeEstimates);

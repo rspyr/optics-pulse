@@ -81,11 +81,12 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
       errorMessage: errorMessage || null,
       errorCode: code,
       // Clear in-flight progress columns so a finished row doesn't keep
-      // showing the last chunk window in the UI.
+      // showing the last chunk window / total in the UI.
       progressCurrentChunk: null,
       progressTotalChunks: null,
       progressWindowStart: null,
       progressWindowEnd: null,
+      progressTotalRecords: null,
     })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
@@ -128,6 +129,19 @@ async function updateSyncLogChunkProgress(
 async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
   await db.update(integrationSyncLogsTable)
     .set({ recordsProcessed })
+    .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+/**
+ * Record the estimated total record count for a non-chunked progress run
+ * (full re-sync / revenue recompute). Captured once from the upstream
+ * total-count header so the Settings panel can render a percent-complete bar
+ * by dividing `recordsProcessed` against this total. Used only by the full
+ * re-sync path — windowed backfills report progress via the chunk columns.
+ */
+async function updateSyncLogTotalRecords(logId: number, totalRecords: number) {
+  await db.update(integrationSyncLogsTable)
+    .set({ progressTotalRecords: totalRecords })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -2070,8 +2084,14 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       }
     }
 
+    // On a full re-sync, capture the upstream total-count once so the
+    // recompute card can show a percent-complete bar. Skipped on incremental
+    // syncs — those report a running tally only.
+    const onInvoiceTotal = options?.fullResync
+      ? (total: number) => { void updateSyncLogTotalRecords(syncLog.id, total); }
+      : undefined;
     try {
-      await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch);
+      await fetchInvoices(stConfig, modifiedOnOrAfter, processInvoiceBatch, onInvoiceTotal);
     } catch (innerErr) {
       // ResyncCancelled is the expected unwind path, not a real failure.
       if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
@@ -2301,8 +2321,13 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       }
     }
 
+    // On a full re-sync, capture the upstream total-count once so the
+    // recompute card can show a percent-complete bar (see invoices path).
+    const onEstimateTotal = options?.fullResync
+      ? (total: number) => { void updateSyncLogTotalRecords(syncLog.id, total); }
+      : undefined;
     try {
-      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch);
+      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal);
     } catch (innerErr) {
       if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
     }

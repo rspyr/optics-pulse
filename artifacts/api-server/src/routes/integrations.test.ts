@@ -160,6 +160,7 @@ interface SyncLogRow {
   progressTotalChunks: number | null;
   progressWindowStart: string | null;
   progressWindowEnd: string | null;
+  progressTotalRecords: number | null;
   errorCode: string | null;
   partial: boolean;
   triggeredBySyncLogId: number | null;
@@ -181,6 +182,7 @@ function log(overrides: Partial<SyncLogRow>): SyncLogRow {
     progressTotalChunks: null,
     progressWindowStart: null,
     progressWindowEnd: null,
+    progressTotalRecords: null,
     errorCode: null,
     partial: false,
     triggeredBySyncLogId: null,

@@ -19,6 +19,11 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   progressTotalChunks: integer("progress_total_chunks"),
   progressWindowStart: text("progress_window_start"),
   progressWindowEnd: text("progress_window_end"),
+  // Estimated total record count for non-chunked progress (full re-sync /
+  // revenue recompute). Populated from the upstream total-count header so the
+  // Settings panel can render a percent-complete bar by dividing
+  // `records_processed` against this. Null on syncs that don't report a total.
+  progressTotalRecords: integer("progress_total_records"),
   errorCode: text("error_code"),
   partial: boolean("partial").notNull().default(false),
   // Cooperative cancel signal for long-running backfills. The HTTP cancel

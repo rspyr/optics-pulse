@@ -341,7 +341,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     needsReconnect: boolean;
     reconnectReason: string | null;
     latestErrorCode: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -350,7 +350,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean }> = {};
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null }> = {};
     // Union of sync types: from the recent log window (latest run/status info)
     // AND from the cumulative aggregation (which covers full history, so we
     // still show sync types whose last run is older than the 60-row window).
@@ -371,6 +371,9 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         // state. Only meaningful while the latest run is `running`.
         runningLogId: latestOfType?.status === "running" ? latestOfType.id : null,
         cancelRequested: latestOfType?.cancelRequested === true,
+        // Estimated total record count for the latest run (set during a full
+        // re-sync / revenue recompute). Lets the UI render a percent bar.
+        totalRecords: latestOfType?.progressTotalRecords ?? null,
       };
     }
 
