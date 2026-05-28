@@ -1305,6 +1305,13 @@ router.post("/leads-hub/create", async (req, res) => {
     parsedCallbackAt = d;
   }
 
+  // When the CSR set a callback time at creation, route the lead straight
+  // into the Callbacks queue (hubStatus = 'call_back') so it shows up in the
+  // Callbacks tab immediately instead of sitting in day_1 until someone
+  // logs an action that flips its status.
+  const initialHubStatus = parsedCallbackAt ? "call_back" : "day_1";
+  const initialLeadStatus = parsedCallbackAt ? "contacted" : "new";
+
   const [lead] = await db.insert(leadsTable).values({
     tenantId,
     firstName,
@@ -1318,9 +1325,9 @@ router.post("/leads-hub/create", async (req, res) => {
     assignedCsrId: validatedCsrId,
     assignedTo: csrName,
     contactPreferences: contactPreferences || [],
-    hubStatus: "day_1",
+    hubStatus: initialHubStatus,
     dayInSequence: 1,
-    status: "new",
+    status: initialLeadStatus,
     callbackAt: parsedCallbackAt,
   }).returning();
 
@@ -1328,7 +1335,7 @@ router.post("/leads-hub/create", async (req, res) => {
     leadId: lead.id,
     tenantId,
     fromStatus: null,
-    toStatus: "day_1",
+    toStatus: initialHubStatus,
     changedByUserId: req.session?.userId ?? validatedCsrId ?? null,
     reason: "created",
   });
@@ -1337,7 +1344,9 @@ router.post("/leads-hub/create", async (req, res) => {
     try {
       const result = await assignLeadRoundRobin(tenantId, lead.id, funnelId || null);
       if (result.assignedCsrId) {
-        if (result.passIntervalMinutes != null) {
+        // Callback-queued leads are not in AUTO_PASS_STATUSES, so don't bother
+        // arming a cascade timer that would no-op when it fires.
+        if (result.passIntervalMinutes != null && initialHubStatus !== "call_back") {
           scheduleAutoPass(lead.id, result.passIntervalMinutes * 60 * 1000);
         }
 
@@ -1362,7 +1371,7 @@ router.post("/leads-hub/create", async (req, res) => {
     } catch (err) {
       console.warn("[LeadsHub Create] Auto-assign round-robin failed for lead", lead.id, err);
     }
-  } else {
+  } else if (initialHubStatus !== "call_back") {
     const manualConfig = await findRoutingConfigForLead(tenantId, funnelId || null);
     if (manualConfig) {
       scheduleAutoPass(lead.id, (manualConfig.passIntervalMinutes ?? 1440) * 60 * 1000);
