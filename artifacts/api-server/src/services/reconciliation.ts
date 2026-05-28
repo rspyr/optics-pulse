@@ -4,7 +4,7 @@ import { decryptConfig } from "../lib/encryption";
 import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrations/google-ads";
 import { sendCAPIEvents, buildCAPILeadEvent } from "./integrations/meta";
 import { patchJobCustomField } from "./integrations/service-titan";
-import { normalizePhone, hashValue, hashPhone, hashEmail } from "../lib/phone-utils";
+import { normalizePhone, hashValue, hashPhone, hashEmail, phoneMatchesSql, findLeadByPhone } from "../lib/phone-utils";
 
 const LOOKBACK_DAYS = 90;
 
@@ -173,7 +173,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     const normalizedJobPhone = job.customerPhone ? normalizePhone(job.customerPhone) : "";
     const phoneLeads = normalizedJobPhone
       ? await db.select().from(leadsTable)
-          .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.phone, normalizedJobPhone)))
+          .where(and(eq(leadsTable.tenantId, job.tenantId), phoneMatchesSql(leadsTable.phone, normalizedJobPhone)))
           .limit(10)
       : [];
 
@@ -450,14 +450,8 @@ async function findLeadForJob(
   job: { customerName: string | null; customerPhone: string | null; customerEmail: string | null },
 ): Promise<{ email: string | null; phone: string | null } | null> {
   if (job.customerPhone) {
-    const normalizedJobPhone = normalizePhone(job.customerPhone);
-    if (normalizedJobPhone) {
-      const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })
-        .from(leadsTable)
-        .where(and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.phone, normalizedJobPhone)))
-        .limit(1);
-      if (lead) return lead;
-    }
+    const lead = await findLeadByPhone(tenantId, job.customerPhone);
+    if (lead) return { email: lead.email, phone: lead.phone };
   }
   if (job.customerEmail) {
     const [lead] = await db.select({ email: leadsTable.email, phone: leadsTable.phone })

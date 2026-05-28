@@ -10,7 +10,7 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { normalizeSource } from "../services/source-normalizer";
 import { normalizeAddress } from "../services/reconciliation";
 import { webhookLimiter } from "../middleware/rate-limit";
-import { hashValue, hashPhone, normalizePhone } from "../lib/phone-utils";
+import { hashValue, hashPhone, normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { verifyCallRailSignature } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
 import { handleResubmission } from "../services/lead-resubmission";
@@ -395,17 +395,20 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       if (customerPhone && dedupeWindowMinutes > 0) {
         const normalizedCustomerPhone = normalizePhone(customerPhone);
         const windowStart = new Date(Date.now() - dedupeWindowMinutes * 60 * 1000);
-        const recentLeads = await db.select({
-          id: leadsTable.id,
-          phone: leadsTable.phone,
-        })
-          .from(leadsTable)
-          .where(and(
-            eq(leadsTable.tenantId, tenantId),
-            isNotNull(leadsTable.phone),
-            gt(leadsTable.createdAt, windowStart),
-          ));
-        const dupLead = recentLeads.find((l) => l.phone && normalizePhone(l.phone) === normalizedCustomerPhone);
+        const [dupLead] = normalizedCustomerPhone
+          ? await db.select({
+              id: leadsTable.id,
+              phone: leadsTable.phone,
+            })
+              .from(leadsTable)
+              .where(and(
+                eq(leadsTable.tenantId, tenantId),
+                isNotNull(leadsTable.phone),
+                gt(leadsTable.createdAt, windowStart),
+                phoneMatchesSql(leadsTable.phone, normalizedCustomerPhone),
+              ))
+              .limit(1)
+          : [];
         if (dupLead) {
           console.log(`[CallRail Webhook] Resubmission detected for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
           const result = await handleResubmission(tenantId, dupLead.id, "CallRail");
@@ -596,11 +599,17 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
       let resubmittedLeadId: number | null = existing?.createdLeadId ?? null;
       if (!resubmittedLeadId && phone) {
         const normalizedPhone = normalizePhone(phone);
-        const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-          .from(leadsTable)
-          .where(and(eq(leadsTable.tenantId, tenantId), isNotNull(leadsTable.phone)));
-        const dup = recentLeads.find((l) => l.phone && normalizePhone(l.phone) === normalizedPhone);
-        if (dup) resubmittedLeadId = dup.id;
+        if (normalizedPhone) {
+          const [dup] = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+            .from(leadsTable)
+            .where(and(
+              eq(leadsTable.tenantId, tenantId),
+              isNotNull(leadsTable.phone),
+              phoneMatchesSql(leadsTable.phone, normalizedPhone),
+            ))
+            .limit(1);
+          if (dup) resubmittedLeadId = dup.id;
+        }
       }
       if (resubmittedLeadId) {
         const result = await handleResubmission(tenantId, resubmittedLeadId, "GHL");
@@ -635,10 +644,16 @@ router.post("/webhooks/ghl", webhookLimiter, async (req, res) => {
       // Phone-based resubmission detection (GHL contacts that bypass externalId dedupe)
       if (phone) {
         const normalizedPhone = normalizePhone(phone);
-        const candidates = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-          .from(leadsTable)
-          .where(and(eq(leadsTable.tenantId, tenantId), isNotNull(leadsTable.phone)));
-        const dup = candidates.find((l) => l.phone && normalizePhone(l.phone) === normalizedPhone);
+        const [dup] = normalizedPhone
+          ? await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+              .from(leadsTable)
+              .where(and(
+                eq(leadsTable.tenantId, tenantId),
+                isNotNull(leadsTable.phone),
+                phoneMatchesSql(leadsTable.phone, normalizedPhone),
+              ))
+              .limit(1)
+          : [];
         if (dup) {
           console.log(`[GHL Webhook] Resubmission detected for tenant ${tenantId} phone (existing lead ${dup.id})`);
           const result = await handleResubmission(tenantId, dup.id, "GHL");

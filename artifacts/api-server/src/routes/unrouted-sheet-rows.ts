@@ -20,7 +20,7 @@ import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
-import { normalizePhone } from "../lib/phone-utils";
+import { normalizePhone, normalizedPhoneSql, phoneMatchesSql } from "../lib/phone-utils";
 
 const router: IRouter = Router();
 
@@ -99,12 +99,7 @@ router.get(
         .from(leadsTable)
         .where(and(
           eq(leadsTable.tenantId, tenantId),
-          sql`CASE
-                WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
-                  AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
-                THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
-                ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
-              END = ANY(${Array.from(normalizedPhones)})`,
+          sql`${normalizedPhoneSql(leadsTable.phone)} = ANY(${Array.from(normalizedPhones)})`,
         ));
       for (const m of matches) {
         const key = normalizePhone(m.phone || "");
@@ -278,12 +273,7 @@ async function routeRowToFunnel(
       .from(leadsTable)
       .where(and(
         eq(leadsTable.tenantId, row.tenantId),
-        sql`CASE
-              WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
-                AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
-              THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
-              ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
-            END = ${normalizedPhone}`,
+        phoneMatchesSql(leadsTable.phone, normalizedPhone),
       ));
     if (dup) {
       try {

@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { scheduleOrEmitNewLead } from "../lead-notify-scheduler";
-import { hashPhone, normalizePhone } from "../../lib/phone-utils";
+import { hashPhone, normalizePhone, phoneMatchesSql } from "../../lib/phone-utils";
 import { withRetry } from "./rate-limiter";
 
 export function verifyCallRailSignature(
@@ -192,7 +192,7 @@ export async function syncCallRailCalls(
           ? await db.select({ id: leadsTable.id }).from(leadsTable)
               .where(and(
                 eq(leadsTable.tenantId, tenantId),
-                eq(leadsTable.phone, normalizedCustomerPhone),
+                phoneMatchesSql(leadsTable.phone, normalizedCustomerPhone),
               ))
               .limit(1)
           : [];
