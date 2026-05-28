@@ -7,6 +7,7 @@ import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/goog
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
 import { runReconciliation } from "./reconciliation";
+import { normalizePhone } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
 import crypto from "crypto";
 
@@ -160,9 +161,10 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
     const matchConditions: SQL[] = [eq(leadsTable.tenantId, tenantId)];
 
     const orClauses: SQL[] = [];
-    if (job.customerPhone) {
+    const normalizedJobPhone = job.customerPhone ? normalizePhone(job.customerPhone) : "";
+    if (normalizedJobPhone) {
       orClauses.push(
-        sql`${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${job.customerPhone}`,
+        sql`${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${normalizedJobPhone}`,
       );
     }
     if (job.customerEmail) {

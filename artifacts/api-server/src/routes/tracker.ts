@@ -634,7 +634,7 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
           tenantId,
           firstName: pii.firstName || "Unknown",
           lastName: pii.lastName || "",
-          phone: pii.phone || null,
+          phone: pii.phone ? normalizePhone(pii.phone) || null : null,
           email: pii.email || null,
           source: resolvedSourceStr,
           originalSource: resolvedSourceStr,

@@ -20,6 +20,7 @@ import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
+import { normalizePhone } from "../lib/phone-utils";
 
 const router: IRouter = Router();
 
@@ -72,37 +73,48 @@ router.get(
       .limit(500);
 
     // Surface a "matches existing lead" hint for unresolved rows whose phone
-    // already belongs to a lead in this tenant. Mirrors the exact-string phone
-    // match used by routeRowToFunnel so the hint reflects what "Send →" would
-    // actually do (resubmit vs. create a new lead).
-    const phoneByRowId = new Map<number, string>();
-    const phones = new Set<string>();
+    // already belongs to a lead in this tenant. Phones are normalized on both
+    // sides (digits-only, leading "1" stripped) via normalizePhone, so the
+    // hint matches what routeRowToFunnel would do regardless of formatting
+    // differences like "(555) 123-4567" vs "5551234567".
+    const normalizedByRowId = new Map<number, string>();
+    const normalizedPhones = new Set<string>();
     for (const r of rows) {
       if (r.resolvedAt) continue;
       const data = (r.rowData || {}) as Record<string, string>;
-      const phone = (data.phone || "").trim();
-      if (!phone) continue;
-      phoneByRowId.set(r.id, phone);
-      phones.add(phone);
+      const normalized = normalizePhone(data.phone || "");
+      if (!normalized) continue;
+      normalizedByRowId.set(r.id, normalized);
+      normalizedPhones.add(normalized);
     }
 
-    const matchByPhone = new Map<string, number>();
-    if (phones.size > 0) {
+    const matchByNormalizedPhone = new Map<string, number>();
+    if (normalizedPhones.size > 0) {
+      // Compare against the normalized form of leads.phone in SQL so this
+      // also catches existing leads whose phone column was stored in a
+      // legacy format (pre-backfill) or via any insert path that did not
+      // normalize.
       const matches = await db
         .select({ id: leadsTable.id, phone: leadsTable.phone })
         .from(leadsTable)
         .where(and(
           eq(leadsTable.tenantId, tenantId),
-          inArray(leadsTable.phone, Array.from(phones)),
+          sql`CASE
+                WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
+                  AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
+                THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
+                ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
+              END = ANY(${Array.from(normalizedPhones)})`,
         ));
       for (const m of matches) {
-        if (m.phone && !matchByPhone.has(m.phone)) matchByPhone.set(m.phone, m.id);
+        const key = normalizePhone(m.phone || "");
+        if (key && !matchByNormalizedPhone.has(key)) matchByNormalizedPhone.set(key, m.id);
       }
     }
 
     const enriched = rows.map(r => {
-      const phone = phoneByRowId.get(r.id);
-      const matchedLeadId = phone ? matchByPhone.get(phone) ?? null : null;
+      const normalized = normalizedByRowId.get(r.id);
+      const matchedLeadId = normalized ? matchByNormalizedPhone.get(normalized) ?? null : null;
       return { ...r, existingLeadIdByPhone: matchedLeadId };
     });
 
@@ -258,7 +270,7 @@ async function routeRowToFunnel(
   }
 
   const data = (row.rowData || {}) as Record<string, string>;
-  const normalizedPhone = (data.phone || "").replace(/[^0-9]/g, "");
+  const normalizedPhone = normalizePhone(data.phone || "");
 
   if (normalizedPhone) {
     const [dup] = await db
@@ -266,7 +278,12 @@ async function routeRowToFunnel(
       .from(leadsTable)
       .where(and(
         eq(leadsTable.tenantId, row.tenantId),
-        eq(leadsTable.phone, data.phone),
+        sql`CASE
+              WHEN LENGTH(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')) = 11
+                AND regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') LIKE '1%'
+              THEN SUBSTRING(regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g') FROM 2)
+              ELSE regexp_replace(${leadsTable.phone}, '[^0-9]', '', 'g')
+            END = ${normalizedPhone}`,
       ));
     if (dup) {
       try {
@@ -302,7 +319,7 @@ async function routeRowToFunnel(
     tenantId: row.tenantId,
     firstName: data.firstName || "Unknown",
     lastName: data.lastName || "",
-    phone: data.phone || null,
+    phone: normalizedPhone || null,
     email: data.email || null,
     source: normalizedIntakeSource,
     originalSource: normalizedIntakeSource,

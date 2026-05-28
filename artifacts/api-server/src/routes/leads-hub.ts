@@ -10,6 +10,7 @@ import { emitLeadUpdated } from "../socket";
 import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
 import { assignLeadRoundRobin } from "../services/round-robin";
 import { normalizeSource } from "../services/source-normalizer";
+import { normalizePhone } from "../lib/phone-utils";
 import { scheduleAutoPass, cancelAutoPass, leadHasRealTouch, claimLead, releaseClaim, consumeClaim, hasActiveClaim, isStickyTerminalAtRest } from "../services/auto-pass-scheduler";
 import { enqueueSyncPodiumConversationAssignment } from "../services/podium-sync-jobs";
 import { parseSpiffConfig, computeSpiffCommission } from "./sales-manager";
@@ -1225,7 +1226,7 @@ router.post("/leads-hub/create", async (req, res) => {
     tenantId,
     firstName,
     lastName,
-    phone: phone || null,
+    phone: phone ? normalizePhone(phone) || null : null,
     email: email || null,
     source: normalizedSource,
     originalSource: normalizedSource,

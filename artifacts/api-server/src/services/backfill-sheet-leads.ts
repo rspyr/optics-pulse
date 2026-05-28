@@ -290,7 +290,7 @@ export async function backfillSheetLeads(opts: BackfillOptions): Promise<Backfil
           tenantId: opts.tenantId,
           firstName: mapped.firstName || "Unknown",
           lastName: mapped.lastName || "",
-          phone: mapped.phone || null,
+          phone: normPhone || null,
           email: mapped.email || null,
           source: normalizedSource,
           originalSource: normalizedSource,

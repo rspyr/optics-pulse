@@ -6,6 +6,7 @@ import { DEFAULT_SOURCE_ALIASES, normalizeSource } from "./source-normalizer";
 import { rerouteLeadsStrandedOnPausedStickyCsr } from "./auto-pass-scheduler";
 import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
+import { normalizePhone } from "../lib/phone-utils";
 
 interface Migration {
   id: string;
@@ -673,9 +674,10 @@ const migrations: Migration[] = [
 
       for (const job of jobsToMatch) {
         const orClauses: ReturnType<typeof sql>[] = [];
-        if (job.customerPhone) {
+        const normalizedJobPhone = job.customerPhone ? normalizePhone(job.customerPhone) : "";
+        if (normalizedJobPhone) {
           orClauses.push(
-            sql`(${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${job.customerPhone})`,
+            sql`(${leadsTable.phone} IS NOT NULL AND ${leadsTable.phone} != '' AND ${leadsTable.phone} = ${normalizedJobPhone})`,
           );
         }
         if (job.customerEmail) {
@@ -1321,6 +1323,35 @@ const migrations: Migration[] = [
       "Ambiguous rows stay NULL so the legacy fallback line still renders. " +
       "Set env BACKFILL_MANUAL_SOURCE_DRY_RUN=1 to log counts without writing.",
     run: async () => { await backfillManualSourceForLegacyEvents(); },
+  },
+  {
+    id: "2026-05-28_normalize-leads-phone",
+    description:
+      "Backfill leads.phone to digits-only with leading '1' stripped, matching " +
+      "normalizePhone() in src/lib/phone-utils.ts. Before this, lead inserts wrote " +
+      "the raw phone string verbatim and duplicate lookups compared raw-against-raw, " +
+      "so '(555) 123-4567' would not match '5551234567' and operators got no warning " +
+      "before creating duplicates. Going forward all lead insert paths normalize on " +
+      "write; this migration brings existing rows into the same shape.",
+    run: async () => {
+      const result = await db.execute(sql`
+        UPDATE leads
+        SET phone = CASE
+          WHEN LENGTH(regexp_replace(phone, '[^0-9]', '', 'g')) = 11
+            AND regexp_replace(phone, '[^0-9]', '', 'g') LIKE '1%'
+          THEN SUBSTRING(regexp_replace(phone, '[^0-9]', '', 'g') FROM 2)
+          ELSE regexp_replace(phone, '[^0-9]', '', 'g')
+        END
+        WHERE phone IS NOT NULL
+          AND phone <> CASE
+            WHEN LENGTH(regexp_replace(phone, '[^0-9]', '', 'g')) = 11
+              AND regexp_replace(phone, '[^0-9]', '', 'g') LIKE '1%'
+            THEN SUBSTRING(regexp_replace(phone, '[^0-9]', '', 'g') FROM 2)
+            ELSE regexp_replace(phone, '[^0-9]', '', 'g')
+          END
+      `);
+      console.log(`[Migration] Normalized phone on ${result.rowCount ?? 0} lead row(s)`);
+    },
   },
 ];
 

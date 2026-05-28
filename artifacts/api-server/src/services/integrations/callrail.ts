@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { scheduleOrEmitNewLead } from "../lead-notify-scheduler";
-import { hashPhone } from "../../lib/phone-utils";
+import { hashPhone, normalizePhone } from "../../lib/phone-utils";
 import { withRetry } from "./rate-limiter";
 
 export function verifyCallRailSignature(
@@ -185,11 +185,14 @@ export async function syncCallRailCalls(
         const firstName = nameParts[0] || "Unknown";
         const lastName = nameParts.slice(1).join(" ") || "";
 
-        const existingLead = call.customerPhoneNumber
+        const normalizedCustomerPhone = call.customerPhoneNumber
+          ? normalizePhone(call.customerPhoneNumber)
+          : "";
+        const existingLead = normalizedCustomerPhone
           ? await db.select({ id: leadsTable.id }).from(leadsTable)
               .where(and(
                 eq(leadsTable.tenantId, tenantId),
-                eq(leadsTable.phone, call.customerPhoneNumber),
+                eq(leadsTable.phone, normalizedCustomerPhone),
               ))
               .limit(1)
           : [];
@@ -199,7 +202,7 @@ export async function syncCallRailCalls(
             tenantId,
             firstName,
             lastName,
-            phone: call.customerPhoneNumber || null,
+            phone: normalizedCustomerPhone || null,
             source: call.source || "callrail",
             originalSource: call.source || "callrail",
             leadType: "CallRail",

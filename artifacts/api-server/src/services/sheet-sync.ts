@@ -8,6 +8,7 @@ import { scheduleAutoPass } from "./auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "./source-normalizer";
+import { normalizePhone } from "../lib/phone-utils";
 import { emitSheetDriftNotification } from "./notifications";
 
 const DRIFT_ALERT_THRESHOLD_MS = 10 * 60 * 1000;
@@ -117,12 +118,12 @@ async function rescanExistingRows(
 
   const leadByPhone = new Map<string, typeof existingLeads[number]>();
   for (const l of existingLeads) {
-    if (l.phone) leadByPhone.set(l.phone.replace(/[^0-9]/g, ""), l);
+    if (l.phone) leadByPhone.set(normalizePhone(l.phone), l);
   }
 
   let updated = 0;
   for (const row of allMappedRows) {
-    const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
+    const normalizedPhone = normalizePhone(row.phone || "");
     if (!normalizedPhone) continue;
 
     const existingLead = leadByPhone.get(normalizedPhone);
@@ -264,7 +265,7 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
     .where(eq(leadsTable.tenantId, config.tenantId));
   const existingPhones = new Set<string>();
   for (const l of existingLeads) {
-    if (l.phone) existingPhones.add(l.phone.replace(/[^0-9]/g, ""));
+    if (l.phone) existingPhones.add(normalizePhone(l.phone));
   }
 
   const funnelIds = new Set<number>();
@@ -284,7 +285,7 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
   const newLeads: (typeof leadsTable.$inferSelect)[] = [];
 
   for (const row of rows) {
-    const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
+    const normalizedPhone = normalizePhone(row.phone || "");
     if (normalizedPhone && existingPhones.has(normalizedPhone)) continue;
     if (!row.firstName && !row.lastName) continue;
     const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
@@ -328,7 +329,7 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
       tenantId: config.tenantId,
       firstName: row.firstName || "Unknown",
       lastName: row.lastName || "",
-      phone: row.phone || null,
+      phone: normalizedPhone || null,
       email: row.email || null,
       source: normalizedIntakeSource,
       originalSource: normalizedIntakeSource,

@@ -10,6 +10,7 @@ import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
+import { normalizePhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
@@ -380,7 +381,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       .from(leadsTable)
       .where(eq(leadsTable.tenantId, config.tenantId));
     for (const l of existingLeads) {
-      if (l.phone) existingPhoneToLeadId.set(l.phone.replace(/[^0-9]/g, ""), l.id);
+      if (l.phone) existingPhoneToLeadId.set(normalizePhone(l.phone), l.id);
     }
 
     let imported = 0;
@@ -391,7 +392,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
     const resubmittedLeadIds: number[] = [];
 
     for (const row of rows) {
-      const normalizedPhone = row.phone.replace(/[^0-9]/g, "");
+      const normalizedPhone = normalizePhone(row.phone || "");
       if (normalizedPhone && existingPhoneToLeadId.has(normalizedPhone)) {
         const dupLeadId = existingPhoneToLeadId.get(normalizedPhone)!;
         try {
@@ -455,7 +456,7 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         tenantId: config.tenantId,
         firstName: row.firstName || "Unknown",
         lastName: row.lastName || "",
-        phone: row.phone || null,
+        phone: normalizedPhone || null,
         email: row.email || null,
         source: normalizedIntakeSource,
         originalSource: normalizedIntakeSource,
