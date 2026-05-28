@@ -252,6 +252,7 @@ export default function Settings() {
   const [rebateInput, setRebateInput] = useState("");
   const [rebateSaving, setRebateSaving] = useState(false);
   const [rebateSaved, setRebateSaved] = useState(false);
+  const [rebateError, setRebateError] = useState<string | null>(null);
   const rebateDirty = JSON.stringify(rebateLabels) !== JSON.stringify(rebateInitial);
 
   useEffect(() => {
@@ -344,17 +345,20 @@ export default function Settings() {
       setRebateInput("");
       return;
     }
+    setRebateError(null);
     setRebateLabels(prev => [...prev, label]);
     setRebateInput("");
   }
 
   function removeRebateLabel(index: number) {
+    setRebateError(null);
     setRebateLabels(prev => prev.filter((_, i) => i !== index));
   }
 
   async function handleRebateSave() {
     if (!tenantId) return;
     setRebateSaving(true);
+    setRebateError(null);
     try {
       const res = await fetch(`${API}/api/tenants/${tenantId}`, {
         method: "PATCH",
@@ -371,8 +375,25 @@ export default function Settings() {
         setRebateUsingDefaults(rc.usingDefaults !== false);
         setRebateSaved(true);
         setTimeout(() => setRebateSaved(false), 2000);
+      } else {
+        let message = "Couldn't save rebate programs. Please try again.";
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string" && data.error.trim()) {
+            message = data.error;
+          } else if (res.status === 403) {
+            message = "You don't have permission to modify revenue settings.";
+          }
+        } catch {
+          if (res.status === 403) {
+            message = "You don't have permission to modify revenue settings.";
+          }
+        }
+        setRebateError(message);
       }
-    } catch {}
+    } catch {
+      setRebateError("Couldn't reach the server. Check your connection and try again.");
+    }
     setRebateSaving(false);
   }
 
@@ -712,17 +733,25 @@ export default function Settings() {
               {rebateLabels.map((label, i) => (
                 <span key={`${label}-${i}`} className="inline-flex items-center gap-1.5 bg-primary/15 border border-primary/30 text-white text-sm px-3 py-1.5 rounded-full">
                   {label}
-                  <button
-                    type="button"
-                    onClick={() => removeRebateLabel(i)}
-                    className="text-gray-400 hover:text-red-400 transition-colors"
-                    aria-label={`Remove ${label}`}
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                  </button>
+                  {isAgency && (
+                    <button
+                      type="button"
+                      onClick={() => removeRebateLabel(i)}
+                      className="text-gray-400 hover:text-red-400 transition-colors"
+                      aria-label={`Remove ${label}`}
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </span>
               ))}
             </div>
+            {!isAgency && (
+              <p className="text-xs text-amber-400/80 mt-2">
+                Only agency users can change which rebate programs count as revenue. Contact your agency to update this list.
+              </p>
+            )}
+            {isAgency && (
             <div className="flex gap-2 mt-2">
               <input
                 type="text"
@@ -741,6 +770,14 @@ export default function Settings() {
                 Add
               </button>
             </div>
+            )}
+            {rebateError && (
+              <div className="flex items-start gap-2 mt-3 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2" role="alert">
+                <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{rebateError}</span>
+              </div>
+            )}
+            {isAgency && (
             <button
               type="button"
               onClick={handleRebateSave}
@@ -750,9 +787,12 @@ export default function Settings() {
               {rebateSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : rebateSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
               {rebateSaved ? "Saved!" : "Save Rebate Programs"}
             </button>
+            )}
+            {isAgency && (
             <p className="text-xs text-gray-500 mt-1">
               After changing this list, run "Recompute Revenue" to re-apply it to existing invoices and estimates.
             </p>
+            )}
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">Google Ads Customer ID</label>
