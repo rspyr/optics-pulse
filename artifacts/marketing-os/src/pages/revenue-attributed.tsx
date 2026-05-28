@@ -8,12 +8,17 @@ import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
 import { toast } from "sonner";
 import {
-  DollarSign, Loader2, ChevronDown, ChevronRight, ExternalLink,
+  DollarSign, Loader2, ChevronDown, ChevronRight, ChevronLeft, ExternalLink,
   Tag, User, Link2, Pencil, Check, X, Download,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 const PULSE_PATH = `${API_BASE}/pulse`;
+
+// UI page size for the attributed-revenue list. The endpoint defaults to 200,
+// so we request this many per page and offset by page * PAGE_SIZE to let users
+// browse the full list instead of silently stopping at the first 200 rows.
+const PAGE_SIZE = 200;
 
 type DateRange = "last30" | "thisMonth" | "lastMonth" | "last7";
 
@@ -117,21 +122,40 @@ export default function RevenueAttributed() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [page, setPage] = useState(0);
+
+  // Reset to the first page whenever the date range or tenant filter changes,
+  // so a user on page 3 of one range doesn't land on an out-of-bounds page.
+  useEffect(() => {
+    setPage(0);
+  }, [startDate, endDate, effectiveTenantId]);
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
     setJobs(null);
     setError(null);
-    const params = new URLSearchParams({ startDate, endDate });
+    const params = new URLSearchParams({
+      startDate,
+      endDate,
+      limit: String(PAGE_SIZE),
+      offset: String(page * PAGE_SIZE),
+    });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: RevenueJob[]) => { if (!cancelled) setJobs(data); })
+      .then((data: RevenueJob[]) => { if (!cancelled) { setJobs(data); setExpandedId(null); } })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId]);
+  }, [startDate, endDate, effectiveTenantId, page]);
 
   useEffect(() => loadJobs(), [loadJobs]);
+
+  // The endpoint returns no total count, so infer "there's more" from a full
+  // page. A short page means we've reached the end of the list. (An empty page
+  // — which can happen when the total is an exact multiple of PAGE_SIZE — is
+  // never "full", so Next is correctly disabled there.)
+  const hasNextPage = jobs != null && jobs.length === PAGE_SIZE;
+  const hasPrevPage = page > 0;
 
   const totals = useMemo(() => {
     if (!jobs) return { revenue: 0, rebates: 0, attributed: 0, count: 0 };
@@ -322,6 +346,36 @@ export default function RevenueAttributed() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {jobs != null && !error && (hasPrevPage || hasNextPage) && (
+          <div className="flex items-center justify-between gap-4 p-4 border-t border-white/5">
+            <span className="text-xs text-muted-foreground">
+              {jobs.length > 0
+                ? `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + jobs.length}`
+                : "No jobs on this page"}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={!hasPrevPage}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="w-4 h-4" /> Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={!hasNextPage}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         )}
       </PremiumCard>

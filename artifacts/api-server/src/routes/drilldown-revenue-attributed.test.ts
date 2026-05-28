@@ -27,11 +27,17 @@ const mockDb = {
   updateResults: [] as unknown[][],
   _selectIdx: 0,
   _updateIdx: 0,
+  // Records the limit/offset args the first select's jobs query was called with,
+  // so paging tests can assert the page boundary forwarded to the DB.
+  lastLimit: undefined as number | undefined,
+  lastOffset: undefined as number | undefined,
   reset() {
     this._selectIdx = 0;
     this._updateIdx = 0;
     this.selectResults = [];
     this.updateResults = [];
+    this.lastLimit = undefined;
+    this.lastOffset = undefined;
   },
 };
 
@@ -65,10 +71,15 @@ function makeSelectChain(results: () => unknown[]) {
   // .limit() may be terminal, or chained with .offset() (e.g. /drilldown/jobs
   // does `.orderBy(...).limit(n).offset(m)`), so the limit return must also
   // expose .offset resolving to the same results.
-  const limitReturn = () =>
-    Object.assign(thenResult(), {
-      offset: vi.fn().mockImplementation(() => Promise.resolve(results())),
+  const limitReturn = (n?: number) => {
+    if (typeof n === "number") mockDb.lastLimit = n;
+    return Object.assign(thenResult(), {
+      offset: vi.fn().mockImplementation((m?: number) => {
+        if (typeof m === "number") mockDb.lastOffset = m;
+        return Promise.resolve(results());
+      }),
     });
+  };
   chain.where = vi.fn().mockImplementation(() =>
     Object.assign(thenResult(), {
       orderBy: vi.fn().mockReturnValue(
@@ -493,6 +504,74 @@ describe("GET /drilldown/revenue-attributed", () => {
       expect(row.soldByName).toBe("Fallback Rep");
       expect(row.rebateBreakdown).toEqual([]);
       expect((row.lead as { id: number }).id).toBe(99);
+    });
+  });
+
+  // Long lists used to silently truncate at 200 rows in the UI (limit=all was
+  // only used by the CSV export). The endpoint now accepts `offset` so the UI
+  // can page through the full list; offset must be applied to the jobs query,
+  // and the follow-up estimate/lead lookups must only cover the returned page.
+  describe("offset paging through long attributed-revenue lists", () => {
+    it("applies offset to the jobs query and scopes follow-up lookups to the returned page", async () => {
+      // Page 2 (offset=200): two completed jobs, each linking a distinct lead,
+      // with one matching sold estimate. The estimate/lead lookups must only
+      // ask for the ids on THIS page, never the whole range.
+      const pageJobs = [
+        { id: 201, tenantId: 7, leadId: 301, stJobId: "j201", stInvoiceId: "i201", customerName: "Page2 A",
+          jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+          revenue: 900, invoiceTotal: 800, invoiceRebateAmount: 100,
+          invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+        { id: 202, tenantId: 7, leadId: 302, stJobId: "j202", stInvoiceId: "i202", customerName: "Page2 B",
+          jobType: "plumb", jobTypeName: "Plumbing", status: "completed",
+          revenue: 400, invoiceTotal: 400, invoiceRebateAmount: null,
+          invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      ];
+      const estimates = [{ jobId: 201, soldByName: "Rep A", rebateAmount: 100, rebateBreakdown: [{ label: "ETO", amount: 100 }] }];
+      const leads = [
+        { id: 301, firstName: "Lead", lastName: "One", source: "ppc", originalSource: "ppc", status: "sold", hubStatus: null, assignedTo: null },
+        { id: 302, firstName: "Lead", lastName: "Two", source: "seo", originalSource: "seo", status: "sold", hubStatus: null, assignedTo: null },
+      ];
+
+      const app = await setupApp("super_admin", null);
+      mockDb.selectResults = [pageJobs, estimates, leads];
+
+      const drizzle = await import("drizzle-orm");
+      const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7&limit=200&offset=200");
+      expect(res.status).toBe(200);
+
+      // Offset was forwarded to the jobs query at the requested page boundary.
+      expect(mockDb.lastLimit).toBe(200);
+      expect(mockDb.lastOffset).toBe(200);
+
+      // Only the two job ids on this page were returned.
+      const rows = res.json as Array<{ id: number }>;
+      expect(rows.map((r) => r.id)).toEqual([201, 202]);
+
+      // The estimate + lead lookups used inArray with ONLY this page's ids,
+      // never the full range — so paging doesn't fan out into the whole list.
+      const inArrayCalls = vi.mocked(drizzle.inArray).mock.calls;
+      const estimateLookup = inArrayCalls.find((c) => (c[0] as unknown as string) === "sold_estimates.jobId");
+      const leadLookup = inArrayCalls.find((c) => (c[0] as unknown as string) === "leads.id");
+      expect(estimateLookup?.[1]).toEqual([201, 202]);
+      expect(leadLookup?.[1]).toEqual([301, 302]);
+    });
+
+    it("does not apply an offset when none is supplied (page 1)", async () => {
+      const pageJobs = [
+        { id: 1, tenantId: 7, leadId: null, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+          jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+          revenue: 1000, invoiceTotal: 900, invoiceRebateAmount: 150,
+          invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      ];
+
+      const app = await setupApp("super_admin", null);
+      mockDb.selectResults = [pageJobs, [], []];
+
+      const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7&limit=200");
+      expect(res.status).toBe(200);
+      expect(mockDb.lastLimit).toBe(200);
+      // No `.offset()` call when offset is absent (avoids an unnecessary OFFSET 0).
+      expect(mockDb.lastOffset).toBeUndefined();
     });
   });
 

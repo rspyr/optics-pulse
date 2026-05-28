@@ -109,6 +109,10 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const rawLimit = req.query.limit;
   const noLimit = rawLimit === "all" || (rawLimit != null && Number(rawLimit) <= 0);
   const limit = noLimit ? null : rawLimit ? Number(rawLimit) : 200;
+  // `offset` lets the UI page through long lists (matches /drilldown/jobs).
+  // Ignored when there is no limit (CSV export pulls the whole range at once).
+  const rawOffset = req.query.offset ? Number(req.query.offset) : 0;
+  const offset = !noLimit && Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -121,7 +125,12 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
 
   const where = and(...conditions);
   const baseQuery = db.select().from(jobsTable).where(where).orderBy(desc(jobRevenueExpr));
-  const jobs = limit == null ? await baseQuery : await baseQuery.limit(limit);
+  const jobs =
+    limit == null
+      ? await baseQuery
+      : offset > 0
+        ? await baseQuery.limit(limit).offset(offset)
+        : await baseQuery.limit(limit);
 
   const jobIds = jobs.map((j) => j.id);
   const leadIds = [...new Set(jobs.map((j) => j.leadId).filter((v): v is number => v != null))];
