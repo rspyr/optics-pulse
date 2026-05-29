@@ -19,7 +19,7 @@
  * first page un-notified and trip this test.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, and, isNotNull } from "drizzle-orm";
 
 // The push enqueue and socket emit are side effects we don't want to exercise
 // against real infra here; mock them so we can also count exactly how many
@@ -380,5 +380,324 @@ describe("checkDueCallbacks — overlapping concurrent sweeps (real Postgres)", 
       .filter((id) => cfx.dueIds.includes(id));
     expect(emittedDueLeadIds.length).toBe(CONCURRENT_DUE_COUNT);
     expect(new Set(emittedDueLeadIds).size).toBe(CONCURRENT_DUE_COUNT);
+  });
+});
+
+/**
+ * Reschedule contract: a callback can be moved to a NEW time after it has
+ * already been reminded. The sweep's re-notify condition is
+ * `callbackNotifiedAt < callbackAt`, so bumping `callbackAt` to a fresh value
+ * that is *after* the last notification (but still in the past, i.e. due
+ * again) MUST make the next sweep fire exactly one fresh reminder — no more,
+ * no less. This guards both failure modes: a regression that dropped the
+ * `callbackNotifiedAt < callbackAt` clause would never re-remind a rescheduled
+ * callback, while one that re-fired purely on "due + previously notified"
+ * could double-fire. We deliberately derive the new `callbackAt` from the
+ * stored `callbackNotifiedAt` (+1ms) so it is provably greater than the last
+ * notification and provably in the past — no reliance on wall-clock sleeps.
+ */
+interface RescheduleFx {
+  tenantId: number;
+  csrId: number;
+  leadId: number;
+}
+
+let rfx: RescheduleFx;
+
+describe("checkDueCallbacks — rescheduled callback re-fires once (real Postgres)", () => {
+  beforeAll(async () => {
+    const slug = `cb-resched-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const [tenant] = await db
+      .insert(tenantsTable)
+      .values({ name: `Callback Resched Int ${slug}`, clientSlug: slug })
+      .returning();
+    const [csr] = await db
+      .insert(usersTable)
+      .values({
+        email: `${slug}-csr@example.com`,
+        name: "CSR",
+        passwordHash: "x",
+        role: "client_user",
+        tenantId: tenant.id,
+      })
+      .returning();
+
+    const [lead] = await db
+      .insert(leadsTable)
+      .values({
+        tenantId: tenant.id,
+        firstName: "Resched",
+        lastName: "Lead",
+        source: "Meta",
+        originalSource: "Meta",
+        hubStatus: "day_1",
+        assignedCsrId: csr.id,
+        callbackAt: new Date(Date.now() - 10 * 60 * 1000),
+        callbackNotifiedAt: null,
+      })
+      .returning({ id: leadsTable.id });
+
+    rfx = { tenantId: tenant.id, csrId: csr.id, leadId: lead.id };
+  });
+
+  afterAll(async () => {
+    if (!rfx) return;
+    try {
+      await db.delete(leadsTable).where(eq(leadsTable.tenantId, rfx.tenantId));
+      await db.delete(usersTable).where(eq(usersTable.id, rfx.csrId));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, rfx.tenantId));
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("fires exactly one fresh reminder after the callback is moved to a new due time", async () => {
+    enqueueSpy.mockClear();
+    emitSpy.mockClear();
+
+    // First sweep: the brand-new due callback is reminded once.
+    await checkDueCallbacks();
+
+    const firstFire = enqueueSpy.mock.calls
+      .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+      .filter((id) => id === rfx.leadId);
+    expect(
+      firstFire.length,
+      "a freshly-due callback must fire exactly one reminder on the first sweep",
+    ).toBe(1);
+
+    const [afterFirst] = await db
+      .select({ callbackNotifiedAt: leadsTable.callbackNotifiedAt })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, rfx.leadId));
+    expect(afterFirst.callbackNotifiedAt).not.toBeNull();
+    const notifiedAt = afterFirst.callbackNotifiedAt as Date;
+
+    // An immediate re-sweep with no change fires nothing — the lead is already
+    // notified for its current callbackAt.
+    enqueueSpy.mockClear();
+    emitSpy.mockClear();
+    await checkDueCallbacks();
+    expect(
+      enqueueSpy.mock.calls
+        .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+        .filter((id) => id === rfx.leadId),
+      "an unchanged, already-notified callback must not re-fire",
+    ).toEqual([]);
+
+    // Reschedule: move callbackAt to a new instant that is strictly AFTER the
+    // last notification yet still in the past (so it is due again). Deriving it
+    // from the stored notifiedAt keeps the ordering deterministic regardless of
+    // how fast the test runs.
+    const rescheduledAt = new Date(notifiedAt.getTime() + 1);
+    await db
+      .update(leadsTable)
+      .set({ callbackAt: rescheduledAt })
+      .where(eq(leadsTable.id, rfx.leadId));
+
+    enqueueSpy.mockClear();
+    emitSpy.mockClear();
+
+    // Next sweep must fire exactly one fresh reminder for the rescheduled lead.
+    await checkDueCallbacks();
+
+    const refire = enqueueSpy.mock.calls
+      .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+      .filter((id) => id === rfx.leadId);
+    expect(
+      refire.length,
+      "a rescheduled (newly-due-again) callback must fire exactly one fresh reminder",
+    ).toBe(1);
+
+    const refireEmits = emitSpy.mock.calls
+      .map((c) => (c[1] as { leadId: number }).leadId)
+      .filter((id) => id === rfx.leadId);
+    expect(refireEmits.length).toBe(1);
+
+    // The DB row is now notified for the new callbackAt (notifiedAt advanced
+    // past the rescheduled time).
+    const [afterResched] = await db
+      .select({
+        callbackAt: leadsTable.callbackAt,
+        callbackNotifiedAt: leadsTable.callbackNotifiedAt,
+      })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, rfx.leadId));
+    expect(afterResched.callbackNotifiedAt).not.toBeNull();
+    expect(afterResched.callbackAt).not.toBeNull();
+    expect(
+      (afterResched.callbackNotifiedAt as Date).getTime(),
+      "after re-firing, notifiedAt must be >= the rescheduled callbackAt",
+    ).toBeGreaterThanOrEqual((afterResched.callbackAt as Date).getTime());
+
+    // And a follow-up sweep with no further change is once again a no-op.
+    enqueueSpy.mockClear();
+    await checkDueCallbacks();
+    expect(
+      enqueueSpy.mock.calls
+        .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+        .filter((id) => id === rfx.leadId),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * Partial-overlap contract: the existing concurrency test starts both sweeps at
+ * the same instant. This one covers the subtler case where one sweep is already
+ * mid-flight — it has claimed SOME (but not all) due rows — when a second sweep
+ * begins. We start sweep #1, poll the DB until it has notified at least one but
+ * fewer than all of the seeded leads, and only THEN launch sweep #2. The
+ * conditional claim UPDATE must still guarantee exactly one reminder per lead:
+ * rows already claimed by sweep #1 are skipped by sweep #2, and rows sweep #1
+ * has not yet reached are claimed by whichever sweep gets there first.
+ */
+const PARTIAL_DUE_COUNT = 200;
+
+interface PartialFx {
+  tenantId: number;
+  csrId: number;
+  dueIds: number[];
+}
+
+let pfx: PartialFx;
+
+describe("checkDueCallbacks — partial-overlap sweeps (real Postgres)", () => {
+  beforeAll(async () => {
+    const slug = `cb-partial-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const [tenant] = await db
+      .insert(tenantsTable)
+      .values({ name: `Callback Partial Int ${slug}`, clientSlug: slug })
+      .returning();
+    const [csr] = await db
+      .insert(usersTable)
+      .values({
+        email: `${slug}-csr@example.com`,
+        name: "CSR",
+        passwordHash: "x",
+        role: "client_user",
+        tenantId: tenant.id,
+      })
+      .returning();
+
+    const past = (mins: number) => new Date(Date.now() - mins * 60 * 1000);
+
+    // Enough rows (well over the page size of 50) that a single sweep takes many
+    // per-row UPDATE round trips to finish — giving us a reliable window to
+    // observe it mid-flight and start the second sweep while some rows are still
+    // unclaimed. Shared callbackAt so both sweeps contend in the same order.
+    const dueIds: number[] = [];
+    for (let i = 0; i < PARTIAL_DUE_COUNT; i++) {
+      const [lead] = await db
+        .insert(leadsTable)
+        .values({
+          tenantId: tenant.id,
+          firstName: "Partial",
+          lastName: `Lead${i}`,
+          source: "Meta",
+          originalSource: "Meta",
+          hubStatus: "day_1",
+          assignedCsrId: csr.id,
+          callbackAt: past(10),
+          callbackNotifiedAt: null,
+        })
+        .returning({ id: leadsTable.id });
+      dueIds.push(lead.id);
+    }
+
+    pfx = { tenantId: tenant.id, csrId: csr.id, dueIds };
+  });
+
+  afterAll(async () => {
+    if (!pfx) return;
+    try {
+      await db.delete(leadsTable).where(eq(leadsTable.tenantId, pfx.tenantId));
+      await db.delete(usersTable).where(eq(usersTable.id, pfx.csrId));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, pfx.tenantId));
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  const notifiedCount = async (): Promise<number> => {
+    const rows = await db
+      .select({ id: leadsTable.id })
+      .from(leadsTable)
+      .where(
+        and(
+          eq(leadsTable.tenantId, pfx.tenantId),
+          isNotNull(leadsTable.callbackNotifiedAt),
+        ),
+      );
+    return rows.length;
+  };
+
+  it("fires exactly one reminder per lead when a second sweep starts mid-first-sweep", async () => {
+    enqueueSpy.mockClear();
+    emitSpy.mockClear();
+
+    // Kick off sweep #1 but do NOT await it yet — let it run on the event loop.
+    const sweep1 = checkDueCallbacks();
+
+    // Poll until sweep #1 has claimed SOME but not ALL rows, so sweep #2 truly
+    // starts during a partial overlap. Guard with a max iteration count so a
+    // pathologically fast (or stalled) sweep can't hang the test.
+    let observedPartial = false;
+    for (let i = 0; i < 500; i++) {
+      const claimed = await notifiedCount();
+      if (claimed > 0 && claimed < PARTIAL_DUE_COUNT) {
+        observedPartial = true;
+        break;
+      }
+      if (claimed >= PARTIAL_DUE_COUNT) break;
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    expect(
+      observedPartial,
+      "expected to catch sweep #1 mid-flight (some but not all rows claimed)",
+    ).toBe(true);
+
+    // Now start sweep #2 while sweep #1 is still in progress, then let both finish.
+    const sweep2 = checkDueCallbacks();
+    await Promise.all([sweep1, sweep2]);
+
+    // Every due lead is notified exactly once at the DB level.
+    const rows = await db
+      .select({
+        id: leadsTable.id,
+        callbackAt: leadsTable.callbackAt,
+        callbackNotifiedAt: leadsTable.callbackNotifiedAt,
+      })
+      .from(leadsTable)
+      .where(inArray(leadsTable.id, pfx.dueIds));
+
+    expect(rows).toHaveLength(PARTIAL_DUE_COUNT);
+    const unnotified = rows.filter(
+      (r) =>
+        r.callbackNotifiedAt === null ||
+        (r.callbackAt !== null && r.callbackNotifiedAt < r.callbackAt),
+    );
+    expect(
+      unnotified.map((r) => r.id),
+      "every due callback must be notified — a partial overlap must not skip any",
+    ).toEqual([]);
+
+    // Exactly one push + one socket emit per due lead across BOTH sweeps.
+    const notifiedDueLeadIds = enqueueSpy.mock.calls
+      .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+      .filter((id) => pfx.dueIds.includes(id));
+    expect(
+      notifiedDueLeadIds.length,
+      "total reminders must equal the number of due leads — extras mean a double-fire",
+    ).toBe(PARTIAL_DUE_COUNT);
+    expect(
+      new Set(notifiedDueLeadIds).size,
+      "each due lead must be reminded exactly once across the overlapping sweeps",
+    ).toBe(PARTIAL_DUE_COUNT);
+
+    const emittedDueLeadIds = emitSpy.mock.calls
+      .map((c) => (c[1] as { leadId: number }).leadId)
+      .filter((id) => pfx.dueIds.includes(id));
+    expect(emittedDueLeadIds.length).toBe(PARTIAL_DUE_COUNT);
+    expect(new Set(emittedDueLeadIds).size).toBe(PARTIAL_DUE_COUNT);
   });
 });
