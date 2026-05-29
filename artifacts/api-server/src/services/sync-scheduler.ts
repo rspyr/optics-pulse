@@ -1771,6 +1771,13 @@ export async function backfillGoogleAdsCampaigns(
           chunks.length,
           since,
           until,
+          // Synchronous Google Ads backfill has no async/heartbeat hooks to
+          // ride, so its only per-chunk sync-log write is this chunk-start one.
+          // Seed the phase here (the chunk always begins by fetching the
+          // window's campaign performance) so the Settings panel shows a label
+          // alongside progress — no extra DB write volume, same piggyback as the
+          // Meta backfill's chunk-start seed.
+          "fetching campaigns",
         );
 
         const rows = await fetchCampaignPerformance(gaConfig, since, until);
