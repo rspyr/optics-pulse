@@ -36,6 +36,18 @@ const overviewState = vi.hoisted(() => ({
     | undefined,
 }));
 
+// The concrete range the stubbed Calendar fires from its onSelect. Shared via
+// vi.hoisted so the (hoisted) calendar mock and the test body agree on the
+// exact dates the user "picks". Months are 1-based for readability; the stub
+// converts to a JS Date below. The serialized YYYY-MM-DD strings are what the
+// component's ymd() produces from those local Y/M/D fields.
+const customPick = vi.hoisted(() => ({
+  from: { y: 2026, m: 2, d: 10 },
+  to: { y: 2026, m: 4, d: 20 },
+  startDate: "2026-02-10",
+  endDate: "2026-04-20",
+}));
+
 // ─── Auth + api-client hooks ──────────────────────────────────────────────────
 
 vi.mock("@/components/auth-context", () => ({
@@ -85,11 +97,43 @@ vi.mock("@/components/ui/popover", async () => {
   };
 });
 
-// The calendar (custom-range picker) isn't exercised here and drags in
-// react-day-picker; stub it to a no-op so the passthrough popover stays light.
-vi.mock("@/components/ui/calendar", () => ({
-  Calendar: () => null,
-}));
+// The shipped Calendar drags in react-day-picker, which jsdom can't drive.
+// Stub it to a single button that, when clicked, fires the component's own
+// onSelect with a concrete {from, to} range — exactly what react-day-picker
+// would hand back once the user finishes picking two days. This exercises the
+// real custom-range branch (DateRangePicker's onSelect -> onChange("custom",
+// ...)) without depending on the calendar UI. The preset tests simply never
+// click this button, so the extra element is inert for them.
+vi.mock("@/components/ui/calendar", async () => {
+  const React = await import("react");
+  return {
+    Calendar: ({
+      onSelect,
+    }: {
+      onSelect?: (range: { from: Date; to: Date }) => void;
+    }) =>
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () =>
+            onSelect?.({
+              from: new Date(
+                customPick.from.y,
+                customPick.from.m - 1,
+                customPick.from.d,
+              ),
+              to: new Date(
+                customPick.to.y,
+                customPick.to.m - 1,
+                customPick.to.d,
+              ),
+            }),
+        },
+        "pick custom range",
+      ),
+  };
+});
 
 // Pulled in after the mocks so the page picks up the stubs.
 import Internal from "../internal";
@@ -108,6 +152,12 @@ function renderInternal() {
 beforeEach(() => {
   overviewState.lastParams = undefined;
   overviewState.data = undefined;
+  // The page persists its selected range into the URL (?range=, ?start=/?end=)
+  // via history.replaceState. jsdom keeps that mutation around for the rest of
+  // the file, so without a reset each test would inherit the *previous* test's
+  // range as its initial window (initialRangeFromUrl reads the URL on mount).
+  // Clear the query string so every test starts from the default "This Month".
+  window.history.replaceState(window.history.state, "", window.location.pathname);
   // The page fires fetchSyncStatus() on mount; hand back an empty snapshot so
   // the unrelated fetch doesn't error in the test environment.
   vi.stubGlobal(
@@ -178,6 +228,40 @@ describe("Internal — date picker drives the overview data window", () => {
         tenantId: undefined,
       });
     });
+  });
+
+  it("picking a custom range from the calendar feeds those exact dates to the hook", async () => {
+    const user = userEvent.setup();
+    renderInternal();
+
+    // Sanity: we begin on This Month before the custom pick.
+    const thisMonth = resolvePreset("thisMonth");
+    await waitFor(() => {
+      expect(overviewState.lastParams?.startDate).toBe(thisMonth.startDate);
+    });
+
+    // Fire the calendar's onSelect with a concrete two-day range, mirroring the
+    // user finishing a custom selection. This drives onChange("custom", ...),
+    // and resolvePreset("custom", { startDate, endDate }) passes the picked
+    // dates straight through — no preset math.
+    await user.click(screen.getByRole("button", { name: "pick custom range" }));
+
+    await waitFor(() => {
+      expect(overviewState.lastParams).toEqual({
+        startDate: customPick.startDate,
+        endDate: customPick.endDate,
+        tenantId: undefined,
+      });
+    });
+    // The picked dates pass through verbatim — not a computed preset window.
+    expect(overviewState.lastParams?.startDate).not.toBe(thisMonth.startDate);
+    expect(overviewState.lastParams?.startDate).toBe(customPick.startDate);
+    expect(overviewState.lastParams?.endDate).toBe(customPick.endDate);
+
+    // The picker trigger now reflects the custom range, formatted "MMM d, yyyy".
+    expect(
+      screen.getByText(/Feb 10, 2026\s*–\s*Apr 20, 2026/),
+    ).toBeInTheDocument();
   });
 
   it("renders the active range from data.dateRange in the header", async () => {
