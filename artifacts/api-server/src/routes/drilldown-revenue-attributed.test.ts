@@ -254,7 +254,7 @@ describe("GET /drilldown/revenue-attributed", () => {
     it("computes correctedRevenue = invoiceTotal + invoiceRebateAmount, falling back to revenue", async () => {
       const app = await setupApp("super_admin", null);
       // selects: [0] jobs. No estimates/leads (no jobIds estimates seeded, leadIds empty).
-      mockDb.selectResults = [jobs, [], []];
+      mockDb.selectResults = [jobs, [{ total: 3 }], []];
 
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7&startDate=2026-01-01&endDate=2026-12-31");
 
@@ -269,7 +269,7 @@ describe("GET /drilldown/revenue-attributed", () => {
     it("totals reconcile with the same formula applied to /drilldown/jobs rows", async () => {
       // revenue-attributed run
       const app1 = await setupApp("super_admin", null);
-      mockDb.selectResults = [jobs, [], []];
+      mockDb.selectResults = [jobs, [{ total: 3 }], []];
       const attributed = await request(app1, "GET", "/drilldown/revenue-attributed?tenantId=7");
       expect(attributed.status).toBe(200);
       const attributedTotal = (attributed.json as Array<{ correctedRevenue: number }>)
@@ -318,7 +318,7 @@ describe("GET /drilldown/revenue-attributed", () => {
 
     it("rounds correctedRevenue to whole cents instead of leaking float drift", async () => {
       const app = await setupApp("super_admin", null);
-      mockDb.selectResults = [fractionalJobs, [], []];
+      mockDb.selectResults = [fractionalJobs, [{ total: 3 }], []];
 
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7");
 
@@ -338,7 +338,7 @@ describe("GET /drilldown/revenue-attributed", () => {
 
     it("totals reconcile with /drilldown/jobs under fractional values (both rounded)", async () => {
       const app1 = await setupApp("super_admin", null);
-      mockDb.selectResults = [fractionalJobs, [], []];
+      mockDb.selectResults = [fractionalJobs, [{ total: 3 }], []];
       const attributed = await request(app1, "GET", "/drilldown/revenue-attributed?tenantId=7");
       expect(attributed.status).toBe(200);
       const attributedTotal = round2(
@@ -371,7 +371,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       );
 
       const app1 = await setupApp("super_admin", null);
-      mockDb.selectResults = [sorted, [], []];
+      mockDb.selectResults = [sorted, [{ total: 3 }], []];
       const attributed = await request(app1, "GET", "/drilldown/revenue-attributed?tenantId=7");
       expect(attributed.status).toBe(200);
       const attributedOrder = (attributed.json as Array<{ id: number; correctedRevenue: number }>)
@@ -453,6 +453,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       const app = await setupApp("super_admin", null);
       mockDb.selectResults = [
         [baseJob],
+        [{ total: 1 }],
         [{ jobId: 10, soldByName: "Dana Sells", rebateAmount: 300, rebateBreakdown: breakdown }],
         [{ id: 99, firstName: "Lead", lastName: "Person", source: "ppc", originalSource: "ppc",
           status: "sold", hubStatus: null, assignedTo: "Fallback Rep" }],
@@ -473,6 +474,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       const app = await setupApp("super_admin", null);
       mockDb.selectResults = [
         [baseJob],
+        [{ total: 1 }],
         [
           { jobId: 10, soldByName: "Small Rebate Rep", rebateAmount: 50, rebateBreakdown: small },
           { jobId: 10, soldByName: "Big Rebate Rep", rebateAmount: 300, rebateBreakdown: big },
@@ -492,6 +494,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       const app = await setupApp("super_admin", null);
       mockDb.selectResults = [
         [baseJob],
+        [{ total: 1 }],
         [], // no sold estimate for this job
         [{ id: 99, firstName: "Lead", lastName: "Person", source: "ppc", originalSource: "ppc",
           status: "sold", hubStatus: null, assignedTo: "Fallback Rep" }],
@@ -533,7 +536,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       ];
 
       const app = await setupApp("super_admin", null);
-      mockDb.selectResults = [pageJobs, estimates, leads];
+      mockDb.selectResults = [pageJobs, [{ total: 2 }], estimates, leads];
 
       const drizzle = await import("drizzle-orm");
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7&limit=200&offset=200");
@@ -565,7 +568,7 @@ describe("GET /drilldown/revenue-attributed", () => {
       ];
 
       const app = await setupApp("super_admin", null);
-      mockDb.selectResults = [pageJobs, [], []];
+      mockDb.selectResults = [pageJobs, [{ total: 1 }], []];
 
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=7&limit=200");
       expect(res.status).toBe(200);
@@ -587,8 +590,191 @@ describe("GET /drilldown/revenue-attributed", () => {
 
     it("forces the session tenantId, ignoring an attacker-supplied query.tenantId", async () => {
       const app = await setupApp("tenant_user", 7);
-      mockDb.selectResults = [[], [], []];
+      mockDb.selectResults = [[], [{ total: 0 }], []];
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=9");
+      expect(res.status).toBeLessThan(500);
+      const tenantArgs = await tenantEqArgsFor("jobs");
+      expect(tenantArgs).toContain(7);
+      expect(tenantArgs).not.toContain(9);
+      expect(tenantArgs).not.toContain("9");
+    });
+  });
+});
+
+// GET /drilldown/revenue-attributed/summary powers the Revenue Attributed
+// summary cards. It returns full-range aggregates (corrected revenue, rebate
+// add-back, attributed-only revenue, and job count) computed server-side via
+// SQL SUM/COUNT, so the cards always reflect the entire date range regardless
+// of which page of rows the list is showing. The aggregate math mirrors the
+// per-row formulas /drilldown/revenue-attributed returns:
+//   corrected revenue = COALESCE(invoiceTotal + COALESCE(invoiceRebateAmount,0), revenue)
+//   rebate add-back    = SUM(COALESCE(invoiceRebateAmount, 0))
+//   attributed         = same corrected revenue, but only WHERE matchLevel IS NOT NULL
+//
+// The db is mocked, so the SQL SUM/COUNT itself runs as if Postgres produced
+// it: each test feeds the aggregate row Postgres would return for the dataset,
+// then asserts the route maps + rounds it correctly. The reconciliation test
+// proves that aggregate equals the sum of every row the list endpoint returns
+// (with limit=all) for the same range/tenant — i.e. the cards can never drift
+// from the list + CSV export.
+describe("GET /drilldown/revenue-attributed/summary", () => {
+  beforeEach(() => {
+    mockDb.reset();
+    vi.clearAllMocks();
+  });
+
+  // A mixed range of completed jobs that the list endpoint and the summary
+  // aggregate must agree on:
+  //   id 1 — invoiced (900 + 150 rebate), attributed (gclid)
+  //   id 2 — invoiced (500, no rebate), NOT attributed (matchLevel null)
+  //   id 3 — legacy fallback to `revenue` (750), attributed (manual)
+  const rangeJobs = [
+    { id: 1, tenantId: 7, leadId: null, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+      jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+      revenue: 1000, invoiceTotal: 900, invoiceRebateAmount: 150,
+      invoiceDate: null, completedAt: null, createdAt: null, matchLevel: "gclid", matchedGclid: "g1" },
+    { id: 2, tenantId: 7, leadId: null, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+      jobType: "plumb", jobTypeName: "Plumbing", status: "completed",
+      revenue: 500, invoiceTotal: 500, invoiceRebateAmount: null,
+      invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+    { id: 3, tenantId: 7, leadId: null, stJobId: "j3", stInvoiceId: null, customerName: "C",
+      jobType: "elec", jobTypeName: "Electrical", status: "completed",
+      revenue: 750, invoiceTotal: null, invoiceRebateAmount: null,
+      invoiceDate: null, completedAt: null, createdAt: null, matchLevel: "manual", matchedGclid: null },
+  ];
+
+  // Mirrors the SQL aggregate the route runs (the raw, pre-rounding sums
+  // Postgres would hand back). corrected = jobRevenueExpr; attributed only
+  // counts rows with a non-null matchLevel; rebates add back invoiceRebateAmount.
+  function aggregateOf(jobs: typeof rangeJobs) {
+    const corrected = (j: (typeof rangeJobs)[number]) =>
+      j.invoiceTotal != null ? j.invoiceTotal + (j.invoiceRebateAmount ?? 0) : j.revenue;
+    let revenue = 0;
+    let rebates = 0;
+    let attributed = 0;
+    for (const j of jobs) {
+      revenue += corrected(j);
+      rebates += j.invoiceRebateAmount ?? 0;
+      if (j.matchLevel != null) attributed += corrected(j);
+    }
+    return { revenue, rebates, attributed, count: jobs.length };
+  }
+
+  it("returns full-range corrected revenue, rebate add-back, attributed revenue, and job count", async () => {
+    const app = await setupApp("super_admin", null);
+    // The summary route issues a single aggregate SELECT; feed the row Postgres
+    // would return for rangeJobs (raw sums; the route rounds to whole cents).
+    mockDb.selectResults = [[aggregateOf(rangeJobs)]];
+
+    const res = await request(
+      app,
+      "GET",
+      "/drilldown/revenue-attributed/summary?tenantId=7&startDate=2026-01-01&endDate=2026-12-31",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({
+      revenue: 2300, // (900+150) + 500 + 750
+      rebates: 150, //  150 + 0 + 0
+      attributed: 1800, // (900+150 gclid) + 750 (manual); id 2 excluded
+      count: 3,
+    });
+  });
+
+  it("totals equal the sum of every row the list endpoint returns with limit=all (same range/tenant)", async () => {
+    // 1) Summary run — fed the aggregate Postgres computes for the range.
+    const summaryApp = await setupApp("super_admin", null);
+    mockDb.selectResults = [[aggregateOf(rangeJobs)]];
+    const summaryRes = await request(
+      summaryApp,
+      "GET",
+      "/drilldown/revenue-attributed/summary?tenantId=7&startDate=2026-01-01&endDate=2026-12-31",
+    );
+    expect(summaryRes.status).toBe(200);
+    const summary = summaryRes.json as {
+      revenue: number; rebates: number; attributed: number; count: number;
+    };
+
+    // 2) List run over the SAME range with limit=all — the route computes
+    // correctedRevenue per row, so summing the rows must reproduce the cards.
+    mockDb.reset();
+    vi.clearAllMocks();
+    const listApp = await setupApp("super_admin", null);
+    // selects: [0] jobs, [1] count, [2] estimates (jobIds non-empty), leads skipped (leadId null).
+    mockDb.selectResults = [rangeJobs, [{ total: rangeJobs.length }], []];
+    const listRes = await request(
+      listApp,
+      "GET",
+      "/drilldown/revenue-attributed?tenantId=7&startDate=2026-01-01&endDate=2026-12-31&limit=all",
+    );
+    expect(listRes.status).toBe(200);
+    const rows = listRes.json as Array<{
+      correctedRevenue: number; invoiceRebateAmount: number | null; matchLevel: string | null;
+    }>;
+
+    const listRevenue = round2(rows.reduce((sum, r) => sum + r.correctedRevenue, 0));
+    const listRebates = round2(rows.reduce((sum, r) => sum + (r.invoiceRebateAmount ?? 0), 0));
+    const listAttributed = round2(
+      rows.reduce((sum, r) => sum + (r.matchLevel != null ? r.correctedRevenue : 0), 0),
+    );
+
+    // The cards reconcile with the full list, row for row.
+    expect(rows).toHaveLength(summary.count);
+    expect(listRevenue).toBe(summary.revenue);
+    expect(listRebates).toBe(summary.rebates);
+    expect(listAttributed).toBe(summary.attributed);
+  });
+
+  // Revenue columns are floating-point `real`, so SUM() can hand back values
+  // like 1050.1500000000001. The summary must round each aggregate to whole
+  // cents (matching the per-row round2 the list applies) so the cards never
+  // show sub-cent drift.
+  it("rounds fractional aggregate sums to whole cents", async () => {
+    const app = await setupApp("super_admin", null);
+    mockDb.selectResults = [[
+      {
+        revenue: 900.1 + 150.05, // 1050.1500000000001 in raw float
+        rebates: 0.1 + 0.2, //      0.30000000000000004 in raw float
+        attributed: 12.005, //      rounds up to 12.01
+        count: 4,
+      },
+    ]];
+
+    const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=7");
+
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ revenue: 1050.15, rebates: 0.3, attributed: 12.01, count: 4 });
+  });
+
+  it("only aggregates completed jobs (status filter is always applied)", async () => {
+    const app = await setupApp("super_admin", null);
+    mockDb.selectResults = [[aggregateOf(rangeJobs)]];
+
+    const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=7");
+
+    expect(res.status).toBe(200);
+    const drizzle = await import("drizzle-orm");
+    const statusArgs = vi
+      .mocked(drizzle.eq)
+      .mock.calls.filter((c) => (c[0] as unknown as string) === "jobs.status")
+      .map((c) => c[1]);
+    expect(statusArgs).toContain("completed");
+  });
+
+  describe("tenant scoping (clients cannot see other tenants' totals)", () => {
+    it("returns 403 'No tenant assigned' for a tenant-scoped role with no session tenant, and never reads the DB", async () => {
+      const app = await setupApp("tenant_user", null);
+      const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=9");
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
+      const dbMod = await import("@workspace/db");
+      expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+    });
+
+    it("forces the session tenantId, ignoring an attacker-supplied query.tenantId", async () => {
+      const app = await setupApp("tenant_user", 7);
+      mockDb.selectResults = [[aggregateOf(rangeJobs)]];
+      const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=9");
       expect(res.status).toBeLessThan(500);
       const tenantArgs = await tenantEqArgsFor("jobs");
       expect(tenantArgs).toContain(7);
