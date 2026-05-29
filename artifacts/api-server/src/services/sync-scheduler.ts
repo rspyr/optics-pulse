@@ -103,6 +103,9 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
       progressWindowStart: null,
       progressWindowEnd: null,
       progressTotalRecords: null,
+      // Clear the in-flight phase label too so a finished row doesn't keep
+      // showing "saving results" (or whatever phase it died in).
+      progressPhase: null,
     })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
@@ -129,6 +132,13 @@ async function updateSyncLogChunkProgress(
   totalChunks: number,
   windowStart: string,
   windowEnd: string,
+  // Initial phase label for the new chunk. The Meta async backfill always
+  // starts a chunk by generating the async report, so it passes "generating
+  // report" here; the synchronous Google Ads backfill has no phases and
+  // passes nothing, leaving the column null. Set on the existing chunk-start
+  // write so the phase is correct from the first moment of the chunk without
+  // an extra DB round-trip.
+  phase?: string | null,
 ) {
   await db.update(integrationSyncLogsTable)
     .set({
@@ -137,6 +147,7 @@ async function updateSyncLogChunkProgress(
       progressTotalChunks: totalChunks,
       progressWindowStart: windowStart,
       progressWindowEnd: windowEnd,
+      progressPhase: phase ?? null,
       // Stamp inactivity watermark so the orphan reaper keeps this long-running
       // backfill alive while it's making progress, and reaps it once it stops.
       // Also surfaced as "last progress N min ago" in the Settings panel.
@@ -173,9 +184,17 @@ async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
  * heartbeat interval, so the orphan reaper threshold and the UI "Stalled"
  * badge can both be tightened without false-positiving on live runs.
  */
-export async function heartbeatSyncLogProgress(logId: number) {
+export async function heartbeatSyncLogProgress(logId: number, phase?: string) {
+  // Piggyback the human-readable phase onto the same throttled write that
+  // already stamps the inactivity watermark — so surfacing "what is this run
+  // doing" costs no extra DB write volume. When `phase` is omitted we leave
+  // the column untouched (pure liveness watermark, as before).
+  const set: { progressUpdatedAt: Date; progressPhase?: string } = {
+    progressUpdatedAt: new Date(),
+  };
+  if (phase !== undefined) set.progressPhase = phase;
   await db.update(integrationSyncLogsTable)
-    .set({ progressUpdatedAt: new Date() })
+    .set(set)
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -1580,6 +1599,10 @@ export async function backfillMetaCampaigns(
           chunks.length,
           since,
           until,
+          // A chunk always begins by generating the async report, so seed the
+          // phase here on the existing chunk-start write. The throttled beat
+          // below advances it through paging → saving as the chunk proceeds.
+          "generating report",
         );
         // Task #561: route historical chunks through Meta's async report
         // endpoint. Async reports are tracked against a separate per-app
@@ -1598,17 +1621,25 @@ export async function backfillMetaCampaigns(
         // heartbeat write failure must never abort a live backfill, so it's
         // swallowed.
         let lastHeartbeatAt = Date.now();
+        // Current phase of the chunk, advanced by whichever callback is firing.
+        // The throttled `beat` writes this label alongside the liveness
+        // watermark, so the phase rides the existing heartbeat write — no extra
+        // DB write volume. Seeded to match the chunk-start write above; the
+        // page/save callbacks bump it as the chunk moves through its phases.
+        let phase = "generating report";
         const beat = async () => {
           const now = Date.now();
           if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) return;
           lastHeartbeatAt = now;
-          try { await heartbeatSyncLogProgress(syncLog.id); } catch {}
+          try { await heartbeatSyncLogProgress(syncLog.id, phase); } catch {}
         };
         const insights = await svc.fetchAdDailyInsightsAsync(since, until, {
-          onPollHeartbeat: beat,
-          onPageHeartbeat: beat,
+          onPollHeartbeat: () => { phase = "generating report"; return beat(); },
+          onPageHeartbeat: () => { phase = "downloading results"; return beat(); },
         });
-        const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights, { onProgress: beat });
+        const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights, {
+          onProgress: () => { phase = "saving results"; return beat(); },
+        });
         totalSynced += perAdSynced;
         console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows (async, ${svc.requestCount} requests so far)`);
       }

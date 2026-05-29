@@ -39,6 +39,11 @@ export interface BackfillProgressDetail {
   percent: number | null;
   /** Inner message when kind === "partial". */
   partialReason: string | null;
+  /** Human-readable phase of the in-flight chunk ("generating report",
+   *  "downloading results", "saving results") for backfills that report one
+   *  (currently the Meta async backfill). Null when the writer doesn't stamp a
+   *  phase (legacy rows, the synchronous Google Ads backfill). */
+  phase: string | null;
 }
 
 export type BackfillErrorCode =
@@ -88,6 +93,7 @@ export function parseBackfillProgress(raw: string | null | undefined): BackfillP
       windowEnd: null,
       percent: null,
       partialReason: partialMatch[1].trim() || null,
+      phase: null,
     };
   }
 
@@ -107,6 +113,7 @@ export function parseBackfillProgress(raw: string | null | undefined): BackfillP
       windowEnd: m[4],
       percent,
       partialReason: null,
+      phase: null,
     };
   }
 
@@ -119,6 +126,7 @@ export function parseBackfillProgress(raw: string | null | undefined): BackfillP
     windowEnd: null,
     percent: null,
     partialReason: null,
+    phase: null,
   };
 }
 

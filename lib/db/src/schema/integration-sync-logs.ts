@@ -27,6 +27,14 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   // once it crosses the inactivity threshold. Null until the first progress
   // write, at which point the reaper falls back to `started_at`.
   progressUpdatedAt: timestamp("progress_updated_at"),
+  // Human-readable phase of an in-flight backfill chunk (e.g. "generating
+  // report", "downloading results", "saving results"). The Meta async
+  // backfill stamps this from inside its throttled liveness heartbeat so the
+  // Settings panel can show *what* a long chunk is doing instead of just the
+  // chunk window. Piggybacks on the existing heartbeat write — no extra write
+  // volume. Null on integrations that don't report a phase (e.g. Google Ads)
+  // and cleared on terminal status.
+  progressPhase: text("progress_phase"),
   // Estimated total record count for non-chunked progress (full re-sync /
   // revenue recompute). Populated from the upstream total-count header so the
   // Settings panel can render a percent-complete bar by dividing

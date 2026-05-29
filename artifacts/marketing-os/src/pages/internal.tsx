@@ -81,6 +81,7 @@ export default function Internal() {
         windowEnd: string | null;
         percent: number | null;
         partialReason: string | null;
+        phase?: string | null;
       } | null;
       errorDetail?: {
         raw: string;
@@ -992,6 +993,12 @@ export default function Internal() {
                                   {bf.progressDetail.windowStart} → {bf.progressDetail.windowEnd}
                                 </span>
                               </div>
+                              {bf.progressDetail.phase && (
+                                <div className="flex items-center gap-1.5 text-white/60">
+                                  <Loader2 className="w-3 h-3 animate-spin text-blue-400/70" />
+                                  <span className="capitalize">{bf.progressDetail.phase}…</span>
+                                </div>
+                              )}
                               <div className="h-1.5 w-full bg-white/5 rounded overflow-hidden">
                                 <div
                                   className="h-full bg-blue-400/70 transition-all"

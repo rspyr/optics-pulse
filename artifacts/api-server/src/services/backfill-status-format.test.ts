@@ -21,6 +21,7 @@ describe("parseBackfillProgress", () => {
       // (2-1)/13 = 7.69% → 8
       percent: 8,
       partialReason: null,
+      phase: null,
     });
   });
 
@@ -46,6 +47,7 @@ describe("parseBackfillProgress", () => {
       windowEnd: null,
       percent: null,
       partialReason: "Google Ads API quota exceeded",
+      phase: null,
     });
   });
 

@@ -527,6 +527,10 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
           windowEnd: log.progressWindowEnd ?? null,
           percent,
           partialReason: null,
+          // Human-readable phase ("generating report" / "downloading results" /
+          // "saving results") stamped mid-chunk by the Meta async backfill so
+          // the UI can show what a slow chunk is doing, not just the window.
+          phase: log.progressPhase ?? null,
         };
       } else {
         // Legacy fallback for old rows.
