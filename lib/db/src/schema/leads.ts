@@ -79,12 +79,8 @@ export const leadsTable = pgTable("leads", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
-  // Backs the keyset-paged list endpoint (`/leads`), whose stable ordering is
-  // `ORDER BY created_at DESC, id DESC`. The composite index matches that sort
-  // order exactly so the database can satisfy both the seek predicate and the
-  // ORDER BY from the index alone (no extra sort/scan) as the table grows.
-  createdAtIdIdx: index("leads_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
-  // Tenant-scoped variant of the keyset index. The real `/leads` list query
+  // Keyset-paged list index for `/leads` (`ORDER BY created_at DESC, id DESC`).
+  // The real `/leads` list query
   // always filters by `tenant_id` (and optionally bounds `created_at` to a
   // date range), so leading with `tenant_id` lets the planner jump straight to
   // one tenant's slice while still satisfying the `created_at DESC, id DESC`

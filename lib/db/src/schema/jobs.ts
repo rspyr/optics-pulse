@@ -41,12 +41,8 @@ export const jobsTable = pgTable("jobs", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
-  // Backs the keyset-paged list endpoint (`/jobs`), whose stable ordering is
-  // `ORDER BY created_at DESC, id DESC`. The composite index matches that sort
-  // order exactly so the database can satisfy both the seek predicate and the
-  // ORDER BY from the index alone (no extra sort/scan) as the table grows.
-  createdAtIdIdx: index("jobs_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
-  // Tenant-scoped variant of the keyset index. The real `/jobs` list query
+  // Keyset-paged list index for `/jobs` (`ORDER BY created_at DESC, id DESC`).
+  // The real `/jobs` list query
   // always filters by `tenant_id`, so leading with `tenant_id` lets the planner
   // jump straight to one tenant's slice while still satisfying the
   // `created_at DESC, id DESC` ORDER BY from the index — no scanning over other
