@@ -108,6 +108,15 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
 }
 
 /**
+ * Throttle for the mid-chunk liveness heartbeat (see `heartbeatSyncLogProgress`
+ * and the Meta async backfill poll loop). The async report polls every ~5s, but
+ * we don't need a DB write that often — stamping at most once per 30s keeps the
+ * worst-case inter-progress gap to ~30s (well under the reaper threshold) while
+ * holding write volume to ~2/min per in-flight chunk.
+ */
+const HEARTBEAT_MIN_INTERVAL_MS = 30_000;
+
+/**
  * Record in-flight chunk progress for a backfill run. Writes to dedicated
  * columns instead of stuffing a `chunk N/M: …` string into `errorMessage`
  * (Task #395). `errorMessage` is cleared so any prior partial-failure text
@@ -151,6 +160,22 @@ async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
     // Stamp inactivity watermark so the orphan reaper treats a row that's still
     // publishing record progress as alive (see updateSyncLogChunkProgress).
     .set({ recordsProcessed, progressUpdatedAt: new Date() })
+    .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+/**
+ * Lightweight liveness heartbeat: stamps ONLY `progress_updated_at` on a
+ * running sync log, leaving every other column untouched. Used mid-chunk by
+ * the Meta async backfill so a healthy-but-slow chunk — whose only structural
+ * progress write (`updateSyncLogChunkProgress`) happens at chunk start —
+ * keeps publishing an inactivity watermark while the async report polls. This
+ * shrinks the worst-case inter-stamp gap from a whole chunk (~5 min) to the
+ * heartbeat interval, so the orphan reaper threshold and the UI "Stalled"
+ * badge can both be tightened without false-positiving on live runs.
+ */
+async function heartbeatSyncLogProgress(logId: number) {
+  await db.update(integrationSyncLogsTable)
+    .set({ progressUpdatedAt: new Date() })
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -1513,7 +1538,23 @@ export async function backfillMetaCampaigns(
         // backfills no longer starve the nightly sync's per-user quota.
         // `MetaTokenInvalidError` still bubbles through unchanged so the
         // reconnect-flag logic from Task #556 keeps working.
-        const insights = await svc.fetchAdDailyInsightsAsync(since, until);
+        //
+        // Mid-chunk heartbeat: a single chunk's async report can poll for
+        // minutes, during which the only structural progress write (the
+        // `updateSyncLogChunkProgress` above) is already in the past. Stamp a
+        // lightweight liveness watermark from inside the poll loop, throttled
+        // to `HEARTBEAT_MIN_INTERVAL_MS`, so the run keeps looking alive to the
+        // reaper / UI. A heartbeat write failure must never abort a live
+        // backfill, so it's swallowed.
+        let lastHeartbeatAt = Date.now();
+        const insights = await svc.fetchAdDailyInsightsAsync(since, until, {
+          onPollHeartbeat: async () => {
+            const now = Date.now();
+            if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) return;
+            lastHeartbeatAt = now;
+            try { await heartbeatSyncLogProgress(syncLog.id); } catch {}
+          },
+        });
         const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
         totalSynced += perAdSynced;
         console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows (async, ${svc.requestCount} requests so far)`);

@@ -395,7 +395,21 @@ export class MetaAPIService {
   async fetchAdDailyInsightsAsync(
     since: string,
     until: string,
-    opts: { pollIntervalMs?: number; timeoutMs?: number } = {},
+    opts: {
+      pollIntervalMs?: number;
+      timeoutMs?: number;
+      /**
+       * Liveness heartbeat fired on every poll iteration while the async
+       * report is still generating. The backfill uses it to stamp
+       * `progress_updated_at` mid-chunk so a healthy-but-slow chunk (whose only
+       * progress write would otherwise be at chunk start) doesn't look stalled
+       * to the orphan reaper or the Settings UI. Awaited so a slow DB write
+       * back-pressures the poll loop rather than racing it; thrown errors are
+       * swallowed by the caller's wrapper so a heartbeat hiccup never aborts a
+       * live backfill.
+       */
+      onPollHeartbeat?: (info: { percentComplete: number; status: string }) => void | Promise<void>;
+    } = {},
   ): Promise<MetaInsightRow[]> {
     if (!this.adAccountId) throw new Error("MetaAPIService: adAccountId required for insights");
     const pollIntervalMs = Math.max(500, opts.pollIntervalMs ?? 5000);
@@ -443,6 +457,16 @@ export class MetaAPIService {
         throw new Error(
           `Meta async insights ${runId} timed out after ${Math.round((Date.now() - startedAt) / 1000)}s (status=${status}, ${poll.async_percent_completion ?? 0}% complete)`,
         );
+      }
+      // Mid-poll liveness heartbeat: the report is still generating but we're
+      // demonstrably alive, so let the caller stamp progress. Without this the
+      // only progress write for a chunk is at chunk start, leaving a multi-min
+      // silent gap that the orphan reaper / UI would read as "stalled".
+      if (opts.onPollHeartbeat) {
+        await opts.onPollHeartbeat({
+          percentComplete: poll.async_percent_completion ?? 0,
+          status,
+        });
       }
       await sleep(pollIntervalMs);
     }

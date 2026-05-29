@@ -180,10 +180,15 @@ export default function Internal() {
   //
   // This is the LEADING early-warning indicator: it's deliberately shorter than
   // the orphan reaper's inactivity threshold (`DEFAULT_INACTIVITY_STALE_MINUTES`,
-  // 15 min in the API server) so operators see "stalled" amber before the
+  // 5 min in the API server) so operators see "stalled" amber before the
   // reaper actually recovers the run. Both are derived from the same
   // `progress_updated_at` inactivity signal, keeping the UI and reaper aligned.
-  const STALLED_PROGRESS_MS = 3 * 60_000;
+  //
+  // The Meta async backfill now stamps a mid-chunk liveness heartbeat (~30s)
+  // while a slow async report polls, so a healthy-but-slow chunk no longer goes
+  // minutes without a progress write — which is what let this badge drop from
+  // 3 min to 2 min without flashing amber on normal slow chunks.
+  const STALLED_PROGRESS_MS = 2 * 60_000;
 
   // Render a running sync's last-progress timestamp as a short relative
   // string ("just now", "3 min ago", "2 hr ago") plus whether it counts as

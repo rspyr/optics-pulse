@@ -19,23 +19,27 @@ const lastActivityExpr = sql`COALESCE(${integrationSyncLogsTable.progressUpdated
  * `sync-scheduler.ts`) so they stay aligned.
  *
  * Sized off the longest gap a *healthy* backfill can go between progress
- * stamps: progress is stamped at the start of each 30-day Meta chunk, and a
- * single chunk's async insights report is bounded by a ~5-min poll timeout
- * (`fetchAdDailyInsightsAsync`). 15 min leaves a comfortable ~2.5x margin so a
- * legitimately slow chunk is never reaped, while a silently-dead run is
- * recovered within roughly one periodic sweep instead of waiting hours.
+ * stamps. That gap used to be a whole Meta chunk: progress was stamped only at
+ * the start of each 30-day chunk, and a single chunk's async insights report is
+ * bounded by a ~5-min poll timeout (`fetchAdDailyInsightsAsync`) — which is why
+ * this threshold sat at 15 min (~2.5x margin). The async poll loop now stamps a
+ * mid-chunk liveness heartbeat (`heartbeatSyncLogProgress`, throttled to ~30s),
+ * so the worst-case inter-stamp gap for a healthy run drops from ~5 min to the
+ * heartbeat interval plus the (fast) report-paging/upsert tail. With that gap
+ * shrunk, the threshold can be tightened to 5 min and still keep a wide margin,
+ * recovering a silently-dead run within roughly one periodic sweep.
  *
- * Because staleness now keys off INACTIVITY (not absolute `started_at` age), a
+ * Because staleness keys off INACTIVITY (not absolute `started_at` age), a
  * long-but-healthy backfill is protected by its own progress stamps regardless
  * of this value — so the old multi-hour buffer is no longer needed. The
  * `ORPHAN_REAPER_STALE_MINUTES` env var can still raise it if an operator sees
  * false reaps on unusually slow chunks.
  *
- * The UI's "Stalled" badge (`STALLED_PROGRESS_MS` in `internal.tsx`, 3 min)
+ * The UI's "Stalled" badge (`STALLED_PROGRESS_MS` in `internal.tsx`, 2 min)
  * is the leading early-warning that precedes this recovery threshold: both are
  * derived from the same `progress_updated_at` inactivity signal.
  */
-export const DEFAULT_INACTIVITY_STALE_MINUTES = 15;
+export const DEFAULT_INACTIVITY_STALE_MINUTES = 5;
 
 /**
  * Mark any `status='running'` sync log rows older than the threshold as

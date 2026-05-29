@@ -723,6 +723,70 @@ describe("MetaAPIService — fetchAdDailyInsightsAsync (Task #561 async report p
     expect(caught).not.toBeInstanceOf(MetaApiError);
   });
 
+  it("fires onPollHeartbeat once per poll iteration while the job is still generating", async () => {
+    let pollCount = 0;
+    setFetch(async (url, init) => {
+      const u = String(url);
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST" && u.includes("/act_1/insights")) {
+        return mockResponse(200, { report_run_id: "rep_hb" });
+      }
+      if (method === "GET" && /\/rep_hb\?/.test(u)) {
+        pollCount++;
+        if (pollCount < 3) {
+          return mockResponse(200, { async_status: "Job Running", async_percent_completion: pollCount * 25 });
+        }
+        return mockResponse(200, { async_status: "Job Completed", async_percent_completion: 100 });
+      }
+      if (method === "GET" && /\/rep_hb\/insights/.test(u)) {
+        return mockResponse(200, { data: [], paging: {} });
+      }
+      return mockResponse(500, { error: { message: "unexpected route", url: u } });
+    });
+
+    const heartbeats: Array<{ percentComplete: number; status: string }> = [];
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    await runWithTimers(
+      svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", {
+        pollIntervalMs: 1000,
+        onPollHeartbeat: (info) => { heartbeats.push(info); },
+      }),
+    );
+
+    // Two non-terminal polls (pollCount 1 and 2) each fire a heartbeat; the
+    // terminal "Job Completed" poll breaks before the heartbeat, so no stamp.
+    expect(heartbeats.length).toBe(2);
+    expect(heartbeats.map((h) => h.status)).toEqual(["Job Running", "Job Running"]);
+    expect(heartbeats.map((h) => h.percentComplete)).toEqual([25, 50]);
+  });
+
+  it("does not fire onPollHeartbeat when the job completes on the first poll", async () => {
+    setFetch(async (url, init) => {
+      const u = String(url);
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST" && u.includes("/act_1/insights")) {
+        return mockResponse(200, { report_run_id: "rep_fast" });
+      }
+      if (method === "GET" && /\/rep_fast\?/.test(u)) {
+        return mockResponse(200, { async_status: "Job Completed", async_percent_completion: 100 });
+      }
+      if (method === "GET" && /\/rep_fast\/insights/.test(u)) {
+        return mockResponse(200, { data: [], paging: {} });
+      }
+      return mockResponse(500, { error: { message: "unexpected route", url: u } });
+    });
+
+    let beats = 0;
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    await runWithTimers(
+      svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", {
+        pollIntervalMs: 1000,
+        onPollHeartbeat: () => { beats++; },
+      }),
+    );
+    expect(beats).toBe(0);
+  });
+
   it("throws MetaApiError when the kickoff POST returns no report_run_id", async () => {
     setFetch(async (_url, init) => {
       const method = (init as RequestInit | undefined)?.method || "GET";
