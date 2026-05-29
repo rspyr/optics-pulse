@@ -289,3 +289,103 @@ describe("Internal — date picker drives the overview data window", () => {
     });
   });
 });
+
+// The selected range is persisted into the URL (?range=, plus ?start=/?end=
+// for a custom window) and read back on mount, so a page reload restores the
+// exact window. The two halves below pin the round trip:
+//   • restore — mounting with the query string already present must feed those
+//     dates straight to useGetCrossTenantOverview (no reset back to default).
+//   • save — choosing a preset / custom range must write the matching params
+//     back to the URL (replaceState), which is what a reload would later read.
+// beforeEach clears the query string, so each case is order-independent: the
+// restore test seeds the URL itself, and the save test starts from a clean one.
+function setUrl(query: string) {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${window.location.pathname}${query ? `?${query}` : ""}`,
+  );
+}
+
+describe("Internal — the selected range survives a reload via the URL", () => {
+  it("restores a custom ?range=custom&start=&end= window from the URL on mount", async () => {
+    // Simulate landing on the page after a reload with a custom window already
+    // persisted in the URL — exactly what initialRangeFromUrl reads on mount.
+    setUrl("range=custom&start=2026-02-10&end=2026-04-20");
+
+    renderInternal();
+
+    // The restored custom dates flow straight into the overview hook, rather
+    // than the page falling back to the default "This Month" window.
+    await waitFor(() => {
+      expect(overviewState.lastParams).toEqual({
+        startDate: "2026-02-10",
+        endDate: "2026-04-20",
+        tenantId: undefined,
+      });
+    });
+
+    const thisMonth = resolvePreset("thisMonth");
+    expect(overviewState.lastParams?.startDate).not.toBe(thisMonth.startDate);
+
+    // The picker trigger reflects the restored custom range, formatted
+    // "MMM d, yyyy".
+    expect(
+      screen.getByText(/Feb 10, 2026\s*–\s*Apr 20, 2026/),
+    ).toBeInTheDocument();
+  });
+
+  it("restores a preset ?range= window from the URL on mount", async () => {
+    setUrl("range=last30");
+
+    renderInternal();
+
+    const last30 = resolvePreset("last30");
+    await waitFor(() => {
+      expect(overviewState.lastParams).toEqual({
+        startDate: last30.startDate,
+        endDate: last30.endDate,
+        tenantId: undefined,
+      });
+    });
+    // Not the default — the URL preset genuinely took effect.
+    const thisMonth = resolvePreset("thisMonth");
+    expect(overviewState.lastParams?.startDate).not.toBe(thisMonth.startDate);
+  });
+
+  it("writes ?range= to the URL when a preset is chosen (no start/end)", async () => {
+    const user = userEvent.setup();
+    renderInternal();
+
+    // The default "This Month" is persisted on mount.
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("range")).toBe("thisMonth");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Last 30 Days" }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("range")).toBe("last30");
+    });
+    // A preset carries no custom dates — start/end must be cleared from the URL.
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("start")).toBeNull();
+    expect(params.get("end")).toBeNull();
+  });
+
+  it("writes ?range=custom&start=&end= to the URL when a custom range is picked", async () => {
+    const user = userEvent.setup();
+    renderInternal();
+
+    await user.click(screen.getByRole("button", { name: "pick custom range" }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("range")).toBe("custom");
+      expect(params.get("start")).toBe(customPick.startDate);
+      expect(params.get("end")).toBe(customPick.endDate);
+    });
+  });
+});
