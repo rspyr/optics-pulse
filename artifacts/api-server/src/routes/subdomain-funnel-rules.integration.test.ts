@@ -266,7 +266,7 @@ describe("subdomain rule → /collect/submit (real Postgres)", () => {
     expect(stored).not.toBe(fx.defaultFunnelName);
   });
 
-  it("falls back to the tenant default funnel after the rule is deleted (cache invalidated)", async () => {
+  it("resolves to null (Unmatched) after the rule is deleted (cache invalidated)", async () => {
     // Find the rule id we created above.
     const [rule] = await db
       .select({ id: subdomainFunnelRulesTable.id })
@@ -282,8 +282,9 @@ describe("subdomain rule → /collect/submit (real Postgres)", () => {
     expect(delRes.json.success).toBe(true);
 
     // Same page_url as the first submit. With the rule gone AND the
-    // resolver cache invalidated by DELETE, the waterfall must fall all
-    // the way through to the tenant's default funnel. If DELETE
+    // resolver cache invalidated by DELETE, the waterfall finds no match.
+    // Per task #575 there is no tenant-default fallback — an unmatched
+    // submit stores resolved_funnel = null ("Unmatched"). If DELETE
     // forgot to call invalidateSubdomainFunnelCache, the cached map
     // would still resolve to the target funnel and this assertion would
     // fail — which is exactly the regression we want to catch.
@@ -296,7 +297,7 @@ describe("subdomain rule → /collect/submit (real Postgres)", () => {
     expect(submitRes.status).toBe(200);
 
     const stored = await latestEventResolvedFunnel(fx.tenantId);
-    expect(stored).toBe(fx.defaultFunnelName);
+    expect(stored).toBeNull();
     expect(stored).not.toBe(fx.targetFunnelName);
   });
 });

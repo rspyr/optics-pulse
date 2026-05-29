@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import crypto from "crypto";
 import { normalizePhone } from "../lib/phone-utils";
+import { leadsTable } from "@workspace/db";
 
 const mockDb = {
   insertCalls: [] as Array<{ table: unknown; values: unknown }>,
@@ -82,6 +83,8 @@ vi.mock("@workspace/db", () => ({
   usersTable: Symbol("usersTable"),
   callAttemptsTable: Symbol("callAttemptsTable"),
   podiumMessagesTable: Symbol("podiumMessagesTable"),
+  callrailWebhookStatusTable: Symbol("callrailWebhookStatusTable"),
+  leadStatusHistoryTable: Symbol("leadStatusHistoryTable"),
 }));
 
 vi.mock("@workspace/api-zod", () => ({
@@ -612,7 +615,7 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const leadInsert = mockDb.insertCalls[1]?.values as Record<string, unknown>;
     expect(leadInsert.firstName).toBe("Jane");
     expect(leadInsert.lastName).toBe("Doe");
-    expect(leadInsert.phone).toBe("+15551234567");
+    expect(leadInsert.phone).toBe(normalizePhone("+15551234567"));
     expect(leadInsert.matchedGclid).toBe("GCLID_xyz");
     expect(leadInsert.leadType).toBe("CallRail");
   });
@@ -636,8 +639,9 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const body = res.json();
     expect(body.duplicate).toBe(true);
     expect(body.eventId).toBe(555);
-    // The upsert was attempted exactly once; no lead insert happened
-    expect(mockDb.insertCalls.length).toBe(1);
+    // No lead insert happened — only the event upsert (plus the
+    // webhook-status audit insert recordCallRailStatus writes on every path).
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
     expect(mockDb.insertCalls[0].table).toBe(
       (await import("@workspace/db")).attributionEventsTable,
     );
@@ -687,8 +691,8 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const body = res.json();
     expect(body.duplicate).toBe(true);
     expect(body.duplicateLeadId).toBe(90);
-    // Only the attribution event was inserted; lead insert was suppressed
-    expect(mockDb.insertCalls.length).toBe(1);
+    // Lead insert was suppressed (same phone within the dedupe window).
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
   });
 
   it("suppresses a duplicate lead within the dedupe window even when the call id is missing", async () => {
@@ -711,7 +715,8 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const body = res.json();
     expect(body.duplicate).toBe(true);
     expect(body.duplicateLeadId).toBe(91);
-    expect(mockDb.insertCalls.length).toBe(1);
+    // Lead insert was suppressed (same phone within the dedupe window).
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
   });
 
   it("creates a second lead when no recent lead exists for that phone (outside the dedupe window)", async () => {
@@ -735,8 +740,8 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
     expect(res.status).toBe(200);
     expect(res.json().duplicate).toBeUndefined();
-    // Both event and lead were inserted
-    expect(mockDb.insertCalls.length).toBe(2);
+    // A new lead was inserted (no recent lead within the dedupe window).
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(1);
   });
 
   it("respects per-tenant CALLRAIL_DEDUPE_WINDOW_MINUTES override of 0 (disabled)", async () => {
@@ -760,7 +765,8 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
     expect(res.status).toBe(200);
     expect(res.json().duplicate).toBeUndefined();
-    expect(mockDb.insertCalls.length).toBe(2);
+    // A new lead was inserted (dedupe disabled by per-tenant window=0).
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(1);
   });
 
   it("skips lead creation for test-named callers", async () => {
@@ -777,8 +783,8 @@ describe("POST /webhooks/callrail/:tenantId", () => {
 
     const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
     expect(res.status).toBe(200);
-    // Only the event insert, no lead insert
-    expect(mockDb.insertCalls.length).toBe(1);
+    // No lead insert — test-named callers are skipped.
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
   });
 
   it("creates exactly one event and one lead when the same call is delivered concurrently", async () => {

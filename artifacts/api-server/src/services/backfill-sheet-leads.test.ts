@@ -74,6 +74,7 @@ vi.mock("@workspace/db", () => {
   tenantsTable: Symbol("tenantsTable"),
   funnelTypesTable: Symbol("funnelTypesTable"),
   callAttemptsTable: Symbol("callAttemptsTable"),
+  leadStatusHistoryTable: Symbol("leadStatusHistoryTable"),
   };
 });
 
@@ -174,7 +175,8 @@ describe("backfillSheetLeads (Vance fixture)", () => {
   function setupInsertResults(count: number) {
     mockDb.insertResults = [];
     for (let i = 0; i < count; i++) {
-      mockDb.insertResults.push([{ id: 100 + i, tenantId: 3 }]); // lead insert
+      mockDb.insertResults.push([{ id: 100 + i, tenantId: 3, hubStatus: "day_1", createdAt: new Date() }]); // lead insert
+      mockDb.insertResults.push([]); // lead status history insert (no returning)
       mockDb.insertResults.push([{ id: 200 + i, tenantId: 3 }]); // attribution event insert
     }
   }
@@ -230,9 +232,9 @@ describe("backfillSheetLeads (Vance fixture)", () => {
       skipAssignment: true,
     });
 
-    // Insert pattern: lead, event, lead, event...
+    // Insert pattern per row: lead, lead-status-history, event...
     const leadInsert = mockDb.insertCalls[0].values as Record<string, unknown>;
-    const eventInsert = mockDb.insertCalls[1].values as Record<string, unknown>;
+    const eventInsert = mockDb.insertCalls[2].values as Record<string, unknown>;
 
     expect(leadInsert.firstName).toBe("Alice");
     expect(leadInsert.source).toBe("Meta");

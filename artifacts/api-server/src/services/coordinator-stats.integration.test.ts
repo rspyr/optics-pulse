@@ -826,6 +826,14 @@ describe("funnel rename keeps spiff payouts deterministic (task #412)", () => {
       { leadId: sold.id, userId: u.id, outcome: "spoke_with_customer", actionType: "call", attemptedAt: at(12, 0) },
     ]);
 
+    // Booking aggregation anchors on the lead_status_history `appt_set`
+    // transition (task #416), not the mutable leads.booked_at snapshot. Write
+    // the matching audit rows so each lead counts as a same-day booking.
+    await db.insert(leadStatusHistoryTable).values([
+      { leadId: booked.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: at(11, 0), changedByUserId: u.id },
+      { leadId: sold.id, tenantId: tenant.id, fromStatus: "day_1", toStatus: "appt_set", changedAt: at(12, 0), changedByUserId: u.id },
+    ]);
+
     xfx = {
       tenantId: tenant.id, csr: u.id, funnelId: funnel.id,
       origFunnelName, renamedFunnelName,

@@ -365,6 +365,7 @@ describe("POST /field-mapping-rules", () => {
       pageUrlPattern: "/contact",
       formIdentifier: "ac-breakdown-prevention",
       excludeLeadId: null,
+      ruleId: 99,
     });
 
     // The route itself must NOT emit the socket event — that's the job
@@ -458,6 +459,7 @@ describe("POST /field-mapping-rules", () => {
       pageUrlPattern: "/quote",
       formIdentifier: "quote-form",
       excludeLeadId: 77,
+      ruleId: 99,
     });
   });
 

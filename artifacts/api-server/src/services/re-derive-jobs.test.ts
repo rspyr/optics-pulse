@@ -181,7 +181,7 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
     expect(emitRuleRederiveFailedMock).toHaveBeenCalledWith(42, {
       pageUrlPattern: "/contact",
       formIdentifier: "contact-form",
-      reason: "db blew up",
+      reason: "Re-derive failed",
       pendingLeads: 7,
       hitLimit: false,
       maxLeads: 200,
@@ -305,7 +305,7 @@ describe("re-derive-jobs handler — emits rule-rederive-complete after fan-out 
       expect.objectContaining({
         pageUrlPattern: "/contact",
         formIdentifier: "contact-form",
-        reason: "invalid pageUrlPattern \"\"",
+        reason: "Invalid page URL pattern",
       }),
     );
     expect(emitRuleRederiveCompleteMock).not.toHaveBeenCalled();

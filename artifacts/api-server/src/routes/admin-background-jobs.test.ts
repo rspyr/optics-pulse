@@ -477,7 +477,10 @@ describe("POST /admin/background-jobs/:id/retry — input validation", () => {
     const res = await request("POST", "/admin/background-jobs/99/retry", {});
     expect(res.status).toBe(404);
     expect(String(res.body.error)).toMatch(/Job not found/);
-    expect(state.updateCalls.length).toBe(0);
+    // The atomic conditional update is issued but no-ops: its WHERE predicate
+    // includes status='failed', so a non-existent row matches nothing and the
+    // returning() is empty, falling through to the 404 lookup.
+    expect(state.updateCalls.length).toBe(1);
   });
 });
 
@@ -494,8 +497,10 @@ describe("POST /admin/background-jobs/:id/retry — status guard", () => {
         /Only failed jobs can be retried/,
       );
       expect(String(res.body.error)).toContain(`current status: ${status}`);
-      // No update issued — the job's state must be left alone.
-      expect(state.updateCalls.length).toBe(0);
+      // The atomic conditional update is issued but no-ops: its WHERE predicate
+      // includes status='failed', so a non-failed job matches nothing and the
+      // returning() is empty, leaving the job's state untouched.
+      expect(state.updateCalls.length).toBe(1);
     },
   );
 });

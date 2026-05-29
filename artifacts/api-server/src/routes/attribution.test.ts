@@ -315,7 +315,7 @@ describe("GET /attribution/events/:id — unmatchedReason contract", () => {
 
     expect(res.status).toBe(200);
     expect(res.json.matchedJob).toEqual(job);
-    expect(res.json.matchedLead).toEqual({ id: 71, firstName: "Ann", lastName: "Bee" });
+    expect(res.json.matchedLead).toEqual({ id: 71, firstName: "Ann", lastName: "Bee", funnelOverriddenAt: null });
   });
 
   it("resolves matchedJob + matchedLead via hashedEmail → silver job", async () => {
@@ -342,7 +342,7 @@ describe("GET /attribution/events/:id — unmatchedReason contract", () => {
 
     expect(res.status).toBe(200);
     expect(res.json.matchedJob).toEqual(job);
-    expect(res.json.matchedLead).toEqual({ id: 82, firstName: "Cee", lastName: "Dee" });
+    expect(res.json.matchedLead).toEqual({ id: 82, firstName: "Cee", lastName: "Dee", funnelOverriddenAt: null });
   });
 
   it("resolves matchedJob via normalized billing address → bronze job", async () => {

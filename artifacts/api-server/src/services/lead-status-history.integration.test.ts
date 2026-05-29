@@ -611,7 +611,15 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a d
       appointmentTime: "14:00",
     });
     expect(bookRes.status).toBe(200);
-    const attemptId = (bookRes.json as { attempt: { id: number } }).attempt.id;
+    // POST /leads-hub/action returns { lead, action } — not the attempt row.
+    // The booking creates exactly one call attempt for this fresh lead, so
+    // read its id back from the audit table to drive the subsequent edit.
+    const [bookingAttempt] = await db
+      .select({ id: callAttemptsTable.id })
+      .from(callAttemptsTable)
+      .where(eq(callAttemptsTable.leadId, leadId))
+      .orderBy(asc(callAttemptsTable.id));
+    const attemptId = bookingAttempt.id;
 
     // Sanity: lead is in the booked aggregate window.
     const [beforeEdit] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
@@ -694,7 +702,15 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a c
       appointmentTime: "14:00",
     });
     expect(bookRes.status).toBe(200);
-    const attemptId = (bookRes.json as { attempt: { id: number } }).attempt.id;
+    // POST /leads-hub/action returns { lead, action } — not the attempt row.
+    // The booking creates exactly one call attempt for this fresh lead, so
+    // read its id back from the audit table to drive the subsequent edit.
+    const [bookingAttempt] = await db
+      .select({ id: callAttemptsTable.id })
+      .from(callAttemptsTable)
+      .where(eq(callAttemptsTable.leadId, leadId))
+      .orderBy(asc(callAttemptsTable.id));
+    const attemptId = bookingAttempt.id;
 
     // Sanity: lead is in the booked aggregate window.
     const [beforeEdit] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId));
