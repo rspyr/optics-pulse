@@ -84,7 +84,7 @@ type LeadSearchResult = {
   createdAt: string;
 };
 
-type RevenueJob = {
+export type RevenueJob = {
   id: number;
   tenantId: number;
   stJobId: string | null;
@@ -110,6 +110,40 @@ type RevenueJob = {
 function csvCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
+}
+
+// Column order for the exported CSV. Kept as a constant so tests can locate the
+// "Rebate Amount", "Corrected Revenue", and "Match Tier" columns by name and
+// reconcile their totals against the summary cards (Task #703).
+export const REVENUE_ATTRIBUTED_CSV_HEADER = [
+  "Date", "Customer", "Job Type", "ST Job", "Match Tier",
+  "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
+] as const;
+
+// Pure CSV builder for the Revenue Attributed export. Extracted from the
+// download handler so the exact bytes the user downloads can be asserted in
+// tests: the Corrected Revenue / Rebate Amount columns must sum to the same
+// totals the summary cards show, and Match Tier drives which rows count toward
+// attributed revenue. Kept side-effect-free (no Blob/anchor) for testability.
+export function buildRevenueAttributedCsv(exportJobs: RevenueJob[]): string {
+  const rows = exportJobs.map((job) => {
+    const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
+    const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "";
+    return [
+      dateStr,
+      job.customerName || "",
+      job.jobTypeName || job.jobType || "",
+      job.stJobId || `#${job.id}`,
+      job.matchLevel || "unmatched",
+      String(job.invoiceRebateAmount ?? 0),
+      String(job.correctedRevenue),
+      job.lead?.source || "",
+      job.soldByName || "",
+    ];
+  });
+  return [REVENUE_ATTRIBUTED_CSV_HEADER as readonly string[], ...rows]
+    .map((r) => r.map(csvCell).join(","))
+    .join("\n");
 }
 
 function isUnknownSource(src: string | null | undefined): boolean {
@@ -229,28 +263,7 @@ export default function RevenueAttributed() {
   }
 
   function buildAndDownloadCSV(exportJobs: RevenueJob[]) {
-    const header = [
-      "Date", "Customer", "Job Type", "ST Job", "Match Tier",
-      "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
-    ];
-    const rows = exportJobs.map((job) => {
-      const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
-      const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "";
-      return [
-        dateStr,
-        job.customerName || "",
-        job.jobTypeName || job.jobType || "",
-        job.stJobId || `#${job.id}`,
-        job.matchLevel || "unmatched",
-        String(job.invoiceRebateAmount ?? 0),
-        String(job.correctedRevenue),
-        job.lead?.source || "",
-        job.soldByName || "",
-      ];
-    });
-    const csv = [header, ...rows]
-      .map((r) => r.map(csvCell).join(","))
-      .join("\n");
+    const csv = buildRevenueAttributedCsv(exportJobs);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

@@ -167,7 +167,7 @@ function request(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; json: Record<string, unknown> | unknown[] }> {
+): Promise<{ status: number; json: Record<string, unknown> | unknown[]; headers: Record<string, string | string[] | undefined> }> {
   return new Promise((resolve, reject) => {
     const http = require("http");
     const server = http.createServer(app);
@@ -184,12 +184,14 @@ function request(
             ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload).toString() }
             : {},
         },
-        (res: { statusCode: number; on: Function }) => {
+        (res: { statusCode: number; headers: Record<string, string | string[] | undefined>; on: Function }) => {
           let data = "";
           res.on("data", (chunk: string) => (data += chunk));
           res.on("end", () => {
             server.close();
-            resolve({ status: res.statusCode, json: data ? JSON.parse(data) : {} });
+            // Surface response headers so tests can assert the export contract
+            // (e.g. X-Total-Count) the front-end paging + CSV download rely on.
+            resolve({ status: res.statusCode, json: data ? JSON.parse(data) : {}, headers: res.headers });
           });
         },
       );
@@ -575,6 +577,65 @@ describe("GET /drilldown/revenue-attributed", () => {
       expect(mockDb.lastLimit).toBe(200);
       // No `.offset()` call when offset is absent (avoids an unnecessary OFFSET 0).
       expect(mockDb.lastOffset).toBeUndefined();
+    });
+  });
+
+  // The CSV export fetches the whole range with `limit=all` and relies on the
+  // X-Total-Count header (the JSON body is a bare array, so the count rides in
+  // the header). This is the exact request the "Download CSV" button issues, so
+  // the header must report the full matching count regardless of paging.
+  describe("X-Total-Count header on the limit=all export request", () => {
+    const rangeJobs = [
+      { id: 1, tenantId: 7, leadId: null, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+        jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+        revenue: 1000, invoiceTotal: 900, invoiceRebateAmount: 150,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: "gclid", matchedGclid: "g1" },
+      { id: 2, tenantId: 7, leadId: null, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+        jobType: "plumb", jobTypeName: "Plumbing", status: "completed",
+        revenue: 500, invoiceTotal: 500, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      { id: 3, tenantId: 7, leadId: null, stJobId: "j3", stInvoiceId: null, customerName: "C",
+        jobType: "elec", jobTypeName: "Electrical", status: "completed",
+        revenue: 750, invoiceTotal: null, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: "manual", matchedGclid: null },
+    ];
+
+    it("reports the full matching count in X-Total-Count for a limit=all export", async () => {
+      const app = await setupApp("super_admin", null);
+      // selects: [0] jobs (all rows), [1] count, [2] estimates (no leads).
+      mockDb.selectResults = [rangeJobs, [{ total: rangeJobs.length }], []];
+
+      const res = await request(
+        app,
+        "GET",
+        "/drilldown/revenue-attributed?tenantId=7&startDate=2026-01-01&endDate=2026-12-31&limit=all",
+      );
+
+      expect(res.status).toBe(200);
+      // Body stays a bare array; the count rides in the header the UI reads.
+      expect(Array.isArray(res.json)).toBe(true);
+      expect((res.json as unknown[]).length).toBe(rangeJobs.length);
+      // Node lowercases response header names.
+      expect(res.headers["x-total-count"]).toBe(String(rangeJobs.length));
+      // Exposed for the proxied front-end fetch to be able to read it.
+      expect(res.headers["access-control-expose-headers"]).toContain("X-Total-Count");
+    });
+
+    it("reports the FULL count even when a page returns fewer rows than the total", async () => {
+      const app = await setupApp("super_admin", null);
+      // Page of 1 job, but the count select reports the whole range is larger.
+      mockDb.selectResults = [[rangeJobs[0]], [{ total: 137 }], []];
+
+      const res = await request(
+        app,
+        "GET",
+        "/drilldown/revenue-attributed?tenantId=7&limit=1&offset=0",
+      );
+
+      expect(res.status).toBe(200);
+      expect((res.json as unknown[]).length).toBe(1);
+      // The header is the full range count, not the returned page length.
+      expect(res.headers["x-total-count"]).toBe("137");
     });
   });
 
