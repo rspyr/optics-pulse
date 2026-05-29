@@ -342,7 +342,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     needsReconnect: boolean;
     reconnectReason: string | null;
     latestErrorCode: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -351,7 +351,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null }> = {};
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null }> = {};
     // Union of sync types: from the recent log window (latest run/status info)
     // AND from the cumulative aggregation (which covers full history, so we
     // still show sync types whose last run is older than the 60-row window).
@@ -380,6 +380,12 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         // a stalled one. Only meaningful while the run is `running`.
         progressUpdatedAt: latestOfType?.status === "running"
           ? latestOfType.progressUpdatedAt?.toISOString() ?? null
+          : null,
+        // Human-readable stage of the latest run (e.g. "reprocessing
+        // invoices") so a long full re-sync is legible beyond a percent bar.
+        // Only meaningful while the run is `running`.
+        phase: latestOfType?.status === "running"
+          ? latestOfType.progressPhase ?? null
           : null,
       };
     }

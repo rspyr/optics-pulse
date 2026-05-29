@@ -165,12 +165,22 @@ async function updateSyncLogChunkProgress(
  * Settings panel can poll `recordsProcessed` and show live progress while
  * invoices / estimates are being reprocessed batch-by-batch. We don't touch
  * the chunk columns here — those are reserved for windowed backfills.
+ *
+ * An optional human-readable `phase` (e.g. "reprocessing invoices") is
+ * piggybacked onto this same per-batch watermark write — surfacing what stage
+ * the recompute is in costs no extra DB write volume (same pattern as the
+ * backfill heartbeat). When `phase` is omitted the column is left untouched.
  */
-async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
-  await db.update(integrationSyncLogsTable)
+async function updateSyncLogRecords(logId: number, recordsProcessed: number, phase?: string) {
+  const set: { recordsProcessed: number; progressUpdatedAt: Date; progressPhase?: string } = {
+    recordsProcessed,
     // Stamp inactivity watermark so the orphan reaper treats a row that's still
     // publishing record progress as alive (see updateSyncLogChunkProgress).
-    .set({ recordsProcessed, progressUpdatedAt: new Date() })
+    progressUpdatedAt: new Date(),
+  };
+  if (phase !== undefined) set.progressPhase = phase;
+  await db.update(integrationSyncLogsTable)
+    .set(set)
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -2223,7 +2233,7 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       // show live progress. Skipped on incremental syncs to avoid an extra
       // write on every 15-min poll where the count barely moves.
       if (options?.fullResync) {
-        await updateSyncLogRecords(syncLog.id, synced);
+        await updateSyncLogRecords(syncLog.id, synced, "reprocessing invoices");
 
         // Cooperative cancel check at the batch boundary — frequent enough
         // that an operator clicking Cancel sees the run stop within seconds.
@@ -2462,7 +2472,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       // progress poll reflects estimates being reprocessed live (see the
       // invoices path above for the rationale).
       if (options?.fullResync) {
-        await updateSyncLogRecords(syncLog.id, synced);
+        await updateSyncLogRecords(syncLog.id, synced, "reprocessing estimates");
 
         // Cooperative cancel check at the batch boundary (see invoices path).
         if (await checkCancel()) {

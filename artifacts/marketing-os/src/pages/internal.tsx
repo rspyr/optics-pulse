@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean; totalRecords?: number | null; progressUpdatedAt?: string | null }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean; totalRecords?: number | null; progressUpdatedAt?: string | null; phase?: string | null }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number; triggeredBySyncLogId?: number | null }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -1142,13 +1142,18 @@ export default function Internal() {
                             const est = stSyncTypes?.estimates;
                             const phaseRow = (
                               name: string,
-                              phase: { lastStatus: string; recordsProcessed: number; totalRecords?: number | null; progressUpdatedAt?: string | null } | undefined,
+                              phase: { lastStatus: string; recordsProcessed: number; totalRecords?: number | null; progressUpdatedAt?: string | null; phase?: string | null } | undefined,
                             ) => {
                               const status = phase?.lastStatus;
                               const rows = phase?.recordsProcessed ?? 0;
                               const total = phase?.totalRecords ?? null;
                               const isRunning = status === "running";
                               const ago = isRunning ? formatProgressAgo(phase?.progressUpdatedAt) : null;
+                              // Human-readable stage of the running re-sync
+                              // (e.g. "reprocessing invoices"), surfaced
+                              // alongside the percent bar so a long recompute
+                              // is legible beyond a number.
+                              const phaseLabel = isRunning ? phase?.phase : null;
                               const isDone = status === "completed";
                               // Percent only when running against a known total
                               // (captured from the upstream total-count). Clamp
@@ -1181,6 +1186,9 @@ export default function Internal() {
                                           : "queued"}
                                     </span>
                                   </div>
+                                  {phaseLabel && (
+                                    <p className="capitalize text-blue-300/70">{phaseLabel}…</p>
+                                  )}
                                   {isRunning && (
                                     <div className="h-1.5 w-full bg-white/5 rounded overflow-hidden">
                                       <div
