@@ -119,6 +119,7 @@ export default function RevenueAttributed() {
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
   const [jobs, setJobs] = useState<RevenueJob[] | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -142,19 +143,30 @@ export default function RevenueAttributed() {
     });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: RevenueJob[]) => { if (!cancelled) { setJobs(data); setExpandedId(null); } })
+      .then((r) => {
+        if (!r.ok) return Promise.reject(new Error(`HTTP ${r.status}`));
+        const header = r.headers.get("X-Total-Count");
+        const parsed = header != null ? Number(header) : NaN;
+        return r.json().then((data: RevenueJob[]) => ({ data, total: Number.isFinite(parsed) ? parsed : null }));
+      })
+      .then(({ data, total }) => {
+        if (!cancelled) { setJobs(data); setTotalCount(total); setExpandedId(null); }
+      })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [startDate, endDate, effectiveTenantId, page]);
 
   useEffect(() => loadJobs(), [loadJobs]);
 
-  // The endpoint returns no total count, so infer "there's more" from a full
-  // page. A short page means we've reached the end of the list. (An empty page
-  // — which can happen when the total is an exact multiple of PAGE_SIZE — is
-  // never "full", so Next is correctly disabled there.)
-  const hasNextPage = jobs != null && jobs.length === PAGE_SIZE;
+  // The endpoint returns the full matching count in the X-Total-Count header,
+  // so we can show a real "X of N" indicator and disable Next on the true last
+  // page even when that page happens to be full. If the header is missing for
+  // any reason, fall back to inferring "there's more" from a full page.
+  const totalPages = totalCount != null ? Math.max(1, Math.ceil(totalCount / PAGE_SIZE)) : null;
+  const hasNextPage =
+    totalCount != null
+      ? page + 1 < (totalPages ?? 1)
+      : jobs != null && jobs.length === PAGE_SIZE;
   const hasPrevPage = page > 0;
 
   const totals = useMemo(() => {
@@ -353,7 +365,9 @@ export default function RevenueAttributed() {
           <div className="flex items-center justify-between gap-4 p-4 border-t border-white/5">
             <span className="text-xs text-muted-foreground">
               {jobs.length > 0
-                ? `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + jobs.length}`
+                ? `Showing ${(page * PAGE_SIZE + 1).toLocaleString()}–${(page * PAGE_SIZE + jobs.length).toLocaleString()}${
+                    totalCount != null ? ` of ${totalCount.toLocaleString()} jobs` : ""
+                  }${totalPages != null ? ` · Page ${page + 1} of ${totalPages.toLocaleString()}` : ""}`
                 : "No jobs on this page"}
             </span>
             <div className="flex items-center gap-2">

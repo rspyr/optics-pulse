@@ -132,6 +132,16 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
         ? await baseQuery.limit(limit).offset(offset)
         : await baseQuery.limit(limit);
 
+  // Total matching completed jobs for the range, independent of paging. Exposed
+  // as a response header so both the paged UI (to show "X of N" + a real page
+  // count) and the CSV export keep receiving a plain JSON array body.
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(jobsTable)
+    .where(where);
+  res.setHeader("X-Total-Count", String(total));
+  res.setHeader("Access-Control-Expose-Headers", "X-Total-Count");
+
   const jobIds = jobs.map((j) => j.id);
   const leadIds = [...new Set(jobs.map((j) => j.leadId).filter((v): v is number => v != null))];
 
