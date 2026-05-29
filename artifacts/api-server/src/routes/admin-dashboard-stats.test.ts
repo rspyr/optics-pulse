@@ -359,6 +359,88 @@ describe("GET /admin/dashboard-stats — projected spend", () => {
   });
 });
 
+// overBudget flags a client whose extrapolated full-month spend will blow past
+// their monthlyBudget. It is derived as projectedSpend > monthlyBudget, so we
+// pin the clock (projectedSpend depends on "today") and pair a tiny budget with
+// a generous one to exercise both sides of the comparison.
+// Select order: [tenants, then per tenant leads, jobs, campaigns, spend].
+//   tenant 1 (Tight): budget 100, spend 1000 → projected 2067 → over budget
+//   tenant 2 (Roomy): budget 100000, spend 1000 → projected 2067 → under budget
+function seedBudgetContrastTenants() {
+  state.selectQueue = [
+    [
+      { id: 1, name: "Tight", monthlyBudget: 100 },
+      { id: 2, name: "Roomy", monthlyBudget: 100000 },
+    ],
+    [], // tenant 1 leads
+    [], // tenant 1 jobs
+    [{ id: 101 }], // tenant 1 campaigns
+    [{ total: 1000 }], // tenant 1 spend
+    [], // tenant 2 leads
+    [], // tenant 2 jobs
+    [{ id: 201 }], // tenant 2 campaigns
+    [{ total: 1000 }], // tenant 2 spend
+  ];
+}
+
+describe("GET /admin/dashboard-stats — over budget warning", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("flags overBudget when projectedSpend exceeds monthlyBudget", async () => {
+    // May 15 of a 31-day month: 1000 / 15 * 31 = 2066.67 → projects to 2067.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 15, 12, 0, 0));
+
+    seedBudgetContrastTenants();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number | boolean>>;
+
+    const tight = tenants.find((t) => t.tenantId === 1)!;
+    expect(tight.projectedSpend).toBe(2067);
+    expect(tight.monthlyBudget).toBe(100);
+    expect(tight.overBudget).toBe(true); // 2067 > 100
+
+    const roomy = tenants.find((t) => t.tenantId === 2)!;
+    expect(roomy.projectedSpend).toBe(2067);
+    expect(roomy.monthlyBudget).toBe(100000);
+    expect(roomy.overBudget).toBe(false); // 2067 < 100000
+  });
+
+  it("does not flag overBudget when projectedSpend equals monthlyBudget", async () => {
+    // May 31 (last day): 1000 / 31 * 31 = 1000, equal to the 1000 budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 31, 12, 0, 0));
+
+    state.selectQueue = [
+      [{ id: 1, name: "Exact", monthlyBudget: 1000 }],
+      [], // leads
+      [], // jobs
+      [{ id: 101 }], // campaigns
+      [{ total: 1000 }], // spend
+    ];
+
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number | boolean>>;
+    const exact = tenants.find((t) => t.tenantId === 1)!;
+    expect(exact.projectedSpend).toBe(1000);
+    expect(exact.monthlyBudget).toBe(1000);
+    expect(exact.overBudget).toBe(false); // strictly greater, so equal is not over
+  });
+});
+
 describe("GET /admin/dashboard-stats — date range narrowing", () => {
   beforeEach(() => {
     state.reset();

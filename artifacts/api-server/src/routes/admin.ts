@@ -283,6 +283,7 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
       const projectedSpend = dayOfMonth > 0 ? Math.round((mtdSpend / dayOfMonth) * daysInMonth) : 0;
 
       const monthlyBudget = tenant.monthlyBudget ?? MONTHLY_BUDGET_DEFAULT;
+      const overBudget = projectedSpend > monthlyBudget;
 
       tenantStats.push({
         tenantId: tenant.id,
@@ -291,6 +292,7 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
         mtdRevenue: Math.round(mtdRevenue * 100) / 100,
         projectedSpend,
         monthlyBudget,
+        overBudget,
         cpl,
         bookingRate,
         closeRate,

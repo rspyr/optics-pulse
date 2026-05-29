@@ -1516,10 +1516,24 @@ export default function Internal() {
                 const pacePercent = row.monthlyBudget > 0 ? (row.projectedSpend / row.monthlyBudget) * 100 : 0;
                 const isOverBudget = pacePercent > 110;
                 const isUnderBudget = pacePercent < 85;
+                const projectedOverBudget = row.projectedSpend > row.monthlyBudget;
 
                 return (
                   <tr key={row.tenantId} className="group hover:bg-white/[0.02] transition-colors">
-                    <td className="p-4 font-medium text-white">{row.tenantName}</td>
+                    <td className="p-4 font-medium text-white">
+                      <div className="flex items-center gap-2">
+                        <span>{row.tenantName}</span>
+                        {projectedOverBudget && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400 ring-1 ring-inset ring-red-500/30"
+                            title={`Projected spend ${formatCurrency(row.projectedSpend)} exceeds budget ${formatCurrency(row.monthlyBudget)}`}
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                            Over Budget
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="p-4 text-right text-sm text-gray-300">{formatCurrency(row.mtdSpend)}</td>
                     <td className="p-4 text-right text-sm text-gray-300">{formatCurrency(row.mtdRevenue)}</td>
                     <td className={`p-4 text-right text-sm ${getCellColor(row.cpl, "cpl")}`}>{formatCurrency(row.cpl)}</td>
