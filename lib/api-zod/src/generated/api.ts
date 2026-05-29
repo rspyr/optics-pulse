@@ -40,6 +40,12 @@ export const CreateTenantBody = zod.object({
   serviceTitanId: zod.string().optional(),
   timezone: zod.string().default(createTenantBodyTimezoneDefault),
   isDemo: zod.boolean().default(createTenantBodyIsDemoDefault),
+  monthlyBudget: zod
+    .number()
+    .nullish()
+    .describe(
+      "Client's monthly ad budget in whole dollars. Null or omitted uses the default budget for the agency overview's Budget Pace.",
+    ),
 });
 
 /**

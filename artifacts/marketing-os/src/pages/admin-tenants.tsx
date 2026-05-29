@@ -355,6 +355,13 @@ export default function AdminTenants() {
       timezone: form.timezone,
       isDemo: form.isDemo,
     };
+    // Whole dollars; blank uses the default budget (omit so the server keeps
+    // the column default). Otherwise persist the override on create.
+    const trimmedBudget = form.monthlyBudget.trim();
+    if (trimmedBudget !== "") {
+      const parsed = Math.round(Number(trimmedBudget));
+      if (Number.isFinite(parsed) && parsed >= 0) body.monthlyBudget = parsed;
+    }
     if (integrationConfig) body.integrationConfig = integrationConfig;
 
     await fetch(`${API_BASE}/api/tenants`, {
@@ -751,6 +758,15 @@ export default function AdminTenants() {
                 <SelectItem value="America/Los_Angeles">Pacific</SelectItem>
               </SelectContent>
             </Select>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={form.monthlyBudget}
+              onChange={(e) => setForm(f => ({ ...f, monthlyBudget: e.target.value }))}
+              placeholder="Monthly Budget ($, blank = default)"
+              className={inputClass}
+            />
           </div>
           <IntegrationFields />
           <div className="mt-4">

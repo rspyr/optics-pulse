@@ -24,6 +24,8 @@ export interface CreateTenantInput {
   serviceTitanId?: string;
   timezone?: string;
   isDemo?: boolean;
+  /** Client's monthly ad budget in whole dollars. Null or omitted uses the default budget for the agency overview's Budget Pace. */
+  monthlyBudget?: number | null;
 }
 
 export interface UpdateTenantInput {

@@ -122,6 +122,17 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
     timezone: body.timezone || "America/New_York",
     isDemo: req.body.isDemo === true ? true : false,
   };
+  // Optional per-client monthly ad budget (whole dollars). Omitted or null
+  // leaves the column at its default so the agency overview's Budget Pace
+  // falls back to the default budget. Reject negative or non-integer values.
+  if (body.monthlyBudget !== undefined && body.monthlyBudget !== null) {
+    const budget = body.monthlyBudget;
+    if (!Number.isInteger(budget) || budget < 0) {
+      res.status(400).json({ error: "monthlyBudget must be a non-negative whole number of dollars, or null to use the default" });
+      return;
+    }
+    insertData.monthlyBudget = budget;
+  }
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
     insertData.apiConfig = encryptConfig(req.body.integrationConfig);
   }
