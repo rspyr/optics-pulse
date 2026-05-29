@@ -121,6 +121,16 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
 export const HEARTBEAT_MIN_INTERVAL_MS = 30_000;
 
 /**
+ * Cooperative-cancel poll cadence for synchronous backfill upsert loops. The
+ * in-flight progress flush is throttled to `HEARTBEAT_MIN_INTERVAL_MS` (~30s)
+ * to keep write volume low, but a cancel only needs a single cheap read, so it
+ * polls on this much tighter cadence. This makes a cancel feel near-instant
+ * even inside an unusually large single chunk without adding per-row reads:
+ * worst case is one extra `SELECT cancel_requested` every few seconds.
+ */
+export const CANCEL_POLL_MIN_INTERVAL_MS = 3_000;
+
+/**
  * Record in-flight chunk progress for a backfill run. Writes to dedicated
  * columns instead of stuffing a `chunk N/M: …` string into `errorMessage`
  * (Task #395). `errorMessage` is cleared so any prior partial-failure text
@@ -1840,6 +1850,7 @@ export async function backfillGoogleAdsCampaigns(
         // (not just at chunk boundaries). Best-effort: a progress write must
         // never abort the backfill.
         let lastProgressFlushAt = Date.now();
+        let lastCancelCheckAt = Date.now();
         let chunkDone = 0;
         if (rows.length > 0) {
           try {
@@ -1922,12 +1933,18 @@ export async function backfillGoogleAdsCampaigns(
                 rows.length,
               );
             } catch {}
+          }
 
-            // Cooperative cancel check, piggybacked on the throttled in-flight
-            // flush so a large chunk can be stopped mid-upsert (not just at
-            // chunk boundaries) without adding extra DB reads. Throw to unwind
-            // out of the row loop; the outer catch treats `BackfillCancelled`
-            // as the expected cancel path rather than a partial failure.
+          // Cooperative cancel check on its own tight cadence
+          // (`CANCEL_POLL_MIN_INTERVAL_MS`, a few seconds), decoupled from the
+          // ~30s progress flush above. A cancel is a single cheap
+          // `SELECT cancel_requested`, so polling it far more often than we
+          // flush progress keeps a large chunk stoppable mid-upsert within a
+          // few seconds (not up to ~30s) while still adding no per-row reads.
+          // Throw to unwind out of the row loop; the outer catch treats
+          // `BackfillCancelled` as the expected cancel path, not a failure.
+          if (nowMs - lastCancelCheckAt >= CANCEL_POLL_MIN_INTERVAL_MS) {
+            lastCancelCheckAt = nowMs;
             if (await checkCancel()) {
               cancelledAt = { chunkIdx: i, rows: totalSynced };
               throw new BackfillCancelled();

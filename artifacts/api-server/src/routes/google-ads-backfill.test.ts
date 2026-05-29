@@ -552,6 +552,93 @@ describe("POST /integrations/google_ads/backfill — cooperative cancel", () => 
     expect(cancelledLog).toBeDefined();
     expect(cancelledLog!.set.recordsProcessed).toBe(0);
   });
+
+  it("stops mid-chunk within a few seconds via the dedicated cancel poll, before the ~30s progress flush would fire", async () => {
+    // A single large chunk with two rows. The in-loop cancel check now runs on
+    // its own ~3s cadence (CANCEL_POLL_MIN_INTERVAL_MS), decoupled from the
+    // ~30s progress flush (HEARTBEAT_MIN_INTERVAL_MS). We advance a mocked
+    // clock by 5s per row: that's past the 3s cancel cadence but well under the
+    // 30s flush cadence, so after row 1 the cancel poll fires and unwinds
+    // BEFORE row 2 is processed and WITHOUT a progress flush. Under the old
+    // (bundled) behaviour the cancel rode the 30s flush, so 5s of elapsed time
+    // wouldn't have triggered it and both rows would have been saved.
+    let mockNow = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => mockNow);
+
+    // db.select() order:
+    //   1. tenants
+    //   2. checkCancel @ chunk 0 boundary → not cancelled
+    //   3. row 1 campaigns lookup → insert
+    //   4. row 1 campaign_daily_stats lookup → insert
+    //   5. in-loop cancel poll after row 1 → cancelled → throw (row 2 untouched)
+    state.selectQueue.push([tenantWithGoogleAds()]);
+    state.selectQueue.push([{ cancel: false }]); // chunk 0 boundary: keep going
+    state.selectQueue.push([]); // row 1 campaigns lookup → insert
+    state.selectQueue.push([]); // row 1 campaign_daily_stats lookup → insert
+    state.selectQueue.push([{ cancel: true }]); // in-loop poll after row 1: cancel!
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+    state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+    // Each formatted row advances the clock 5s — past the 3s cancel cadence,
+    // under the 30s flush cadence.
+    gaMocks.formatCampaignRow.mockImplementation(() => {
+      mockNow += 5_000;
+      return {
+        platform: "google_ads",
+        externalId: "ga-c1",
+        name: "Campaign One",
+        status: "ENABLED",
+        date: "2026-04-01",
+        spend: "1.00",
+        impressions: 10,
+        clicks: 1,
+        conversions: 0,
+      };
+    });
+    // Chunk 0 holds two rows; chunk 1 is never fetched (we throw mid-chunk-0).
+    gaMocks.fetchCampaignPerformance.mockResolvedValueOnce([{ raw: "row-1" }, { raw: "row-2" }]);
+    gaMocks.fetchCampaignPerformance.mockResolvedValue([]);
+
+    const res = await postJson("/integrations/google_ads/backfill", { tenantId: 7, days: 31 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled).toBe(true);
+    // Only the FIRST row was saved — the cancel poll fired after row 1 and
+    // before row 2. (The old 30s-bundled behaviour would have saved both.)
+    expect(res.body.synced).toBe(1);
+
+    // Only chunk 0 was fetched — we threw before reaching the chunk-1 boundary.
+    expect(gaMocks.fetchCampaignPerformance).toHaveBeenCalledTimes(1);
+    // formatCampaignRow ran for row 1 only; row 2 was never reached.
+    expect(gaMocks.formatCampaignRow).toHaveBeenCalledTimes(1);
+
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(1);
+
+    // The cancel fired WITHOUT a mid-chunk progress flush: the only
+    // "saving results" write is the pre-loop seed (progressChunkRecords === 0).
+    // A throttled in-flight flush after row 1 would have written
+    // progressChunkRecords === 1, which must not happen at only 5s elapsed.
+    const flushedAfterRow = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs"
+        && u.set.progressPhase === "saving results"
+        && typeof u.set.progressChunkRecords === "number"
+        && (u.set.progressChunkRecords as number) >= 1,
+    );
+    expect(flushedAfterRow).toBeUndefined();
+
+    // Never finalized as 'error' and no partial-failure row was written.
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.status === "error"),
+    ).toBeUndefined();
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.partial === true),
+    ).toBeUndefined();
+  });
 });
 
 describe("POST /integrations/google_ads/backfill — partial failure mid-chunk", () => {
