@@ -77,12 +77,15 @@ const NEW_RUN = "2026-05-28T12:00:00Z";
 let syncSnapshot: Record<string, unknown>;
 let patchedRebateLabels: string[];
 let patchCalls: Array<{ url: string; body: unknown }>;
+let cancelCalls: string[];
 
 type PhaseShape = {
   lastStatus: string;
   recordsProcessed: number;
   totalRecords: number | null;
   lastRun: string | null;
+  runningLogId?: number | null;
+  cancelRequested?: boolean;
 };
 
 function snapshot(invoices: PhaseShape, estimates: PhaseShape) {
@@ -110,6 +113,17 @@ function runningSnapshot() {
   return snapshot(
     { lastStatus: "running", recordsProcessed: 50, totalRecords: 100, lastRun: OLD_RUN },
     { lastStatus: "never", recordsProcessed: 0, totalRecords: null, lastRun: OLD_RUN },
+  );
+}
+
+// Same in-flight invoices phase, but the running sync log carries an id (and
+// no cancel requested yet) — the shape the snapshot reports for a recompute
+// that's actually cancellable.
+const RUNNING_LOG_ID = 909;
+function runningWithLogIdSnapshot() {
+  return snapshot(
+    { lastStatus: "running", recordsProcessed: 50, totalRecords: 100, lastRun: OLD_RUN, runningLogId: RUNNING_LOG_ID, cancelRequested: false },
+    { lastStatus: "never", recordsProcessed: 0, totalRecords: null, lastRun: OLD_RUN, runningLogId: null, cancelRequested: false },
   );
 }
 
@@ -145,6 +159,12 @@ function makeFetchMock() {
     const method = (init?.method || "GET").toUpperCase();
     const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as Response;
 
+    // Cancel route for the running recompute phase (cooperative + force).
+    if (url.includes("/api/integrations/sync-logs/") && url.includes("/cancel")) {
+      cancelCalls.push(url);
+      const forced = url.includes("force=true");
+      return ok({ success: true, forced, message: forced ? "Run hard-cancelled." : "Cancel requested" });
+    }
     if (url.includes("/api/integrations/sync-status")) {
       return ok(syncSnapshot);
     }
@@ -231,7 +251,10 @@ beforeEach(() => {
   syncSnapshot = baselineSnapshot();
   patchedRebateLabels = ["ETO", "PGE Rebate"];
   patchCalls = [];
+  cancelCalls = [];
   vi.stubGlobal("fetch", makeFetchMock());
+  // cancelRecompute guards each request behind a window.confirm prompt.
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -412,6 +435,57 @@ describe("Settings — rebate-edit recompute progress surface", () => {
       expect(screen.getByText(/Revenue recompute complete/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/Recomputing historical revenue…/i)).not.toBeInTheDocument();
+    expect(patchCalls.length).toBe(0);
+  });
+
+  it("cancels (then force-cancels) a recompute re-surfaced on first mount", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+
+    // The user kicked off a recompute earlier and came back to it: a phase is
+    // already running on first mount, and its sync log carries a cancellable
+    // id. No save happens this session, so the surface (and its cancel control)
+    // come up purely off the observed run — recomputeArmed is never set by us.
+    syncSnapshot = runningWithLogIdSnapshot();
+
+    renderSettings();
+
+    // Open the card so the surface is visible — but do NOT dirty or save.
+    const toggle = await screen.findByRole("button", { name: /API Integrations/i });
+    await user.click(toggle);
+
+    await screen.findByText(/Recomputing historical revenue…/i);
+    await waitFor(() => {
+      expect(screen.getByText(/50 \/ ~100 \(50%\)/)).toBeInTheDocument();
+    });
+
+    // The cooperative Cancel control renders off runningLogId from the snapshot.
+    const cancelBtn = await screen.findByRole("button", { name: /^Cancel$/ });
+    await user.click(cancelBtn);
+
+    // It POSTs to the running phase's log id, without force.
+    await waitFor(() => {
+      expect(cancelCalls.some((u) => u.includes(`/sync-logs/${RUNNING_LOG_ID}/cancel`))).toBe(true);
+    });
+    expect(cancelCalls.every((u) => !u.includes("force=true"))).toBe(true);
+
+    // Optimistic "Cancelling…" state; Force cancel is still gated behind the delay.
+    await screen.findByText(/Cancelling…/i);
+    expect(screen.queryByRole("button", { name: /Force cancel/i })).not.toBeInTheDocument();
+
+    // Past FORCE_CANCEL_DELAY_MS the Force-cancel affordance appears.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8500);
+    });
+    const forceBtn = await screen.findByRole("button", { name: /Force cancel/i });
+    await user.click(forceBtn);
+
+    // The force path targets the same running phase's log id with force=true.
+    await waitFor(() => {
+      expect(cancelCalls.some((u) => u.includes(`/sync-logs/${RUNNING_LOG_ID}/cancel?force=true`))).toBe(true);
+    });
+
+    // We never performed a save in this session.
     expect(patchCalls.length).toBe(0);
   });
 
