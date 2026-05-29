@@ -5,13 +5,17 @@ import { emitCallbackDue } from "../socket";
 
 const CHECK_INTERVAL_MS = 60_000;
 
-async function checkDueCallbacks() {
+export async function checkDueCallbacks() {
   try {
     const now = new Date();
-    let offset = 0;
     const pageSize = 50;
 
     while (true) {
+      // Always re-query the first page of still-unnotified due leads. Because each
+      // lead we process is marked notified (which removes it from this result set),
+      // advancing a LIMIT/OFFSET cursor would skip the rows that shifted up into the
+      // pages we already passed. Re-reading page one until it is empty guarantees we
+      // process every due callback exactly once with no skips, regardless of batch size.
       const dueLeads = await db
         .select({
           id: leadsTable.id,
@@ -37,13 +41,13 @@ async function checkDueCallbacks() {
           )
         )
         // Unique id tiebreaker (same asc direction as callbackAt) gives a stable
-        // total order so LIMIT/OFFSET paging never skips or re-serves a lead when
-        // multiple callbacks share the same callbackAt timestamp.
+        // total order so each page reads the oldest still-due callbacks first.
         .orderBy(asc(leadsTable.callbackAt), asc(leadsTable.id))
-        .limit(pageSize)
-        .offset(offset);
+        .limit(pageSize);
 
       if (dueLeads.length === 0) break;
+
+      let claimedInPage = 0;
 
       for (const lead of dueLeads) {
         if (!lead.assignedCsrId) continue;
@@ -67,6 +71,8 @@ async function checkDueCallbacks() {
 
         if (claimed.length === 0) continue;
 
+        claimedInPage++;
+
         await enqueueSendPushToUser({
           userId: lead.assignedCsrId,
           title: "Callback Due",
@@ -87,8 +93,10 @@ async function checkDueCallbacks() {
         console.log(`[CallbackScheduler] Sent push for lead ${lead.id} to user ${lead.assignedCsrId}`);
       }
 
-      if (dueLeads.length < pageSize) break;
-      offset += pageSize;
+      // Safety guard: if nothing on this page could be claimed (e.g. every row was
+      // already notified by a concurrent sweep), re-querying would return the same
+      // rows forever. Stop instead of looping endlessly.
+      if (claimedInPage === 0) break;
     }
   } catch (err) {
     console.error("[CallbackScheduler] Error checking callbacks:", err);
