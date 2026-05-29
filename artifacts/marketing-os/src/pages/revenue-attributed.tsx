@@ -181,6 +181,11 @@ export default function RevenueAttributed() {
   const { effectiveTenantId, isAgency } = useTenantFilter();
   const { user } = useAuth();
   const isClientReadOnly = !isAgency;
+
+  // Agency/super-admin users browse across tenants, but the revenue endpoints
+  // reject cross-tenant requests (400) when no client is selected. Gate the
+  // fetches and show a friendly prompt instead of firing a doomed request.
+  const needsClientSelection = isAgency && effectiveTenantId == null;
   const [dateRange, setDateRange] = useState<DateRange>(initialRangeFromUrl);
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
@@ -212,6 +217,12 @@ export default function RevenueAttributed() {
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
+    if (needsClientSelection) {
+      setJobs([]);
+      setTotalCount(null);
+      setError(null);
+      return () => { cancelled = true; };
+    }
     setJobs(null);
     setError(null);
     const params = new URLSearchParams({
@@ -237,7 +248,7 @@ export default function RevenueAttributed() {
       })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, sortKey, sortDir]);
+  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, sortKey, sortDir, needsClientSelection]);
 
   useEffect(() => loadJobs(), [loadJobs]);
 
@@ -247,6 +258,7 @@ export default function RevenueAttributed() {
   const loadSummary = useCallback(() => {
     let cancelled = false;
     setSummary(null);
+    if (needsClientSelection) return () => { cancelled = true; };
     const params = new URLSearchParams({ startDate, endDate });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
@@ -256,13 +268,17 @@ export default function RevenueAttributed() {
       .then((data: RevenueSummary) => { if (!cancelled) setSummary(data); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, needsClientSelection]);
 
   // Filter facets (distinct funnels + sources in the range) for the dropdowns.
   // Scoped only by tenant/date — NOT by the active funnel/source filters — so the
   // user can always pivot to another value without losing options.
   useEffect(() => {
     let cancelled = false;
+    if (needsClientSelection) {
+      setFacets({ funnels: [], sources: [] });
+      return () => { cancelled = true; };
+    }
     const params = new URLSearchParams({ startDate, endDate });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed/facets?${params.toString()}`, { credentials: "include" })
@@ -273,7 +289,7 @@ export default function RevenueAttributed() {
       })
       .catch(() => { if (!cancelled) setFacets({ funnels: [], sources: [] }); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId]);
+  }, [startDate, endDate, effectiveTenantId, needsClientSelection]);
 
   // If the active filter value disappears from the facets (e.g. after switching
   // date range), fall back to "all" so the list isn't stuck showing nothing.
@@ -436,7 +452,9 @@ export default function RevenueAttributed() {
           </div>
         </div>
 
-        {error ? (
+        {needsClientSelection ? (
+          <div className="text-center text-muted-foreground py-10">Select a client to view revenue.</div>
+        ) : error ? (
           <div className="text-center text-red-400 py-10">Failed to load: {error}</div>
         ) : jobs === null ? (
           <div className="text-center text-muted-foreground py-10 flex items-center justify-center gap-2">
