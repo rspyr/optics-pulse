@@ -5,17 +5,49 @@ import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { DateRangePicker, resolvePreset, type DateRangePreset } from "@/components/date-range-picker";
 import { toast } from "@/hooks/use-toast";
 import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarSign, Target, BarChart3, Filter, RefreshCw, Clock, Zap, Diamond, Award, Plug, CheckCircle, XCircle, Loader2, ArrowUpRight, Upload } from "lucide-react";
 
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
 type SortDir = "asc" | "desc";
 
+// Format a YYYY-MM-DD date (as returned by the endpoint's dateRange) into a
+// readable "Mon D, YYYY" label without TZ drift.
+function fmtRangeLabel(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export default function Internal() {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startDate = monthStart.toISOString().split("T")[0];
-  const endDate = now.toISOString().split("T")[0];
+  // Date window for the overview. Defaults to "This Month" (the prior fixed
+  // behaviour); users can switch presets or pick a custom range. Custom ranges
+  // carry their own start/end which we feed straight to the endpoint.
+  const [rangePreset, setRangePreset] = useState<DateRangePreset>("thisMonth");
+  const [customRange, setCustomRange] = useState<{ startDate: string; endDate: string } | null>(null);
+  const { startDate, endDate } = useMemo(() => {
+    const resolved = resolvePreset(rangePreset, customRange ?? undefined);
+    // A custom preset always carries both dates (set together below), and every
+    // other preset computes both — but fall back to the trailing 30-day window
+    // so startDate/endDate are never undefined for the request or drilldowns.
+    const fallback = resolvePreset("last30");
+    return {
+      startDate: resolved.startDate ?? fallback.startDate!,
+      endDate: resolved.endDate ?? fallback.endDate!,
+    };
+  }, [rangePreset, customRange]);
+  const handleRangeChange = useCallback(
+    (preset: DateRangePreset, custom?: { startDate: string; endDate: string }) => {
+      setRangePreset(preset);
+      setCustomRange(preset === "custom" && custom ? custom : null);
+    },
+    [],
+  );
 
   // The tenant filter lives in AuthContext so the same selection scopes
   // /attribution, /admin/tenants, and any other admin surface — and survives
@@ -594,8 +626,19 @@ export default function Internal() {
         <div>
           <GradientHeading className="text-3xl md:text-4xl mb-2">Agency God View</GradientHeading>
           <p className="font-sub text-muted-foreground text-sm tracking-wide">CROSS-CLIENT COMMAND CENTER</p>
+          {data?.dateRange && (
+            <p className="font-sub text-muted-foreground/80 text-xs tracking-wide mt-1">
+              {fmtRangeLabel(data.dateRange.startDate)} – {fmtRangeLabel(data.dateRange.endDate)}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          <DateRangePicker
+            preset={rangePreset}
+            startDate={startDate}
+            endDate={endDate}
+            onChange={handleRangeChange}
+          />
           <div className="flex items-center gap-2 bg-card border border-white/10 rounded-lg px-3 py-1">
             <Users className="w-4 h-4 text-muted-foreground" />
             <Select
