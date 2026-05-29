@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express, { type Request, type Response, type NextFunction } from "express";
 import http from "http";
 
@@ -309,6 +309,53 @@ describe("GET /admin/dashboard-stats — agency averages", () => {
     expect(avg.cpl).toBe(100); // 2000 / 20
     expect(avg.roas).toBe(5); // 10000 / 2000
     expect(avg.bookingRate).toBe(50); // 10 booked / 20 leads
+  });
+});
+
+// projectedSpend extrapolates month-to-date spend to the full month:
+//   Math.round((mtdSpend / dayOfMonth) * daysInMonth)
+// This depends on "today", so we pin the system clock to make it deterministic.
+// We fake ONLY Date (not all timers) so the real http server timers keep
+// working and getJson doesn't hang.
+describe("GET /admin/dashboard-stats — projected spend", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("extrapolates mtdSpend to month-end from the day/days-in-month ratio", async () => {
+    // May 15 of a 31-day month: 1000 / 15 * 31 = 2066.67 → rounds to 2067.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 15, 12, 0, 0));
+
+    seedRichTenant();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number>>;
+    const alpha = tenants.find((t) => t.tenantId === 1)!;
+    expect(alpha.mtdSpend).toBe(1000);
+    expect(alpha.projectedSpend).toBe(2067); // round(1000 / 15 * 31)
+  });
+
+  it("projects close to mtdSpend on the last day of the month", async () => {
+    // May 31 (last day): 1000 / 31 * 31 = 1000.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 31, 12, 0, 0));
+
+    seedRichTenant();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number>>;
+    const alpha = tenants.find((t) => t.tenantId === 1)!;
+    expect(alpha.projectedSpend).toBe(1000); // round(1000 / 31 * 31)
   });
 });
 
