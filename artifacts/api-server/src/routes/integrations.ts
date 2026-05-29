@@ -4,7 +4,7 @@ import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } fro
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
 import { decryptConfig } from "../lib/encryption";
-import { parseBackfillProgress, classifyBackfillError, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
+import { parseBackfillProgress, classifyBackfillError, computeChunkPercent, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
 const router: IRouter = Router();
 
@@ -521,9 +521,19 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       if (log.progressCurrentChunk != null && log.progressTotalChunks != null) {
         const current = log.progressCurrentChunk;
         const total = log.progressTotalChunks;
-        const percent = total > 0
-          ? Math.max(0, Math.min(100, Math.round(((current - 1) / total) * 100)))
-          : null;
+        // Blend in sub-chunk row progress when the writer reports it
+        // (Google Ads: `progressChunkRecords` rows done out of
+        // `progressTotalRecords` rows in the current chunk). This advances the
+        // percent *within* a chunk instead of only at chunk boundaries. When a
+        // writer doesn't report sub-chunk progress (Meta / ServiceTitan) the
+        // fraction is 0 and the percent falls back to the chunk-ordinal
+        // estimate exactly as before.
+        const percent = computeChunkPercent(
+          current,
+          total,
+          log.progressChunkRecords,
+          log.progressTotalRecords,
+        );
         progressDetail = {
           raw: `chunk ${current}/${total}: ${log.progressWindowStart ?? ""} → ${log.progressWindowEnd ?? ""}`,
           kind: "chunk",

@@ -1,5 +1,55 @@
 import { describe, it, expect } from "vitest";
-import { parseBackfillProgress, classifyBackfillError } from "./backfill-status-format";
+import { parseBackfillProgress, classifyBackfillError, computeChunkPercent } from "./backfill-status-format";
+
+describe("computeChunkPercent", () => {
+  it("returns null when totalChunks is non-positive", () => {
+    expect(computeChunkPercent(1, 0)).toBeNull();
+    expect(computeChunkPercent(1, -1)).toBeNull();
+  });
+
+  it("falls back to the chunk-ordinal estimate when no sub-chunk progress is reported", () => {
+    // Same values the parser test asserts: (2-1)/13 → 8, (1-1)/4 → 0, (4-1)/4 → 75.
+    expect(computeChunkPercent(2, 13)).toBe(8);
+    expect(computeChunkPercent(1, 4)).toBe(0);
+    expect(computeChunkPercent(4, 4)).toBe(75);
+    // null/undefined record counts behave the same as omitting them.
+    expect(computeChunkPercent(2, 13, null, null)).toBe(8);
+    expect(computeChunkPercent(2, 13, 5, null)).toBe(8);
+    expect(computeChunkPercent(2, 13, null, 100)).toBe(8);
+  });
+
+  it("advances the percent WITHIN a chunk as chunkRecords increases", () => {
+    // Chunk 1 of 4 spans [0%, 25%]. As rows of this chunk land, percent climbs
+    // through that band instead of sitting at the 0% chunk-start value.
+    const atStart = computeChunkPercent(1, 4, 0, 200); // 0 + 0/200 of 25%
+    const quarter = computeChunkPercent(1, 4, 50, 200); // 0.25 of 25% = 6.25 → 6
+    const half = computeChunkPercent(1, 4, 100, 200); // 0.5 of 25% = 12.5 → 13
+    const almost = computeChunkPercent(1, 4, 200, 200); // full chunk = 25%
+
+    expect(atStart).toBe(0);
+    expect(quarter).toBe(6);
+    expect(half).toBe(13);
+    expect(almost).toBe(25);
+    // Strictly increasing as more rows of the chunk are processed.
+    expect(atStart).toBeLessThan(quarter!);
+    expect(quarter).toBeLessThan(half!);
+    expect(half).toBeLessThan(almost!);
+  });
+
+  it("keeps sub-chunk progress inside the current chunk's band (mid-run chunk)", () => {
+    // Chunk 3 of 4 spans [50%, 75%]. Half the chunk's rows → 50% + 0.5*25% = 62.5 → 63.
+    expect(computeChunkPercent(3, 4, 0, 80)).toBe(50);
+    expect(computeChunkPercent(3, 4, 40, 80)).toBe(63);
+    expect(computeChunkPercent(3, 4, 80, 80)).toBe(75);
+  });
+
+  it("clamps the in-chunk fraction to [0, 1] and the result to [0, 100]", () => {
+    // Defensive: chunkRecords exceeding chunkTotalRecords can't push past the
+    // chunk's upper band, and a final chunk can't exceed 100.
+    expect(computeChunkPercent(4, 4, 999, 100)).toBe(100); // last chunk, over-count → 100
+    expect(computeChunkPercent(2, 4, -10, 100)).toBe(25); // negative → fraction 0 → (2-1)/4
+  });
+});
 
 describe("parseBackfillProgress", () => {
   it("returns null for empty / null input", () => {

@@ -103,6 +103,7 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
       progressWindowStart: null,
       progressWindowEnd: null,
       progressTotalRecords: null,
+      progressChunkRecords: null,
       // Clear the in-flight phase label too so a finished row doesn't keep
       // showing "saving results" (or whatever phase it died in).
       progressPhase: null,
@@ -139,23 +140,41 @@ async function updateSyncLogChunkProgress(
   // write so the phase is correct from the first moment of the chunk without
   // an extra DB round-trip.
   phase?: string | null,
+  // Optional sub-chunk row progress. When a writer knows how many rows the
+  // current chunk holds (`chunkTotalRecords`) and how many it has upserted so
+  // far (`chunkRecords`), it passes them here so the /sync-status route can
+  // advance the percent *within* a chunk instead of only at chunk boundaries.
+  //
+  // These columns are *always* written (defaulting to null) so they reset on
+  // every chunk-start write. If we only wrote them when provided, a prior
+  // chunk's sub-chunk counters would linger into the next chunk's fetch phase
+  // (and into zero-row chunks that never reach the "saving results" seed),
+  // letting `/sync-status` blend a stale fraction and inflate — or even
+  // regress — the percent across chunk boundaries. Writers that don't report
+  // sub-chunk progress (Meta / ServiceTitan) leave both null, so the percent
+  // falls back to the chunk-ordinal estimate exactly as before.
+  chunkRecords: number | null = null,
+  chunkTotalRecords: number | null = null,
 ) {
+  const set = {
+    recordsProcessed,
+    progressCurrentChunk: currentChunk,
+    progressTotalChunks: totalChunks,
+    progressWindowStart: windowStart,
+    progressWindowEnd: windowEnd,
+    progressPhase: phase ?? null,
+    // Stamp inactivity watermark so the orphan reaper keeps this long-running
+    // backfill alive while it's making progress, and reaps it once it stops.
+    // Also surfaced as "last progress N min ago" in the Settings panel.
+    progressUpdatedAt: new Date(),
+    errorMessage: null,
+    errorCode: null,
+    partial: false,
+    progressChunkRecords: chunkRecords,
+    progressTotalRecords: chunkTotalRecords,
+  };
   await db.update(integrationSyncLogsTable)
-    .set({
-      recordsProcessed,
-      progressCurrentChunk: currentChunk,
-      progressTotalChunks: totalChunks,
-      progressWindowStart: windowStart,
-      progressWindowEnd: windowEnd,
-      progressPhase: phase ?? null,
-      // Stamp inactivity watermark so the orphan reaper keeps this long-running
-      // backfill alive while it's making progress, and reaps it once it stops.
-      // Also surfaced as "last progress N min ago" in the Settings panel.
-      progressUpdatedAt: new Date(),
-      errorMessage: null,
-      errorCode: null,
-      partial: false,
-    })
+    .set(set)
     .where(eq(integrationSyncLogsTable.id, logId));
 }
 
@@ -1781,6 +1800,34 @@ export async function backfillGoogleAdsCampaigns(
         );
 
         const rows = await fetchCampaignPerformance(gaConfig, since, until);
+
+        // Fetching is done; the rest of the chunk is the synchronous upsert
+        // loop. Advance the phase to "saving results" so the Settings panel
+        // reflects what the chunk is actually doing (the Meta/ServiceTitan
+        // paths both advance through multiple phases). One write per chunk —
+        // negligible volume. Seed the in-flight flush throttle clock here too.
+        // `chunkDone`/`rows.length` are reported as sub-chunk row progress so
+        // the /sync-status route can advance the percent within this chunk
+        // (not just at chunk boundaries). Best-effort: a progress write must
+        // never abort the backfill.
+        let lastProgressFlushAt = Date.now();
+        let chunkDone = 0;
+        if (rows.length > 0) {
+          try {
+            await updateSyncLogChunkProgress(
+              syncLog.id,
+              totalSynced,
+              i + 1,
+              chunks.length,
+              since,
+              until,
+              "saving results",
+              chunkDone,
+              rows.length,
+            );
+          } catch {}
+        }
+
         for (const row of rows) {
           const formatted = formatCampaignRow(row);
 
@@ -1821,6 +1868,32 @@ export async function backfillGoogleAdsCampaigns(
             });
           }
           totalSynced++;
+          chunkDone++;
+
+          // Flush in-flight progress so the row count / percent tick up
+          // within a chunk instead of only at chunk boundaries. The sub-chunk
+          // counts (`chunkDone`/`rows.length`) let the route render a percent
+          // that advances mid-chunk. Throttled to the same ~2/min cap as the
+          // Meta heartbeat (HEARTBEAT_MIN_INTERVAL_MS) so this adds no
+          // meaningful DB write volume even on large chunks. Best-effort:
+          // never let a progress write abort the upsert loop.
+          const nowMs = Date.now();
+          if (nowMs - lastProgressFlushAt >= HEARTBEAT_MIN_INTERVAL_MS) {
+            lastProgressFlushAt = nowMs;
+            try {
+              await updateSyncLogChunkProgress(
+                syncLog.id,
+                totalSynced,
+                i + 1,
+                chunks.length,
+                since,
+                until,
+                "saving results",
+                chunkDone,
+                rows.length,
+              );
+            } catch {}
+          }
         }
         console.log(`[Backfill] Google Ads tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${rows.length} campaign-day rows`);
       }

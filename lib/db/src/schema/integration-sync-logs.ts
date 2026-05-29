@@ -40,6 +40,15 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   // Settings panel can render a percent-complete bar by dividing
   // `records_processed` against this. Null on syncs that don't report a total.
   progressTotalRecords: integer("progress_total_records"),
+  // Rows already upserted within the CURRENT chunk of a windowed backfill.
+  // Paired with `progress_total_records` (repurposed by chunked writers to hold
+  // the current chunk's total row count) so the /sync-status route can render a
+  // percent that advances *within* a chunk, not just at chunk boundaries:
+  // percent ≈ ((currentChunk - 1 + chunkRecords/chunkTotalRecords) / totalChunks).
+  // Null on integrations that don't report sub-chunk row progress (the percent
+  // then falls back to the chunk-ordinal estimate) and cleared on terminal
+  // status.
+  progressChunkRecords: integer("progress_chunk_records"),
   errorCode: text("error_code"),
   partial: boolean("partial").notNull().default(false),
   // Cooperative cancel signal for long-running backfills. The HTTP cancel

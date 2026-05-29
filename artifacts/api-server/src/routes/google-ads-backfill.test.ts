@@ -377,6 +377,90 @@ describe("POST /integrations/google_ads/backfill — successful run", () => {
     expect(completed).toBeDefined();
     expect(completed!.set.recordsProcessed).toBe(1);
     expect(completed!.set.errorMessage).toBeNull();
+
+    // Once fetching completes and the upsert loop begins, the phase advances
+    // to "saving results" and the writer publishes sub-chunk row progress
+    // (progressChunkRecords out of progressTotalRecords = rows in this chunk)
+    // so the /sync-status route can move the percent WITHIN the chunk, not
+    // just at chunk boundaries.
+    const savingWrite = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.progressPhase === "saving results",
+    );
+    expect(savingWrite).toBeDefined();
+    expect(savingWrite!.set.progressTotalRecords).toBe(1); // chunk 1 held 1 row
+    expect(savingWrite!.set.progressChunkRecords).toBe(0); // seeded before the loop
+
+    // Every chunk-start ("fetching campaigns") write must RESET the sub-chunk
+    // counters to null. Here chunk 2 has zero rows and never reaches the
+    // "saving results" seed, so without this reset chunk 1's sub-chunk values
+    // would leak forward and the /sync-status route would blend a stale
+    // fraction into chunk 2's percent. Both counters must be null on each
+    // chunk-start write.
+    const fetchingWrites = state.updateCalls.filter(
+      (u) => u.table === "integration_sync_logs" && u.set.progressPhase === "fetching campaigns",
+    );
+    expect(fetchingWrites.length).toBe(res.body.chunks as number);
+    for (const w of fetchingWrites) {
+      expect(w.set.progressChunkRecords).toBeNull();
+      expect(w.set.progressTotalRecords).toBeNull();
+    }
+
+    // The completion write clears the in-flight sub-chunk column so a finished
+    // row doesn't keep reporting stale progress.
+    expect(completed!.set.progressChunkRecords).toBeNull();
+  });
+
+  it("resets sub-chunk counters at each chunk boundary so a prior chunk's row progress can't leak into the next chunk", async () => {
+    // Two data-bearing chunks. After chunk 1 publishes sub-chunk progress
+    // (progressChunkRecords/progressTotalRecords), chunk 2's chunk-start write
+    // must reset both to null so /sync-status falls back to chunk 2's baseline
+    // percent instead of blending chunk 1's stale fraction.
+    state.selectQueue.push([tenantWithGoogleAds()]);
+    state.selectQueue.push([]); // chunk 1: campaigns lookup → insert
+    state.selectQueue.push([]); // chunk 1: campaign_daily_stats lookup → insert
+    state.selectQueue.push([]); // chunk 2: campaigns lookup → insert
+    state.selectQueue.push([]); // chunk 2: campaign_daily_stats lookup → insert
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+    state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+    gaMocks.formatCampaignRow.mockImplementation(() => ({
+      platform: "google_ads",
+      externalId: "ga-c1",
+      name: "Campaign One",
+      status: "ENABLED",
+      date: "2026-04-01",
+      spend: "1.00",
+      impressions: 10,
+      clicks: 1,
+      conversions: 0,
+    }));
+    // 31-day window → 2 chunks; both return one row.
+    gaMocks.fetchCampaignPerformance.mockResolvedValueOnce([{ raw: "row-c1" }]);
+    gaMocks.fetchCampaignPerformance.mockResolvedValueOnce([{ raw: "row-c2" }]);
+    gaMocks.fetchCampaignPerformance.mockResolvedValue([]);
+
+    const res = await postJson("/integrations/google_ads/backfill", { tenantId: 7, days: 31 });
+    expect(res.status).toBe(200);
+    expect(res.body.chunks as number).toBeGreaterThanOrEqual(2);
+
+    const islWrites = state.updateCalls.filter((u) => u.table === "integration_sync_logs");
+    // Every chunk-start write resets the sub-chunk counters regardless of what
+    // the previous chunk published.
+    const fetchingWrites = islWrites.filter((u) => u.set.progressPhase === "fetching campaigns");
+    expect(fetchingWrites.length).toBe(res.body.chunks as number);
+    for (const w of fetchingWrites) {
+      expect(w.set.progressChunkRecords).toBeNull();
+      expect(w.set.progressTotalRecords).toBeNull();
+    }
+
+    // Sanity: each data-bearing chunk still seeds its own "saving results"
+    // sub-chunk progress (chunkDone 0 of the chunk's row count).
+    const savingWrites = islWrites.filter((u) => u.set.progressPhase === "saving results");
+    expect(savingWrites.length).toBeGreaterThanOrEqual(2);
+    for (const w of savingWrites) {
+      expect(w.set.progressTotalRecords).toBe(1);
+    }
   });
 });
 

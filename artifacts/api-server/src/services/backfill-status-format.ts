@@ -71,6 +71,36 @@ export interface BackfillErrorDetail {
   partial: boolean;
 }
 
+/**
+ * Compute the 0-100 percent for a chunked backfill, blending in sub-chunk row
+ * progress when the writer reports it.
+ *
+ * The baseline estimate is purely the chunk ordinal: `(currentChunk - 1) /
+ * totalChunks`, which only advances at chunk boundaries. When a writer also
+ * reports how many rows of the *current* chunk have been upserted so far
+ * (`chunkRecords` out of `chunkTotalRecords` — the Google Ads backfill does
+ * this), we add the in-chunk fraction so the percent advances *within* a chunk:
+ *
+ *   percent = ((currentChunk - 1 + chunkRecords / chunkTotalRecords) / totalChunks) * 100
+ *
+ * Writers that don't report sub-chunk progress (Meta / ServiceTitan) pass
+ * null/undefined record counts, leaving the fraction at 0 so the percent falls
+ * back to the chunk-ordinal estimate exactly as before. The result is clamped
+ * to [0, 100] and rounded to an integer. Returns null when `totalChunks <= 0`.
+ */
+export function computeChunkPercent(
+  currentChunk: number,
+  totalChunks: number,
+  chunkRecords?: number | null,
+  chunkTotalRecords?: number | null,
+): number | null {
+  if (!(totalChunks > 0)) return null;
+  const chunkFraction = chunkTotalRecords != null && chunkTotalRecords > 0 && chunkRecords != null
+    ? Math.max(0, Math.min(1, chunkRecords / chunkTotalRecords))
+    : 0;
+  return Math.max(0, Math.min(100, Math.round(((currentChunk - 1 + chunkFraction) / totalChunks) * 100)));
+}
+
 const CHUNK_PROGRESS_RE = /^\s*chunk\s+(\d+)\s*\/\s*(\d+)\s*:\s*(\d{4}-\d{2}-\d{2})\s*(?:→|->|—)\s*(\d{4}-\d{2}-\d{2})\s*$/i;
 
 /**
