@@ -103,8 +103,38 @@ export async function checkDueCallbacks() {
   }
 }
 
+// Re-entrancy guard. The scheduler fires on a fixed interval, but a sweep can
+// take longer than that interval (lots of due callbacks, slow DB). Without a
+// guard, each tick would start another overlapping sweep, piling up redundant
+// DB work and connections. We let at most one sweep run at a time: a tick that
+// fires while a sweep is still in progress is dropped (the next tick will pick
+// up whatever remains). This guard lives at the scheduling layer, not inside
+// `checkDueCallbacks`, so direct/concurrent callers (e.g. tests) are unaffected
+// and the conditional-claim correctness guarantee still holds.
+let sweepInProgress = false;
+
+export async function runGuardedSweep(
+  sweep: () => Promise<void> = checkDueCallbacks,
+): Promise<boolean> {
+  if (sweepInProgress) {
+    console.log("[CallbackScheduler] Previous sweep still running; skipping this tick");
+    return false;
+  }
+  sweepInProgress = true;
+  try {
+    await sweep();
+  } finally {
+    sweepInProgress = false;
+  }
+  return true;
+}
+
 export function startCallbackScheduler() {
   console.log("[CallbackScheduler] Starting callback notification scheduler");
-  setInterval(checkDueCallbacks, CHECK_INTERVAL_MS);
-  setTimeout(checkDueCallbacks, 5000);
+  setInterval(() => {
+    void runGuardedSweep();
+  }, CHECK_INTERVAL_MS);
+  setTimeout(() => {
+    void runGuardedSweep();
+  }, 5000);
 }
