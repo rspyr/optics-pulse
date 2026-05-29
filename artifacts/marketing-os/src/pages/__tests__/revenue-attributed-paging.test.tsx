@@ -10,6 +10,10 @@
 //      multiple of the page size) must NOT strand the user: the Previous
 //      control stays visible and usable so they can go back.
 //   3. Clicking Previous from that empty page returns to the prior full page.
+//   4. (Task #714) When the server reports the true total via the X-Total-Count
+//      header, the UI shows an accurate "X of N jobs · Page A of B" indicator and
+//      disables Next on the true last page even when that page is exactly full —
+//      the header-driven path the "infer from a full page" fallback can't cover.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -106,6 +110,38 @@ function installFetch() {
   });
 }
 
+// Like installFetch, but the list endpoint reports the real total via the
+// X-Total-Count header and serves page-specific rows. `total` jobs are split
+// into PAGE_SIZE-sized pages keyed off the offset query param.
+function installFetchWithTotal(total: number) {
+  vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/api/drilldown/revenue-attributed/summary")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ revenue: 0, rebates: 0, attributed: 0, count: 0 }),
+      } as Response;
+    }
+    if (url.includes("/api/drilldown/revenue-attributed")) {
+      listCallUrls.push(url);
+      const offset = Number(new URL(url, "http://x").searchParams.get("offset") ?? "0");
+      const count = Math.max(0, Math.min(PAGE_SIZE, total - offset));
+      const body = Array.from({ length: count }, (_, i) => makeJob(offset + i + 1));
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === "x-total-count" ? String(total) : null,
+        },
+        json: async () => body,
+      } as unknown as Response;
+    }
+    return { ok: true, status: 200, json: async () => ({}) } as Response;
+  });
+}
+
 function setUser() {
   useTenantFilterMock.mockReturnValue(
     makeTenantFilterStub({
@@ -187,5 +223,36 @@ describe("Revenue Attributed — offset paging (Task #679)", () => {
     await screen.findByText("Customer 1");
     const offsetZeroCalls = listCallUrls.filter((u) => u.includes("offset=0"));
     expect(offsetZeroCalls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("Revenue Attributed — header-driven page totals (Task #714)", () => {
+  it("shows an accurate 'X of N' count and disables Next on a full true last page", async () => {
+    // Exactly two full pages (400 = 2 × PAGE_SIZE). The last page is full, so the
+    // "infer from a full page" fallback would wrongly leave Next enabled; the
+    // X-Total-Count header is what lets the UI know page 2 is really the end.
+    setUser();
+    installFetchWithTotal(2 * PAGE_SIZE);
+    const user = userEvent.setup();
+    render(<RevenueAttributed />);
+
+    // Page 1: real total known → accurate count and Next enabled.
+    await screen.findByText("Customer 1");
+    expect(
+      screen.getByText("Showing 1–200 of 400 jobs · Page 1 of 2"),
+    ).toBeInTheDocument();
+    const next = screen.getByRole("button", { name: /next/i });
+    expect(next).toBeEnabled();
+
+    // Advance to page 2 — the true last page, which is also exactly full.
+    await user.click(next);
+    await screen.findByText("Customer 201");
+
+    // Accurate count on the last page, and Next disabled despite a full page.
+    expect(
+      screen.getByText("Showing 201–400 of 400 jobs · Page 2 of 2"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /previous/i })).toBeEnabled();
   });
 });
