@@ -15,6 +15,7 @@ export const tenantsTable = pgTable("tenants", {
   revenueConfig: jsonb("revenue_config"),
   spiffConfig: jsonb("spiff_config"),
   oldLeadThreshold: integer("old_lead_threshold"),
+  monthlyBudget: integer("monthly_budget"),
   isActive: boolean("is_active").notNull().default(true),
   isDemo: boolean("is_demo").notNull().default(false),
   stSyncPaused: boolean("st_sync_paused").notNull().default(true),

@@ -140,8 +140,8 @@ function getJson(
 function seed() {
   mockDb.selectResults = [
     [
-      { id: 1, name: "Alpha" },
-      { id: 2, name: "Beta" },
+      { id: 1, name: "Alpha", monthlyBudget: 5000 },
+      { id: 2, name: "Beta", monthlyBudget: null },
     ],
     [{ tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 }],
     [{ tenantId: 1, mtdRevenue: 1000 }],
@@ -173,11 +173,13 @@ describe("GET /dashboard/cross-tenant-overview", () => {
     expect(alpha.cpl).toBe(20); // 200 / 10
     expect(alpha.bookingRate).toBe(40); // 4 / 10 * 100
     expect(alpha.roas).toBe(5); // 1000 / 200
+    expect(alpha.monthlyBudget).toBe(5000); // real per-tenant budget
 
     const beta = tenants.find((t) => t.tenantId === 2)!;
     expect(beta.totalLeads).toBe(0);
     expect(beta.mtdSpend).toBe(0);
     expect(beta.roas).toBe(0);
+    expect(beta.monthlyBudget).toBe(15000); // null budget falls back to default
 
     const avg = json.agencyAverages as Record<string, number>;
     expect(avg.totalSpend).toBe(200);

@@ -433,7 +433,7 @@ router.get("/dashboard/cross-tenant-overview", requireRole("super_admin", "agenc
   const startBound = new Date(startDate);
   const endBound = new Date(endDate + "T23:59:59.999Z");
 
-  const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+  const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name, monthlyBudget: tenantsTable.monthlyBudget })
     .from(tenantsTable).where(eq(tenantsTable.isActive, true));
 
   const tenantIds = tenants.map(t => t.id);
@@ -518,7 +518,7 @@ router.get("/dashboard/cross-tenant-overview", requireRole("super_admin", "agenc
       mtdSpend: Math.round(mtdSpend * 100) / 100,
       mtdRevenue: Math.round(mtdRevenue * 100) / 100,
       projectedSpend,
-      monthlyBudget: MONTHLY_BUDGET_DEFAULT,
+      monthlyBudget: tenant.monthlyBudget ?? MONTHLY_BUDGET_DEFAULT,
       cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
       bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
       closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
