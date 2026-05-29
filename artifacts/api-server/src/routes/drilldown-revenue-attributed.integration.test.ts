@@ -378,6 +378,212 @@ describe("GET /drilldown/revenue-attributed/summary — filtered totals (real Po
   });
 });
 
+// ---------------------------------------------------------------------------
+// Paging (limit/offset) against real Postgres.
+//
+// The filtering/sorting tests above always pull with `limit=all`, so the
+// route's limit/offset paging path — and the X-Total-Count header staying
+// constant across pages — is only ever exercised with the db mocked. A
+// SQL-level paging regression (an ORDER BY that isn't stable under
+// LIMIT/OFFSET, or an offset applied to the wrong query) would slip past them.
+//
+// This block seeds its own tenant with enough completed jobs to span multiple
+// pages under a fixed sort, with *distinct* corrected revenues so the default
+// `revenue desc` ORDER BY is fully deterministic. It then walks the pages and
+// asserts they are disjoint, correctly-ordered slices of the full list and
+// that X-Total-Count reflects the full *filtered* total on every page.
+// ---------------------------------------------------------------------------
+interface PageFx {
+  tenantId: number;
+  leadIds: number[];
+  jobIds: number[];
+  // Completed, in-range jobs ordered by corrected revenue DESC (5000→1000).
+  // P1-P3 are Google, P4-P5 are Meta, so a source filter narrows the total.
+  orderedDesc: number[]; // [P1, P2, P3, P4, P5]
+  googleDesc: number[]; // [P1, P2, P3]
+}
+
+let pageFx: PageFx;
+
+beforeAll(async () => {
+  const slug = `rev-attr-page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const [tenant] = await db
+    .insert(tenantsTable)
+    .values({ name: `Revenue Attr Paging ${slug}`, clientSlug: slug })
+    .returning();
+
+  const mkLead = async (source: string) => {
+    const [lead] = await db
+      .insert(leadsTable)
+      .values({
+        tenantId: tenant.id,
+        firstName: "Page",
+        lastName: slug,
+        source,
+        originalSource: source,
+        leadType: "PagingFunnel",
+      })
+      .returning();
+    return lead;
+  };
+
+  const mkJob = async (opts: {
+    leadId: number;
+    corrected: number;
+    status: "completed" | "pending";
+    invoiceDate: Date;
+  }) => {
+    const [job] = await db
+      .insert(jobsTable)
+      .values({
+        tenantId: tenant.id,
+        leadId: opts.leadId,
+        jobType: "hvac",
+        jobTypeName: "HVAC",
+        status: opts.status,
+        // invoiceRebateAmount 0 → corrected revenue == invoiceTotal, so each
+        // job has the exact distinct corrected revenue we control here.
+        revenue: opts.corrected,
+        invoiceTotal: opts.corrected,
+        invoiceRebateAmount: 0,
+        matchLevel: "gclid",
+        invoiceDate: opts.invoiceDate,
+      })
+      .returning();
+    return job;
+  };
+
+  // Five completed, in-range jobs with distinct corrected revenues. Sources
+  // are split (3 Google / 2 Meta) so a source filter changes the total.
+  const specs: { source: string; corrected: number }[] = [
+    { source: SOURCE_GOOGLE, corrected: 5000 },
+    { source: SOURCE_GOOGLE, corrected: 4000 },
+    { source: SOURCE_GOOGLE, corrected: 3000 },
+    { source: SOURCE_META, corrected: 2000 },
+    { source: SOURCE_META, corrected: 1000 },
+  ];
+
+  const leadIds: number[] = [];
+  const orderedDesc: number[] = [];
+  const googleDesc: number[] = [];
+  for (const spec of specs) {
+    const lead = await mkLead(spec.source);
+    leadIds.push(lead.id);
+    const job = await mkJob({
+      leadId: lead.id,
+      corrected: spec.corrected,
+      status: "completed",
+      invoiceDate: IN_RANGE,
+    });
+    orderedDesc.push(job.id);
+    if (spec.source === SOURCE_GOOGLE) googleDesc.push(job.id);
+  }
+
+  // Noise the total must never include: a pending (non-completed) job and a
+  // completed-but-out-of-range job. Both would inflate X-Total-Count if the
+  // count query dropped the status/date predicates.
+  const noiseLeadPending = await mkLead("NoiseSource");
+  const noiseLeadOut = await mkLead("NoiseSource");
+  const jobPending = await mkJob({ leadId: noiseLeadPending.id, corrected: 9999, status: "pending", invoiceDate: IN_RANGE });
+  const jobOut = await mkJob({ leadId: noiseLeadOut.id, corrected: 8888, status: "completed", invoiceDate: OUT_OF_RANGE });
+
+  pageFx = {
+    tenantId: tenant.id,
+    leadIds: [...leadIds, noiseLeadPending.id, noiseLeadOut.id],
+    jobIds: [...orderedDesc, jobPending.id, jobOut.id],
+    orderedDesc,
+    googleDesc,
+  };
+});
+
+afterAll(async () => {
+  if (!pageFx) return;
+  try {
+    await db.delete(jobsTable).where(inArray(jobsTable.id, pageFx.jobIds));
+    await db.delete(leadsTable).where(inArray(leadsTable.id, pageFx.leadIds));
+    await db.delete(tenantsTable).where(eq(tenantsTable.id, pageFx.tenantId));
+  } catch {
+    /* best-effort cleanup */
+  }
+});
+
+describe("GET /drilldown/revenue-attributed — limit/offset paging (real Postgres)", () => {
+  const pageRange = () =>
+    `tenantId=${pageFx.tenantId}&startDate=${START_DATE}&endDate=${END_DATE}`;
+
+  it("returns the full ordered list when unpaged (revenue desc, distinct values)", async () => {
+    const res = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&limit=all&sort=revenue&dir=desc`);
+    expect(res.status).toBe(200);
+    const ids = (res.json as ListRow[]).map((r) => r.id);
+    expect(ids).toEqual(pageFx.orderedDesc);
+    // Total reflects only the 5 completed in-range jobs (noise excluded).
+    expect(res.headers["x-total-count"]).toBe("5");
+  });
+
+  it("returns disjoint, correctly-ordered pages that reassemble the full list", async () => {
+    const page1 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&limit=2&offset=0`);
+    const page2 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&limit=2&offset=2`);
+    const page3 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&limit=2&offset=4`);
+
+    expect(page1.status).toBe(200);
+    expect(page2.status).toBe(200);
+    expect(page3.status).toBe(200);
+
+    const ids1 = (page1.json as ListRow[]).map((r) => r.id);
+    const ids2 = (page2.json as ListRow[]).map((r) => r.id);
+    const ids3 = (page3.json as ListRow[]).map((r) => r.id);
+
+    // Each page is the expected slice of the fixed revenue-desc ordering.
+    expect(ids1).toEqual(pageFx.orderedDesc.slice(0, 2));
+    expect(ids2).toEqual(pageFx.orderedDesc.slice(2, 4));
+    expect(ids3).toEqual(pageFx.orderedDesc.slice(4, 6));
+
+    // Pages are disjoint and reassemble the full ordered list in order — this
+    // is what fails if OFFSET is applied to the wrong query or the ORDER BY
+    // isn't stable under LIMIT/OFFSET.
+    const reassembled = [...ids1, ...ids2, ...ids3];
+    expect(reassembled).toEqual(pageFx.orderedDesc);
+    expect(new Set(reassembled).size).toBe(reassembled.length);
+
+    // X-Total-Count is the full filtered total on every page, not the page size.
+    expect(page1.headers["x-total-count"]).toBe("5");
+    expect(page2.headers["x-total-count"]).toBe("5");
+    expect(page3.headers["x-total-count"]).toBe("5");
+  });
+
+  it("pages an ascending sort the same way (mirror of the desc walk)", async () => {
+    const orderedAsc = [...pageFx.orderedDesc].reverse();
+    const page1 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=asc&limit=2&offset=0`);
+    const page2 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=asc&limit=2&offset=2`);
+
+    expect(page1.status).toBe(200);
+    expect(page2.status).toBe(200);
+    expect((page1.json as ListRow[]).map((r) => r.id)).toEqual(orderedAsc.slice(0, 2));
+    expect((page2.json as ListRow[]).map((r) => r.id)).toEqual(orderedAsc.slice(2, 4));
+  });
+
+  it("keeps X-Total-Count at the FILTERED total across pages of a filtered list", async () => {
+    // Google → 3 jobs (P1-P3). Paging one at a time must report total=3 on
+    // every page, proving the count query carries the same source filter.
+    const page1 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&source=${encodeURIComponent(SOURCE_GOOGLE)}&limit=1&offset=0`);
+    const page2 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&source=${encodeURIComponent(SOURCE_GOOGLE)}&limit=1&offset=1`);
+    const page3 = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&source=${encodeURIComponent(SOURCE_GOOGLE)}&limit=1&offset=2`);
+
+    expect((page1.json as ListRow[]).map((r) => r.id)).toEqual([pageFx.googleDesc[0]]);
+    expect((page2.json as ListRow[]).map((r) => r.id)).toEqual([pageFx.googleDesc[1]]);
+    expect((page3.json as ListRow[]).map((r) => r.id)).toEqual([pageFx.googleDesc[2]]);
+
+    expect(page1.headers["x-total-count"]).toBe("3");
+    expect(page2.headers["x-total-count"]).toBe("3");
+    expect(page3.headers["x-total-count"]).toBe("3");
+
+    // A page past the end is empty but still reports the filtered total.
+    const past = await getJson(app, `/drilldown/revenue-attributed?${pageRange()}&sort=revenue&dir=desc&source=${encodeURIComponent(SOURCE_GOOGLE)}&limit=1&offset=3`);
+    expect((past.json as ListRow[])).toEqual([]);
+    expect(past.headers["x-total-count"]).toBe("3");
+  });
+});
+
 describe("GET /drilldown/revenue-attributed/facets — distinct sorted values (real Postgres)", () => {
   it("returns the distinct funnels + sources across completed in-range jobs, sorted, excluding pending/out-of-range noise", async () => {
     const res = await getJson(app, `/drilldown/revenue-attributed/facets?${range()}`);
