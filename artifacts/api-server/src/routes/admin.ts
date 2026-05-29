@@ -331,7 +331,7 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
   }
 });
 
-async function computeTenantMetrics(tenantId: number, startDate?: string, endDate?: string) {
+export async function computeTenantMetrics(tenantId: number, startDate?: string, endDate?: string) {
   const leadConditions = [eq(leadsTable.tenantId, tenantId)];
   const jobConditions = [eq(jobsTable.tenantId, tenantId)];
 
