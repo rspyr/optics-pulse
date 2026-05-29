@@ -99,6 +99,10 @@ vi.mock("@workspace/db", () => ({
     jobId: "sold_estimates.jobId",
     rebateAmount: "sold_estimates.rebateAmount",
   },
+  funnelTypesTable: {
+    id: "funnel_types.id",
+    name: "funnel_types.name",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -108,8 +112,10 @@ vi.mock("drizzle-orm", () => ({
   gte: vi.fn((...a: unknown[]) => ["gte", ...a]),
   lte: vi.fn((...a: unknown[]) => ["lte", ...a]),
   desc: vi.fn((...a: unknown[]) => ["desc", ...a]),
+  asc: vi.fn((...a: unknown[]) => ["asc", ...a]),
   inArray: vi.fn((...a: unknown[]) => ["inArray", ...a]),
   ilike: vi.fn((col: unknown, term: unknown) => ["ilike", col, term]),
+  getTableColumns: vi.fn(() => ({})),
   sql: Object.assign(
     vi.fn((...a: unknown[]) => ["sql", ...a]),
     {},

@@ -88,6 +88,7 @@ vi.mock("@workspace/db", () => {
     usersTable: tablecol("users"),
     leadSourceAliasesTable: tablecol("lead_source_aliases"),
     callrailWebhookStatusTable: tablecol("callrail_webhook_status"),
+    funnelTypesTable: tablecol("funnel_types"),
   };
 });
 
@@ -104,6 +105,8 @@ vi.mock("drizzle-orm", () => ({
   isNotNull: vi.fn((a: unknown) => asAble({ __op: "isNotNull", a })),
   isNull: vi.fn((a: unknown) => asAble({ __op: "isNull", a })),
   count: vi.fn((a: unknown) => asAble({ __op: "count", a })),
+  asc: vi.fn((a: unknown) => asAble({ __op: "asc", a })),
+  getTableColumns: vi.fn(() => ({})),
   sql: Object.assign(
     vi.fn((..._a: unknown[]) => asAble({ __op: "sql" })),
     { join: vi.fn((...a: unknown[]) => asAble({ __op: "sql.join", a })) },
