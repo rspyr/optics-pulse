@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, boolean, timestamp, pgEnum, jsonb, date } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, boolean, timestamp, pgEnum, jsonb, date, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -78,7 +78,13 @@ export const leadsTable = pgTable("leads", {
   bookedAt: timestamp("booked_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  // Backs the keyset-paged list endpoint (`/leads`), whose stable ordering is
+  // `ORDER BY created_at DESC, id DESC`. The composite index matches that sort
+  // order exactly so the database can satisfy both the seek predicate and the
+  // ORDER BY from the index alone (no extra sort/scan) as the table grows.
+  createdAtIdIdx: index("leads_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
+}));
 
 export const insertLeadSchema = createInsertSchema(leadsTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertLead = z.infer<typeof insertLeadSchema>;

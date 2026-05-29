@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -40,7 +40,13 @@ export const jobsTable = pgTable("jobs", {
   capiUploadedAt: timestamp("capi_uploaded_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  // Backs the keyset-paged list endpoint (`/jobs`), whose stable ordering is
+  // `ORDER BY created_at DESC, id DESC`. The composite index matches that sort
+  // order exactly so the database can satisfy both the seek predicate and the
+  // ORDER BY from the index alone (no extra sort/scan) as the table grows.
+  createdAtIdIdx: index("jobs_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
+}));
 
 export const insertJobSchema = createInsertSchema(jobsTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertJob = z.infer<typeof insertJobSchema>;

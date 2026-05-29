@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -57,6 +57,11 @@ export const attributionEventsTable = pgTable("attribution_events", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   tenantExternalIdUnique: uniqueIndex("attribution_events_tenant_external_id_unique").on(table.tenantId, table.externalId),
+  // Backs the keyset-paged list endpoint (`/attribution/events`), whose stable
+  // ordering is `ORDER BY created_at DESC, id DESC`. The composite index matches
+  // that sort order exactly so the database can satisfy both the seek predicate
+  // and the ORDER BY from the index alone (no extra sort/scan) as the table grows.
+  createdAtIdIdx: index("attribution_events_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
 }));
 
 export const insertAttributionEventSchema = createInsertSchema(attributionEventsTable).omit({ id: true, createdAt: true });
