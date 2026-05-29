@@ -67,7 +67,7 @@ async function startServer() {
     // "Cancelling…" because there's no worker to flip cancel_requested.
     try {
       const { reapOrphanedSyncLogs } = await import("./services/orphan-sync-reaper");
-      const reaped = await reapOrphanedSyncLogs(15);
+      const reaped = await reapOrphanedSyncLogs();
       if (reaped > 0) console.log(`[startup] Reaped ${reaped} orphaned sync_log row(s)`);
     } catch (err) {
       console.error("[startup] Orphan sync reaper failed:", err);

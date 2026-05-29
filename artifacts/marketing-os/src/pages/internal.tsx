@@ -177,6 +177,12 @@ export default function Internal() {
   // advanced for a while, so it's likely silently dead (waiting on the orphan
   // reaper). We surface it in amber so operators can tell it apart from a
   // backfill that's actively churning through chunks.
+  //
+  // This is the LEADING early-warning indicator: it's deliberately shorter than
+  // the orphan reaper's inactivity threshold (`DEFAULT_INACTIVITY_STALE_MINUTES`,
+  // 15 min in the API server) so operators see "stalled" amber before the
+  // reaper actually recovers the run. Both are derived from the same
+  // `progress_updated_at` inactivity signal, keeping the UI and reaper aligned.
   const STALLED_PROGRESS_MS = 3 * 60_000;
 
   // Render a running sync's last-progress timestamp as a short relative

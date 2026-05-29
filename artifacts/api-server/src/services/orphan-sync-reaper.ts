@@ -13,6 +13,31 @@ import { db, integrationSyncLogsTable } from "@workspace/db";
 const lastActivityExpr = sql`COALESCE(${integrationSyncLogsTable.progressUpdatedAt}, ${integrationSyncLogsTable.startedAt})`;
 
 /**
+ * Default inactivity window (minutes) before a `status='running'` row is
+ * considered dead. Single source of truth for BOTH reaper entry points (the
+ * startup reaper in `src/index.ts` and the periodic scheduler sweep in
+ * `sync-scheduler.ts`) so they stay aligned.
+ *
+ * Sized off the longest gap a *healthy* backfill can go between progress
+ * stamps: progress is stamped at the start of each 30-day Meta chunk, and a
+ * single chunk's async insights report is bounded by a ~5-min poll timeout
+ * (`fetchAdDailyInsightsAsync`). 15 min leaves a comfortable ~2.5x margin so a
+ * legitimately slow chunk is never reaped, while a silently-dead run is
+ * recovered within roughly one periodic sweep instead of waiting hours.
+ *
+ * Because staleness now keys off INACTIVITY (not absolute `started_at` age), a
+ * long-but-healthy backfill is protected by its own progress stamps regardless
+ * of this value — so the old multi-hour buffer is no longer needed. The
+ * `ORPHAN_REAPER_STALE_MINUTES` env var can still raise it if an operator sees
+ * false reaps on unusually slow chunks.
+ *
+ * The UI's "Stalled" badge (`STALLED_PROGRESS_MS` in `internal.tsx`, 3 min)
+ * is the leading early-warning that precedes this recovery threshold: both are
+ * derived from the same `progress_updated_at` inactivity signal.
+ */
+export const DEFAULT_INACTIVITY_STALE_MINUTES = 15;
+
+/**
  * Mark any `status='running'` sync log rows older than the threshold as
  * orphaned — the worker that owned them is gone (deploy, crash, OOM, a
  * silently-dead backfill loop). Without this, the row sits at "running"
@@ -31,7 +56,7 @@ const lastActivityExpr = sql`COALESCE(${integrationSyncLogsTable.progressUpdated
  * long-running backfills are never killed.
  */
 export async function reapOrphanedSyncLogs(
-  staleMinutes = 15,
+  staleMinutes = DEFAULT_INACTIVITY_STALE_MINUTES,
   reason = "server restart",
 ): Promise<number> {
   const cutoff = new Date(Date.now() - staleMinutes * 60_000);

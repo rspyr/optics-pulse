@@ -9,6 +9,7 @@ import { syncPodiumReviews } from "./integrations/podium";
 import { runReconciliation } from "./reconciliation";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
+import { DEFAULT_INACTIVITY_STALE_MINUTES } from "./orphan-sync-reaper";
 import crypto from "crypto";
 
 function hashStJobId(stJobId: string): string {
@@ -2507,14 +2508,16 @@ export function startSyncScheduler() {
   // sync_log stuck at status='running' until the next restart. This sweep
   // recovers those orphans while the server is still alive.
   //
-  // The threshold is deliberately FAR more conservative than the 15-min
-  // startup reaper: at startup the previous process is definitely dead, but
-  // here the process is live and a legitimate backfill may still be churning.
-  // We only reap rows whose started_at is older than this long threshold so a
-  // genuinely in-flight backfill is never killed. Both interval and threshold
-  // are env-overridable.
+  // Staleness keys off INACTIVITY (`COALESCE(progress_updated_at, started_at)`),
+  // not absolute `started_at` age, so a long-but-healthy backfill is protected
+  // by its own progress stamps and the old multi-hour buffer is unnecessary.
+  // The periodic sweep therefore uses the SAME inactivity default as the
+  // startup reaper (`DEFAULT_INACTIVITY_STALE_MINUTES`), recovering a silently
+  // dead run within roughly one sweep instead of hours. Both interval and
+  // threshold stay env-overridable so an operator who sees false reaps on
+  // unusually slow chunks can raise the window.
   const orphanReaperIntervalMs = Number(process.env.ORPHAN_REAPER_INTERVAL_MS || String(30 * 60 * 1000));
-  const orphanReaperStaleMinutes = Number(process.env.ORPHAN_REAPER_STALE_MINUTES || "360");
+  const orphanReaperStaleMinutes = Number(process.env.ORPHAN_REAPER_STALE_MINUTES || String(DEFAULT_INACTIVITY_STALE_MINUTES));
   const orphanReaperTimer = setInterval(async () => {
     try {
       const { reapOrphanedSyncLogs } = await import("./orphan-sync-reaper");
