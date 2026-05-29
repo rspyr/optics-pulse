@@ -330,11 +330,28 @@ export default function Settings() {
     if (!confirm(prompt)) return;
     setCancellingLogIds((s) => ({ ...s, [logId]: true }));
     if (!force) setCancelStartedAt((s) => (s[logId] ? s : { ...s, [logId]: Date.now() }));
+    // Roll back the optimistic "Cancelling…" state so a failed cancel doesn't
+    // leave the surface stuck pretending a cancel is in flight when it isn't.
+    const revertOptimisticCancel = () => {
+      setCancellingLogIds((s) => {
+        if (!(logId in s)) return s;
+        const next = { ...s };
+        delete next[logId];
+        return next;
+      });
+      setCancelStartedAt((s) => {
+        if (!(logId in s)) return s;
+        const next = { ...s };
+        delete next[logId];
+        return next;
+      });
+    };
     try {
       const url = `${API_BASE}/api/integrations/sync-logs/${logId}/cancel${force ? "?force=true" : ""}`;
       const res = await fetch(url, { method: "POST", credentials: "include" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
+        revertOptimisticCancel();
         toast({ title: "Cancel failed", description: body?.error || `HTTP ${res.status}`, variant: "destructive" });
       } else {
         toast({
@@ -343,6 +360,7 @@ export default function Settings() {
         });
       }
     } catch (err) {
+      revertOptimisticCancel();
       toast({ title: "Cancel failed", description: (err as Error).message, variant: "destructive" });
     } finally {
       fetchRecomputeStatus();

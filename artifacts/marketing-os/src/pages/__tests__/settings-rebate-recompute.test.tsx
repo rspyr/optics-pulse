@@ -62,6 +62,17 @@ vi.mock("@workspace/api-client-react", async () => {
   return mockApiClientReactModule();
 });
 
+// settings.tsx calls the standalone `toast` export directly (no Toaster is
+// mounted in these tests), so we capture every toast() call to assert the
+// destructive "Cancel failed" feedback fires on the cancel failure branches.
+const toastMock = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/use-toast", async () => {
+  const { mockUseToastModule } = await import("@/test-utils/use-toast-mocks");
+  return mockUseToastModule({
+    toast: toastMock as unknown as typeof import("@/hooks/use-toast").toast,
+  });
+});
+
 // ─── Sync-status + tenant fetch driver ────────────────────────────────────────
 //
 // settings.tsx fetches a handful of endpoints on mount (tenant config, comm
@@ -78,6 +89,9 @@ let syncSnapshot: Record<string, unknown>;
 let patchedRebateLabels: string[];
 let patchCalls: Array<{ url: string; body: unknown }>;
 let cancelCalls: string[];
+// How the cancel route should respond — lets a test force the failure paths
+// cancelRecompute defends: a non-OK HTTP response, or a thrown/rejected fetch.
+let cancelResult: "ok" | "error" | "reject";
 
 type PhaseShape = {
   lastStatus: string;
@@ -162,6 +176,12 @@ function makeFetchMock() {
     // Cancel route for the running recompute phase (cooperative + force).
     if (url.includes("/api/integrations/sync-logs/") && url.includes("/cancel")) {
       cancelCalls.push(url);
+      if (cancelResult === "reject") {
+        throw new Error("Network request failed");
+      }
+      if (cancelResult === "error") {
+        return { ok: false, status: 500, json: async () => ({ error: "Worker did not respond" }) } as Response;
+      }
       const forced = url.includes("force=true");
       return ok({ success: true, forced, message: forced ? "Run hard-cancelled." : "Cancel requested" });
     }
@@ -252,6 +272,8 @@ beforeEach(() => {
   patchedRebateLabels = ["ETO", "PGE Rebate"];
   patchCalls = [];
   cancelCalls = [];
+  cancelResult = "ok";
+  toastMock.mockClear();
   vi.stubGlobal("fetch", makeFetchMock());
   // cancelRecompute guards each request behind a window.confirm prompt.
   vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -487,6 +509,109 @@ describe("Settings — rebate-edit recompute progress surface", () => {
 
     // We never performed a save in this session.
     expect(patchCalls.length).toBe(0);
+  });
+
+  it("raises a destructive 'Cancel failed' toast when the cancel POST returns non-OK", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+
+    // A recompute is already running on first mount with a cancellable log id.
+    syncSnapshot = runningWithLogIdSnapshot();
+    // The cancel route answers with a non-OK response carrying an error body.
+    cancelResult = "error";
+
+    renderSettings();
+
+    const toggle = await screen.findByRole("button", { name: /API Integrations/i });
+    await user.click(toggle);
+
+    await screen.findByText(/Recomputing historical revenue…/i);
+    await waitFor(() => {
+      expect(screen.getByText(/50 \/ ~100 \(50%\)/)).toBeInTheDocument();
+    });
+
+    const cancelBtn = await screen.findByRole("button", { name: /^Cancel$/ });
+    await user.click(cancelBtn);
+
+    // It still POSTed to the running phase's log id (cooperative, no force).
+    await waitFor(() => {
+      expect(cancelCalls.some((u) => u.includes(`/sync-logs/${RUNNING_LOG_ID}/cancel`))).toBe(true);
+    });
+
+    // The failure surfaces a destructive toast that names the server error.
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancel failed",
+          description: "Worker did not respond",
+          variant: "destructive",
+        }),
+      );
+    });
+
+    // The optimistic "Cancelling…" state is rolled back: the surface drops back
+    // to the plain Cancel button rather than getting stuck pretending a cancel
+    // is in flight.
+    await waitFor(() => {
+      expect(screen.queryByText(/Cancelling…/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeInTheDocument();
+
+    // The recompute keeps running — a failed cancel must not resolve the
+    // surface to a terminal success/failure outcome.
+    expect(screen.getByText(/Recomputing historical revenue…/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Revenue recompute complete/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Revenue recompute failed/i)).not.toBeInTheDocument();
+  });
+
+  it("raises a destructive 'Cancel failed' toast when the cancel POST rejects", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+
+    syncSnapshot = runningWithLogIdSnapshot();
+    // The cancel route throws (network error) rather than resolving.
+    cancelResult = "reject";
+
+    renderSettings();
+
+    const toggle = await screen.findByRole("button", { name: /API Integrations/i });
+    await user.click(toggle);
+
+    await screen.findByText(/Recomputing historical revenue…/i);
+    await waitFor(() => {
+      expect(screen.getByText(/50 \/ ~100 \(50%\)/)).toBeInTheDocument();
+    });
+
+    const cancelBtn = await screen.findByRole("button", { name: /^Cancel$/ });
+    await user.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(cancelCalls.some((u) => u.includes(`/sync-logs/${RUNNING_LOG_ID}/cancel`))).toBe(true);
+    });
+
+    // The thrown rejection is caught and surfaced as the same destructive toast,
+    // this time carrying the thrown error's message.
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cancel failed",
+          description: "Network request failed",
+          variant: "destructive",
+        }),
+      );
+    });
+
+    // The optimistic "Cancelling…" state is rolled back here too: back to the
+    // plain Cancel button, not stuck mid-cancel.
+    await waitFor(() => {
+      expect(screen.queryByText(/Cancelling…/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeInTheDocument();
+
+    // The recompute is still in flight, not resolved to a terminal outcome.
+    expect(screen.getByText(/Recomputing historical revenue…/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Revenue recompute complete/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Revenue recompute failed/i)).not.toBeInTheDocument();
   });
 
   it("clears via the grace window when no recompute ever starts (no-op edit)", async () => {
