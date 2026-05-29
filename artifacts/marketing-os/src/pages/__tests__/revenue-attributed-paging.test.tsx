@@ -82,11 +82,25 @@ let listCallUrls: string[] = [];
 function installFetch() {
   vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    // Full-range summary endpoint shares the list prefix, so match it first and
+    // keep it out of listCallUrls (which only tracks the paged list requests).
+    if (url.includes("/api/drilldown/revenue-attributed/summary")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ revenue: 0, rebates: 0, attributed: 0, count: 0 }),
+      } as Response;
+    }
     if (url.includes("/api/drilldown/revenue-attributed")) {
       listCallUrls.push(url);
       const offset = Number(new URL(url, "http://x").searchParams.get("offset") ?? "0");
       const body = offset >= PAGE_SIZE ? [] : fullPage;
-      return { ok: true, status: 200, json: async () => body } as Response;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => body,
+      } as unknown as Response;
     }
     return { ok: true, status: 200, json: async () => ({}) } as Response;
   });

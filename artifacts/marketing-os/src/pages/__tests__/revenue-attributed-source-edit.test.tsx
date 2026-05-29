@@ -123,7 +123,12 @@ function installFetch(handlers: FetchHandlers = {}) {
 
       // Jobs list (page load)
       if (url.includes("/api/drilldown/revenue-attributed")) {
-        return { ok: true, status: 200, json: async () => [job] } as Response;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => [job],
+        } as unknown as Response;
       }
 
       // Canonical source list (loaded when the editor opens)

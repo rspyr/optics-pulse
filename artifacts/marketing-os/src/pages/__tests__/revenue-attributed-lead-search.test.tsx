@@ -121,8 +121,9 @@ function installFetch(handlers: FetchHandlers = {}) {
         return {
           ok: true,
           status: 200,
+          headers: { get: () => null },
           json: async () => [makeJob()],
-        } as Response;
+        } as unknown as Response;
       }
 
       // Lead typeahead search
@@ -299,7 +300,7 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/api/drilldown/revenue-attributed")) {
-          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+          return { ok: true, status: 200, headers: { get: () => null }, json: async () => [makeJob()] } as unknown as Response;
         }
         if (url.includes("/api/drilldown/leads/search")) {
           searchCall += 1;
@@ -355,7 +356,7 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/api/drilldown/revenue-attributed")) {
-          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+          return { ok: true, status: 200, headers: { get: () => null }, json: async () => [makeJob()] } as unknown as Response;
         }
         if (url.includes("/api/drilldown/leads/search")) {
           searchCall += 1;
@@ -401,7 +402,7 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/api/drilldown/revenue-attributed")) {
-          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+          return { ok: true, status: 200, headers: { get: () => null }, json: async () => [makeJob()] } as unknown as Response;
         }
         if (url.includes("/api/drilldown/leads/search")) {
           searchCallUrls.push(url);
@@ -451,7 +452,7 @@ describe("Revenue Attributed — lead-matching typeahead (Task #673)", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/api/drilldown/revenue-attributed")) {
-          return { ok: true, status: 200, json: async () => [makeJob()] } as Response;
+          return { ok: true, status: 200, headers: { get: () => null }, json: async () => [makeJob()] } as unknown as Response;
         }
         if (url.includes("/api/drilldown/leads/search")) {
           searchCall += 1;
