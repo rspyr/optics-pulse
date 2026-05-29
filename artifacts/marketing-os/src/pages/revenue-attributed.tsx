@@ -56,6 +56,11 @@ function getDateRange(range: DateRange): { startDate: string; endDate: string; l
 
 type RebateItem = { label: string; amount: number };
 
+// Sort keys the list supports — must match the server's sortExprByKey in
+// drilldown.ts so the order is applied across the whole (paged) result set.
+type SortKey = "revenue" | "date" | "customer" | "funnel" | "source";
+type SortDir = "asc" | "desc";
+
 type RevenueSummary = {
   revenue: number;
   rebates: number;
@@ -71,6 +76,7 @@ type LeadSummary = {
   originalSource: string | null;
   status: string | null;
   hubStatus: string | null;
+  funnel?: string | null;
 };
 
 type LeadSearchResult = {
@@ -90,6 +96,9 @@ export type RevenueJob = {
   stJobId: string | null;
   stInvoiceId: string | null;
   customerName: string | null;
+  customerPhone?: string | null;
+  customerEmail?: string | null;
+  serviceAddress?: string | null;
   jobType: string;
   jobTypeName: string | null;
   status: string;
@@ -102,10 +111,25 @@ export type RevenueJob = {
   createdAt: string;
   matchLevel: string | null;
   matchedGclid: string | null;
+  funnel?: string | null;
+  source?: string | null;
   rebateBreakdown: RebateItem[];
   soldByName: string | null;
   lead: LeadSummary | null;
 };
+
+// Resolve the display name for a job's customer. ServiceTitan invoices often
+// omit the customer name even when the job is matched, so fall back to the
+// matched lead's name (Task #727) before showing a dash.
+function leadFullName(lead: LeadSummary | null | undefined): string {
+  if (!lead) return "";
+  return [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
+}
+
+export function resolveCustomerName(job: RevenueJob): string {
+  if (job.customerName && job.customerName.trim()) return job.customerName.trim();
+  return leadFullName(job.lead);
+}
 
 function csvCell(value: string): string {
   if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
@@ -116,7 +140,7 @@ function csvCell(value: string): string {
 // "Rebate Amount", "Corrected Revenue", and "Match Tier" columns by name and
 // reconcile their totals against the summary cards (Task #703).
 export const REVENUE_ATTRIBUTED_CSV_HEADER = [
-  "Date", "Customer", "Job Type", "ST Job", "Match Tier",
+  "Date", "Customer", "Funnel", "Job Type", "ST Job", "Match Tier",
   "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
 ] as const;
 
@@ -131,13 +155,14 @@ export function buildRevenueAttributedCsv(exportJobs: RevenueJob[]): string {
     const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "";
     return [
       dateStr,
-      job.customerName || "",
+      resolveCustomerName(job),
+      job.funnel || "",
       job.jobTypeName || job.jobType || "",
       job.stJobId || `#${job.id}`,
       job.matchLevel || "unmatched",
       String(job.invoiceRebateAmount ?? 0),
       String(job.correctedRevenue),
-      job.lead?.source || "",
+      job.lead?.source || job.source || "",
       job.soldByName || "",
     ];
   });
@@ -167,11 +192,23 @@ export default function RevenueAttributed() {
   const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(0);
 
-  // Reset to the first page whenever the date range or tenant filter changes,
-  // so a user on page 3 of one range doesn't land on an out-of-bounds page.
+  // Filters on the originating lead's funnel/source. "all" = no filter. Options
+  // come from the facets endpoint (every value in the range), so the dropdowns
+  // stay complete even though the list itself is paged.
+  const [funnelFilter, setFunnelFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [facets, setFacets] = useState<{ funnels: string[]; sources: string[] }>({ funnels: [], sources: [] });
+
+  // Sort state for the list. Mirrors the server's sort keys; default matches the
+  // historical "biggest corrected invoice first".
+  const [sortKey, setSortKey] = useState<SortKey>("revenue");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  // Reset to the first page whenever the date range, tenant, active filters, or
+  // sort change, so a user on page 3 doesn't land on an out-of-bounds page.
   useEffect(() => {
     setPage(0);
-  }, [startDate, endDate, effectiveTenantId]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, sortKey, sortDir]);
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
@@ -182,8 +219,12 @@ export default function RevenueAttributed() {
       endDate,
       limit: String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
+      sort: sortKey,
+      dir: sortDir,
     });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+    if (funnelFilter !== "all") params.set("funnel", funnelFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
     fetch(`${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`, { credentials: "include" })
       .then((r) => {
         if (!r.ok) return Promise.reject(new Error(`HTTP ${r.status}`));
@@ -196,7 +237,7 @@ export default function RevenueAttributed() {
       })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, page]);
+  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, sortKey, sortDir]);
 
   useEffect(() => loadJobs(), [loadJobs]);
 
@@ -208,12 +249,51 @@ export default function RevenueAttributed() {
     setSummary(null);
     const params = new URLSearchParams({ startDate, endDate });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+    if (funnelFilter !== "all") params.set("funnel", funnelFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
     fetch(`${API_BASE}/api/drilldown/revenue-attributed/summary?${params.toString()}`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: RevenueSummary) => { if (!cancelled) setSummary(data); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter]);
+
+  // Filter facets (distinct funnels + sources in the range) for the dropdowns.
+  // Scoped only by tenant/date — NOT by the active funnel/source filters — so the
+  // user can always pivot to another value without losing options.
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ startDate, endDate });
+    if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+    fetch(`${API_BASE}/api/drilldown/revenue-attributed/facets?${params.toString()}`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: { funnels?: string[]; sources?: string[] }) => {
+        if (cancelled) return;
+        setFacets({ funnels: data.funnels ?? [], sources: data.sources ?? [] });
+      })
+      .catch(() => { if (!cancelled) setFacets({ funnels: [], sources: [] }); });
+    return () => { cancelled = true; };
   }, [startDate, endDate, effectiveTenantId]);
+
+  // If the active filter value disappears from the facets (e.g. after switching
+  // date range), fall back to "all" so the list isn't stuck showing nothing.
+  useEffect(() => {
+    if (funnelFilter !== "all" && !facets.funnels.includes(funnelFilter)) setFunnelFilter("all");
+    if (sourceFilter !== "all" && !facets.sources.includes(sourceFilter)) setSourceFilter("all");
+  }, [facets, funnelFilter, sourceFilter]);
+
+  // Toggle sort: clicking the active column flips direction; a new column starts
+  // descending (largest/Z-A first), matching the default revenue view.
+  const toggleSort = useCallback((key: SortKey) => {
+    setSortKey((prevKey) => {
+      if (prevKey === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setSortDir("desc");
+      return key;
+    });
+  }, []);
 
   useEffect(() => loadSummary(), [loadSummary]);
 
@@ -241,8 +321,10 @@ export default function RevenueAttributed() {
     try {
       // Fetch the full result set for the selected range directly, so the CSV
       // always includes every attributed job regardless of any UI paging/limit.
-      const params = new URLSearchParams({ startDate, endDate, limit: "all" });
+      const params = new URLSearchParams({ startDate, endDate, limit: "all", sort: sortKey, dir: sortDir });
       if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+      if (funnelFilter !== "all") params.set("funnel", funnelFilter);
+      if (sourceFilter !== "all") params.set("source", sourceFilter);
       const res = await fetch(
         `${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`,
         { credentials: "include" },
@@ -312,12 +394,46 @@ export default function RevenueAttributed() {
       </div>
 
       <PremiumCard className="p-0 overflow-hidden">
-        <div className="p-5 border-b border-white/5">
-          <h3 className="font-display text-lg text-white">Revenue by Job</h3>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Completed ServiceTitan jobs, biggest corrected invoice first. Expand a row for the rebate breakdown and originating lead.
-            {isClientReadOnly && " View only."}
-          </p>
+        <div className="p-5 border-b border-white/5 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h3 className="font-display text-lg text-white">Revenue by Job</h3>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              Completed ServiceTitan jobs. Expand a row for the rebate breakdown, originating lead, and how it was matched.
+              {isClientReadOnly && " View only."}
+            </p>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Funnel</span>
+              <Select value={funnelFilter} onValueChange={setFunnelFilter}>
+                <SelectTrigger className="h-9 w-44"><SelectValue placeholder="All funnels" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All funnels</SelectItem>
+                  {facets.funnels.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Source</span>
+              <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                <SelectTrigger className="h-9 w-44"><SelectValue placeholder="All sources" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sources</SelectItem>
+                  {facets.sources.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {(funnelFilter !== "all" || sourceFilter !== "all") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 self-end text-muted-foreground hover:text-white"
+                onClick={() => { setFunnelFilter("all"); setSourceFilter("all"); }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
         </div>
 
         {error ? (
@@ -327,20 +443,24 @@ export default function RevenueAttributed() {
             <Loader2 className="w-4 h-4 animate-spin" /> Loading jobs…
           </div>
         ) : jobs.length === 0 ? (
-          <div className="text-center text-muted-foreground py-10">No completed jobs in this range.</div>
+          <div className="text-center text-muted-foreground py-10">
+            No completed jobs{funnelFilter !== "all" || sourceFilter !== "all" ? " match these filters" : " in this range"}.
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-white/5">
                   <th className="p-4 w-8" />
-                  <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Date</th>
-                  <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Customer</th>
+                  <SortableTh label="Date" sortKey="date" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Customer" sortKey="customer" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Funnel" sortKey="funnel" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                  <SortableTh label="Source" sortKey="source" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Job Type</th>
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ST Job</th>
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Match</th>
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Rebates</th>
-                  <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Revenue</th>
+                  <SortableTh label="Revenue" sortKey="revenue" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -358,7 +478,9 @@ export default function RevenueAttributed() {
                           {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                         </td>
                         <td className="p-4 text-sm text-muted-foreground whitespace-nowrap">{dateStr}</td>
-                        <td className="p-4 text-sm text-white">{job.customerName || "—"}</td>
+                        <td className="p-4 text-sm text-white">{resolveCustomerName(job) || "—"}</td>
+                        <td className="p-4 text-sm text-muted-foreground">{job.funnel || "—"}</td>
+                        <td className="p-4 text-sm text-muted-foreground">{job.source || job.lead?.source || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{job.jobTypeName || job.jobType || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground font-mono">{job.stJobId || `#${job.id}`}</td>
                         <td className="p-4 text-sm">
@@ -375,7 +497,7 @@ export default function RevenueAttributed() {
                       </tr>
                       {isExpanded && (
                         <tr key={`${job.id}-detail`} className="bg-white/[0.015]">
-                          <td colSpan={8} className="p-5">
+                          <td colSpan={10} className="p-5">
                             <JobDetail
                               job={job}
                               isClientReadOnly={isClientReadOnly}
@@ -440,6 +562,133 @@ function SummaryCard({ label, value, icon }: { label: string; value: string; ico
   );
 }
 
+// Clickable column header that drives server-side sorting. Shows an arrow on the
+// active column indicating direction; clicking the active column flips it.
+function SortableTh({
+  label, sortKey, activeKey, dir, onSort, align = "left",
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <th className={`p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider ${align === "right" ? "text-right" : ""}`}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex items-center gap-1 uppercase tracking-wider hover:text-white transition-colors ${active ? "text-white" : ""}`}
+        aria-label={`Sort by ${label}`}
+      >
+        {label}
+        <span className={`text-[10px] ${active ? "opacity-100" : "opacity-30"}`}>
+          {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+// Maps a stored match level to a plain-language explanation of HOW the job was
+// matched to a marketing touchpoint, plus which ServiceTitan field bridged it.
+const MATCH_EXPLANATIONS: Record<string, { title: string; detail: string }> = {
+  diamond: { title: "Matched by Google Click ID (GCLID)", detail: "Highest confidence — the click that drove this job was tracked end-to-end." },
+  golden: { title: "Matched by phone number", detail: "The customer's phone on the invoice matched a tracked lead's phone." },
+  silver: { title: "Matched by email address", detail: "The customer's email on the invoice matched a tracked lead's email." },
+  bronze: { title: "Matched by service address", detail: "The service address on the invoice matched a tracked lead's address." },
+  manual: { title: "Manually matched", detail: "An operator linked this job to the lead by hand." },
+  unmatched: { title: "Not matched", detail: "No marketing touchpoint could be linked to this job yet." },
+};
+
+// Legacy/alternate match-level values map onto the canonical tiers so the
+// explanation text stays accurate for older rows (e.g. "gclid" === diamond).
+const MATCH_LEVEL_ALIASES: Record<string, string> = {
+  gclid: "diamond",
+  phone: "golden",
+  email: "silver",
+  address: "bronze",
+};
+
+// "How this was matched" panel: spells out the match method in plain language
+// and shows, side by side, what came from ServiceTitan (the invoice) vs. what
+// came from Optics/Pulse (the tracked lead/attribution) so the link is auditable.
+function MatchExplanation({ job }: { job: RevenueJob }) {
+  const rawLevel = job.matchLevel ?? "unmatched";
+  const level = MATCH_LEVEL_ALIASES[rawLevel] ?? rawLevel;
+  const explanation = MATCH_EXPLANATIONS[level] ?? MATCH_EXPLANATIONS.unmatched;
+  const lead = job.lead;
+  const leadName = lead ? [lead.firstName, lead.lastName].filter(Boolean).join(" ") || `Lead #${lead.id}` : null;
+
+  const stRows: [string, string | null | undefined][] = [
+    ["Customer name", job.customerName],
+    ["Phone", job.customerPhone],
+    ["Email", job.customerEmail],
+    ["Service address", job.serviceAddress],
+    ["ST job", job.stJobId],
+    ["Invoice", job.stInvoiceId],
+  ];
+  const opticsRows: [string, string | null | undefined][] = [
+    ["Matched lead", leadName],
+    ["Lead source", job.source ?? lead?.source],
+    ["Funnel", job.funnel],
+    ["Matched GCLID", job.matchedGclid],
+  ];
+
+  return (
+    <div className="rounded-lg border border-white/5 bg-white/[0.015] p-4">
+      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
+        <Link2 className="w-3.5 h-3.5" /> How This Was Matched
+      </h4>
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`text-xs px-2 py-0.5 rounded-full border capitalize ${job.matchLevel ? "border-ice/30 text-ice/90" : "border-white/10 text-muted-foreground/60"}`}>
+          {level}
+        </span>
+        <span className="text-sm text-white">{explanation.title}</span>
+      </div>
+      <p className="text-xs text-muted-foreground/80 mb-4">{explanation.detail}</p>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-2">From ServiceTitan (invoice)</div>
+          <div className="space-y-1.5">
+            {stRows.map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">{k}</span>
+                <span className="text-white/90 text-right break-all">{v && String(v).trim() ? v : "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-2">From Optics / Pulse (tracked lead)</div>
+          {lead || job.matchedGclid ? (
+            <div className="space-y-1.5">
+              {opticsRows.map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-3">
+                  <span className="text-muted-foreground shrink-0">{k}</span>
+                  <span className="text-white/90 text-right break-all">{v && String(v).trim() ? v : "—"}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground/60 text-xs">
+              No tracked lead is linked, so there's nothing from Optics/Pulse to compare against yet.
+            </p>
+          )}
+        </div>
+      </div>
+      {!job.customerName?.trim() && leadName && (
+        <p className="text-[11px] text-muted-foreground/60 mt-3">
+          ServiceTitan didn't include a customer name on this invoice, so the Customer column shows the matched lead's name ({leadName}).
+        </p>
+      )}
+    </div>
+  );
+}
+
 function JobDetail({
   job, isClientReadOnly, currentUserRole, onChanged,
 }: {
@@ -453,7 +702,8 @@ function JobDetail({
   const reportedTotal = job.invoiceTotal ?? job.revenue;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Revenue + rebate breakdown */}
       <div>
         <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
@@ -523,6 +773,9 @@ function JobDetail({
           <AgencyControls job={job} currentUserRole={currentUserRole} onChanged={onChanged} />
         )}
       </div>
+      </div>
+
+      <MatchExplanation job={job} />
     </div>
   );
 }

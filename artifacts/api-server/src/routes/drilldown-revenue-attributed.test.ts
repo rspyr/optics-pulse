@@ -121,6 +121,7 @@ vi.mock("@workspace/db", () => {
     leadsTable: tablecol("leads"),
     jobsTable: tablecol("jobs"),
     soldEstimatesTable: tablecol("sold_estimates"),
+    funnelTypesTable: tablecol("funnel_types"),
   };
 });
 
@@ -133,6 +134,7 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...a: unknown[]) => asAble({ __op: "and", a })),
   or: vi.fn((...a: unknown[]) => asAble({ __op: "or", a })),
   desc: vi.fn((...a: unknown[]) => asAble({ __op: "desc", a })),
+  asc: vi.fn((...a: unknown[]) => asAble({ __op: "asc", a })),
   sql: Object.assign(
     vi.fn((..._a: unknown[]) => asAble({ __op: "sql" })),
     { join: vi.fn((...a: unknown[]) => asAble({ __op: "sql.join", a })) },
@@ -140,6 +142,7 @@ vi.mock("drizzle-orm", () => ({
   inArray: vi.fn((...a: unknown[]) => asAble({ __op: "inArray", a })),
   gte: vi.fn((...a: unknown[]) => asAble({ __op: "gte", a })),
   lte: vi.fn((...a: unknown[]) => asAble({ __op: "lte", a })),
+  getTableColumns: vi.fn(() => ({})),
   SQL: class {},
 }));
 

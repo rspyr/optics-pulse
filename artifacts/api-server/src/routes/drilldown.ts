@@ -1,12 +1,18 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, jobsTable, soldEstimatesTable, type RebateBreakdownItem } from "@workspace/db";
-import { eq, and, gte, lte, desc, SQL, inArray, sql, or, ilike } from "drizzle-orm";
+import { db, leadsTable, jobsTable, soldEstimatesTable, funnelTypesTable, type RebateBreakdownItem } from "@workspace/db";
+import { eq, and, gte, lte, asc, desc, SQL, inArray, sql, or, ilike, getTableColumns } from "drizzle-orm";
 import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
 // Matches the date expression used by /api/dashboard/spend-revenue so the
 // drilldown returns the same jobs that the chart's revenue bar aggregated.
 const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
 const jobRevenueExpr = sql<number>`COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue})`;
+// Canonical funnel name for a job's originating lead: prefer the joined
+// funnel_types.name (authoritative), falling back to the denormalised
+// leads.lead_type the ingestion pipeline stamps. Used for the Funnel column,
+// funnel filtering, and funnel sorting on the Revenue Attributed list. Depends
+// on leadsTable + funnelTypesTable being left-joined into the query.
+const funnelNameExpr = sql<string | null>`COALESCE(${funnelTypesTable.name}, ${leadsTable.leadType})`;
 
 // Revenue columns (subtotal, rebateAmount, invoiceTotal, invoiceRebateAmount)
 // are stored as floating-point `real`, so summing them in JS can produce
@@ -114,6 +120,27 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const rawOffset = req.query.offset ? Number(req.query.offset) : 0;
   const offset = !noLimit && Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
+  // Optional filters on the originating lead. Funnel matches the canonical
+  // funnel name (funnelNameExpr); source matches leads.source exactly. Both are
+  // applied identically to the list, count, and summary so the cards/CSV always
+  // reconcile with the visible rows under any active filter.
+  const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
+  const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+
+  // Sort key + direction. Defaults to corrected-revenue desc (the historical
+  // behaviour) so existing callers are unaffected.
+  const sortExprByKey: Record<string, SQL> = {
+    revenue: jobRevenueExpr,
+    date: sql`${jobDateExpr}`,
+    customer: sql`${jobsTable.customerName}`,
+    funnel: sql`${funnelNameExpr}`,
+    source: sql`${leadsTable.source}`,
+  };
+  const sortKey = typeof req.query.sort === "string" && req.query.sort in sortExprByKey ? req.query.sort : "revenue";
+  const sortDir = req.query.dir === "asc" ? "asc" : "desc";
+  const sortExpr = sortExprByKey[sortKey];
+  const orderBy = sortDir === "asc" ? asc(sortExpr) : desc(sortExpr);
+
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
 
@@ -122,22 +149,41 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   conditions.push(eq(jobsTable.status, "completed"));
   if (startDate) conditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
   if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
+  if (funnel) conditions.push(sql`${funnelNameExpr} = ${funnel}`);
+  if (source) conditions.push(eq(leadsTable.source, source));
 
   const where = and(...conditions);
-  const baseQuery = db.select().from(jobsTable).where(where).orderBy(desc(jobRevenueExpr));
-  const jobs =
+  // Left-join the originating lead (+ its funnel type) so funnel/source filters
+  // and sorting can reference them. Select the full job row plus the resolved
+  // funnel name; lead detail is fetched in a second pass (below) to keep the
+  // enrichment shape stable.
+  const baseQuery = db
+    .select({ ...getTableColumns(jobsTable), funnelName: funnelNameExpr })
+    .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
+    .where(where)
+    .orderBy(orderBy);
+  const rows =
     limit == null
       ? await baseQuery
       : offset > 0
         ? await baseQuery.limit(limit).offset(offset)
         : await baseQuery.limit(limit);
+  // Rows are flat job columns + the resolved funnelName; keep the funnel name
+  // keyed by job id so it can be hoisted into the response below.
+  const jobs = rows;
+  const funnelByJobId = new Map(rows.map((r) => [r.id, r.funnelName]));
 
   // Total matching completed jobs for the range, independent of paging. Exposed
   // as a response header so both the paged UI (to show "X of N" + a real page
-  // count) and the CSV export keep receiving a plain JSON array body.
+  // count) and the CSV export keep receiving a plain JSON array body. Must carry
+  // the same joins/filters as the data query so the count tracks the filters.
   const [{ total }] = await db
     .select({ total: sql<number>`count(*)::int` })
     .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
     .where(where);
   res.setHeader("X-Total-Count", String(total));
   res.setHeader("Access-Control-Expose-Headers", "X-Total-Count");
@@ -182,12 +228,18 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
         ? job.invoiceTotal + (job.invoiceRebateAmount ?? 0)
         : job.revenue,
     );
+    const funnelName = funnelByJobId.get(job.id) ?? null;
     return {
       id: job.id,
       tenantId: job.tenantId,
       stJobId: job.stJobId,
       stInvoiceId: job.stInvoiceId,
       customerName: job.customerName,
+      // ServiceTitan contact fields surfaced for the match-explanation panel so
+      // the UI can show exactly what came from the invoice vs. Optics/Pulse.
+      customerPhone: job.customerPhone,
+      customerEmail: job.customerEmail,
+      serviceAddress: job.serviceAddress,
       jobType: job.jobType,
       jobTypeName: job.jobTypeName,
       status: job.status,
@@ -200,6 +252,10 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       createdAt: job.createdAt,
       matchLevel: job.matchLevel,
       matchedGclid: job.matchedGclid,
+      // Resolved funnel name + lead source, hoisted to the top level so the list
+      // can render/sort the Funnel and Source columns without digging into lead.
+      funnel: funnelName,
+      source: lead?.source ?? null,
       rebateBreakdown,
       soldByName: est?.soldByName ?? lead?.assignedTo ?? null,
       lead: lead
@@ -211,6 +267,7 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
             originalSource: lead.originalSource,
             status: lead.status,
             hubStatus: lead.hubStatus,
+            funnel: funnelName,
           }
         : null,
     };
@@ -227,6 +284,52 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
+  // Same lead-side filters as the list so the cards reconcile with the visible
+  // rows + CSV under any active funnel/source filter.
+  const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
+  const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
+  const conditions: SQL[] = [];
+  if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
+  conditions.push(eq(jobsTable.status, "completed"));
+  if (startDate) conditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
+  if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
+  if (funnel) conditions.push(sql`${funnelNameExpr} = ${funnel}`);
+  if (source) conditions.push(eq(leadsTable.source, source));
+
+  const where = and(...conditions);
+
+  const [agg] = await db
+    .select({
+      revenue: sql<number>`COALESCE(SUM(${jobRevenueExpr}), 0)`,
+      rebates: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceRebateAmount}, 0)), 0)`,
+      attributed: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.matchLevel} IS NOT NULL THEN ${jobRevenueExpr} ELSE 0 END), 0)`,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
+    .where(where);
+
+  res.json({
+    revenue: round2(Number(agg?.revenue ?? 0)),
+    rebates: round2(Number(agg?.rebates ?? 0)),
+    attributed: round2(Number(agg?.attributed ?? 0)),
+    count: Number(agg?.count ?? 0),
+  });
+});
+
+// Revenue Attributed filter facets: the distinct funnels + sources present in
+// the completed jobs for a tenant/date range. Deliberately NOT scoped by the
+// funnel/source filters themselves so the dropdowns always offer every option
+// in the range (letting the user pivot between filters without losing choices).
+router.get("/drilldown/revenue-attributed/facets", async (req, res) => {
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -239,22 +342,21 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
 
   const where = and(...conditions);
 
-  const [agg] = await db
-    .select({
-      revenue: sql<number>`COALESCE(SUM(${jobRevenueExpr}), 0)`,
-      rebates: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceRebateAmount}, 0)), 0)`,
-      attributed: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.matchLevel} IS NOT NULL THEN ${jobRevenueExpr} ELSE 0 END), 0)`,
-      count: sql<number>`COUNT(*)`,
-    })
+  const rows = await db
+    .selectDistinct({ funnel: funnelNameExpr, source: leadsTable.source })
     .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
     .where(where);
 
-  res.json({
-    revenue: round2(Number(agg?.revenue ?? 0)),
-    rebates: round2(Number(agg?.rebates ?? 0)),
-    attributed: round2(Number(agg?.attributed ?? 0)),
-    count: Number(agg?.count ?? 0),
-  });
+  const funnels = [...new Set(rows.map((r) => r.funnel).filter((v): v is string => !!v && v.trim() !== ""))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  const sources = [...new Set(rows.map((r) => r.source).filter((v): v is string => !!v && v.trim() !== ""))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+
+  res.json({ funnels, sources });
 });
 
 // Typeahead lead search for manual job→lead matching. Agency/admin only —

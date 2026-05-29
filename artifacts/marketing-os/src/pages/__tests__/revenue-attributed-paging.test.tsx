@@ -95,7 +95,7 @@ function installFetch() {
         json: async () => ({ revenue: 0, rebates: 0, attributed: 0, count: 0 }),
       } as Response;
     }
-    if (url.includes("/api/drilldown/revenue-attributed")) {
+    if (url.includes("/api/drilldown/revenue-attributed") && !url.includes("/facets")) {
       listCallUrls.push(url);
       const offset = Number(new URL(url, "http://x").searchParams.get("offset") ?? "0");
       const body = offset >= PAGE_SIZE ? [] : fullPage;
@@ -123,7 +123,7 @@ function installFetchWithTotal(total: number) {
         json: async () => ({ revenue: 0, rebates: 0, attributed: 0, count: 0 }),
       } as Response;
     }
-    if (url.includes("/api/drilldown/revenue-attributed")) {
+    if (url.includes("/api/drilldown/revenue-attributed") && !url.includes("/facets")) {
       listCallUrls.push(url);
       const offset = Number(new URL(url, "http://x").searchParams.get("offset") ?? "0");
       const count = Math.max(0, Math.min(PAGE_SIZE, total - offset));
