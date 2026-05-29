@@ -252,3 +252,133 @@ describe("checkDueCallbacks — multi-page due sweep (real Postgres)", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Concurrency contract: if a scheduler tick takes longer than its interval, two
+ * `checkDueCallbacks()` sweeps can run at once against the same due leads. The
+ * conditional "claim" UPDATE (set callbackNotifiedAt WHERE it is still
+ * unnotified, then `.returning()`) is what guarantees only ONE sweep ever
+ * claims a given lead: under Postgres READ COMMITTED, when both sweeps UPDATE
+ * the same row, the second blocks until the first commits, then re-evaluates
+ * its WHERE against the now-notified row, matches nothing, and returns zero
+ * rows — so it skips firing a reminder. This test pins that contract so a
+ * future refactor (e.g. dropping the conditional WHERE or the `.returning()`
+ * guard) that reintroduced duplicate push notifications would fail here.
+ */
+const CONCURRENT_DUE_COUNT = 150;
+
+interface ConcurrentFx {
+  tenantId: number;
+  csrId: number;
+  dueIds: number[];
+}
+
+let cfx: ConcurrentFx;
+
+describe("checkDueCallbacks — overlapping concurrent sweeps (real Postgres)", () => {
+  beforeAll(async () => {
+    const slug = `cb-race-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const [tenant] = await db
+      .insert(tenantsTable)
+      .values({ name: `Callback Race Int ${slug}`, clientSlug: slug })
+      .returning();
+    const [csr] = await db
+      .insert(usersTable)
+      .values({
+        email: `${slug}-csr@example.com`,
+        name: "CSR",
+        passwordHash: "x",
+        role: "client_user",
+        tenantId: tenant.id,
+      })
+      .returning();
+
+    const past = (mins: number) => new Date(Date.now() - mins * 60 * 1000);
+
+    // Seed more than two pages of due, unnotified, assigned, non-dead callbacks
+    // with a SHARED callbackAt so the two sweeps contend on the exact same rows
+    // in the exact same order — the worst case for the claim race.
+    const dueIds: number[] = [];
+    for (let i = 0; i < CONCURRENT_DUE_COUNT; i++) {
+      const [lead] = await db
+        .insert(leadsTable)
+        .values({
+          tenantId: tenant.id,
+          firstName: "Race",
+          lastName: `Lead${i}`,
+          source: "Meta",
+          originalSource: "Meta",
+          hubStatus: "day_1",
+          assignedCsrId: csr.id,
+          callbackAt: past(10),
+          callbackNotifiedAt: null,
+        })
+        .returning({ id: leadsTable.id });
+      dueIds.push(lead.id);
+    }
+
+    cfx = { tenantId: tenant.id, csrId: csr.id, dueIds };
+  });
+
+  afterAll(async () => {
+    if (!cfx) return;
+    try {
+      await db.delete(leadsTable).where(eq(leadsTable.tenantId, cfx.tenantId));
+      await db.delete(usersTable).where(eq(usersTable.id, cfx.csrId));
+      await db.delete(tenantsTable).where(eq(tenantsTable.id, cfx.tenantId));
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("fires exactly one reminder per due callback when two sweeps overlap", async () => {
+    enqueueSpy.mockClear();
+    emitSpy.mockClear();
+
+    // Run two sweeps concurrently — they interleave on the event loop at every
+    // awaited query, so both genuinely race to claim the same due rows.
+    await Promise.all([checkDueCallbacks(), checkDueCallbacks()]);
+
+    // Every seeded due lead must be notified exactly once at the DB level.
+    const rows = await db
+      .select({
+        id: leadsTable.id,
+        callbackAt: leadsTable.callbackAt,
+        callbackNotifiedAt: leadsTable.callbackNotifiedAt,
+      })
+      .from(leadsTable)
+      .where(inArray(leadsTable.id, cfx.dueIds));
+
+    expect(rows).toHaveLength(CONCURRENT_DUE_COUNT);
+    const unnotified = rows.filter(
+      (r) =>
+        r.callbackNotifiedAt === null ||
+        (r.callbackAt !== null && r.callbackNotifiedAt < r.callbackAt),
+    );
+    expect(
+      unnotified.map((r) => r.id),
+      "every due callback must be notified — overlapping sweeps must not skip any",
+    ).toEqual([]);
+
+    // The claim guarantees exactly one push reminder per due lead: no row was
+    // claimed (and thus notified) twice, and none was skipped.
+    const notifiedDueLeadIds = enqueueSpy.mock.calls
+      .map((c) => (c[0] as { data: { leadId: number } }).data.leadId)
+      .filter((id) => cfx.dueIds.includes(id));
+    expect(
+      notifiedDueLeadIds.length,
+      "total reminders must equal the number of due leads — extras mean a double-fire",
+    ).toBe(CONCURRENT_DUE_COUNT);
+    expect(
+      new Set(notifiedDueLeadIds).size,
+      "each due lead must be reminded exactly once across both sweeps",
+    ).toBe(CONCURRENT_DUE_COUNT);
+
+    // The socket emit mirrors the push enqueue one-to-one — also exactly once each.
+    const emittedDueLeadIds = emitSpy.mock.calls
+      .map((c) => (c[1] as { leadId: number }).leadId)
+      .filter((id) => cfx.dueIds.includes(id));
+    expect(emittedDueLeadIds.length).toBe(CONCURRENT_DUE_COUNT);
+    expect(new Set(emittedDueLeadIds).size).toBe(CONCURRENT_DUE_COUNT);
+  });
+});
