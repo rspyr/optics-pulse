@@ -62,7 +62,7 @@ export default function Internal() {
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
   const OUTBOUND_SYNC_TYPES = ["oci_upload", "enhanced_conversions", "capi_upload"];
   interface SyncStatus {
-    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean; totalRecords?: number | null }> }>;
+    statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number; state?: IntegrationState; needsReconnect?: boolean; reconnectReason?: string | null; latestErrorCode?: string | null; syncTypes?: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId?: number | null; cancelRequested?: boolean; totalRecords?: number | null; progressUpdatedAt?: string | null }> }>;
     recentLogs: Array<{ id: number; integration: string; syncType: string; status: string; recordsProcessed: number; completedAt: string | null; tenantId: number; triggeredBySyncLogId?: number | null }>;
     outboundPushStatus?: Record<string, { lastSuccess: string | null; lastStatus: string; recordsPushed: number; lastError: string | null; pendingCount: number }>;
     purgeStatus?: { lastRun: string | null; status: string; recordsProcessed: number } | null;
@@ -99,6 +99,7 @@ export default function Internal() {
         completedAt: string | null;
       } | null;
       startedAt: string | null;
+      progressUpdatedAt?: string | null;
       completedAt: string | null;
     }>;
   }
@@ -163,13 +164,46 @@ export default function Internal() {
   const [cancelStartedAt, setCancelStartedAt] = useState<Record<number, number>>({});
   // Tick at 1Hz while any cancel is pending so the "Force cancel" button
   // appears on its own once enough time has elapsed.
-  const [, setNowTick] = useState(0);
+  const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
     if (Object.keys(cancelStartedAt).length === 0) return;
     const id = setInterval(() => setNowTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, [cancelStartedAt]);
   const FORCE_CANCEL_DELAY_MS = 8000;
+
+  // A running sync whose last forward progress is older than this is treated
+  // as "stalled" — it's still flagged `running` in the DB but nothing has
+  // advanced for a while, so it's likely silently dead (waiting on the orphan
+  // reaper). We surface it in amber so operators can tell it apart from a
+  // backfill that's actively churning through chunks.
+  const STALLED_PROGRESS_MS = 3 * 60_000;
+
+  // Render a running sync's last-progress timestamp as a short relative
+  // string ("just now", "3 min ago", "2 hr ago") plus whether it counts as
+  // stalled. `nowTick` is referenced so this recomputes on the 1s tick while
+  // a run is in flight, keeping the relative label fresh between polls.
+  const formatProgressAgo = (iso: string | null | undefined): { label: string; stalled: boolean } | null => {
+    if (!iso) return null;
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return null;
+    void nowTick;
+    const deltaMs = Math.max(0, Date.now() - then);
+    const stalled = deltaMs >= STALLED_PROGRESS_MS;
+    let label: string;
+    if (deltaMs < 30_000) {
+      label = "just now";
+    } else if (deltaMs < 60_000) {
+      label = "less than a min ago";
+    } else if (deltaMs < 60 * 60_000) {
+      const mins = Math.floor(deltaMs / 60_000);
+      label = `${mins} min ago`;
+    } else {
+      const hrs = Math.floor(deltaMs / (60 * 60_000));
+      label = `${hrs} hr ago`;
+    }
+    return { label, stalled };
+  };
 
   // Auto-trigger badge → Recent Activity jump. When the operator clicks the
   // "Auto-triggered by nightly catch-up" badge on a backfill row, we look
@@ -1010,6 +1044,24 @@ export default function Internal() {
                             )
                           )}
                           <p>{bf.recordsProcessed.toLocaleString()} rows</p>
+                          {bf.status === "running" && (() => {
+                            const ago = formatProgressAgo(bf.progressUpdatedAt);
+                            if (!ago) return null;
+                            return ago.stalled ? (
+                              <p
+                                className="flex items-center gap-1 text-amber-400"
+                                title="No forward progress for a while — this run may be stalled. The orphan reaper will recover it if it stays silent."
+                              >
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
+                                Stalled — last progress {ago.label}
+                              </p>
+                            ) : (
+                              <p className="flex items-center gap-1 text-emerald-400/90">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                Last progress {ago.label}
+                              </p>
+                            );
+                          })()}
                           <p>
                             Started: {bf.startedAt ? new Date(bf.startedAt).toLocaleString() : "—"}
                           </p>
@@ -1072,12 +1124,13 @@ export default function Internal() {
                             const est = stSyncTypes?.estimates;
                             const phaseRow = (
                               name: string,
-                              phase: { lastStatus: string; recordsProcessed: number; totalRecords?: number | null } | undefined,
+                              phase: { lastStatus: string; recordsProcessed: number; totalRecords?: number | null; progressUpdatedAt?: string | null } | undefined,
                             ) => {
                               const status = phase?.lastStatus;
                               const rows = phase?.recordsProcessed ?? 0;
                               const total = phase?.totalRecords ?? null;
                               const isRunning = status === "running";
+                              const ago = isRunning ? formatProgressAgo(phase?.progressUpdatedAt) : null;
                               const isDone = status === "completed";
                               // Percent only when running against a known total
                               // (captured from the upstream total-count). Clamp
@@ -1117,6 +1170,19 @@ export default function Internal() {
                                         style={{ width: `${percent ?? 100}%` }}
                                       />
                                     </div>
+                                  )}
+                                  {ago && (
+                                    ago.stalled ? (
+                                      <p
+                                        className="flex items-center gap-1 text-amber-400"
+                                        title="No forward progress for a while — this phase may be stalled. The orphan reaper will recover it if it stays silent."
+                                      >
+                                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                                        Stalled — last progress {ago.label}
+                                      </p>
+                                    ) : (
+                                      <p className="text-white/40">Last progress {ago.label}</p>
+                                    )
                                   )}
                                 </div>
                               );

@@ -342,7 +342,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     needsReconnect: boolean;
     reconnectReason: string | null;
     latestErrorCode: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -351,7 +351,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null }> = {};
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null }> = {};
     // Union of sync types: from the recent log window (latest run/status info)
     // AND from the cumulative aggregation (which covers full history, so we
     // still show sync types whose last run is older than the 60-row window).
@@ -375,6 +375,12 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         // Estimated total record count for the latest run (set during a full
         // re-sync / revenue recompute). Lets the UI render a percent bar.
         totalRecords: latestOfType?.progressTotalRecords ?? null,
+        // Most recent forward-progress time for the latest run. Lets the UI
+        // show "last progress N min ago" for an in-flight recompute and flag
+        // a stalled one. Only meaningful while the run is `running`.
+        progressUpdatedAt: latestOfType?.status === "running"
+          ? latestOfType.progressUpdatedAt?.toISOString() ?? null
+          : null,
       };
     }
 
@@ -489,6 +495,11 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
       completedAt: string | null;
     } | null;
     startedAt: string | null;
+    /** Wall-clock time of the most recent forward progress (chunk advanced or
+     *  a batch of rows written). Lets the UI render a relative "last progress
+     *  N min ago" indicator on in-flight runs and flag silently-stalled ones.
+     *  Only meaningful while `status === "running"`. */
+    progressUpdatedAt: string | null;
     completedAt: string | null;
   }> = {};
   for (const integ of integrations) {
@@ -615,6 +626,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         triggeredBySyncLogId: log.triggeredBySyncLogId ?? null,
         triggeredByParent,
         startedAt: log.startedAt?.toISOString() ?? null,
+        progressUpdatedAt: log.progressUpdatedAt?.toISOString() ?? null,
         completedAt: log.completedAt?.toISOString() ?? null,
       };
     }

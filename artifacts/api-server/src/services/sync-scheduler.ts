@@ -129,6 +129,7 @@ async function updateSyncLogChunkProgress(
       progressWindowEnd: windowEnd,
       // Stamp inactivity watermark so the orphan reaper keeps this long-running
       // backfill alive while it's making progress, and reaps it once it stops.
+      // Also surfaced as "last progress N min ago" in the Settings panel.
       progressUpdatedAt: new Date(),
       errorMessage: null,
       errorCode: null,
@@ -181,6 +182,7 @@ async function updateSyncLogPartialFailure(
   await db.update(integrationSyncLogsTable)
     .set({
       recordsProcessed,
+      progressUpdatedAt: new Date(),
       errorMessage: innerMessage,
       errorCode: code,
       partial: true,
