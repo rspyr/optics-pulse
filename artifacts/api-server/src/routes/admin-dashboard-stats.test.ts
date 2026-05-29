@@ -42,7 +42,11 @@ vi.mock("@workspace/db", () => ({
   trainingItemsTable: tableProxy("training_items"),
 }));
 
-vi.mock("drizzle-orm", () => {
+// Shared, stable drizzle-orm spies. They must survive the vi.resetModules() in
+// setupApp so that, after admin.ts is re-imported, the route still calls the
+// *same* gte/lte mocks the tests inspect. vi.hoisted gives us that stable
+// reference; an inline factory would mint fresh fns on every re-import.
+const drizzle = vi.hoisted(() => {
   const sql = Object.assign((...a: unknown[]) => a, {
     join: (...a: unknown[]) => a,
   });
@@ -58,6 +62,8 @@ vi.mock("drizzle-orm", () => {
     sql,
   };
 });
+
+vi.mock("drizzle-orm", () => drizzle);
 
 vi.mock("../middleware/auth", () => ({
   requireAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -176,5 +182,178 @@ describe("GET /admin/dashboard-stats — budget", () => {
     const tenants = json.tenants as Array<Record<string, number | string>>;
     const beta = tenants.find((t) => t.tenantId === 2)!;
     expect(beta.monthlyBudget).toBe(15000); // null budget falls back to default
+  });
+});
+
+// A single tenant that exercises every money/rate path: campaigns with a
+// spend row, a mix of lead statuses, and completed/non-completed jobs.
+// Select order: [tenants, leads, jobs, campaigns, spend].
+//   spend = 1000
+//   leads = 10 total → 2 sold + 2 booked = 4 booked, 2 sold
+//   jobs  = 5000 completed revenue (the in_progress 9999 is ignored)
+// Derived: cpl 100, bookingRate 40.0, closeRate 50.0, roas 5, mtdRevenue 5000.
+function seedRichTenant() {
+  state.selectQueue = [
+    [{ id: 1, name: "Alpha", monthlyBudget: 10000 }],
+    [
+      { status: "sold" },
+      { status: "sold" },
+      { status: "booked" },
+      { status: "booked" },
+      { status: "new" },
+      { status: "new" },
+      { status: "new" },
+      { status: "new" },
+      { status: "new" },
+      { status: "new" },
+    ],
+    [
+      { status: "completed", revenue: 2500 },
+      { status: "completed", revenue: 2500 },
+      { status: "in_progress", revenue: 9999 },
+    ],
+    [{ id: 101 }],
+    [{ total: 1000 }],
+  ];
+}
+
+describe("GET /admin/dashboard-stats — money & rate math", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("aggregates mtdSpend from the campaign spend rows", async () => {
+    seedRichTenant();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number>>;
+    const alpha = tenants.find((t) => t.tenantId === 1)!;
+    expect(alpha.mtdSpend).toBe(1000); // summed from campaign_daily_stats
+  });
+
+  it("computes mtdRevenue, cpl, bookingRate, closeRate and roas from real leads/jobs", async () => {
+    seedRichTenant();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number>>;
+    const alpha = tenants.find((t) => t.tenantId === 1)!;
+
+    expect(alpha.mtdRevenue).toBe(5000); // only completed jobs count
+    expect(alpha.totalLeads).toBe(10);
+    expect(alpha.bookedLeads).toBe(4); // booked + sold
+    expect(alpha.soldLeads).toBe(2);
+    expect(alpha.cpl).toBe(100); // 1000 spend / 10 leads
+    expect(alpha.bookingRate).toBe(40); // 4/10 → 40.0%
+    expect(alpha.closeRate).toBe(50); // 2/4 → 50.0%
+    expect(alpha.roas).toBe(5); // 5000 revenue / 1000 spend
+  });
+});
+
+// Two tenants, both with real data, so agency-wide rollups have something to
+// average. Select order: [tenants, then per tenant leads, jobs, campaigns, spend].
+//   tenant 1: spend 1000, leads 10 (5 booked), revenue 4000
+//   tenant 2: spend 1000, leads 10 (5 booked), revenue 6000
+// Agency: totalSpend 2000, totalLeads 20, totalRevenue 10000, totalBooked 10.
+function seedTwoRichTenants() {
+  const tenOf = (booked: number) =>
+    Array.from({ length: 10 }, (_, i) => ({
+      status: i < booked ? "booked" : "new",
+    }));
+  state.selectQueue = [
+    [
+      { id: 1, name: "Alpha", monthlyBudget: 10000 },
+      { id: 2, name: "Beta", monthlyBudget: 20000 },
+    ],
+    tenOf(5), // tenant 1 leads
+    [{ status: "completed", revenue: 4000 }], // tenant 1 jobs
+    [{ id: 101 }], // tenant 1 campaigns
+    [{ total: 1000 }], // tenant 1 spend
+    tenOf(5), // tenant 2 leads
+    [{ status: "completed", revenue: 6000 }], // tenant 2 jobs
+    [{ id: 201 }], // tenant 2 campaigns
+    [{ total: 1000 }], // tenant 2 spend
+  ];
+}
+
+describe("GET /admin/dashboard-stats — agency averages", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("computes agencyAverages across all active tenants even when tenantId filtering is applied", async () => {
+    seedTwoRichTenants();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(
+      app,
+      "/admin/dashboard-stats?tenantId=1",
+    );
+
+    expect(status).toBe(200);
+
+    // The displayed tenant list is scoped to the requested tenant...
+    const tenants = json.tenants as Array<Record<string, number>>;
+    expect(tenants).toHaveLength(1);
+    expect(tenants[0].tenantId).toBe(1);
+
+    // ...but the agency benchmark still spans BOTH active tenants.
+    const avg = json.agencyAverages as Record<string, number>;
+    expect(avg.totalLeads).toBe(20); // 10 + 10
+    expect(avg.totalSpend).toBe(2000); // 1000 + 1000
+    expect(avg.totalRevenue).toBe(10000); // 4000 + 6000
+    expect(avg.cpl).toBe(100); // 2000 / 20
+    expect(avg.roas).toBe(5); // 10000 / 2000
+    expect(avg.bookingRate).toBe(50); // 10 booked / 20 leads
+  });
+});
+
+describe("GET /admin/dashboard-stats — date range narrowing", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("wires startDate/endDate into the lead, job and spend query windows", async () => {
+    seedRichTenant();
+    const app = await setupApp("super_admin");
+
+    // Only the request (not module load) calls gte/lte, so clearing here gives
+    // us a clean record of exactly the conditions this query builds.
+    drizzle.gte.mockClear();
+    drizzle.lte.mockClear();
+
+    const { status } = await getJson(
+      app,
+      "/admin/dashboard-stats?startDate=2026-05-01&endDate=2026-05-28",
+    );
+
+    expect(status).toBe(200);
+
+    // Lead and job windows use Date-bounded createdAt.
+    expect(drizzle.gte).toHaveBeenCalledWith(
+      "leads.createdAt",
+      expect.any(Date),
+    );
+    expect(drizzle.gte).toHaveBeenCalledWith("jobs.createdAt", expect.any(Date));
+    expect(drizzle.lte).toHaveBeenCalledWith(
+      "leads.createdAt",
+      expect.any(Date),
+    );
+    expect(drizzle.lte).toHaveBeenCalledWith("jobs.createdAt", expect.any(Date));
+
+    // Spend window narrows campaign_daily_stats by its string date column.
+    expect(drizzle.gte).toHaveBeenCalledWith(
+      "campaign_daily_stats.date",
+      "2026-05-01",
+    );
+    expect(drizzle.lte).toHaveBeenCalledWith(
+      "campaign_daily_stats.date",
+      "2026-05-28",
+    );
   });
 });
