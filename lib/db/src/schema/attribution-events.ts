@@ -62,6 +62,12 @@ export const attributionEventsTable = pgTable("attribution_events", {
   // that sort order exactly so the database can satisfy both the seek predicate
   // and the ORDER BY from the index alone (no extra sort/scan) as the table grows.
   createdAtIdIdx: index("attribution_events_created_at_id_idx").on(table.createdAt.desc(), table.id.desc()),
+  // Tenant-scoped variant of the keyset index. The real `/attribution/events`
+  // list query always filters by `tenant_id`, so leading with `tenant_id` lets
+  // the planner jump straight to one tenant's slice while still satisfying the
+  // `created_at DESC, id DESC` ORDER BY from the index — no scanning over other
+  // tenants' rows, no sort.
+  tenantCreatedAtIdIdx: index("attribution_events_tenant_created_at_id_idx").on(table.tenantId, table.createdAt.desc(), table.id.desc()),
 }));
 
 export const insertAttributionEventSchema = createInsertSchema(attributionEventsTable).omit({ id: true, createdAt: true });
