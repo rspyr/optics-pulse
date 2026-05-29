@@ -121,6 +121,16 @@ function terminalSuccessSnapshot() {
   );
 }
 
+// The brief gap on an adopted run: invoices have finished but estimates hasn't
+// been picked up yet, so neither phase reports "running". Estimates still shows
+// its pre-run status with no terminal marker.
+function invoicesDoneEstimatesQueuedSnapshot() {
+  return snapshot(
+    { lastStatus: "completed", recordsProcessed: 100, totalRecords: 100, lastRun: NEW_RUN },
+    { lastStatus: "never", recordsProcessed: 0, totalRecords: null, lastRun: OLD_RUN },
+  );
+}
+
 // Fresh run where the estimates phase errored out.
 function terminalFailureSnapshot() {
   return snapshot(
@@ -360,6 +370,48 @@ describe("Settings — rebate-edit recompute progress surface", () => {
     });
     expect(screen.queryByText(/Recomputing historical revenue…/i)).not.toBeInTheDocument();
     // We never performed a save in this session.
+    expect(patchCalls.length).toBe(0);
+  });
+
+  it("stays in progress on an adopted run when invoices finish but estimates haven't started", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+
+    // Adopted run: invoices are mid-flight when the page first mounts, with no
+    // save performed in this session, so there is no pre-save baseline.
+    syncSnapshot = runningSnapshot();
+
+    renderSettings();
+
+    const toggle = await screen.findByRole("button", { name: /API Integrations/i });
+    await user.click(toggle);
+
+    await screen.findByText(/Recomputing historical revenue…/i);
+    await waitFor(() => {
+      expect(screen.getByText(/50 \/ ~100 \(50%\)/)).toBeInTheDocument();
+    });
+
+    // A poll lands in the gap: invoices finished, estimates not yet running.
+    // Neither phase is "running", but estimates has no terminal status — the
+    // surface must NOT flash "complete".
+    syncSnapshot = invoicesDoneEstimatesQueuedSnapshot();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3200);
+    });
+
+    expect(screen.queryByText(/Revenue recompute complete/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Recomputing historical revenue…/i)).toBeInTheDocument();
+
+    // Once estimates actually finish, it resolves to success.
+    syncSnapshot = terminalSuccessSnapshot();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3200);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Revenue recompute complete/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Recomputing historical revenue…/i)).not.toBeInTheDocument();
     expect(patchCalls.length).toBe(0);
   });
 

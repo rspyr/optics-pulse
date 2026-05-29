@@ -387,8 +387,15 @@ export default function Settings() {
       return;
     }
     const base = recomputeBaseline.current;
-    const invDone = !base || inv.lastRun !== base.inv;
-    const estDone = !base || est.lastRun !== base.est;
+    // With a pre-save baseline we detect a fresh finish by the phase's `lastRun`
+    // moving past the captured value. An adopted run has no baseline, so we
+    // can't use that signal — instead each phase must actually reach a terminal
+    // status. Otherwise the brief gap after invoices finishes but before
+    // estimates starts (neither phase "running") would resolve prematurely to a
+    // false "complete".
+    const isTerminal = (s: string) => s === "completed" || s === "error";
+    const invDone = base ? inv.lastRun !== base.inv : isTerminal(inv.lastStatus);
+    const estDone = base ? est.lastRun !== base.est : isTerminal(est.lastStatus);
     if (recomputeSawRunning.current && invDone && estDone) {
       const failed = inv.lastStatus === "error" || est.lastStatus === "error";
       setRecomputeOutcome(failed ? "failed" : "success");
