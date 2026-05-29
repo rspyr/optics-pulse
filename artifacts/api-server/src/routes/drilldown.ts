@@ -51,8 +51,16 @@ router.get("/drilldown/leads", async (req, res) => {
   if (source) conditions.push(eq(leadsTable.source, source));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
+  // Append the unique primary key as a deterministic tiebreaker so paging is
+  // stable under LIMIT/OFFSET. createdAt ties constantly (bulk imports stamp
+  // the same timestamp), and Postgres gives no guaranteed order among rows the
+  // ORDER BY can't distinguish — so without a unique secondary key, two
+  // requests for adjacent pages can overlap (a tied row served twice) or skip
+  // rows entirely. leads.id is unique + monotonic, so appending it in the same
+  // direction as the primary sort gives a total order: every page is a
+  // disjoint, complete slice of one fixed sequence.
   const leads = await db.select().from(leadsTable).where(where)
-    .orderBy(desc(leadsTable.createdAt)).limit(limit).offset(offset);
+    .orderBy(desc(leadsTable.createdAt), sql`${leadsTable.id} desc`).limit(limit).offset(offset);
 
   res.json(leads);
 });
@@ -88,8 +96,16 @@ router.get("/drilldown/jobs", async (req, res) => {
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
   const orderBy = sortBy === "revenue" ? desc(jobRevenueExpr) : desc(jobsTable.createdAt);
+  // Append the unique primary key as a deterministic tiebreaker so paging is
+  // stable under LIMIT/OFFSET. Both the revenue sort (ties when two jobs share
+  // a corrected revenue) and the date sort (ties when invoices share a
+  // createdAt) leave rows the ORDER BY can't distinguish, and Postgres gives no
+  // guaranteed order among them — so without a unique secondary key, adjacent
+  // pages can overlap (a tied row served twice) or skip rows. jobs.id is unique
+  // + monotonic, so appending it in the same direction as the primary sort
+  // gives a total order: every page is a disjoint, complete slice.
   const jobs = await db.select().from(jobsTable).where(where)
-    .orderBy(orderBy).limit(limit).offset(offset);
+    .orderBy(orderBy, sql`${jobsTable.id} desc`).limit(limit).offset(offset);
 
   // Money columns are floating-point `real`, so they can carry sub-cent drift
   // (e.g. 900.1000000001). Round every money field to whole cents before
