@@ -102,7 +102,11 @@ router.get("/leads", async (req, res) => {
 
 router.get("/leads/hud/queue", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: the Pulse HUD is an inherently per-tenant view (there is no
+  // cross-tenant queue in the product). An unfiltered admin request would run
+  // getSmartQueue with no tenant filter — a cross-tenant scan + createdAt sort
+  // over the whole leads table. Force a concrete tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
 
@@ -146,7 +150,10 @@ router.get("/leads/hud/stats", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user" || role === "client_admin";
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: the HUD stats are per-tenant. An unfiltered admin request
+  // would aggregate counts across every tenant's leads/call_attempts for the
+  // day — a cross-tenant scan. Force a concrete tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
 
@@ -177,7 +184,9 @@ router.get("/leads/hud/comparison", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user";
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: per-tenant HUD comparison. Force admins to pick a tenant
+  // first rather than allowing the implicit cross-tenant path.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
 
@@ -212,7 +221,10 @@ router.get("/leads/hud/historical", async (req, res) => {
   const role = req.session.userRole;
   const isManager = role === "super_admin" || role === "agency_user";
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: per-tenant HUD history. An unfiltered admin request would
+  // scan coordinator_daily_stats across every tenant for the date range. Force
+  // a concrete tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
 
@@ -355,12 +367,18 @@ function parseNaturalDate(input: string): { start: Date; end: Date; remainingTex
 
 router.get("/leads/search", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  // Deliberately NOT opted into `{ requireTenant: true }`: unlike the heavy
+  // list/drilldown endpoints, this handler can never run an unfiltered
+  // cross-tenant query. It resolves to a single concrete tenant (the supplied
+  // tenantId, else the caller's session tenantId) and short-circuits to an
+  // empty result when none is available — so a super_admin / agency_user with
+  // no tenantId simply gets `{ leads: [], total: 0 }`, never a full-table
+  // scan. Every query below is hard-scoped with `eq(leads.tenantId, ...)`, and
+  // the session-tenant fallback is intentional (an admin with a session tenant
+  // can search it without re-supplying tenantId), which `requireTenant` would
+  // break by 400-ing before the fallback runs.
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
-  // Search requires a concrete tenant scope. For super_admin /
-  // agency_user with no tenantId param, fall back to their session
-  // tenantId (if any) — same behavior as before, just routed through
-  // the shared helper for tenant-scoped roles.
   const resolvedTenantId = scope.tenantId ?? req.session.tenantId ?? null;
 
   if (!resolvedTenantId) {

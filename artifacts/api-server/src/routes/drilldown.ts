@@ -167,7 +167,11 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   // contract the mocked unit tests assert on stays intact.
   const idTiebreak = sortDir === "asc" ? sql`${jobsTable.id} asc` : sql`${jobsTable.id} desc`;
 
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: an unfiltered request (super_admin / agency_user with no
+  // tenantId) would join jobs→leads→funnel_types over every tenant's completed
+  // jobs and sort the whole result — an unindexed full-table scan after the
+  // global keyset indexes were dropped. Force a concrete tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];
@@ -315,7 +319,10 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
 
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: same heavy jobs→leads→funnel_types join as the list, here
+  // aggregated with SUM/COUNT. An unfiltered request would scan every tenant's
+  // completed jobs — reject it and make the caller pick a tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];
@@ -357,7 +364,10 @@ router.get("/drilldown/revenue-attributed/facets", async (req, res) => {
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
 
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  // requireTenant: a SELECT DISTINCT over the same jobs→leads→funnel_types join.
+  // An unfiltered request would distinct-scan every tenant's completed jobs —
+  // reject it and make the caller pick a tenant first.
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];

@@ -335,6 +335,13 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
       { name: "GET /attribution/events", routerPath: "./attribution", url: "/attribution/events" },
       { name: "GET /drilldown/leads", routerPath: "./drilldown", url: "/drilldown/leads" },
       { name: "GET /drilldown/jobs", routerPath: "./drilldown", url: "/drilldown/jobs" },
+      // Revenue Attributed list/summary/facets (task #750): each runs a heavy
+      // jobs→leads→funnel_types join over completed jobs, so an unfiltered
+      // cross-tenant request must be rejected before any DB read. The facets
+      // route uses db.selectDistinct (not db.select), hence the dual assertion.
+      { name: "GET /drilldown/revenue-attributed", routerPath: "./drilldown", url: "/drilldown/revenue-attributed" },
+      { name: "GET /drilldown/revenue-attributed/summary", routerPath: "./drilldown", url: "/drilldown/revenue-attributed/summary" },
+      { name: "GET /drilldown/revenue-attributed/facets", routerPath: "./drilldown", url: "/drilldown/revenue-attributed/facets" },
     ];
 
     for (const role of ["super_admin", "agency_user"] as const) {
@@ -349,6 +356,7 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
 
           const dbMod = await import("@workspace/db");
           expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+          expect(vi.mocked(dbMod.db.selectDistinct)).not.toHaveBeenCalled();
         });
       }
     }
@@ -364,6 +372,11 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
     const manualParseCases = [
       { name: "GET /drilldown/leads", routerPath: "./drilldown", url: "/drilldown/leads" },
       { name: "GET /drilldown/jobs", routerPath: "./drilldown", url: "/drilldown/jobs" },
+      // Revenue Attributed routes also parse tenantId with Number(...), so they
+      // share the same NaN gap and must coerce it to "no tenant" → 400.
+      { name: "GET /drilldown/revenue-attributed", routerPath: "./drilldown", url: "/drilldown/revenue-attributed" },
+      { name: "GET /drilldown/revenue-attributed/summary", routerPath: "./drilldown", url: "/drilldown/revenue-attributed/summary" },
+      { name: "GET /drilldown/revenue-attributed/facets", routerPath: "./drilldown", url: "/drilldown/revenue-attributed/facets" },
     ];
     for (const role of ["super_admin", "agency_user"] as const) {
       for (const c of manualParseCases) {
@@ -378,8 +391,64 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
 
           const dbMod = await import("@workspace/db");
           expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+          expect(vi.mocked(dbMod.db.selectDistinct)).not.toHaveBeenCalled();
         });
       }
+    }
+  });
+
+  // The Pulse HUD endpoints are per-tenant views with no cross-tenant mode, so
+  // task #750 opts them into `{ requireTenant: true }`. They delegate to mocked
+  // services (getSmartQueue / getHudStats / getComparisonStats /
+  // getHistoricalStats) rather than db.select directly, so we assert the
+  // service is never reached when a super_admin / agency_user omits or
+  // malforms the tenantId (the manual `Number(...)` parse turns `abc` into NaN,
+  // which the helper must coerce to "no tenant" → 400).
+  describe("requireTenant — reject unfiltered cross-tenant HUD requests", () => {
+    const hudCases = [
+      { name: "GET /leads/hud/queue", url: "/leads/hud/queue", servicePath: "../services/lead-scoring", fn: "getSmartQueue" },
+      { name: "GET /leads/hud/stats", url: "/leads/hud/stats", servicePath: "../socket", fn: "getHudStats" },
+      { name: "GET /leads/hud/comparison", url: "/leads/hud/comparison", servicePath: "../services/coordinator-stats", fn: "getComparisonStats" },
+      { name: "GET /leads/hud/historical", url: "/leads/hud/historical", servicePath: "../services/coordinator-stats", fn: "getHistoricalStats" },
+    ];
+    for (const role of ["super_admin", "agency_user"] as const) {
+      for (const c of hudCases) {
+        for (const variant of [
+          { label: "no tenantId", query: "" },
+          { label: "invalid tenantId=abc", query: "?tenantId=abc" },
+        ]) {
+          it(`${c.name}: ${role} with ${variant.label} → 400, and never invokes the service`, async () => {
+            const app = await setupApp("./leads", role, null);
+
+            const res = await getJson(app, `${c.url}${variant.query}`);
+
+            expect(res.status).toBe(400);
+            expect(res.json).toEqual(TENANT_REQUIRED_ERROR);
+
+            const svc = (await import(c.servicePath)) as Record<string, unknown>;
+            expect(vi.mocked(svc[c.fn] as (...args: unknown[]) => unknown)).not.toHaveBeenCalled();
+          });
+        }
+      }
+    }
+  });
+
+  // /leads/search is deliberately NOT opted into requireTenant (task #750): it
+  // resolves to a single concrete tenant and short-circuits to an empty result
+  // when none is available, so an unfiltered admin request can never run a
+  // full-table scan. Lock in that it returns 200 with an empty list — never the
+  // 400 the guarded endpoints return — so a future refactor doesn't silently
+  // break the intentional session-tenant fallback.
+  describe("/leads/search — intentionally allows the no-tenant path", () => {
+    for (const role of ["super_admin", "agency_user"] as const) {
+      it(`${role} with no tenantId and no session tenant → 200 empty list (not 400)`, async () => {
+        const app = await setupApp("./leads", role, null);
+
+        const res = await getJson(app, "/leads/search?q=test");
+
+        expect(res.status).toBe(200);
+        expect(res.json).toEqual({ leads: [], total: 0 });
+      });
     }
   });
 
