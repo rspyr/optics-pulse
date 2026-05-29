@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
+import { NO_TENANT_ASSIGNED_ERROR, TENANT_REQUIRED_ERROR } from "../lib/tenant-scope";
 
 const mockDb = {
   selectResults: [] as unknown[][],
@@ -414,19 +414,18 @@ describe("GET /attribution/events — list tenant scoping", () => {
       .mock.calls.filter((c) => (c[0] as unknown) === "attribution_events.tenantId");
   }
 
-  it("lets super_admin list across all tenants when no tenantId query param is provided", async () => {
+  it("rejects super_admin with no tenantId query param (no unfiltered cross-tenant list) and never reads the DB", async () => {
+    // task #749: the global keyset indexes were dropped, so an
+    // unfiltered cross-tenant ORDER BY would be a full-table sort. The
+    // handler now requires a concrete tenantId and 400s before any DB read.
     await setupApp("super_admin", null);
-    mockDb.selectResults = [
-      [makeBaseEvent({ id: 401, tenantId: 5 }), makeBaseEvent({ id: 402, tenantId: 9 })],
-      [{ count: 2 }],
-    ];
 
     const res = await getJson(app, "/attribution/events");
 
-    expect(res.status).toBe(200);
-    expect((res.json.events as unknown[]).length).toBe(2);
-    const tenantScopes = await tenantEqCalls();
-    expect(tenantScopes).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.json).toEqual(TENANT_REQUIRED_ERROR);
+    const dbMod = await import("@workspace/db");
+    expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
   });
 
   it("lets super_admin filter by an arbitrary query.tenantId", async () => {
@@ -443,18 +442,15 @@ describe("GET /attribution/events — list tenant scoping", () => {
     expect(tenantScopes).toContainEqual(["attribution_events.tenantId", "9"]);
   });
 
-  it("lets agency_user list across all tenants when no tenantId query param is provided", async () => {
+  it("rejects agency_user with no tenantId query param (no unfiltered cross-tenant list) and never reads the DB", async () => {
     await setupApp("agency_user", null);
-    mockDb.selectResults = [
-      [makeBaseEvent({ id: 404, tenantId: 5 }), makeBaseEvent({ id: 405, tenantId: 9 })],
-      [{ count: 2 }],
-    ];
 
     const res = await getJson(app, "/attribution/events");
 
-    expect(res.status).toBe(200);
-    const tenantScopes = await tenantEqCalls();
-    expect(tenantScopes).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.json).toEqual(TENANT_REQUIRED_ERROR);
+    const dbMod = await import("@workspace/db");
+    expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
   });
 
   it("returns 403 for a tenant-scoped role with no tenantId on the session", async () => {

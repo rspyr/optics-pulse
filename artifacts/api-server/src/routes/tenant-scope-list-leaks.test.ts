@@ -17,7 +17,7 @@
 // route is wired through the helper *before* any DB access.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { NO_TENANT_ASSIGNED_ERROR } from "../lib/tenant-scope";
+import { NO_TENANT_ASSIGNED_ERROR, TENANT_REQUIRED_ERROR } from "../lib/tenant-scope";
 
 const mockDb = {
   selectResults: [] as unknown[][],
@@ -322,6 +322,66 @@ describe("List-endpoint tenant scoping (cross-tenant leak prevention)", () => {
       });
     });
   }
+
+  // Heavy list/drilldown endpoints opted into `{ requireTenant: true }`
+  // (task #749). After the global keyset indexes were dropped, an
+  // unfiltered cross-tenant request (super_admin / agency_user with no
+  // tenantId) would run an unindexed full-table ORDER BY — so the helper
+  // must 400 BEFORE any DB read instead of serving the unscoped query.
+  describe("requireTenant — reject unfiltered cross-tenant list requests", () => {
+    const requireTenantCases = [
+      { name: "GET /leads", routerPath: "./leads", url: "/leads" },
+      { name: "GET /jobs", routerPath: "./jobs", url: "/jobs" },
+      { name: "GET /attribution/events", routerPath: "./attribution", url: "/attribution/events" },
+      { name: "GET /drilldown/leads", routerPath: "./drilldown", url: "/drilldown/leads" },
+      { name: "GET /drilldown/jobs", routerPath: "./drilldown", url: "/drilldown/jobs" },
+    ];
+
+    for (const role of ["super_admin", "agency_user"] as const) {
+      for (const c of requireTenantCases) {
+        it(`${c.name}: ${role} with no tenantId → 400, and never reads the DB`, async () => {
+          const app = await setupApp(c.routerPath, role, null);
+
+          const res = await getJson(app, c.url);
+
+          expect(res.status).toBe(400);
+          expect(res.json).toEqual(TENANT_REQUIRED_ERROR);
+
+          const dbMod = await import("@workspace/db");
+          expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+        });
+      }
+    }
+
+    // The drilldown routes parse tenantId manually with Number(...), so an
+    // invalid `tenantId=abc` produces NaN. The helper must normalize that
+    // to "no tenant" and 400 — otherwise NaN slips past the requireTenant
+    // check and the truthy `if (scope.tenantId)` filter drops it, yielding
+    // the exact unscoped full-table query this task closes off. (The other
+    // requireTenant routes parse tenantId via a zod.coerce.number() schema,
+    // which already rejects a non-numeric value before the handler runs, so
+    // they don't share this manual-parse gap.)
+    const manualParseCases = [
+      { name: "GET /drilldown/leads", routerPath: "./drilldown", url: "/drilldown/leads" },
+      { name: "GET /drilldown/jobs", routerPath: "./drilldown", url: "/drilldown/jobs" },
+    ];
+    for (const role of ["super_admin", "agency_user"] as const) {
+      for (const c of manualParseCases) {
+        it(`${c.name}: ${role} with invalid tenantId=abc → 400, and never reads the DB`, async () => {
+          const app = await setupApp(c.routerPath, role, null);
+
+          const sep = c.url.includes("?") ? "&" : "?";
+          const res = await getJson(app, `${c.url}${sep}tenantId=abc`);
+
+          expect(res.status).toBe(400);
+          expect(res.json).toEqual(TENANT_REQUIRED_ERROR);
+
+          const dbMod = await import("@workspace/db");
+          expect(vi.mocked(dbMod.db.select)).not.toHaveBeenCalled();
+        });
+      }
+    }
+  });
 
   describe("GET /dashboard/spend-revenue", () => {
     it("returns 403 'No tenant assigned' for tenant-scoped role with no session.tenantId, and never reads the DB", async () => {

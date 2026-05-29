@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Request, Response } from "express";
-import { resolveListTenantScope, assertResourceTenantAccess, NO_TENANT_ASSIGNED_ERROR } from "./tenant-scope";
+import { resolveListTenantScope, assertResourceTenantAccess, NO_TENANT_ASSIGNED_ERROR, TENANT_REQUIRED_ERROR } from "./tenant-scope";
 
 function makeReq(role: string, tenantId: number | null): Request {
   return {
@@ -94,6 +94,75 @@ describe("resolveListTenantScope — list-handler tenant scoping contract", () =
     expect(out).toEqual({ ok: false });
     expect(status).toHaveBeenCalledWith(403);
     expect(json).toHaveBeenCalledWith(NO_TENANT_ASSIGNED_ERROR);
+  });
+
+  describe("requireTenant — reject unfiltered cross-tenant list requests", () => {
+    it("super_admin without query.tenantId + requireTenant → 400, no unscoped query", () => {
+      const { res, status, json } = makeRes();
+      const out = resolveListTenantScope(makeReq("super_admin", null), res, null, { requireTenant: true });
+      expect(out).toEqual({ ok: false });
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith(TENANT_REQUIRED_ERROR);
+    });
+
+    it("agency_user without query.tenantId + requireTenant → 400, no unscoped query", () => {
+      const { res, status, json } = makeRes();
+      const out = resolveListTenantScope(makeReq("agency_user", null), res, null, { requireTenant: true });
+      expect(out).toEqual({ ok: false });
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith(TENANT_REQUIRED_ERROR);
+    });
+
+    it("super_admin WITH query.tenantId + requireTenant → uses the supplied tenantId (unchanged)", () => {
+      const { res, status } = makeRes();
+      const out = resolveListTenantScope(makeReq("super_admin", null), res, 9, { requireTenant: true });
+      expect(out).toEqual({ ok: true, tenantId: 9 });
+      expect(status).not.toHaveBeenCalled();
+    });
+
+    it("agency_user WITH query.tenantId + requireTenant → uses the supplied tenantId (unchanged)", () => {
+      const { res, status } = makeRes();
+      const out = resolveListTenantScope(makeReq("agency_user", null), res, 12, { requireTenant: true });
+      expect(out).toEqual({ ok: true, tenantId: 12 });
+      expect(status).not.toHaveBeenCalled();
+    });
+
+    it("tenant-scoped role + requireTenant → still forces session tenantId (unaffected by the flag)", () => {
+      const { res, status } = makeRes();
+      const out = resolveListTenantScope(makeReq("tenant_user", 7), res, 9, { requireTenant: true });
+      expect(out).toEqual({ ok: true, tenantId: 7 });
+      expect(status).not.toHaveBeenCalled();
+    });
+
+    it("super_admin without query.tenantId WITHOUT requireTenant → cross-tenant scope (default unchanged)", () => {
+      const { res, status } = makeRes();
+      const out = resolveListTenantScope(makeReq("super_admin", null), res, null);
+      expect(out).toEqual({ ok: true, tenantId: null });
+      expect(status).not.toHaveBeenCalled();
+    });
+
+    it("super_admin with NaN query.tenantId (e.g. tenantId=abc) + requireTenant → 400, not an unscoped query", () => {
+      const { res, status, json } = makeRes();
+      const out = resolveListTenantScope(makeReq("super_admin", null), res, Number("abc"), { requireTenant: true });
+      expect(out).toEqual({ ok: false });
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith(TENANT_REQUIRED_ERROR);
+    });
+
+    it("agency_user with non-positive query.tenantId (0) + requireTenant → 400, not an unscoped query", () => {
+      const { res, status, json } = makeRes();
+      const out = resolveListTenantScope(makeReq("agency_user", null), res, 0, { requireTenant: true });
+      expect(out).toEqual({ ok: false });
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith(TENANT_REQUIRED_ERROR);
+    });
+
+    it("super_admin with NaN query.tenantId WITHOUT requireTenant → normalized to cross-tenant null (never a falsy NaN)", () => {
+      const { res, status } = makeRes();
+      const out = resolveListTenantScope(makeReq("super_admin", null), res, Number("abc"));
+      expect(out).toEqual({ ok: true, tenantId: null });
+      expect(status).not.toHaveBeenCalled();
+    });
   });
 });
 

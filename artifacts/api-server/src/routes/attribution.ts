@@ -17,17 +17,13 @@ router.get("/attribution/events", async (req, res) => {
   const query = ListAttributionEventsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  const role = req.session.userRole;
-  const userTenantId = req.session.tenantId;
-  if (role !== "super_admin" && role !== "agency_user") {
-    if (!userTenantId) {
-      res.status(403).json(NO_TENANT_ASSIGNED_ERROR);
-      return;
-    }
-    conditions.push(eq(attributionEventsTable.tenantId, userTenantId));
-  } else if (query.tenantId) {
-    conditions.push(eq(attributionEventsTable.tenantId, query.tenantId));
-  }
+  // Force a concrete tenant scope. `requireTenant` also rejects the
+  // unfiltered cross-tenant path for super_admin / agency_user (no
+  // tenantId) with a 400 — after the global keyset indexes were dropped,
+  // such a request would run an unindexed full-table ORDER BY.
+  const scope = resolveListTenantScope(req, res, query.tenantId, { requireTenant: true });
+  if (!scope.ok) return;
+  if (scope.tenantId) conditions.push(eq(attributionEventsTable.tenantId, scope.tenantId));
 
   if (query.matchLevel) {
     const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "manual" | "unmatched";

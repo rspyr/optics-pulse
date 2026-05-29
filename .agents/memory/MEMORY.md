@@ -1,3 +1,4 @@
 - [Revenue attribution data model](revenue-attribution-data-model.md) — rebate-corrected revenue math + itemized rebate breakdown lives only on sold_estimates, not jobs.
 - [Orphan reaper thresholds](orphan-reaper-thresholds.md) — reaper keys off progress_updated_at inactivity; threshold must exceed max inter-stamp gap (~5min Meta chunk); UI 3min is leading warning, reaper 15min recovers.
 - [api-server route test mocks](api-server-route-test-mocks.md) — any new @workspace/db table or drizzle-orm export used in a route must be added to ALL test mocks that load it (directly or via routes/index aggregator), or vitest fails at module load.
+- [tenant-scope id validation](tenant-scope-id-validation.md) — admin tenantId arrives as number (zod), NaN (manual Number()), or numeric string (test passthrough); coerce before Number.isFinite; abc-regression only on drilldown routes.

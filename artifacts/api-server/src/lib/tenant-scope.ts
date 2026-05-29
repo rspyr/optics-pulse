@@ -19,6 +19,25 @@ export const NO_TENANT_ASSIGNED_ERROR = {
 } as const;
 
 /**
+ * 400 returned by list/drilldown endpoints that opt into
+ * `{ requireTenant: true }` when a super_admin / agency_user issues an
+ * unfiltered, cross-tenant request (no `tenantId`).
+ *
+ * The web UI never asks for an unfiltered cross-tenant list — agency /
+ * super_admin users must pick a specific tenant first. After the global
+ * keyset indexes on leads/jobs/attribution_events were dropped (to speed
+ * up writes), such a request would trigger a full sequential scan + sort
+ * over the whole table. Rejecting it stops a stray or malicious call from
+ * running an unindexed full-table ORDER BY. A genuine cross-tenant
+ * aggregate view, if ever wanted, should be built deliberately with its
+ * own supporting index rather than relying on this implicit path.
+ */
+export const TENANT_REQUIRED_ERROR = {
+  error: "A tenantId is required",
+  hint: "Select a specific tenant before requesting this list. Unfiltered cross-tenant list requests are not supported.",
+} as const;
+
+/**
  * Result of resolving the tenant scope for a list-style handler.
  *
  * `ok: false` means the helper has already written a 403 response to
@@ -50,15 +69,42 @@ export type ListTenantScope =
  * tenantId into `req.query.tenantId` for non-admin roles, but list
  * handlers should NOT rely on that as their sole defense — this helper
  * is the in-handler enforcement layer.
+ *
+ * Pass `{ requireTenant: true }` to forbid the unfiltered cross-tenant
+ * path entirely: super_admin / agency_user callers must then supply a
+ * concrete `tenantId` or the helper responds 400 (see
+ * `TENANT_REQUIRED_ERROR`). Use it on heavy list/drilldown endpoints
+ * where an unfiltered request would run an unindexed full-table sort.
  */
 export function resolveListTenantScope(
   req: Request,
   res: Response,
   queryTenantId?: number | null,
+  options?: { requireTenant?: boolean },
 ): ListTenantScope {
   const role = req.session.userRole;
   if (role === "super_admin" || role === "agency_user") {
-    return { ok: true, tenantId: queryTenantId ?? null };
+    // Validate the supplied tenant id so an invalid value can never slip
+    // past the `requireTenant` check below and then be silently dropped
+    // by a truthy `if (scope.tenantId)` filter — which would produce
+    // exactly the unscoped, unindexed full-table query this helper exists
+    // to prevent. Tenant IDs are positive serials, so anything non-finite
+    // (e.g. NaN from a `tenantId=abc` query a route parsed with
+    // `Number(...)`) or non-positive (0, negatives) is treated as "no
+    // tenant supplied". Coerce before checking so a numeric-string id
+    // (some routes hand the raw query value straight through) is accepted.
+    const numeric = queryTenantId == null ? NaN : Number(queryTenantId);
+    const hasValidTenant = Number.isFinite(numeric) && numeric > 0;
+    if (!hasValidTenant) {
+      if (options?.requireTenant) {
+        res.status(400).json(TENANT_REQUIRED_ERROR);
+        return { ok: false };
+      }
+      return { ok: true, tenantId: null };
+    }
+    // Preserve the caller-supplied value as-is (numeric in production
+    // where the route coerces it; a numeric string in passthrough paths).
+    return { ok: true, tenantId: queryTenantId as number };
   }
   const userTenantId = req.session.tenantId ?? null;
   if (!userTenantId) {

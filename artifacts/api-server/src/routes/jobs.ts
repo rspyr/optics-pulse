@@ -10,7 +10,7 @@ router.get("/jobs", async (req, res) => {
   const query = ListJobsQueryParams.parse(req.query);
   const conditions: SQL[] = [];
 
-  const scope = resolveListTenantScope(req, res, query.tenantId);
+  const scope = resolveListTenantScope(req, res, query.tenantId, { requireTenant: true });
   if (!scope.ok) return;
   if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
   if (query.status) {

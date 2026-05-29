@@ -37,7 +37,7 @@ router.get("/drilldown/leads", async (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   const offset = req.query.offset ? Number(req.query.offset) : 0;
 
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];
@@ -78,7 +78,7 @@ router.get("/drilldown/jobs", async (req, res) => {
   // sort=revenue → biggest invoice first (for "what made up this revenue bar?" UX).
   const sortBy = req.query.sort === "revenue" ? "revenue" : "date";
 
-  const scope = resolveListTenantScope(req, res, queryTenantId);
+  const scope = resolveListTenantScope(req, res, queryTenantId, { requireTenant: true });
   if (!scope.ok) return;
 
   const conditions: SQL[] = [];
