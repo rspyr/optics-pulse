@@ -324,6 +324,45 @@ describe("Settings — rebate-edit recompute progress surface", () => {
     expect(screen.queryByText(/Recomputing historical revenue…/i)).not.toBeInTheDocument();
   });
 
+  it("re-surfaces a recompute already running on first mount (reopened mid-run)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
+
+    // The user kicked off a recompute, navigated away (or refreshed), and came
+    // back: a phase is already running when the page first mounts. No save is
+    // performed in this session, so recomputeArmed is never set by us.
+    syncSnapshot = runningSnapshot();
+
+    renderSettings();
+
+    // Open the card so the rebate surface is visible — but do NOT dirty the
+    // list or save. The surface must come up purely off the observed run.
+    const toggle = await screen.findByRole("button", { name: /API Integrations/i });
+    await user.click(toggle);
+
+    // The progress surface appears off recomputeRunning alone, with the
+    // invoices percent bar driven by the running snapshot.
+    await screen.findByText(/Recomputing historical revenue…/i);
+    await waitFor(() => {
+      expect(screen.getByText(/50 \/ ~100 \(50%\)/)).toBeInTheDocument();
+    });
+
+    // The phases then land fresh terminal rows. Without an armed baseline the
+    // completion branch treats base as null, so any terminal lastRun counts as
+    // done and it resolves to the success note.
+    syncSnapshot = terminalSuccessSnapshot();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3200);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Revenue recompute complete/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Recomputing historical revenue…/i)).not.toBeInTheDocument();
+    // We never performed a save in this session.
+    expect(patchCalls.length).toBe(0);
+  });
+
   it("clears via the grace window when no recompute ever starts (no-op edit)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });

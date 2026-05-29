@@ -349,6 +349,23 @@ export default function Settings() {
     }
   };
 
+  // Seed the recompute status once on mount so a run that's already in flight
+  // (the user kicked off a recompute, navigated away or refreshed, and came
+  // back) re-surfaces from a "running" snapshot even though nothing was armed
+  // in this session.
+  useEffect(() => {
+    if (!tenantId || !isAgency) return;
+    fetchRecomputeStatus();
+  }, [tenantId, isAgency, fetchRecomputeStatus]);
+
+  // Adopt a recompute that's already running when we land on the page without
+  // having armed it ourselves. There's no pre-save baseline in this case, so
+  // the completion branch below treats base as null and any terminal lastRun
+  // counts as freshly done.
+  useEffect(() => {
+    if (recomputeRunning && !recomputeArmed) setRecomputeArmed(true);
+  }, [recomputeRunning, recomputeArmed]);
+
   // Poll while we're waiting on a recompute we armed OR while a recompute is
   // observed running (covers reopening the panel mid-run).
   useEffect(() => {
