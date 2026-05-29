@@ -1628,8 +1628,38 @@ export async function backfillMetaCampaigns(
     }
 
     let totalSynced = 0;
+    let cancelledAt: { chunkIdx: number; rows: number } | null = null;
+
+    // Cooperative cancel sentinel — mirrors the Google Ads / ServiceTitan
+    // backfill pattern. A Meta chunk spends most of its time inside async
+    // operations (report poll, paging, upsert) that take callbacks, so we
+    // poll the cancel flag from inside those callbacks and throw this to
+    // unwind out of them. The outer catch distinguishes it from a real
+    // upstream error by checking `cancelledAt`.
+    class BackfillCancelled extends Error {
+      constructor() { super("backfill cancelled"); this.name = "BackfillCancelled"; }
+    }
+
+    async function checkCancel(): Promise<boolean> {
+      try {
+        const [row] = await db.select({ cancel: integrationSyncLogsTable.cancelRequested })
+          .from(integrationSyncLogsTable)
+          .where(eq(integrationSyncLogsTable.id, syncLog.id))
+          .limit(1);
+        return row?.cancel === true;
+      } catch {
+        return false;
+      }
+    }
+
     try {
       for (let i = 0; i < chunks.length; i++) {
+        // Cancel check at chunk boundary — cheap and frequent enough that a
+        // user clicking Cancel sees a response within seconds, not minutes.
+        if (await checkCancel()) {
+          cancelledAt = { chunkIdx: i, rows: totalSynced };
+          break;
+        }
         const { since, until } = chunks[i];
         await updateSyncLogChunkProgress(
           syncLog.id,
@@ -1672,23 +1702,60 @@ export async function backfillMetaCampaigns(
           lastHeartbeatAt = now;
           try { await heartbeatSyncLogProgress(syncLog.id, phase); } catch {}
         };
+        // Cooperative cancel poll on its own tight cadence
+        // (`CANCEL_POLL_MIN_INTERVAL_MS`, a few seconds), decoupled from the
+        // ~30s heartbeat throttle above. A single chunk can spend minutes in
+        // the async report poll, paging, or the upsert loop, so we piggyback
+        // the cancel check on the same callbacks that drive the heartbeat but
+        // gate it on its own clock. A cancel is a single cheap
+        // `SELECT cancel_requested`, so polling it far more often than we
+        // flush progress keeps a large chunk stoppable mid-flight within a few
+        // seconds (not up to ~30s) while still adding no per-row reads. Throw
+        // to unwind out of whichever async op is running; the outer catch
+        // treats `BackfillCancelled` as the expected cancel path, not a
+        // failure. Kept outside `beat`'s swallow-on-error try so the throw
+        // actually propagates.
+        let lastCancelCheckAt = Date.now();
+        const pollCancel = async () => {
+          const now = Date.now();
+          if (now - lastCancelCheckAt < CANCEL_POLL_MIN_INTERVAL_MS) return;
+          lastCancelCheckAt = now;
+          if (await checkCancel()) {
+            cancelledAt = { chunkIdx: i, rows: totalSynced };
+            throw new BackfillCancelled();
+          }
+        };
         const insights = await svc.fetchAdDailyInsightsAsync(since, until, {
-          onPollHeartbeat: () => { phase = "generating report"; return beat(); },
-          onPageHeartbeat: () => { phase = "downloading results"; return beat(); },
+          onPollHeartbeat: async () => { phase = "generating report"; await beat(); await pollCancel(); },
+          onPageHeartbeat: async () => { phase = "downloading results"; await beat(); await pollCancel(); },
         });
         const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights, {
-          onProgress: () => { phase = "saving results"; return beat(); },
+          onProgress: async () => { phase = "saving results"; await beat(); await pollCancel(); },
         });
         totalSynced += perAdSynced;
         console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows (async, ${svc.requestCount} requests so far)`);
       }
     } catch (innerErr) {
-      // Re-throw so the outer catch handles error-state, but stash partial
-      // progress on the log first so operators don't lose visibility into
-      // how far the backfill got before failing.
-      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
-      throw innerErr;
+      // BackfillCancelled is an expected unwind path, not a partial failure.
+      if (innerErr instanceof BackfillCancelled) {
+        // fall through to the cancelled-completion path below
+      } else {
+        // Re-throw so the outer catch handles error-state, but stash partial
+        // progress on the log first so operators don't lose visibility into
+        // how far the backfill got before failing.
+        const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+        try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
+        throw innerErr;
+      }
+    }
+
+    if (cancelledAt) {
+      // Finalize as `cancelled` (not `error`), preserving the rows already
+      // upserted — same contract as the Google Ads / ServiceTitan backfill
+      // cancel path.
+      await completeSyncLog(syncLog.id, "cancelled", totalSynced, `Cancelled by operator after chunk ${cancelledAt.chunkIdx + 1}/${chunks.length} (${totalSynced} rows synced)`);
+      console.log(`[Backfill] Meta tenant ${tenantId}: cancelled after ${totalSynced} ad-day rows (chunk ${cancelledAt.chunkIdx + 1}/${chunks.length})`);
+      return { synced: totalSynced, chunks: cancelledAt.chunkIdx, error: "cancelled" };
     }
 
     await completeSyncLog(syncLog.id, "completed", totalSynced);

@@ -476,3 +476,147 @@ describe("POST /integrations/meta/backfill — successful run", () => {
     expect(completed!.set.errorMessage).toBeNull();
   });
 });
+
+describe("POST /integrations/meta/backfill — cooperative cancel", () => {
+  it("finalizes the sync log as 'cancelled' (not error) at a chunk boundary, preserving rows already saved", async () => {
+    // Chunk 0 saves one ad-day row; at the chunk-1 boundary the cancel flag is
+    // set, so the run unwinds cleanly. The chunk-boundary checkCancel reads the
+    // cancelRequested flag off the sync log row.
+    //
+    // db.select() order inside backfillMetaCampaigns:
+    //   1. tenants
+    //   2. meta_ad_accounts (currency lookup)
+    //   3. checkCancel @ chunk 0 boundary → not cancelled
+    //   4. campaigns lookup (chunk 0 row) → insert
+    //   5. checkCancel @ chunk 1 boundary → cancelled → break
+    state.selectQueue.push([tenantWithMeta()]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.selectQueue.push([{ cancel: false }]); // chunk 0 boundary: keep going
+    state.selectQueue.push([]); // campaigns lookup → not found → insert
+    state.selectQueue.push([{ cancel: true }]); // chunk 1 boundary: cancel!
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+    state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+    // 31-day window → 2 chunks. Chunk 0 returns one row; chunk 1 is never
+    // fetched because we break at its boundary.
+    fetchAdDailyInsightsMock.mockResolvedValueOnce([
+      {
+        ad_id: "ad_1", ad_name: "Ad 1", adset_id: "as_1",
+        campaign_id: "c1", campaign_name: "Campaign One",
+        date_start: "2025-06-01", date_stop: "2025-06-01",
+        spend: "1.00", impressions: "10", clicks: "1",
+        actions: [{ action_type: "lead", value: "1" }],
+      },
+    ]);
+    fetchAdDailyInsightsMock.mockResolvedValue([]);
+
+    const res = await postJson("/integrations/meta/backfill", { tenantId: 7, days: 31 });
+
+    // A deliberate cancel resolves as a 200 success with cancelled:true, not a
+    // 502 failure.
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.cancelled).toBe(true);
+    expect(res.body.synced).toBe(1);
+
+    // Only chunk 0 was fetched — we broke at the chunk-1 boundary.
+    expect(fetchAdDailyInsightsMock).toHaveBeenCalledTimes(1);
+
+    // The sync log was finalized as 'cancelled' (not 'error'), keeping the one
+    // row already synced.
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(1);
+    expect(String(cancelledLog!.set.errorMessage)).toMatch(/cancelled by operator/i);
+
+    // No 'error' status was ever written.
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.status === "error"),
+    ).toBeUndefined();
+  });
+
+  it("cancels before any work when the flag is already set at the first chunk boundary (zero rows synced)", async () => {
+    state.selectQueue.push([tenantWithMeta()]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.selectQueue.push([{ cancel: true }]); // chunk 0 boundary: cancel immediately
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+
+    const res = await postJson("/integrations/meta/backfill", { tenantId: 7, days: 31 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled).toBe(true);
+    expect(res.body.synced).toBe(0);
+
+    // Nothing was fetched — we cancelled before the first chunk's report pull.
+    expect(fetchAdDailyInsightsMock).not.toHaveBeenCalled();
+
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(0);
+  });
+
+  it("stops mid-chunk within a few seconds via the dedicated cancel poll fired from the async-report heartbeat", async () => {
+    // A single chunk spends minutes inside the async report poll. The cancel
+    // poll now rides the report-poll heartbeat callback on its own ~3s cadence
+    // (CANCEL_POLL_MIN_INTERVAL_MS), decoupled from the ~30s heartbeat flush
+    // (HEARTBEAT_MIN_INTERVAL_MS). We advance a mocked clock by 5s before
+    // firing the poll heartbeat: that's past the 3s cancel cadence but well
+    // under the 30s flush cadence, so the cancel poll fires and unwinds the run
+    // before the chunk's upsert is ever reached.
+    let mockNow = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => mockNow);
+
+    // db.select() order:
+    //   1. tenants
+    //   2. meta_ad_accounts (currency lookup)
+    //   3. checkCancel @ chunk 0 boundary → not cancelled
+    //   4. cancel poll fired from onPollHeartbeat → cancelled → throw
+    state.selectQueue.push([tenantWithMeta()]);
+    state.selectQueue.push([{ accountId: "999", currency: "USD" }]);
+    state.selectQueue.push([{ cancel: false }]); // chunk 0 boundary: keep going
+    state.selectQueue.push([{ cancel: true }]); // cancel poll inside report heartbeat
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+
+    // The async report mock advances the clock past the 3s cancel cadence, then
+    // fires the poll heartbeat. The cancel poll riding that callback throws to
+    // unwind — so the mock never returns rows and the upsert is never reached.
+    fetchAdDailyInsightsMock.mockImplementation(
+      async (_since: string, _until: string, opts: {
+        onPollHeartbeat?: (info: { percentComplete: number; status: string }) => Promise<void> | void;
+      }) => {
+        mockNow += 5_000;
+        if (opts?.onPollHeartbeat) {
+          await opts.onPollHeartbeat({ percentComplete: 50, status: "JOB_RUNNING" });
+        }
+        return [];
+      },
+    );
+
+    const res = await postJson("/integrations/meta/backfill", { tenantId: 7, days: 31 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled).toBe(true);
+    // The cancel poll fired during report generation, before any rows were
+    // upserted. (The old code had no cancel path at all, so the run would have
+    // pushed on through every chunk.)
+    expect(res.body.synced).toBe(0);
+
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(0);
+
+    // No 'error' status was written — the cancel is the expected unwind path.
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.status === "error"),
+    ).toBeUndefined();
+  });
+});

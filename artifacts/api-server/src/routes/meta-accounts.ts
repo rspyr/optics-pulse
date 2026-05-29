@@ -157,6 +157,15 @@ router.post("/integrations/meta/backfill", requireRole("super_admin", "agency_us
 
   const result = await backfillMetaCampaigns(tenantId, days);
   if (result.error) {
+    // A cooperative cancel is a deliberate stop, not a failure — finalize the
+    // request as a 200 success with `cancelled: true` (mirrors the google_ads
+    // / service_titan backfill cancel contract) so the UI shows a "cancelled"
+    // toast instead of a misleading "backfill failed" error. Rows already
+    // synced are kept (the sync log row is finalized as `cancelled`).
+    if (result.error === "cancelled") {
+      res.json({ success: true, cancelled: true, ...result });
+      return;
+    }
     const status = /already running/i.test(result.error) ? 409
       : /not found/i.test(result.error) ? 404
       : /not configured|needs reconnect/i.test(result.error) ? 400
