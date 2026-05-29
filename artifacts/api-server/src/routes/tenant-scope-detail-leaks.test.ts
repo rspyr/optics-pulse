@@ -136,6 +136,7 @@ vi.mock("@workspace/db", () => {
     soldEstimatesTable: tablecol("sold_estimates"),
     leadAttributionCorrectionsTable: tablecol("lead_attribution_corrections"),
     scheduledFollowupsTable: tablecol("scheduled_followups"),
+    integrationSyncLogsTable: tablecol("integration_sync_logs"),
     isUnknownSource: (s: unknown) => s === "Unknown",
   };
 });

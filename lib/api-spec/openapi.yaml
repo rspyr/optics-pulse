@@ -1703,6 +1703,12 @@ components:
           type: boolean
         stSyncPaused:
           type: boolean
+        monthlyBudget:
+          type: integer
+          nullable: true
+          description: >-
+            Client's monthly ad budget in whole dollars. Null clears the
+            override so the agency overview falls back to the default budget.
 
     Lead:
       type: object

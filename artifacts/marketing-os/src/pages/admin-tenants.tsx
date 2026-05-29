@@ -30,6 +30,7 @@ interface TenantForm {
   googleAdsDeveloperToken: string;
   podiumApiToken: string;
   podiumLocationId: string;
+  monthlyBudget: string;
   isDemo: boolean;
 }
 
@@ -90,6 +91,7 @@ const emptyForm: TenantForm = {
   googleAdsDeveloperToken: "",
   podiumApiToken: "",
   podiumLocationId: "",
+  monthlyBudget: "",
   isDemo: false,
 };
 
@@ -375,6 +377,14 @@ export default function AdminTenants() {
       timezone: form.timezone,
       isDemo: form.isDemo,
     };
+    // Whole dollars; blank clears the override (null → falls back to default).
+    const trimmedBudget = form.monthlyBudget.trim();
+    if (trimmedBudget === "") {
+      body.monthlyBudget = null;
+    } else {
+      const parsed = Math.round(Number(trimmedBudget));
+      if (Number.isFinite(parsed) && parsed >= 0) body.monthlyBudget = parsed;
+    }
     if (integrationConfig) body.integrationConfig = integrationConfig;
 
     await fetch(`${API_BASE}/api/tenants/${id}`, {
@@ -424,6 +434,7 @@ export default function AdminTenants() {
       metaPixelId: lc.metaPixelId || "",
       podiumApiToken: lc.podiumApiToken || "",
       podiumLocationId: lc.podiumLocationId || "",
+      monthlyBudget: t.monthlyBudget != null ? String(t.monthlyBudget) : "",
       isDemo: Boolean(t.isDemo),
     });
     setDirtyFields(new Set());
@@ -781,6 +792,7 @@ export default function AdminTenants() {
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ServiceTitan Tenant ID</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Timezone</th>
+                <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Monthly Budget</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Integrations</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ST Sync</th>
                 <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
@@ -820,6 +832,20 @@ export default function AdminTenants() {
                           </Select>
                         </td>
                         <td className="p-4">
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={form.monthlyBudget}
+                              onChange={(e) => setForm(f => ({ ...f, monthlyBudget: e.target.value }))}
+                              placeholder="Default"
+                              className="bg-background/50 border border-white/10 rounded pl-5 pr-2 py-1 text-white text-sm w-28"
+                            />
+                          </div>
+                        </td>
+                        <td className="p-4">
                           <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>
                             {t.hasIntegrationConfig ? "Configured" : "None"}
                           </Badge>
@@ -852,6 +878,13 @@ export default function AdminTenants() {
                         <td className="p-4 font-medium text-white">{t.name as string}</td>
                         <td className="p-4 text-sm text-muted-foreground">{(t.serviceTitanId as string) || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{t.timezone as string}</td>
+                        <td className="p-4 text-sm">
+                          {t.monthlyBudget != null ? (
+                            <span className="text-white">${Number(t.monthlyBudget).toLocaleString()}</span>
+                          ) : (
+                            <span className="text-muted-foreground italic">Default</span>
+                          )}
+                        </td>
                         <td className="p-4">
                           <div className="flex items-center gap-2">
                             <Badge variant={t.hasIntegrationConfig ? "success" : "neutral"}>
@@ -903,7 +936,7 @@ export default function AdminTenants() {
                   </tr>
                   {expandedSyncTenant === tid && !editId && (
                     <tr className="bg-white/[0.01]">
-                      <td colSpan={9} className="px-6 py-4">
+                      <td colSpan={10} className="px-6 py-4">
                         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Integration Sync Status</div>
                         {tenantSyncStatuses[tid] ? (
                           <div className="grid grid-cols-3 gap-4">

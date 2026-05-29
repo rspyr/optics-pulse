@@ -33,6 +33,8 @@ export interface UpdateTenantInput {
   isActive?: boolean;
   isDemo?: boolean;
   stSyncPaused?: boolean;
+  /** Client's monthly ad budget in whole dollars. Null clears the override so the agency overview falls back to the default budget. */
+  monthlyBudget?: number | null;
 }
 
 export type LeadStatus = (typeof LeadStatus)[keyof typeof LeadStatus];

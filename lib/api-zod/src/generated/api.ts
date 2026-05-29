@@ -73,6 +73,12 @@ export const UpdateTenantBody = zod.object({
   isActive: zod.boolean().optional(),
   isDemo: zod.boolean().optional(),
   stSyncPaused: zod.boolean().optional(),
+  monthlyBudget: zod
+    .number()
+    .nullish()
+    .describe(
+      "Client's monthly ad budget in whole dollars. Null clears the override so the agency overview falls back to the default budget.",
+    ),
 });
 
 export const UpdateTenantResponse = zod.object({

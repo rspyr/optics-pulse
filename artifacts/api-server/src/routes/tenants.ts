@@ -195,6 +195,25 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   if (body.stSyncPaused !== undefined && (role === "super_admin" || role === "agency_user")) {
     updateData.stSyncPaused = body.stSyncPaused;
   }
+  // Per-client monthly ad budget (whole dollars). Only agency staff may set
+  // it. `null` clears the override so the agency overview's Budget Pace falls
+  // back to the default budget. Reject negative or non-integer values.
+  if (body.monthlyBudget !== undefined) {
+    if (role !== "super_admin" && role !== "agency_user") {
+      res.status(403).json({ error: "Only agency users can modify the monthly budget" });
+      return;
+    }
+    if (body.monthlyBudget === null) {
+      updateData.monthlyBudget = null;
+    } else {
+      const budget = body.monthlyBudget;
+      if (!Number.isInteger(budget) || budget < 0) {
+        res.status(400).json({ error: "monthlyBudget must be a non-negative whole number of dollars, or null to clear" });
+        return;
+      }
+      updateData.monthlyBudget = budget;
+    }
+  }
   if (req.body.integrationConfig && typeof req.body.integrationConfig === "object") {
     const [existingTenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
     let mergedConfig: Record<string, unknown> = {};

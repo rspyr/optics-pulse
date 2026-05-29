@@ -74,6 +74,7 @@ vi.mock("@workspace/db", () => {
     usersTable: tablecol("users"),
     leadSourceAliasesTable: tablecol("lead_source_aliases"),
     callrailWebhookStatusTable: tablecol("callrail_webhook_status"),
+    integrationSyncLogsTable: tablecol("integration_sync_logs"),
   };
 });
 
@@ -273,6 +274,41 @@ describe("Rebate program admin save flow (PATCH/GET /tenants revenueConfig)", ()
       });
       expect(res.status).toBe(400);
       expect(res.json).toEqual({ error: "rebateLabels must be an array of strings" });
+      const dbMod = await import("@workspace/db");
+      expect(vi.mocked(dbMod.db.update)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("PATCH /tenants/:tenantId — monthly budget", () => {
+    it("agency_user sets a whole-dollar budget → persisted", async () => {
+      const app = await setupApp("agency_user", 1);
+      mockDb.updateResults = [[{ id: 7, name: "Acme", apiConfig: null, monthlyBudget: 25000 }]];
+      const res = await request(app, "PATCH", "/tenants/7", { monthlyBudget: 25000 });
+      expect(res.status).toBe(200);
+      expect(lastUpdateSetArg?.monthlyBudget).toBe(25000);
+    });
+
+    it("null clears the override → falls back to default", async () => {
+      const app = await setupApp("super_admin", null);
+      mockDb.updateResults = [[{ id: 7, name: "Acme", apiConfig: null, monthlyBudget: null }]];
+      const res = await request(app, "PATCH", "/tenants/7", { monthlyBudget: null });
+      expect(res.status).toBe(200);
+      expect(lastUpdateSetArg?.monthlyBudget).toBeNull();
+    });
+
+    it("rejects a negative budget → 400, no DB write", async () => {
+      const app = await setupApp("super_admin", null);
+      const res = await request(app, "PATCH", "/tenants/7", { monthlyBudget: -5 });
+      expect(res.status).toBe(400);
+      const dbMod = await import("@workspace/db");
+      expect(vi.mocked(dbMod.db.update)).not.toHaveBeenCalled();
+    });
+
+    it("client_admin cannot modify the monthly budget → 403, no DB write", async () => {
+      const app = await setupApp("client_admin", 7);
+      const res = await request(app, "PATCH", "/tenants/7", { monthlyBudget: 5000 });
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual({ error: "Only agency users can modify the monthly budget" });
       const dbMod = await import("@workspace/db");
       expect(vi.mocked(dbMod.db.update)).not.toHaveBeenCalled();
     });
