@@ -111,7 +111,11 @@ router.get("/attribution/events", async (req, res) => {
   const offset = query.offset ?? 0;
 
   const [events, [totalResult]] = await Promise.all([
-    db.select().from(attributionEventsTable).where(where).orderBy(desc(attributionEventsTable.createdAt)).limit(limit).offset(offset),
+    // Append the unique primary key as a deterministic tiebreaker so paging is
+    // stable under LIMIT/OFFSET: createdAt ties leave rows the ORDER BY can't
+    // distinguish, and Postgres gives no guaranteed order among them, so without
+    // a unique secondary key adjacent pages can overlap or skip rows.
+    db.select().from(attributionEventsTable).where(where).orderBy(desc(attributionEventsTable.createdAt), desc(attributionEventsTable.id)).limit(limit).offset(offset),
     db.select({ count: count() }).from(attributionEventsTable).where(where),
   ]);
 

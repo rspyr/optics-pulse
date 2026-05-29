@@ -308,7 +308,13 @@ router.get("/leads-hub/archive", async (req, res) => {
 
   const where = and(...conds);
   const [leads, [totalResult]] = await Promise.all([
-    db.select().from(leadsTable).where(where).orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.updatedAt}) DESC`).limit(limit).offset(offset),
+    // Append the unique primary key as a deterministic tiebreaker so paging is
+    // stable under LIMIT/OFFSET: the COALESCE(bookedAt, updatedAt) sort ties
+    // whenever rows share that timestamp, and Postgres gives no guaranteed order
+    // among them, so without a unique secondary key adjacent pages can overlap
+    // or skip rows. leads.id is unique + monotonic and appended in the same
+    // (desc) direction as the primary sort.
+    db.select().from(leadsTable).where(where).orderBy(sql`COALESCE(${leadsTable.bookedAt}, ${leadsTable.updatedAt}) DESC`, desc(leadsTable.id)).limit(limit).offset(offset),
     db.select({ count: count() }).from(leadsTable).where(where),
   ]);
 

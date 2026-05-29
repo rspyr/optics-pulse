@@ -89,7 +89,11 @@ router.get("/leads", async (req, res) => {
   const offset = query.offset ?? 0;
 
   const [leads, [totalResult]] = await Promise.all([
-    db.select().from(leadsTable).where(where).orderBy(desc(leadsTable.createdAt)).limit(limit).offset(offset),
+    // Append the unique primary key as a deterministic tiebreaker so paging is
+    // stable under LIMIT/OFFSET: createdAt ties leave rows the ORDER BY can't
+    // distinguish, and Postgres gives no guaranteed order among them, so without
+    // a unique secondary key adjacent pages can overlap or skip rows.
+    db.select().from(leadsTable).where(where).orderBy(desc(leadsTable.createdAt), desc(leadsTable.id)).limit(limit).offset(offset),
     db.select({ count: count() }).from(leadsTable).where(where),
   ]);
 
@@ -536,7 +540,7 @@ router.get("/leads/search", async (req, res) => {
           .from(leadsTable)
           .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
           .where(tpWhere)
-          .orderBy(orderExpr, desc(leadsTable.createdAt))
+          .orderBy(orderExpr, desc(leadsTable.createdAt), desc(leadsTable.id))
           .limit(limit)
           .offset(offset),
         db.select({ count: count() }).from(leadsTable).leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id)).where(tpWhere),
@@ -584,7 +588,7 @@ router.get("/leads/search", async (req, res) => {
         .from(leadsTable)
         .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
         .where(where)
-        .orderBy(textQuery ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt))
+        .orderBy(textQuery ? desc(sql`relevance`) : desc(leadsTable.createdAt), desc(leadsTable.createdAt), desc(leadsTable.id))
         .limit(limit)
         .offset(offset),
       db.select({ count: count() }).from(leadsTable).leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id)).where(where),

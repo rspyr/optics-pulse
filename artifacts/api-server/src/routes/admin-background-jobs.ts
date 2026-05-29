@@ -45,7 +45,11 @@ router.get("/admin/background-jobs", ...agencyOnly, async (req, res) => {
         .select()
         .from(backgroundJobsTable)
         .where(where)
-        .orderBy(desc(backgroundJobsTable.createdAt))
+        // Append the unique primary key as a deterministic tiebreaker so paging
+        // is stable under LIMIT/OFFSET: createdAt ties leave rows the ORDER BY
+        // can't distinguish, and Postgres gives no guaranteed order among them,
+        // so without a unique secondary key adjacent pages can overlap or skip.
+        .orderBy(desc(backgroundJobsTable.createdAt), desc(backgroundJobsTable.id))
         .limit(limit)
         .offset(offset),
       db.select({ count: count() }).from(backgroundJobsTable).where(where),

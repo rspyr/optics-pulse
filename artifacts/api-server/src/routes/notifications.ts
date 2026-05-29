@@ -44,7 +44,8 @@ router.get("/notifications", requireRole(...AGENCY_ROLES), async (req, res) => {
     const notifications = await db.select()
       .from(notificationsTable)
       .where(where)
-      .orderBy(desc(notificationsTable.createdAt))
+      // Unique id tiebreaker keeps LIMIT/OFFSET paging stable when createdAt ties.
+      .orderBy(desc(notificationsTable.createdAt), desc(notificationsTable.id))
       .limit(limit)
       .offset(offset);
 
@@ -111,7 +112,8 @@ router.get("/notifications/history", requireRole(...AGENCY_ROLES), async (req, r
     const notifications = await db.select()
       .from(notificationsTable)
       .where(scope)
-      .orderBy(desc(notificationsTable.createdAt))
+      // Unique id tiebreaker keeps LIMIT/OFFSET paging stable when createdAt ties.
+      .orderBy(desc(notificationsTable.createdAt), desc(notificationsTable.id))
       .limit(limit)
       .offset(offset);
 

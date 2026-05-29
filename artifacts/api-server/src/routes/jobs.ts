@@ -23,7 +23,13 @@ router.get("/jobs", async (req, res) => {
   const offset = query.offset ?? 0;
 
   const [jobs, [totalResult]] = await Promise.all([
-    db.select().from(jobsTable).where(where).orderBy(desc(jobsTable.createdAt)).limit(limit).offset(offset),
+    // Append the unique primary key as a deterministic tiebreaker so paging is
+    // stable under LIMIT/OFFSET. createdAt ties (bulk imports stamp the same
+    // timestamp), and Postgres gives no guaranteed order among rows the ORDER BY
+    // can't distinguish — so without a unique secondary key, adjacent pages can
+    // overlap (a tied row served twice) or skip rows. jobs.id is unique +
+    // monotonic, so appending it in the same direction gives a total order.
+    db.select().from(jobsTable).where(where).orderBy(desc(jobsTable.createdAt), desc(jobsTable.id)).limit(limit).offset(offset),
     db.select({ count: count() }).from(jobsTable).where(where),
   ]);
 

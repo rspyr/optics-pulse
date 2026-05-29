@@ -36,7 +36,10 @@ async function checkDueCallbacks() {
             ),
           )
         )
-        .orderBy(asc(leadsTable.callbackAt))
+        // Unique id tiebreaker (same asc direction as callbackAt) gives a stable
+        // total order so LIMIT/OFFSET paging never skips or re-serves a lead when
+        // multiple callbacks share the same callbackAt timestamp.
+        .orderBy(asc(leadsTable.callbackAt), asc(leadsTable.id))
         .limit(pageSize)
         .offset(offset);
 
