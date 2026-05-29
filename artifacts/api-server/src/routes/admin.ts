@@ -16,6 +16,11 @@ const router: IRouter = Router();
 
 const agencyOnly = [requireRole("super_admin", "agency_user")];
 
+// Fallback when a tenant has no explicit `monthly_budget` set. Mirrors the
+// `MONTHLY_BUDGET_DEFAULT` used by `/dashboard/cross-tenant-overview` so both
+// paths report the same budget/pacing for a given tenant.
+const MONTHLY_BUDGET_DEFAULT = 15000;
+
 /**
  * Surface the same data as the startup `[broken-account-audit]` log
  * to admins in the UI, so they can act on broken accounts without
@@ -277,7 +282,7 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
       const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
       const projectedSpend = dayOfMonth > 0 ? Math.round((mtdSpend / dayOfMonth) * daysInMonth) : 0;
 
-      const monthlyBudget = 15000;
+      const monthlyBudget = tenant.monthlyBudget ?? MONTHLY_BUDGET_DEFAULT;
 
       tenantStats.push({
         tenantId: tenant.id,
