@@ -602,3 +602,197 @@ describe("GET /drilldown/revenue-attributed/facets — distinct sorted values (r
     expect(sources).not.toContain("ExcludedSource");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stable paging for the TEXT (customer) and DATE sorts against real Postgres.
+//
+// The revenue paging block above leans on *distinct* numeric revenues, so its
+// ORDER BY is total on its own and LIMIT/OFFSET can't misbehave. sort=customer
+// and sort=date are the dangerous cases: customer names and invoice dates tie
+// constantly, and Postgres gives no guaranteed order among rows the ORDER BY
+// can't tell apart. Without a unique tiebreaker, two adjacent pages can serve
+// the same tied row twice (overlap) or drop one entirely (skip) — the classic
+// LIMIT/OFFSET-on-a-non-unique-sort bug.
+//
+// This block seeds a fresh tenant with *tied* customer names AND *tied* invoice
+// dates, deliberately arranged so a tied group straddles a page boundary, then
+// walks the pages under sort=customer and sort=date (asc + desc). It asserts
+// every page is a disjoint, correctly-ordered slice of the route's own full
+// (limit=all) ordering, that the pages reassemble that full list with no
+// overlap and no skips, and that the full list matches the intended total order
+// (primary key, then jobs.id as the tiebreaker). That total order is exactly
+// what the route's id tiebreaker guarantees; remove it and these fail.
+// ---------------------------------------------------------------------------
+interface SortRow {
+  id: number;
+  customerName: string;
+  invoiceDateMs: number;
+}
+interface SortFx {
+  tenantId: number;
+  leadId: number;
+  jobIds: number[];
+  rows: SortRow[]; // in insertion order → id ascending
+}
+
+let sortFx: SortFx;
+
+// Two tied customer names (sort A < B under any reasonable collation) and two
+// tied invoice dates, both in range. Each (name,date) combo repeats so both the
+// customer sort and the date sort have ties that span page boundaries.
+const CUST_A = "Acme";
+const CUST_B = "Beacon";
+const DATE_EARLY = new Date("2026-03-10T12:00:00.000Z");
+const DATE_LATE = new Date("2026-03-20T12:00:00.000Z");
+
+beforeAll(async () => {
+  const slug = `rev-attr-sort-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const [tenant] = await db
+    .insert(tenantsTable)
+    .values({ name: `Revenue Attr Sort ${slug}`, clientSlug: slug })
+    .returning();
+
+  // One shared lead is enough — the customer/date sorts read jobs columns, not
+  // the lead. (A lead is still needed so the left-join resolves source/funnel.)
+  const [lead] = await db
+    .insert(leadsTable)
+    .values({
+      tenantId: tenant.id,
+      firstName: "Sort",
+      lastName: slug,
+      source: SOURCE_GOOGLE,
+      originalSource: SOURCE_GOOGLE,
+      leadType: "SortFunnel",
+    })
+    .returning();
+
+  const mkJob = async (customerName: string, invoiceDate: Date) => {
+    const [job] = await db
+      .insert(jobsTable)
+      .values({
+        tenantId: tenant.id,
+        leadId: lead.id,
+        jobType: "hvac",
+        jobTypeName: "HVAC",
+        status: "completed",
+        revenue: 1000,
+        invoiceTotal: 1000,
+        invoiceRebateAmount: 0,
+        matchLevel: "gclid",
+        customerName,
+        invoiceDate,
+      })
+      .returning();
+    return job;
+  };
+
+  // Insertion order fixes id ascending (serial). The arrangement gives:
+  //   - customer ties: Acme ×3, Beacon ×3
+  //   - date ties: DATE_EARLY on rows 1,3,5; DATE_LATE on rows 2,4,6
+  // With limit=2 a tied group straddles a page boundary under both sorts.
+  const specs: { name: string; date: Date }[] = [
+    { name: CUST_A, date: DATE_EARLY },
+    { name: CUST_A, date: DATE_LATE },
+    { name: CUST_A, date: DATE_EARLY },
+    { name: CUST_B, date: DATE_LATE },
+    { name: CUST_B, date: DATE_EARLY },
+    { name: CUST_B, date: DATE_LATE },
+  ];
+
+  const rows: SortRow[] = [];
+  for (const spec of specs) {
+    const job = await mkJob(spec.name, spec.date);
+    rows.push({ id: job.id, customerName: spec.name, invoiceDateMs: spec.date.getTime() });
+  }
+
+  sortFx = {
+    tenantId: tenant.id,
+    leadId: lead.id,
+    jobIds: rows.map((r) => r.id),
+    rows,
+  };
+});
+
+afterAll(async () => {
+  if (!sortFx) return;
+  try {
+    await db.delete(jobsTable).where(inArray(jobsTable.id, sortFx.jobIds));
+    await db.delete(leadsTable).where(eq(leadsTable.id, sortFx.leadId));
+    await db.delete(tenantsTable).where(eq(tenantsTable.id, sortFx.tenantId));
+  } catch {
+    /* best-effort cleanup */
+  }
+});
+
+describe("GET /drilldown/revenue-attributed — stable paging for tied customer/date sorts (real Postgres)", () => {
+  const sortRange = () =>
+    `tenantId=${sortFx.tenantId}&startDate=${START_DATE}&endDate=${END_DATE}`;
+
+  // The total order the route's ORDER BY produces: primary key first, then
+  // jobs.id as the unique tiebreaker — both in the requested direction (desc
+  // reverses the whole comparator, tiebreaker included).
+  const expectedOrder = (key: "customer" | "date", dir: "asc" | "desc"): number[] =>
+    [...sortFx.rows]
+      .sort((a, b) => {
+        let cmp =
+          key === "customer"
+            ? a.customerName < b.customerName
+              ? -1
+              : a.customerName > b.customerName
+                ? 1
+                : 0
+            : a.invoiceDateMs - b.invoiceDateMs;
+        if (cmp === 0) cmp = a.id - b.id; // unique id tiebreak
+        return dir === "asc" ? cmp : -cmp;
+      })
+      .map((r) => r.id);
+
+  async function walkPages(query: string, expected: number[]): Promise<void> {
+    const total = expected.length;
+
+    // The route's own full (limit=all) ordering is the source of truth the
+    // pages must match. Assert it equals the intended total order so a broken
+    // tiebreaker is caught even if every page happened to agree with itself.
+    const full = await getJson(app, `${query}&limit=all`);
+    expect(full.status).toBe(200);
+    const fullIds = (full.json as ListRow[]).map((r) => r.id);
+    expect(fullIds).toEqual(expected);
+
+    const limit = 2;
+    const pages: number[][] = [];
+    for (let offset = 0; offset < total; offset += limit) {
+      const res = await getJson(app, `${query}&limit=${limit}&offset=${offset}`);
+      expect(res.status).toBe(200);
+      // Count is the full filtered total on every page, never the page size.
+      expect(res.headers["x-total-count"]).toBe(String(total));
+      pages.push((res.json as ListRow[]).map((r) => r.id));
+    }
+
+    // Every page is exactly the matching slice of the full ordering.
+    pages.forEach((ids, i) => {
+      expect(ids).toEqual(fullIds.slice(i * limit, i * limit + limit));
+    });
+
+    // Pages reassemble the full list in order (no skipped rows) and share no
+    // ids (no overlap) — the two failure modes of paging a non-unique sort.
+    const reassembled = pages.flat();
+    expect(reassembled).toEqual(fullIds);
+    expect(new Set(reassembled).size).toBe(reassembled.length);
+  }
+
+  for (const dir of ["asc", "desc"] as const) {
+    it(`sort=customer&dir=${dir}: tied names page into disjoint, ordered slices`, async () => {
+      await walkPages(
+        `/drilldown/revenue-attributed?${sortRange()}&sort=customer&dir=${dir}`,
+        expectedOrder("customer", dir),
+      );
+    });
+
+    it(`sort=date&dir=${dir}: tied invoice dates page into disjoint, ordered slices`, async () => {
+      await walkPages(
+        `/drilldown/revenue-attributed?${sortRange()}&sort=date&dir=${dir}`,
+        expectedOrder("date", dir),
+      );
+    });
+  }
+});

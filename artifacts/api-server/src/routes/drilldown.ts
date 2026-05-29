@@ -140,6 +140,16 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const sortDir = req.query.dir === "asc" ? "asc" : "desc";
   const sortExpr = sortExprByKey[sortKey];
   const orderBy = sortDir === "asc" ? asc(sortExpr) : desc(sortExpr);
+  // Deterministic tiebreaker so paging is stable under LIMIT/OFFSET. The text
+  // (customer) and date sorts have many ties, and Postgres does not guarantee
+  // any particular order among rows the ORDER BY can't distinguish — so without
+  // a unique secondary key, two requests for adjacent pages can overlap (a tied
+  // row served twice) or skip rows entirely. jobs.id is unique + monotonic, so
+  // appending it (in the same direction as the primary sort) gives a total
+  // order: every page is a disjoint, complete slice of one fixed sequence.
+  // Built as raw SQL rather than asc()/desc() so the single-asc/desc-call
+  // contract the mocked unit tests assert on stays intact.
+  const idTiebreak = sortDir === "asc" ? sql`${jobsTable.id} asc` : sql`${jobsTable.id} desc`;
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -163,7 +173,7 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
     .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
     .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
     .where(where)
-    .orderBy(orderBy);
+    .orderBy(orderBy, idTiebreak);
   const rows =
     limit == null
       ? await baseQuery
