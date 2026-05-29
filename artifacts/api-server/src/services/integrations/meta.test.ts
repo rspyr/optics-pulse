@@ -799,6 +799,53 @@ describe("MetaAPIService — fetchAdDailyInsightsAsync (Task #561 async report p
       runWithTimers(svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02")),
     ).rejects.toBeInstanceOf(MetaApiError);
   });
+
+  it("fires onPageHeartbeat once per page while paging the completed report", async () => {
+    setFetch(async (url, init) => {
+      const u = String(url);
+      const method = (init as RequestInit | undefined)?.method || "GET";
+      if (method === "POST" && u.includes("/act_1/insights")) {
+        return mockResponse(200, { report_run_id: "rep_pg" });
+      }
+      if (method === "GET" && /\/rep_pg\?/.test(u)) {
+        // Completes immediately so no poll heartbeats fire — isolating the
+        // paging heartbeat under test.
+        return mockResponse(200, { async_status: "Job Completed", async_percent_completion: 100 });
+      }
+      if (method === "GET" && /\/rep_pg\/insights/.test(u)) {
+        if (!/after=p1/.test(u)) {
+          return mockResponse(200, {
+            data: [{ ad_id: "a1", date_start: "2026-01-01", date_stop: "2026-01-01" }],
+            paging: { next: "https://graph.facebook.com/v21.0/rep_pg/insights?after=p1", cursors: { after: "p1" } },
+          });
+        }
+        return mockResponse(200, {
+          data: [{ ad_id: "a2", date_start: "2026-01-02", date_stop: "2026-01-02" }],
+          paging: { cursors: { after: "p2" } },
+        });
+      }
+      return mockResponse(500, { error: { message: "unexpected route", url: u } });
+    });
+
+    const pageBeats: Array<{ pagesFetched: number; rowsCollected: number }> = [];
+    let pollBeats = 0;
+    const svc = new MetaAPIService({ accessToken: "tok", adAccountId: "act_1" });
+    const rows = await runWithTimers(
+      svc.fetchAdDailyInsightsAsync("2026-01-01", "2026-01-02", {
+        pollIntervalMs: 1000,
+        onPollHeartbeat: () => { pollBeats++; },
+        onPageHeartbeat: (info) => { pageBeats.push(info); },
+      }),
+    );
+
+    expect(rows.map((r) => r.ad_id)).toEqual(["a1", "a2"]);
+    expect(pollBeats).toBe(0);
+    // One heartbeat per page fetched (including the final page), so the run
+    // stays alive while paging a large completed report.
+    expect(pageBeats.length).toBe(2);
+    expect(pageBeats.map((b) => b.pagesFetched)).toEqual([1, 2]);
+    expect(pageBeats.map((b) => b.rowsCollected)).toEqual([1, 2]);
+  });
 });
 
 describe("MetaAPIService — listing pagination guards", () => {

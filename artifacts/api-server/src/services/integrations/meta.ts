@@ -409,6 +409,15 @@ export class MetaAPIService {
        * live backfill.
        */
       onPollHeartbeat?: (info: { percentComplete: number; status: string }) => void | Promise<void>;
+      /**
+       * Liveness heartbeat fired on every page iteration while the *completed*
+       * report is being paged (step 3). Report generation can finish and then
+       * paging up to the 200-page safety cap can itself run for minutes on a
+       * very large chunk — during which the poll heartbeat above has already
+       * stopped. Stamping here keeps the run alive through that second slow
+       * phase. Same swallow-on-error contract as `onPollHeartbeat`.
+       */
+      onPageHeartbeat?: (info: { pagesFetched: number; rowsCollected: number }) => void | Promise<void>;
     } = {},
   ): Promise<MetaInsightRow[]> {
     if (!this.adAccountId) throw new Error("MetaAPIService: adAccountId required for insights");
@@ -486,6 +495,12 @@ export class MetaAPIService {
       lastCursor = cursor;
       nextPath = next;
       nextParams = undefined;
+      // Mid-paging liveness heartbeat: report generation is done so the poll
+      // heartbeat has stopped, but paging a large report can itself run for
+      // minutes. Stamp here so the run keeps looking alive through this phase.
+      if (opts.onPageHeartbeat) {
+        await opts.onPageHeartbeat({ pagesFetched: safety, rowsCollected: all.length });
+      }
     }
     return all;
   }

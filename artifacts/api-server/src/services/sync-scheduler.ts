@@ -1314,6 +1314,18 @@ async function upsertMetaInsightRows(
   accountIdNoPrefix: string,
   currency: string | undefined,
   insights: MetaInsightLikeRow[],
+  opts?: {
+    /**
+     * Liveness heartbeat fired between DB batches while writing rows. For a
+     * very large chunk the ad-day insert loop, per-campaign upsert loop, and
+     * stat insert loop can each take minutes — long after the async report's
+     * poll/page heartbeats have stopped. Stamping here keeps the run alive
+     * through the upsert phase. Awaited so a slow write back-pressures the
+     * loop; the caller swallows thrown errors so a heartbeat hiccup never
+     * aborts a live backfill.
+     */
+    onProgress?: () => void | Promise<void>;
+  },
 ): Promise<{ perAdSynced: number; campaignDayCount: number }> {
   interface CampaignDayBucket {
     campaignId: string;
@@ -1398,6 +1410,7 @@ async function upsertMetaInsightRows(
           actionsJson: sql`excluded.actions_json`,
         },
       });
+    if (opts?.onProgress) await opts.onProgress();
   }
 
   const campaignIdByExternal = new Map<string, number>();
@@ -1422,6 +1435,7 @@ async function upsertMetaInsightRows(
         .where(eq(campaignsTable.id, campaign.id));
     }
     campaignIdByExternal.set(extId, campaign.id);
+    if (opts?.onProgress) await opts.onProgress();
   }
 
   const statRows: Array<typeof campaignDailyStatsTable.$inferInsert> = [];
@@ -1452,6 +1466,7 @@ async function upsertMetaInsightRows(
           currency: sql`excluded.currency`,
         },
       });
+    if (opts?.onProgress) await opts.onProgress();
   }
 
   return { perAdSynced: adDailyRows.length, campaignDayCount: campaignBuckets.size };
@@ -1573,17 +1588,27 @@ export async function backfillMetaCampaigns(
         // `MetaTokenInvalidError` still bubbles through unchanged so the
         // reconnect-flag logic from Task #556 keeps working.
         //
-        // Mid-chunk heartbeat: a single chunk's async report can poll for
-        // minutes, during which the only structural progress write (the
-        // `updateSyncLogChunkProgress` above) is already in the past. Stamp a
-        // lightweight liveness watermark from inside the poll loop, throttled
-        // to `HEARTBEAT_MIN_INTERVAL_MS`, so the run keeps looking alive to the
-        // reaper / UI. A heartbeat write failure must never abort a live
-        // backfill, so it's swallowed.
+        // Mid-chunk heartbeat: a single chunk stays slow across three phases
+        // long after `updateSyncLogChunkProgress` (above) — the async report
+        // polls for minutes, paging the completed report can run up to the
+        // 200-page cap, and the upsert loops can take minutes on a large
+        // chunk. Stamp a lightweight liveness watermark from inside all three,
+        // throttled to `HEARTBEAT_MIN_INTERVAL_MS` via a shared timestamp so we
+        // never exceed ~2 writes/min regardless of which phase is running. A
+        // heartbeat write failure must never abort a live backfill, so it's
+        // swallowed.
+        let lastHeartbeatAt = Date.now();
+        const beat = async () => {
+          const now = Date.now();
+          if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) return;
+          lastHeartbeatAt = now;
+          try { await heartbeatSyncLogProgress(syncLog.id); } catch {}
+        };
         const insights = await svc.fetchAdDailyInsightsAsync(since, until, {
-          onPollHeartbeat: makePollHeartbeat(syncLog.id),
+          onPollHeartbeat: beat,
+          onPageHeartbeat: beat,
         });
-        const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
+        const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights, { onProgress: beat });
         totalSynced += perAdSynced;
         console.log(`[Backfill] Meta tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${perAdSynced} ad-day rows (async, ${svc.requestCount} requests so far)`);
       }
