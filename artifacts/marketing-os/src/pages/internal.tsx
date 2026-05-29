@@ -354,13 +354,21 @@ export default function Internal() {
           method: "POST",
           credentials: "include",
         });
-        let body: { success?: boolean; synced?: number; chunks?: number; error?: string } = {};
+        let body: { success?: boolean; cancelled?: boolean; synced?: number; chunks?: number; error?: string } = {};
         try { body = await res.json(); } catch { /* non-JSON */ }
         if (!res.ok || body.success === false) {
           toast({
             title: `${meta.label} backfill failed`,
             description: body.error || `HTTP ${res.status}`,
             variant: "destructive",
+          });
+        } else if (body.cancelled) {
+          // Cooperative cancel: the run stopped on request, keeping rows
+          // already synced. Surface as an informational (non-destructive)
+          // toast rather than a failure.
+          toast({
+            title: `${meta.label} backfill cancelled`,
+            description: `Stopped on request. Kept ${body.synced ?? 0} rows synced before cancelling.`,
           });
         } else {
           toast({

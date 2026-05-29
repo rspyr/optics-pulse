@@ -1780,8 +1780,37 @@ export async function backfillGoogleAdsCampaigns(
     }
 
     let totalSynced = 0;
+    let cancelledAt: { chunkIdx: number; rows: number } | null = null;
+
+    // Cooperative cancel sentinel — mirrors the ServiceTitan backfill pattern.
+    // The upsert loop has no batched callback to throw out of, so we break the
+    // chunk loop at chunk boundaries and throw this from inside the upsert loop
+    // to unwind out of the row iteration. The outer catch distinguishes it from
+    // a real upstream error by checking `cancelledAt`.
+    class BackfillCancelled extends Error {
+      constructor() { super("backfill cancelled"); this.name = "BackfillCancelled"; }
+    }
+
+    async function checkCancel(): Promise<boolean> {
+      try {
+        const [row] = await db.select({ cancel: integrationSyncLogsTable.cancelRequested })
+          .from(integrationSyncLogsTable)
+          .where(eq(integrationSyncLogsTable.id, syncLog.id))
+          .limit(1);
+        return row?.cancel === true;
+      } catch {
+        return false;
+      }
+    }
+
     try {
       for (let i = 0; i < chunks.length; i++) {
+        // Cancel check at chunk boundary — cheap and frequent enough that a
+        // user clicking Cancel sees a response within seconds, not minutes.
+        if (await checkCancel()) {
+          cancelledAt = { chunkIdx: i, rows: totalSynced };
+          break;
+        }
         const { since, until } = chunks[i];
         await updateSyncLogChunkProgress(
           syncLog.id,
@@ -1893,14 +1922,37 @@ export async function backfillGoogleAdsCampaigns(
                 rows.length,
               );
             } catch {}
+
+            // Cooperative cancel check, piggybacked on the throttled in-flight
+            // flush so a large chunk can be stopped mid-upsert (not just at
+            // chunk boundaries) without adding extra DB reads. Throw to unwind
+            // out of the row loop; the outer catch treats `BackfillCancelled`
+            // as the expected cancel path rather than a partial failure.
+            if (await checkCancel()) {
+              cancelledAt = { chunkIdx: i, rows: totalSynced };
+              throw new BackfillCancelled();
+            }
           }
         }
         console.log(`[Backfill] Google Ads tenant ${tenantId} chunk ${i + 1}/${chunks.length} ${since}→${until}: ${rows.length} campaign-day rows`);
       }
     } catch (innerErr) {
-      const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
-      try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
-      throw innerErr;
+      // BackfillCancelled is an expected unwind path, not a partial failure.
+      if (innerErr instanceof BackfillCancelled) {
+        // fall through to the cancelled-completion path below
+      } else {
+        const innerMessage = innerErr instanceof Error ? innerErr.message : String(innerErr);
+        try { await updateSyncLogPartialFailure(syncLog.id, totalSynced, innerMessage); } catch {}
+        throw innerErr;
+      }
+    }
+
+    if (cancelledAt) {
+      // Finalize as `cancelled` (not `error`), preserving the rows already
+      // upserted — same contract as the ServiceTitan backfill cancel path.
+      await completeSyncLog(syncLog.id, "cancelled", totalSynced, `Cancelled by operator after chunk ${cancelledAt.chunkIdx + 1}/${chunks.length} (${totalSynced} rows synced)`);
+      console.log(`[Backfill] Google Ads tenant ${tenantId}: cancelled after ${totalSynced} campaign-day rows (chunk ${cancelledAt.chunkIdx + 1}/${chunks.length})`);
+      return { synced: totalSynced, chunks: cancelledAt.chunkIdx, error: "cancelled" };
     }
 
     await completeSyncLog(syncLog.id, "completed", totalSynced);

@@ -464,6 +464,96 @@ describe("POST /integrations/google_ads/backfill — successful run", () => {
   });
 });
 
+describe("POST /integrations/google_ads/backfill — cooperative cancel", () => {
+  it("finalizes the sync log as 'cancelled' (not error) at a chunk boundary, preserving rows already saved", async () => {
+    // Chunk 1 saves one row; at the chunk-2 boundary the cancel flag is set,
+    // so the run unwinds cleanly. The chunk-boundary checkCancel reads the
+    // cancelRequested flag off the sync log row.
+    //
+    // db.select() order inside backfillGoogleAdsCampaigns:
+    //   1. tenants
+    //   2. checkCancel @ chunk 0 boundary → not cancelled
+    //   3. campaigns lookup (chunk 0 row) → insert
+    //   4. campaign_daily_stats lookup (chunk 0 row) → insert
+    //   5. checkCancel @ chunk 1 boundary → cancelled → break
+    state.selectQueue.push([tenantWithGoogleAds()]);
+    state.selectQueue.push([{ cancel: false }]); // chunk 0 boundary: keep going
+    state.selectQueue.push([]); // campaigns lookup → not found → insert
+    state.selectQueue.push([]); // campaign_daily_stats lookup → not found → insert
+    state.selectQueue.push([{ cancel: true }]); // chunk 1 boundary: cancel!
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+    state.insertReturning.set("campaigns", [{ id: 100 }]);
+
+    gaMocks.formatCampaignRow.mockReturnValue({
+      platform: "google_ads",
+      externalId: "ga-c1",
+      name: "Campaign One",
+      status: "ENABLED",
+      date: "2026-04-01",
+      spend: "1.00",
+      impressions: 10,
+      clicks: 1,
+      conversions: 0,
+    });
+    // 31-day window → 2 chunks. Chunk 0 returns one row; chunk 1 is never
+    // fetched because we break at its boundary.
+    gaMocks.fetchCampaignPerformance.mockResolvedValueOnce([{ raw: "row-1" }]);
+    gaMocks.fetchCampaignPerformance.mockResolvedValue([]);
+
+    const res = await postJson("/integrations/google_ads/backfill", { tenantId: 7, days: 31 });
+
+    // A deliberate cancel resolves as a 200 success with cancelled:true, not a
+    // 502 failure.
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.cancelled).toBe(true);
+    expect(res.body.synced).toBe(1);
+
+    // Only chunk 0 was fetched — we broke at the chunk-1 boundary.
+    expect(gaMocks.fetchCampaignPerformance).toHaveBeenCalledTimes(1);
+
+    // The sync log was finalized as 'cancelled' (not 'error'), keeping the one
+    // row already synced.
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(1);
+    expect(String(cancelledLog!.set.errorMessage)).toMatch(/cancelled by operator/i);
+
+    // No 'error' status was ever written, and no partial-failure row was set.
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.status === "error"),
+    ).toBeUndefined();
+    expect(
+      state.updateCalls.find((u) => u.table === "integration_sync_logs" && u.set.partial === true),
+    ).toBeUndefined();
+  });
+
+  it("cancels before any work when the flag is already set at the first chunk boundary (zero rows synced)", async () => {
+    state.selectQueue.push([tenantWithGoogleAds()]);
+    state.selectQueue.push([{ cancel: true }]); // chunk 0 boundary: cancel immediately
+
+    state.executeQueue.push({ rows: [{ got: true }] });
+
+    const res = await postJson("/integrations/google_ads/backfill", { tenantId: 7, days: 31 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled).toBe(true);
+    expect(res.body.synced).toBe(0);
+
+    // Nothing was fetched — we cancelled before the first chunk's fetch.
+    expect(gaMocks.fetchCampaignPerformance).not.toHaveBeenCalled();
+
+    const cancelledLog = state.updateCalls.find(
+      (u) => u.table === "integration_sync_logs" && u.set.status === "cancelled",
+    );
+    expect(cancelledLog).toBeDefined();
+    expect(cancelledLog!.set.recordsProcessed).toBe(0);
+  });
+});
+
 describe("POST /integrations/google_ads/backfill — partial failure mid-chunk", () => {
   it("writes a 'partial: …' progress message and finalizes the backfill log as error when a later chunk throws", async () => {
     // Chunk 1 inserts one campaign + one stat row, then chunk 2 throws.
