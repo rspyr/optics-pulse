@@ -2,6 +2,7 @@ import { db, leadsTable } from "@workspace/db";
 import { and, lte, isNotNull, ne, asc, or, eq, sql } from "drizzle-orm";
 import { enqueueSendPushToUser } from "./push-notification-jobs";
 import { emitCallbackDue } from "../socket";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 
 const CHECK_INTERVAL_MS = 60_000;
 
@@ -111,23 +112,10 @@ export async function checkDueCallbacks() {
 // up whatever remains). This guard lives at the scheduling layer, not inside
 // `checkDueCallbacks`, so direct/concurrent callers (e.g. tests) are unaffected
 // and the conditional-claim correctness guarantee still holds.
-let sweepInProgress = false;
-
-export async function runGuardedSweep(
-  sweep: () => Promise<void> = checkDueCallbacks,
-): Promise<boolean> {
-  if (sweepInProgress) {
-    console.log("[CallbackScheduler] Previous sweep still running; skipping this tick");
-    return false;
-  }
-  sweepInProgress = true;
-  try {
-    await sweep();
-  } finally {
-    sweepInProgress = false;
-  }
-  return true;
-}
+export const runGuardedSweep = createGuardedRunner(
+  "CallbackScheduler",
+  checkDueCallbacks,
+);
 
 export function startCallbackScheduler() {
   console.log("[CallbackScheduler] Starting callback notification scheduler");

@@ -10,6 +10,7 @@ import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "./source-normalizer";
 import { normalizePhone } from "../lib/phone-utils";
 import { emitSheetDriftNotification } from "./notifications";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 
 const DRIFT_ALERT_THRESHOLD_MS = 10 * 60 * 1000;
 
@@ -492,8 +493,14 @@ let syncTimer: ReturnType<typeof setInterval> | null = null;
 export function startSheetSyncScheduler(): void {
   if (syncTimer) clearInterval(syncTimer);
 
+  // Re-entrancy guard: a 60s poll can outlast its interval when a sheet is
+  // large or the DB is slow, so the next tick skips instead of stacking an
+  // overlapping sync.
+  const runSheetSweep = createGuardedRunner("SheetSync", async () => {
+    await syncAllSheets();
+  });
   syncTimer = setInterval(() => {
-    syncAllSheets().catch((err) => {
+    void runSheetSweep().catch((err) => {
       console.error("[SheetSync] Scheduled sync failed:", err);
     });
   }, 60 * 1000);

@@ -10,6 +10,7 @@ import { runReconciliation } from "./reconciliation";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
 import { DEFAULT_INACTIVITY_STALE_MINUTES } from "./orphan-sync-reaper";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 import crypto from "crypto";
 
 function hashStJobId(stJobId: string): string {
@@ -2796,20 +2797,30 @@ export function startSyncScheduler() {
   const jobsSyncInterval = 15 * 60 * 1000;
   const campaignSyncInterval = 60 * 60 * 1000;
 
-  const jobsTimer = setInterval(async () => {
+  // Each periodic sweep below is wrapped in its own re-entrancy guard so a run
+  // that outlasts its interval (slow DB, many tenants) makes the next tick skip
+  // instead of stacking overlapping sweeps. Guards are per-sweep, so the timers
+  // never block each other — only repeated ticks of the same sweep coalesce.
+  const runJobsSweep = createGuardedRunner("SyncScheduler:jobs", async () => {
     console.log("[SyncScheduler] Starting ServiceTitan jobs sync for all tenants");
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
     for (const tenant of tenants) {
       await syncServiceTitanJobs(tenant.id);
     }
+  });
+  const jobsTimer = setInterval(() => {
+    void runJobsSweep();
   }, jobsSyncInterval);
 
-  const campaignTimer = setInterval(async () => {
+  const runCampaignSweep = createGuardedRunner("SyncScheduler:campaigns", async () => {
     console.log("[SyncScheduler] Starting Google Ads campaign sync for all tenants");
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
     for (const tenant of tenants) {
       await syncGoogleAdsCampaigns(tenant.id);
     }
+  });
+  const campaignTimer = setInterval(() => {
+    void runCampaignSweep();
   }, campaignSyncInterval);
 
   // Meta sync runs nightly at 1 AM Eastern (configurable via META_SYNC_HOUR_ET).
@@ -2818,7 +2829,7 @@ export function startSyncScheduler() {
   const metaSyncHourEt = Number(process.env.META_SYNC_HOUR_ET || "1");
   const metaPerTenantSleepMs = Number(process.env.META_PER_TENANT_SLEEP_MS || "10000");
   let lastMetaSyncDateKey = "";
-  const metaTimer = setInterval(async () => {
+  const runMetaSweep = createGuardedRunner("SyncScheduler:meta", async () => {
     const nowEt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
     const dateKey = nowEt.toISOString().slice(0, 10);
     if (nowEt.getHours() !== metaSyncHourEt) return;
@@ -2836,16 +2847,22 @@ export function startSyncScheduler() {
       await new Promise((r) => setTimeout(r, metaPerTenantSleepMs));
     }
     console.log(`[SyncScheduler] Nightly Meta sync complete (${tenants.length} tenants)`);
+  });
+  const metaTimer = setInterval(() => {
+    void runMetaSweep();
   }, 5 * 60 * 1000); // check every 5 minutes whether the trigger hour has arrived
 
   const invoiceSyncInterval = 15 * 60 * 1000;
-  const invoiceTimer = setInterval(async () => {
+  const runInvoiceSweep = createGuardedRunner("SyncScheduler:invoices", async () => {
     console.log("[SyncScheduler] Starting ServiceTitan invoice + estimates sync for all tenants");
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
     for (const tenant of tenants) {
       await syncServiceTitanInvoices(tenant.id);
       await syncServiceTitanEstimates(tenant.id);
     }
+  });
+  const invoiceTimer = setInterval(() => {
+    void runInvoiceSweep();
   }, invoiceSyncInterval);
 
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
@@ -2869,7 +2886,7 @@ export function startSyncScheduler() {
   // unusually slow chunks can raise the window.
   const orphanReaperIntervalMs = Number(process.env.ORPHAN_REAPER_INTERVAL_MS || String(30 * 60 * 1000));
   const orphanReaperStaleMinutes = Number(process.env.ORPHAN_REAPER_STALE_MINUTES || String(DEFAULT_INACTIVITY_STALE_MINUTES));
-  const orphanReaperTimer = setInterval(async () => {
+  const runOrphanReaperSweep = createGuardedRunner("SyncScheduler:orphan-reaper", async () => {
     try {
       const { reapOrphanedSyncLogs } = await import("./orphan-sync-reaper");
       const reaped = await reapOrphanedSyncLogs(orphanReaperStaleMinutes, "periodic reaper sweep");
@@ -2879,6 +2896,9 @@ export function startSyncScheduler() {
     } catch (err) {
       console.error("[SyncScheduler] Periodic orphan reaper failed:", err);
     }
+  });
+  const orphanReaperTimer = setInterval(() => {
+    void runOrphanReaperSweep();
   }, orphanReaperIntervalMs);
 
   // CallRail intake is webhook-only (POST /api/webhooks/callrail/:tenantId).

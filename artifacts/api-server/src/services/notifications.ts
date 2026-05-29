@@ -1,5 +1,6 @@
 import { db, notificationsTable, integrationSyncLogsTable, trackerHeartbeatsTable, trackerSubmitAttemptsTable, tenantsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 
 export async function createNotification(params: {
   tenantId: number | null;
@@ -323,8 +324,13 @@ export function startStaleInstallMonitor() {
     );
   }, 30_000);
 
+  // Re-entrancy guard: a check that outlasts its interval must make the next
+  // tick skip rather than stack an overlapping check.
+  const runStaleInstallSweep = createGuardedRunner("Notifications:stale-install", async () => {
+    await checkStaleInstall();
+  });
   staleInstallTimer = setInterval(() => {
-    checkStaleInstall().catch(err =>
+    void runStaleInstallSweep().catch(err =>
       console.error("[Notifications] Periodic stale-install check failed:", err)
     );
   }, STALE_INSTALL_COOLDOWN_MS);
@@ -341,12 +347,17 @@ export function startHeartbeatMonitor() {
     console.error("[Notifications] Initial heartbeat check failed:", err)
   );
 
-  heartbeatCheckTimer = setInterval(async () => {
+  // Re-entrancy guard: a check that outlasts its interval must make the next
+  // tick skip rather than stack an overlapping check.
+  const runHeartbeatSweep = createGuardedRunner("Notifications:heartbeat", async () => {
     try {
       await checkStaleHeartbeats();
     } catch (err) {
       console.error("[Notifications] Heartbeat check failed:", err);
     }
+  });
+  heartbeatCheckTimer = setInterval(() => {
+    void runHeartbeatSweep();
   }, 60 * 60 * 1000);
 
   console.log("[Notifications] Heartbeat monitor started (checks every 60 min)");

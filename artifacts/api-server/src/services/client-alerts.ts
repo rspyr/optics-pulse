@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { db, tenantsTable, usersTable, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable } from "@workspace/db";
 import { eq, and, gte, inArray, sql } from "drizzle-orm";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 
 interface AlertResult {
   tenantId: number;
@@ -234,7 +235,9 @@ export function startClientAlertScheduler() {
   console.log("[ClientAlerts] Starting weekly alert scheduler");
 
   const checkInterval = 24 * 60 * 60 * 1000;
-  setInterval(async () => {
+  // Re-entrancy guard: a check that outlasts its interval must make the next
+  // tick skip rather than stack an overlapping check.
+  const runAlertSweep = createGuardedRunner("ClientAlerts", async () => {
     const dayOfWeek = new Date().getDay();
     if (dayOfWeek !== 1) return;
 
@@ -245,5 +248,8 @@ export function startClientAlertScheduler() {
     } catch (err) {
       console.error("[ClientAlerts] Weekly check failed:", err);
     }
+  });
+  setInterval(() => {
+    void runAlertSweep();
   }, checkInterval);
 }

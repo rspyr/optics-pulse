@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { db, automationRulesTable, automationAlertsTable, campaignsTable, campaignDailyStatsTable, tenantsTable, jobsTable, usersTable } from "@workspace/db";
 import { eq, and, gte, sql } from "drizzle-orm";
+import { createGuardedRunner } from "../lib/reentrancy-guard";
 
 interface CampaignMetrics {
   campaignId: number;
@@ -273,7 +274,9 @@ export function startAutomationScheduler() {
     console.error("[Automation] Initial evaluation failed:", err);
   });
 
-  setInterval(async () => {
+  // Re-entrancy guard: a rule evaluation that outlasts its 60-min interval must
+  // make the next tick skip rather than stack an overlapping evaluation.
+  const runEvaluationSweep = createGuardedRunner("Automation", async () => {
     try {
       console.log("[Automation] Running scheduled rule evaluation...");
       const result = await evaluateAutomationRules();
@@ -281,5 +284,8 @@ export function startAutomationScheduler() {
     } catch (err) {
       console.error("[Automation] Scheduled evaluation failed:", err);
     }
+  });
+  setInterval(() => {
+    void runEvaluationSweep();
   }, 60 * 60 * 1000);
 }
