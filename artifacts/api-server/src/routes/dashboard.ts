@@ -394,6 +394,161 @@ router.get("/dashboard/benchmarks", async (req, res) => {
   });
 });
 
+// Deliberate, indexed cross-tenant overview for agency / super_admin users.
+//
+// Replaces the implicit unfiltered cross-tenant *list* path (an unbounded
+// `ORDER BY created_at` over a whole base table) that the `requireTenant` guard
+// on the /leads, /jobs and /drilldown/* endpoints now rejects. Instead of
+// scanning entire base tables, this endpoint:
+//   * Bounds every query to a date window (defaults to the last 30 days) so a
+//     request can never devolve into an unbounded full-table read.
+//   * Aggregates per-tenant in single `GROUP BY tenant_id` queries (no N+1
+//     per-tenant loop, no `SELECT *`), served by the tenant-scoped
+//     `(tenant_id, created_at)` indexes on leads/jobs (migration 0072) and the
+//     `campaigns(tenant_id)` + `campaign_daily_stats(campaign_id, date)`
+//     indexes added for spend (migration 0074).
+//
+// Response shape mirrors /admin/dashboard-stats so the agency "God View" can
+// consume it as a drop-in, but the data is produced by grouped, indexed
+// queries rather than a per-tenant `SELECT *` loop.
+const CROSS_TENANT_DEFAULT_WINDOW_DAYS = 30;
+const MONTHLY_BUDGET_DEFAULT = 15000;
+
+router.get("/dashboard/cross-tenant-overview", requireRole("super_admin", "agency_user"), async (req, res) => {
+  // Resolve a bounded date window. An explicit start/end always wins; otherwise
+  // default to the trailing CROSS_TENANT_DEFAULT_WINDOW_DAYS so the aggregation
+  // never runs unbounded over the full history of every table.
+  const now = new Date();
+  const rawStart = typeof req.query.startDate === "string" && req.query.startDate ? req.query.startDate : undefined;
+  const rawEnd = typeof req.query.endDate === "string" && req.query.endDate ? req.query.endDate : undefined;
+  const endDate = rawEnd ?? now.toISOString().split("T")[0];
+  const defaultStart = new Date(now.getTime() - CROSS_TENANT_DEFAULT_WINDOW_DAYS * 86400000)
+    .toISOString().split("T")[0];
+  const startDate = rawStart ?? defaultStart;
+  // Optional: scope the returned `tenants` array to one client. Agency averages
+  // are always computed across every active tenant so they stay a stable
+  // benchmark regardless of this filter.
+  const filterTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+
+  const startBound = new Date(startDate);
+  const endBound = new Date(endDate + "T23:59:59.999Z");
+
+  const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
+    .from(tenantsTable).where(eq(tenantsTable.isActive, true));
+
+  const tenantIds = tenants.map(t => t.id);
+  if (tenantIds.length === 0) {
+    res.json({
+      dateRange: { startDate, endDate },
+      tenants: [],
+      agencyAverages: { cpl: 0, roas: 0, bookingRate: 0, totalSpend: 0, totalRevenue: 0, totalLeads: 0 },
+    });
+    return;
+  }
+
+  const [leadsByTenant, jobsByTenant, spendByTenant] = await Promise.all([
+    db.select({
+      tenantId: leadsTable.tenantId,
+      totalLeads: count(),
+      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
+      soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
+    }).from(leadsTable)
+      .where(and(
+        inArray(leadsTable.tenantId, tenantIds),
+        gte(leadsTable.createdAt, startBound),
+        lte(leadsTable.createdAt, endBound),
+      ))
+      .groupBy(leadsTable.tenantId),
+    db.select({
+      tenantId: jobsTable.tenantId,
+      mtdRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN ${jobsTable.revenue} ELSE 0 END), 0)`,
+    }).from(jobsTable)
+      .where(and(
+        inArray(jobsTable.tenantId, tenantIds),
+        gte(jobsTable.createdAt, startBound),
+        lte(jobsTable.createdAt, endBound),
+      ))
+      .groupBy(jobsTable.tenantId),
+    db.select({
+      tenantId: campaignsTable.tenantId,
+      total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
+    }).from(campaignDailyStatsTable)
+      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+      .where(and(
+        inArray(campaignsTable.tenantId, tenantIds),
+        gte(campaignDailyStatsTable.date, startDate),
+        lte(campaignDailyStatsTable.date, endDate),
+      ))
+      .groupBy(campaignsTable.tenantId),
+  ]);
+
+  const leadMap = new Map(leadsByTenant.map(r => [r.tenantId, r]));
+  const jobMap = new Map(jobsByTenant.map(r => [r.tenantId, r]));
+  const spendMap = new Map(spendByTenant.map(r => [r.tenantId, r]));
+
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  let totalAgencySpend = 0;
+  let totalAgencyLeads = 0;
+  let totalAgencyRevenue = 0;
+  let totalAgencyBookedLeads = 0;
+
+  const tenantStats = tenants.map(tenant => {
+    const l = leadMap.get(tenant.id);
+    const j = jobMap.get(tenant.id);
+    const s = spendMap.get(tenant.id);
+
+    const totalLeads = Number(l?.totalLeads ?? 0);
+    const bookedLeads = Number(l?.bookedLeads ?? 0);
+    const soldLeads = Number(l?.soldLeads ?? 0);
+    const mtdRevenue = Number(j?.mtdRevenue ?? 0);
+    const mtdSpend = Number(s?.total ?? 0);
+
+    totalAgencySpend += mtdSpend;
+    totalAgencyLeads += totalLeads;
+    totalAgencyRevenue += mtdRevenue;
+    totalAgencyBookedLeads += bookedLeads;
+
+    const projectedSpend = dayOfMonth > 0 ? Math.round((mtdSpend / dayOfMonth) * daysInMonth) : 0;
+
+    return {
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      mtdSpend: Math.round(mtdSpend * 100) / 100,
+      mtdRevenue: Math.round(mtdRevenue * 100) / 100,
+      projectedSpend,
+      monthlyBudget: MONTHLY_BUDGET_DEFAULT,
+      cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
+      bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
+      closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
+      roas: mtdSpend > 0 ? Math.round((mtdRevenue / mtdSpend) * 100) / 100 : 0,
+      totalLeads,
+      bookedLeads,
+      soldLeads,
+    };
+  });
+
+  const agencyAverages = {
+    cpl: totalAgencyLeads > 0 ? Math.round((totalAgencySpend / totalAgencyLeads) * 100) / 100 : 0,
+    roas: totalAgencySpend > 0 ? Math.round((totalAgencyRevenue / totalAgencySpend) * 100) / 100 : 0,
+    bookingRate: totalAgencyLeads > 0 ? Math.round((totalAgencyBookedLeads / totalAgencyLeads) * 100 * 10) / 10 : 0,
+    totalSpend: Math.round(totalAgencySpend * 100) / 100,
+    totalRevenue: Math.round(totalAgencyRevenue * 100) / 100,
+    totalLeads: totalAgencyLeads,
+  };
+
+  const filteredTenantStats = filterTenantId
+    ? tenantStats.filter(t => t.tenantId === filterTenantId)
+    : tenantStats;
+
+  res.json({
+    dateRange: { startDate, endDate },
+    tenants: filteredTenantStats,
+    agencyAverages,
+  });
+});
+
 router.get("/dashboard/tenant-performance", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenants = await db.select({ id: tenantsTable.id, name: tenantsTable.name })
     .from(tenantsTable).where(eq(tenantsTable.isActive, true));

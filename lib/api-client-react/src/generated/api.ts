@@ -34,6 +34,7 @@ import type {
   CreateTenantInput,
   CreateTrainingItemBody,
   CreateUserInput,
+  CrossTenantOverview,
   DashboardOverview,
   DeleteAutomationRule200,
   DeleteTenant200,
@@ -44,6 +45,7 @@ import type {
   GetAttributionEventFacetsParams,
   GetAutomationAlertCount200,
   GetCampaignStatsParams,
+  GetCrossTenantOverviewParams,
   GetDashboardBenchmarksParams,
   GetDashboardOverviewParams,
   GetHudQueueParams,
@@ -5175,6 +5177,113 @@ export function useGetTenantPerformance<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetTenantPerformanceQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Purpose-built cross-tenant overview for agency / super_admin users. Aggregates per-tenant metrics in single GROUP BY queries over a bounded date window (defaults to the trailing 30 days) backed by supporting indexes, instead of scanning entire base tables. Optionally scope the returned tenants array to one client via tenantId; agency averages are always computed across every active tenant.
+ * @summary Deliberate, indexed cross-tenant roll-up (agency God View)
+ */
+export const getGetCrossTenantOverviewUrl = (
+  params?: GetCrossTenantOverviewParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/dashboard/cross-tenant-overview?${stringifiedParams}`
+    : `/api/dashboard/cross-tenant-overview`;
+};
+
+export const getCrossTenantOverview = async (
+  params?: GetCrossTenantOverviewParams,
+  options?: RequestInit,
+): Promise<CrossTenantOverview> => {
+  return customFetch<CrossTenantOverview>(
+    getGetCrossTenantOverviewUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCrossTenantOverviewQueryKey = (
+  params?: GetCrossTenantOverviewParams,
+) => {
+  return [
+    `/api/dashboard/cross-tenant-overview`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetCrossTenantOverviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCrossTenantOverview>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetCrossTenantOverviewParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCrossTenantOverview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCrossTenantOverviewQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCrossTenantOverview>>
+  > = ({ signal }) =>
+    getCrossTenantOverview(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCrossTenantOverview>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCrossTenantOverviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCrossTenantOverview>>
+>;
+export type GetCrossTenantOverviewQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Deliberate, indexed cross-tenant roll-up (agency God View)
+ */
+
+export function useGetCrossTenantOverview<
+  TData = Awaited<ReturnType<typeof getCrossTenantOverview>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetCrossTenantOverviewParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCrossTenantOverview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCrossTenantOverviewQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

@@ -670,14 +670,15 @@ rows the detail endpoint recomputes on read using the same shared
 helper as the live socket emit.
  */
   unmatchedReason?: string | null;
-  /** When matchLevel === "manual", records *how* the operator resolved
-the event — e.g. `field_mapping_rule:123` or
-`funnel_override:lead/555`. Written alongside the manual flip by
-every operator-action path (saved field-mapping rule, per-lead
-funnel override, rule-scope re-derive fan-out) and surfaced
-inline on the event sheet with a deep-link back to the action
-that produced it (task #584). Null on non-manual rows and on
-legacy `manual` rows written before the column existed.
+  /** When matchLevel === "manual", records *how* the operator
+resolved the event — e.g. `field_mapping_rule:123` or
+`funnel_override:lead/555`. Written alongside the manual flip
+by every operator-action path (saved field-mapping rule,
+per-lead funnel override, rule-scope re-derive fan-out) and
+surfaced inline on the event sheet with a deep-link back to
+the action that produced it (task #584). Null on non-manual
+rows and on legacy `manual` rows written before the column
+existed.
  */
   manualSource?: string | null;
   submittedAt?: string | null;
@@ -957,6 +958,42 @@ export interface TenantPerformanceRow {
   closeRate: number;
   roas: number;
   leadCount: number;
+}
+
+export interface CrossTenantOverviewRow {
+  tenantId: number;
+  tenantName: string;
+  mtdSpend: number;
+  mtdRevenue: number;
+  projectedSpend: number;
+  monthlyBudget: number;
+  cpl: number;
+  bookingRate: number;
+  closeRate: number;
+  roas: number;
+  totalLeads: number;
+  bookedLeads: number;
+  soldLeads: number;
+}
+
+export type CrossTenantOverviewDateRange = {
+  startDate: string;
+  endDate: string;
+};
+
+export type CrossTenantOverviewAgencyAverages = {
+  cpl: number;
+  roas: number;
+  bookingRate: number;
+  totalSpend: number;
+  totalRevenue: number;
+  totalLeads: number;
+};
+
+export interface CrossTenantOverview {
+  dateRange: CrossTenantOverviewDateRange;
+  tenants: CrossTenantOverviewRow[];
+  agencyAverages: CrossTenantOverviewAgencyAverages;
 }
 
 export interface LoginInput {
@@ -1725,6 +1762,12 @@ export type GetDashboardBenchmarksParams = {
 export type GetTenantPerformanceParams = {
   startDate?: string;
   endDate?: string;
+};
+
+export type GetCrossTenantOverviewParams = {
+  startDate?: string;
+  endDate?: string;
+  tenantId?: number;
 };
 
 export type ListTrainingItemsParams = {

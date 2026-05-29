@@ -1144,6 +1144,12 @@ export const ListAttributionEventsResponse = zod.object({
         .describe(
           'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nPersisted on the event row at insert time (column unmatched_reason)\nso audit trails and old screenshots stay reproducible even if the\nheuristic is reworded later. Null on matched events and on legacy\nrows written before the column existed; for those legacy unmatched\nrows the detail endpoint recomputes on read using the same shared\nhelper as the live socket emit.\n',
         ),
+      manualSource: zod
+        .string()
+        .nullish()
+        .describe(
+          'When matchLevel === \"manual\", records \*how\* the operator\nresolved the event — e.g. `field_mapping_rule:123` or\n`funnel_override:lead\/555`. Written alongside the manual flip\nby every operator-action path (saved field-mapping rule,\nper-lead funnel override, rule-scope re-derive fan-out) and\nsurfaced inline on the event sheet with a deep-link back to\nthe action that produced it (task #584). Null on non-manual\nrows and on legacy `manual` rows written before the column\nexisted.\n',
+        ),
       submittedAt: zod.date().nullish(),
       matchLevel: zod
         .enum(["diamond", "golden", "silver", "bronze", "manual", "unmatched"])
@@ -1268,6 +1274,12 @@ export const GetAttributionEventResponse = zod.object({
       .nullish()
       .describe(
         'One-line diagnosis of why an event ended up matchLevel === \"unmatched\".\nPersisted on the event row at insert time (column unmatched_reason)\nso audit trails and old screenshots stay reproducible even if the\nheuristic is reworded later. Null on matched events and on legacy\nrows written before the column existed; for those legacy unmatched\nrows the detail endpoint recomputes on read using the same shared\nhelper as the live socket emit.\n',
+      ),
+    manualSource: zod
+      .string()
+      .nullish()
+      .describe(
+        'When matchLevel === \"manual\", records \*how\* the operator\nresolved the event — e.g. `field_mapping_rule:123` or\n`funnel_override:lead\/555`. Written alongside the manual flip\nby every operator-action path (saved field-mapping rule,\nper-lead funnel override, rule-scope re-derive fan-out) and\nsurfaced inline on the event sheet with a deep-link back to\nthe action that produced it (task #584). Null on non-manual\nrows and on legacy `manual` rows written before the column\nexisted.\n',
       ),
     submittedAt: zod.date().nullish(),
     matchLevel: zod
@@ -2068,6 +2080,48 @@ export const GetTenantPerformanceResponseItem = zod.object({
 export const GetTenantPerformanceResponse = zod.array(
   GetTenantPerformanceResponseItem,
 );
+
+/**
+ * Purpose-built cross-tenant overview for agency / super_admin users. Aggregates per-tenant metrics in single GROUP BY queries over a bounded date window (defaults to the trailing 30 days) backed by supporting indexes, instead of scanning entire base tables. Optionally scope the returned tenants array to one client via tenantId; agency averages are always computed across every active tenant.
+ * @summary Deliberate, indexed cross-tenant roll-up (agency God View)
+ */
+export const GetCrossTenantOverviewQueryParams = zod.object({
+  startDate: zod.coerce.string().optional(),
+  endDate: zod.coerce.string().optional(),
+  tenantId: zod.coerce.number().optional(),
+});
+
+export const GetCrossTenantOverviewResponse = zod.object({
+  dateRange: zod.object({
+    startDate: zod.string(),
+    endDate: zod.string(),
+  }),
+  tenants: zod.array(
+    zod.object({
+      tenantId: zod.number(),
+      tenantName: zod.string(),
+      mtdSpend: zod.number(),
+      mtdRevenue: zod.number(),
+      projectedSpend: zod.number(),
+      monthlyBudget: zod.number(),
+      cpl: zod.number(),
+      bookingRate: zod.number(),
+      closeRate: zod.number(),
+      roas: zod.number(),
+      totalLeads: zod.number(),
+      bookedLeads: zod.number(),
+      soldLeads: zod.number(),
+    }),
+  ),
+  agencyAverages: zod.object({
+    cpl: zod.number(),
+    roas: zod.number(),
+    bookingRate: zod.number(),
+    totalSpend: zod.number(),
+    totalRevenue: zod.number(),
+    totalLeads: zod.number(),
+  }),
+});
 
 /**
  * @summary List all training items

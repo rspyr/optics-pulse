@@ -1355,6 +1355,39 @@ paths:
                 items:
                   $ref: "#/components/schemas/TenantPerformanceRow"
 
+  /dashboard/cross-tenant-overview:
+    get:
+      operationId: getCrossTenantOverview
+      tags: [dashboard]
+      summary: Deliberate, indexed cross-tenant roll-up (agency God View)
+      description: >-
+        Purpose-built cross-tenant overview for agency / super_admin users.
+        Aggregates per-tenant metrics in single GROUP BY queries over a bounded
+        date window (defaults to the trailing 30 days) backed by supporting
+        indexes, instead of scanning entire base tables. Optionally scope the
+        returned tenants array to one client via tenantId; agency averages are
+        always computed across every active tenant.
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          schema:
+            type: string
+        - name: tenantId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cross-tenant overview roll-up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrossTenantOverview"
+
   /training/items:
     get:
       operationId: listTrainingItems
@@ -3135,6 +3168,70 @@ components:
         leadCount:
           type: integer
       required: [tenantId, tenantName, mtdSpend, mtdRevenue, cpl, bookingRate, closeRate, roas, leadCount]
+
+    CrossTenantOverviewRow:
+      type: object
+      properties:
+        tenantId:
+          type: integer
+        tenantName:
+          type: string
+        mtdSpend:
+          type: number
+        mtdRevenue:
+          type: number
+        projectedSpend:
+          type: number
+        monthlyBudget:
+          type: number
+        cpl:
+          type: number
+        bookingRate:
+          type: number
+        closeRate:
+          type: number
+        roas:
+          type: number
+        totalLeads:
+          type: integer
+        bookedLeads:
+          type: integer
+        soldLeads:
+          type: integer
+      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
+
+    CrossTenantOverview:
+      type: object
+      properties:
+        dateRange:
+          type: object
+          properties:
+            startDate:
+              type: string
+            endDate:
+              type: string
+          required: [startDate, endDate]
+        tenants:
+          type: array
+          items:
+            $ref: "#/components/schemas/CrossTenantOverviewRow"
+        agencyAverages:
+          type: object
+          properties:
+            cpl:
+              type: number
+            roas:
+              type: number
+            bookingRate:
+              type: number
+            totalSpend:
+              type: number
+            totalRevenue:
+              type: number
+            totalLeads:
+              type: integer
+          required: [cpl, roas, bookingRate, totalSpend, totalRevenue, totalLeads]
+      required: [dateRange, tenants, agencyAverages]
 
     LoginInput:
       type: object

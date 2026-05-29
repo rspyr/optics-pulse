@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAuth } from "@/components/auth-context";
-import { useGetAdminDashboardStats, useListLeads, useGetReconciliationStatus, useRunReconciliation, useListTenants } from "@workspace/api-client-react";
+import { useGetCrossTenantOverview, useListLeads, useGetReconciliationStatus, useRunReconciliation, useListTenants } from "@workspace/api-client-react";
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
@@ -23,7 +23,7 @@ export default function Internal() {
   // `null` and restores the agency-wide view everywhere.
   const { selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
 
-  const { data, isLoading } = useGetAdminDashboardStats({ startDate, endDate, tenantId: globalTenantId ?? undefined });
+  const { data, isLoading } = useGetCrossTenantOverview({ startDate, endDate, tenantId: globalTenantId ?? undefined });
   const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus(globalTenantId ? { tenantId: globalTenantId } : undefined);
   const reconMutation = useRunReconciliation();
   // Unfiltered tenant list for the global selector — `data.tenants` collapses
