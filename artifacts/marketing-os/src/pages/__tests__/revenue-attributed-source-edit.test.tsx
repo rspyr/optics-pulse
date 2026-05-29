@@ -121,6 +121,16 @@ function installFetch(handlers: FetchHandlers = {}) {
       const url = typeof input === "string" ? input : input.toString();
       const method = (init?.method ?? "GET").toUpperCase();
 
+      // Full-range summary endpoint shares the list prefix, so match it first
+      // and return a RevenueSummary shape rather than a job array.
+      if (url.includes("/api/drilldown/revenue-attributed/summary")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ revenue: 0, rebates: 0, attributed: 0, count: 0 }),
+        } as Response;
+      }
+
       // Jobs list (page load)
       if (url.includes("/api/drilldown/revenue-attributed")) {
         return {
