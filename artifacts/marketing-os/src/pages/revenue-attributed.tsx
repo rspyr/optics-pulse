@@ -3,7 +3,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { formatCurrency, round2 } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
 import { toast } from "sonner";
@@ -55,6 +55,13 @@ function getDateRange(range: DateRange): { startDate: string; endDate: string; l
 }
 
 type RebateItem = { label: string; amount: number };
+
+type RevenueSummary = {
+  revenue: number;
+  rebates: number;
+  attributed: number;
+  count: number;
+};
 
 type LeadSummary = {
   id: number;
@@ -120,6 +127,7 @@ export default function RevenueAttributed() {
 
   const [jobs, setJobs] = useState<RevenueJob[] | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [summary, setSummary] = useState<RevenueSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -158,6 +166,30 @@ export default function RevenueAttributed() {
 
   useEffect(() => loadJobs(), [loadJobs]);
 
+  // Summary cards reflect the ENTIRE date range, not just the current page.
+  // Totals are computed server-side over the full range so they stay stable as
+  // the user pages through the list (page intentionally not a dependency).
+  const loadSummary = useCallback(() => {
+    let cancelled = false;
+    setSummary(null);
+    const params = new URLSearchParams({ startDate, endDate });
+    if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
+    fetch(`${API_BASE}/api/drilldown/revenue-attributed/summary?${params.toString()}`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: RevenueSummary) => { if (!cancelled) setSummary(data); })
+      .catch(() => { if (!cancelled) setSummary(null); });
+    return () => { cancelled = true; };
+  }, [startDate, endDate, effectiveTenantId]);
+
+  useEffect(() => loadSummary(), [loadSummary]);
+
+  // Reload both the visible page and the full-range summary after an edit (e.g.
+  // a manual match or rebate change) so the cards and list stay in sync.
+  const reload = useCallback(() => {
+    loadJobs();
+    loadSummary();
+  }, [loadJobs, loadSummary]);
+
   // The endpoint returns the full matching count in the X-Total-Count header,
   // so we can show a real "X of N" indicator and disable Next on the true last
   // page even when that page happens to be full. If the header is missing for
@@ -168,19 +200,6 @@ export default function RevenueAttributed() {
       ? page + 1 < (totalPages ?? 1)
       : jobs != null && jobs.length === PAGE_SIZE;
   const hasPrevPage = page > 0;
-
-  const totals = useMemo(() => {
-    if (!jobs) return { revenue: 0, rebates: 0, attributed: 0, count: 0 };
-    let revenue = 0, rebates = 0, attributed = 0;
-    for (const j of jobs) {
-      revenue += j.correctedRevenue;
-      rebates += j.invoiceRebateAmount ?? 0;
-      if (j.matchLevel) attributed += j.correctedRevenue;
-    }
-    // Round each summed total to whole cents so accumulated floating-point
-    // drift never surfaces in the summary cards (matches the API rounding).
-    return { revenue: round2(revenue), rebates: round2(rebates), attributed: round2(attributed), count: jobs.length };
-  }, [jobs]);
 
   async function handleExportCSV() {
     if (exporting) return;
@@ -273,10 +292,10 @@ export default function RevenueAttributed() {
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SummaryCard label="Corrected Revenue" value={formatCurrency(totals.revenue)} icon={<DollarSign className="w-4 h-4" />} />
-        <SummaryCard label="Attributed Revenue" value={formatCurrency(totals.attributed)} icon={<Link2 className="w-4 h-4" />} />
-        <SummaryCard label="Rebate Add-Backs" value={formatCurrency(totals.rebates)} icon={<Tag className="w-4 h-4" />} />
-        <SummaryCard label="Jobs" value={String(totals.count)} icon={<User className="w-4 h-4" />} />
+        <SummaryCard label="Corrected Revenue" value={summary ? formatCurrency(summary.revenue) : "—"} icon={<DollarSign className="w-4 h-4" />} />
+        <SummaryCard label="Attributed Revenue" value={summary ? formatCurrency(summary.attributed) : "—"} icon={<Link2 className="w-4 h-4" />} />
+        <SummaryCard label="Rebate Add-Backs" value={summary ? formatCurrency(summary.rebates) : "—"} icon={<Tag className="w-4 h-4" />} />
+        <SummaryCard label="Jobs" value={summary ? String(summary.count) : "—"} icon={<User className="w-4 h-4" />} />
       </div>
 
       <PremiumCard className="p-0 overflow-hidden">
@@ -348,7 +367,7 @@ export default function RevenueAttributed() {
                               job={job}
                               isClientReadOnly={isClientReadOnly}
                               currentUserRole={user?.role}
-                              onChanged={loadJobs}
+                              onChanged={reload}
                             />
                           </td>
                         </tr>

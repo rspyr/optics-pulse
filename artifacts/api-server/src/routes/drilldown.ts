@@ -219,6 +219,44 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   res.json(result);
 });
 
+// Revenue Attributed summary: full-range totals for the summary cards, computed
+// server-side so they reflect the entire date range regardless of which page of
+// rows the UI is showing. Uses the same date/revenue/corrected-revenue math as
+// /drilldown/revenue-attributed so the cards reconcile with the list + CSV.
+router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
+  const conditions: SQL[] = [];
+  if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
+  conditions.push(eq(jobsTable.status, "completed"));
+  if (startDate) conditions.push(sql`${jobDateExpr} >= ${new Date(startDate)}`);
+  if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
+
+  const where = and(...conditions);
+
+  const [agg] = await db
+    .select({
+      revenue: sql<number>`COALESCE(SUM(${jobRevenueExpr}), 0)`,
+      rebates: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceRebateAmount}, 0)), 0)`,
+      attributed: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.matchLevel} IS NOT NULL THEN ${jobRevenueExpr} ELSE 0 END), 0)`,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(jobsTable)
+    .where(where);
+
+  res.json({
+    revenue: round2(Number(agg?.revenue ?? 0)),
+    rebates: round2(Number(agg?.rebates ?? 0)),
+    attributed: round2(Number(agg?.attributed ?? 0)),
+    count: Number(agg?.count ?? 0),
+  });
+});
+
 // Typeahead lead search for manual job→lead matching. Agency/admin only —
 // the manual-match feature is agency-only (see PATCH below). Results are
 // tenant-scoped: a tenantId must be supplied (the job's tenant) so the
