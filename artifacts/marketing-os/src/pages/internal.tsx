@@ -12,6 +12,30 @@ import { ArrowUpDown, TrendingUp, TrendingDown, AlertTriangle, X, Users, DollarS
 type SortKey = "tenantName" | "mtdSpend" | "cpl" | "bookingRate" | "roas" | "totalLeads" | "mtdRevenue";
 type SortDir = "asc" | "desc";
 
+const VALID_PRESETS: DateRangePreset[] = ["thisMonth", "last30", "lastMonth", "custom"];
+
+// Read the persisted overview date range from the URL. Mirrors the
+// ?range= pattern on the Revenue Attributed page, but also carries the
+// user-picked start/end for the "custom" preset so a reload restores the
+// exact window — not just the preset.
+function initialRangeFromUrl(): {
+  preset: DateRangePreset;
+  custom: { startDate: string; endDate: string } | null;
+} {
+  if (typeof window === "undefined") return { preset: "thisMonth", custom: null };
+  const params = new URLSearchParams(window.location.search);
+  const r = params.get("range");
+  const preset = r && (VALID_PRESETS as string[]).includes(r) ? (r as DateRangePreset) : "thisMonth";
+  if (preset === "custom") {
+    const startDate = params.get("start");
+    const endDate = params.get("end");
+    if (startDate && endDate) return { preset, custom: { startDate, endDate } };
+    // A custom preset without both dates is meaningless — fall back.
+    return { preset: "thisMonth", custom: null };
+  }
+  return { preset, custom: null };
+}
+
 // Format a YYYY-MM-DD date (as returned by the endpoint's dateRange) into a
 // readable "Mon D, YYYY" label without TZ drift.
 function fmtRangeLabel(ymd: string): string {
@@ -28,8 +52,10 @@ export default function Internal() {
   // Date window for the overview. Defaults to "This Month" (the prior fixed
   // behaviour); users can switch presets or pick a custom range. Custom ranges
   // carry their own start/end which we feed straight to the endpoint.
-  const [rangePreset, setRangePreset] = useState<DateRangePreset>("thisMonth");
-  const [customRange, setCustomRange] = useState<{ startDate: string; endDate: string } | null>(null);
+  const [rangePreset, setRangePreset] = useState<DateRangePreset>(() => initialRangeFromUrl().preset);
+  const [customRange, setCustomRange] = useState<{ startDate: string; endDate: string } | null>(
+    () => initialRangeFromUrl().custom,
+  );
   const { startDate, endDate } = useMemo(() => {
     const resolved = resolvePreset(rangePreset, customRange ?? undefined);
     // A custom preset always carries both dates (set together below), and every
@@ -48,6 +74,28 @@ export default function Internal() {
     },
     [],
   );
+
+  // Persist the selected range in the URL (?range=, plus ?start=/?end= for the
+  // custom preset) so it survives a page reload — mirroring the Revenue
+  // Attributed page. replaceState avoids cluttering browser history.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("range", rangePreset);
+    if (rangePreset === "custom" && customRange) {
+      params.set("start", customRange.startDate);
+      params.set("end", customRange.endDate);
+    } else {
+      params.delete("start");
+      params.delete("end");
+    }
+    const query = params.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+    );
+  }, [rangePreset, customRange]);
 
   // The tenant filter lives in AuthContext so the same selection scopes
   // /attribution, /admin/tenants, and any other admin surface — and survives
