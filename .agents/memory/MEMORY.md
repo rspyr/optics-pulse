@@ -4,3 +4,4 @@
 - [tenant-scope id validation](tenant-scope-id-validation.md) — admin tenantId arrives as number (zod), NaN (manual Number()), or numeric string (test passthrough); coerce before Number.isFinite; abc-regression only on drilldown routes.
 - [drizzle migration discovery](drizzle-migration-discovery.md) — runner auto-discovers NNNN_*.sql by filename + _applied_migrations table; _journal.json is stale (stops at 0049), do NOT edit it.
 - [api-server test parallelism](api-server-test-parallelism.md) — vitest runs fileParallelism:false; "passes alone, fails in full run" = shared-DB pollution + throttled-CPU timeouts, not drift.
+- [Artifact typecheck source resolution](stale-project-ref-dist-typecheck.md) — artifact tsconfig must NOT carry composite `references` to @workspace libs, else bare `tsc --noEmit` reads stale gitignored `dist/*.d.ts` (phantom "property does not exist"); rely on customConditions:["workspace"] + src exports.

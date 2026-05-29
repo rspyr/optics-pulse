@@ -6,16 +6,5 @@
     "types": ["node"],
     "lib": ["es2022", "dom"]
   },
-  "include": ["src/**/*.test.ts", "src/types/**/*.d.ts"],
-  "references": [
-    {
-      "path": "../../lib/db"
-    },
-    {
-      "path": "../../lib/api-zod"
-    },
-    {
-      "path": "../../lib/integrations-gemini-ai"
-    }
-  ]
+  "include": ["src/**/*.test.ts", "src/types/**/*.d.ts"]
 }
