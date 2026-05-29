@@ -114,7 +114,7 @@ async function completeSyncLog(logId: number, status: string, recordsProcessed: 
  * worst-case inter-progress gap to ~30s (well under the reaper threshold) while
  * holding write volume to ~2/min per in-flight chunk.
  */
-const HEARTBEAT_MIN_INTERVAL_MS = 30_000;
+export const HEARTBEAT_MIN_INTERVAL_MS = 30_000;
 
 /**
  * Record in-flight chunk progress for a backfill run. Writes to dedicated
@@ -173,10 +173,44 @@ async function updateSyncLogRecords(logId: number, recordsProcessed: number) {
  * heartbeat interval, so the orphan reaper threshold and the UI "Stalled"
  * badge can both be tightened without false-positiving on live runs.
  */
-async function heartbeatSyncLogProgress(logId: number) {
+export async function heartbeatSyncLogProgress(logId: number) {
   await db.update(integrationSyncLogsTable)
     .set({ progressUpdatedAt: new Date() })
     .where(eq(integrationSyncLogsTable.id, logId));
+}
+
+/**
+ * Build the `onPollHeartbeat` callback handed to `fetchAdDailyInsightsAsync`.
+ * Encapsulates the two pieces of "heartbeat wiring" that keep a long async
+ * chunk looking alive to the orphan reaper / UI:
+ *
+ *   1. Throttle — the async report polls every ~5s, but we stamp at most once
+ *      per `HEARTBEAT_MIN_INTERVAL_MS` so write volume stays ~2/min per chunk
+ *      while still bounding the worst-case inter-stamp gap to ~30s.
+ *   2. Failure isolation — a heartbeat is pure liveness bookkeeping, so a DB
+ *      write hiccup must NEVER abort an otherwise-healthy backfill; the write
+ *      is awaited (so a slow write back-pressures rather than races the loop)
+ *      but any thrown error is swallowed.
+ *
+ * `writer` and `now` are injectable purely so the wiring can be unit-tested
+ * (throttle timing + error swallowing) without a live poll loop or a real DB.
+ */
+export function makePollHeartbeat(
+  logId: number,
+  writer: (id: number) => Promise<void> = heartbeatSyncLogProgress,
+  now: () => number = Date.now,
+): () => Promise<void> {
+  let lastHeartbeatAt = now();
+  return async () => {
+    const t = now();
+    if (t - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) return;
+    lastHeartbeatAt = t;
+    try {
+      await writer(logId);
+    } catch {
+      /* liveness-only: a heartbeat write failure must not abort the backfill */
+    }
+  };
 }
 
 /**
@@ -1546,14 +1580,8 @@ export async function backfillMetaCampaigns(
         // to `HEARTBEAT_MIN_INTERVAL_MS`, so the run keeps looking alive to the
         // reaper / UI. A heartbeat write failure must never abort a live
         // backfill, so it's swallowed.
-        let lastHeartbeatAt = Date.now();
         const insights = await svc.fetchAdDailyInsightsAsync(since, until, {
-          onPollHeartbeat: async () => {
-            const now = Date.now();
-            if (now - lastHeartbeatAt < HEARTBEAT_MIN_INTERVAL_MS) return;
-            lastHeartbeatAt = now;
-            try { await heartbeatSyncLogProgress(syncLog.id); } catch {}
-          },
+          onPollHeartbeat: makePollHeartbeat(syncLog.id),
         });
         const { perAdSynced } = await upsertMetaInsightRows(tenantId, accountIdNoPrefix, currency, insights);
         totalSynced += perAdSynced;

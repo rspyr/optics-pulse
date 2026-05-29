@@ -18,13 +18,17 @@
  *     even when old enough to fall past the cutoff
  *   - the reaper writes the orphan error message + clears progress columns
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { eq, inArray, sql } from "drizzle-orm";
 
 const dbModule = await import("@workspace/db");
 const { db, tenantsTable, integrationSyncLogsTable } = dbModule;
 
-const { reapOrphanedSyncLogs } = await import("./orphan-sync-reaper");
+const { reapOrphanedSyncLogs, DEFAULT_INACTIVITY_STALE_MINUTES } = await import(
+  "./orphan-sync-reaper"
+);
+const { makePollHeartbeat, heartbeatSyncLogProgress, HEARTBEAT_MIN_INTERVAL_MS } =
+  await import("./sync-scheduler");
 
 const STALE_MINUTES = 15;
 const MIN_MS = 60 * 1000;
@@ -364,6 +368,151 @@ describe("reapOrphanedSyncLogs — inactivity-keyed periodic sweep", () => {
         `tick ${tick}: a backfill refreshing progress must outlive the 6-hour mark`,
       ).toBe("running");
     }
+  });
+});
+
+describe("tightened dead-sync detector — new-speed recovery (Task #702)", () => {
+  // Task #702 lowered the shared orphan-reaper inactivity default from 15 to 5
+  // min and added a throttled mid-chunk heartbeat. These tests exercise the new
+  // default end-to-end (rather than the suite's hardcoded STALE_MINUTES=15) and
+  // pin the heartbeat wiring that makes the tighter window safe.
+
+  async function insertRunning(progressUpdatedAt: Date | null): Promise<number> {
+    const [row] = await db
+      .insert(integrationSyncLogsTable)
+      .values({
+        tenantId,
+        integration: "meta",
+        syncType: "backfill",
+        status: "running",
+        startedAt: minutesAgo(180),
+        progressUpdatedAt,
+        progressCurrentChunk: 2,
+        progressTotalChunks: 9,
+      })
+      .returning({ id: integrationSyncLogsTable.id });
+    seeded.push({ id: row.id, label: "tightened-detector", expectReaped: false });
+    return row.id;
+  }
+
+  async function statusOf(id: number): Promise<string | undefined> {
+    const [row] = await db
+      .select({ status: integrationSyncLogsTable.status })
+      .from(integrationSyncLogsTable)
+      .where(eq(integrationSyncLogsTable.id, id));
+    return row?.status;
+  }
+
+  it("uses the tightened 5-min default: reaps just over it, spares just under it", async () => {
+    // Pin the actual constant so a regression that reverts the default to 15
+    // (or any looser value) fails here instead of silently slipping past CI.
+    expect(DEFAULT_INACTIVITY_STALE_MINUTES).toBe(5);
+
+    // Last activity 1 min INSIDE the window → genuinely alive, must survive.
+    const fresh = await insertRunning(
+      minutesAgo(DEFAULT_INACTIVITY_STALE_MINUTES - 1),
+    );
+    // Last activity 1 min PAST the window → dead, must be reaped.
+    const stale = await insertRunning(
+      minutesAgo(DEFAULT_INACTIVITY_STALE_MINUTES + 1),
+    );
+
+    // Sweep at the default (no explicit threshold) — this is exactly what the
+    // startup reaper and the periodic sweep both run in production.
+    const reaped = await reapOrphanedSyncLogs(DEFAULT_INACTIVITY_STALE_MINUTES);
+    expect(reaped).toBeGreaterThanOrEqual(1);
+
+    expect(
+      await statusOf(fresh),
+      "a run whose last stamp is just inside the 5-min window must survive",
+    ).toBe("running");
+    expect(
+      await statusOf(stale),
+      "a run whose last stamp is just past the 5-min window must be reaped",
+    ).toBe("error");
+  });
+
+  it("never reaps a run kept alive by the throttled poll heartbeat over a span longer than the threshold", async () => {
+    // The heartbeat throttle must stay comfortably below the reap threshold,
+    // otherwise the worst-case inter-stamp gap could cross the cutoff between
+    // writes and a healthy run would be falsely reaped.
+    expect(HEARTBEAT_MIN_INTERVAL_MS).toBeLessThan(
+      DEFAULT_INACTIVITY_STALE_MINUTES * MIN_MS,
+    );
+
+    const id = await insertRunning(new Date());
+
+    // Fake ONLY `Date` so simulated wall-clock advances for both the heartbeat
+    // writer (`new Date()`), the throttle (`Date.now()`), and the reaper's
+    // cutoff (`Date.now()`) in lockstep — while real timers keep the pg driver
+    // and async DB I/O working.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const base = Date.now();
+      vi.setSystemTime(base);
+      // Align the row's last-stamp to t=base so the simulation starts fresh.
+      await db
+        .update(integrationSyncLogsTable)
+        .set({ progressUpdatedAt: new Date(base) })
+        .where(eq(integrationSyncLogsTable.id, id));
+
+      // Drive the REAL throttled poll callback (not direct heartbeat writes) at
+      // the async-report poll cadence (~5s). Count actual DB writes so we can
+      // assert the throttle collapses many poll ticks into ~one write per
+      // HEARTBEAT_MIN_INTERVAL_MS.
+      let writes = 0;
+      const heartbeat = makePollHeartbeat(id, async (logId) => {
+        writes++;
+        await heartbeatSyncLogProgress(logId);
+      });
+
+      const POLL_INTERVAL_MS = 5_000; // matches fetchAdDailyInsightsAsync default
+      const spanMs = (DEFAULT_INACTIVITY_STALE_MINUTES + 2) * MIN_MS; // > threshold
+      let pollTicks = 0;
+
+      for (let elapsed = 0; elapsed <= spanMs; elapsed += POLL_INTERVAL_MS) {
+        vi.setSystemTime(base + elapsed);
+        pollTicks++;
+        await heartbeat(); // throttled: writes progress_updated_at at most ~every 30s
+        await reapOrphanedSyncLogs(DEFAULT_INACTIVITY_STALE_MINUTES);
+        expect(
+          await statusOf(id),
+          `t+${elapsed}ms: a backfill driven by the throttled heartbeat must never be reaped`,
+        ).toBe("running");
+      }
+
+      // Throttling actually happened: far fewer DB writes than poll ticks, and
+      // roughly one write per heartbeat interval across the span.
+      const expectedWrites = Math.floor(spanMs / HEARTBEAT_MIN_INTERVAL_MS);
+      expect(writes).toBeLessThan(pollTicks);
+      expect(writes).toBeGreaterThanOrEqual(expectedWrites - 1);
+      expect(writes).toBeLessThanOrEqual(expectedWrites + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a heartbeat DB-write failure does not abort the backfill", async () => {
+    // The poll-heartbeat callback is pure liveness bookkeeping: a failed DB
+    // write must be swallowed so a transient hiccup never tears down an
+    // otherwise-healthy chunk. Drive the real factory with an injected clock
+    // (to clear the throttle) and a writer that always throws.
+    let now = 0;
+    const calls: number[] = [];
+    const heartbeat = makePollHeartbeat(
+      999_999,
+      async (id) => {
+        calls.push(id);
+        throw new Error("simulated heartbeat DB write failure");
+      },
+      () => now,
+    );
+
+    // Advance past the throttle so the callback actually attempts a write,
+    // then assert it resolves (does NOT reject) despite the writer throwing.
+    now = HEARTBEAT_MIN_INTERVAL_MS + 1;
+    await expect(heartbeat()).resolves.toBeUndefined();
+    expect(calls).toEqual([999_999]);
   });
 });
 
