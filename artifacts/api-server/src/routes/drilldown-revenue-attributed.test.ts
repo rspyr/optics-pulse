@@ -113,6 +113,14 @@ vi.mock("@workspace/db", () => {
         const idx = mockDb._selectIdx++;
         return makeSelectChain(() => mockDb.selectResults[idx] || []);
       }),
+      // The facets endpoint uses db.selectDistinct(...).from().leftJoin()
+      // .leftJoin().where() with the result awaited at .where() (terminal),
+      // which makeSelectChain already supports. Shares the same select results
+      // queue/index so tests seed it the same way as db.select().
+      selectDistinct: vi.fn().mockImplementation(() => {
+        const idx = mockDb._selectIdx++;
+        return makeSelectChain(() => mockDb.selectResults[idx] || []);
+      }),
       update: vi.fn().mockImplementation(() => {
         const idx = mockDb._updateIdx++;
         return makeUpdateChain(() => mockDb.updateResults[idx] || []);
@@ -642,6 +650,189 @@ describe("GET /drilldown/revenue-attributed", () => {
     });
   });
 
+  // The Revenue Attributed list supports filtering on the originating lead's
+  // funnel + source. The filter must be applied IDENTICALLY to the list and the
+  // summary aggregate so the cards/CSV always reconcile with the visible rows
+  // under an active filter. Here we feed both endpoints the SAME server-filtered
+  // dataset (as Postgres would return for funnel=Roofing & source=ppc) and prove
+  // the per-row corrected-revenue totals equal the summary aggregate, and that
+  // the leads.source filter is wired into both queries.
+  describe("funnel/source filters reconcile across list + summary", () => {
+    // Two completed jobs that survive funnel=Roofing & source=ppc. Each row
+    // carries the resolved funnelName the route selects + a linked lead whose
+    // source is "ppc"; one is attributed (gclid), one is not.
+    const filteredJobs = [
+      { id: 1, tenantId: 7, leadId: 101, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+        funnelName: "Roofing", jobType: "roof", jobTypeName: "Roofing", status: "completed",
+        revenue: 1000, invoiceTotal: 900, invoiceRebateAmount: 150,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: "gclid", matchedGclid: "g1" },
+      { id: 2, tenantId: 7, leadId: 102, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+        funnelName: "Roofing", jobType: "roof", jobTypeName: "Roofing", status: "completed",
+        revenue: 500, invoiceTotal: 500, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+    ];
+    const filteredLeads = [
+      { id: 101, firstName: "Lead", lastName: "One", source: "ppc", originalSource: "ppc",
+        status: "sold", hubStatus: null, assignedTo: null },
+      { id: 102, firstName: "Lead", lastName: "Two", source: "ppc", originalSource: "ppc",
+        status: "sold", hubStatus: null, assignedTo: null },
+    ];
+
+    // The raw aggregate Postgres would return for the filtered subset (pre-
+    // rounding sums) — mirrors the summary route's SUM/COUNT over the same rows.
+    function aggregateOf(jobs: typeof filteredJobs) {
+      const corrected = (j: (typeof filteredJobs)[number]) =>
+        j.invoiceTotal != null ? j.invoiceTotal + (j.invoiceRebateAmount ?? 0) : j.revenue;
+      let revenue = 0, rebates = 0, attributed = 0;
+      for (const j of jobs) {
+        revenue += corrected(j);
+        rebates += j.invoiceRebateAmount ?? 0;
+        if (j.matchLevel != null) attributed += corrected(j);
+      }
+      return { revenue, rebates, attributed, count: jobs.length };
+    }
+
+    async function sourceEqArgs(): Promise<unknown[]> {
+      const drizzle = await import("drizzle-orm");
+      return vi
+        .mocked(drizzle.eq)
+        .mock.calls.filter((c) => (c[0] as unknown as string) === "leads.source")
+        .map((c) => c[1]);
+    }
+
+    it("list + summary compute the same totals over the filtered set, and both wire the source filter", async () => {
+      // List run (limit=all, as the CSV export issues) with funnel + source.
+      const listApp = await setupApp("super_admin", null);
+      mockDb.selectResults = [filteredJobs, [{ total: filteredJobs.length }], [], filteredLeads];
+      const listRes = await request(
+        listApp,
+        "GET",
+        "/drilldown/revenue-attributed?tenantId=7&funnel=Roofing&source=ppc&limit=all",
+      );
+      expect(listRes.status).toBe(200);
+      const rows = listRes.json as Array<{
+        id: number; correctedRevenue: number; invoiceRebateAmount: number | null;
+        matchLevel: string | null; funnel: string | null; source: string | null;
+      }>;
+      // Only the filtered rows came back, with their funnel/source surfaced.
+      expect(rows.map((r) => r.id)).toEqual([1, 2]);
+      expect(rows.every((r) => r.funnel === "Roofing")).toBe(true);
+      expect(rows.every((r) => r.source === "ppc")).toBe(true);
+      // The source filter was forwarded to the list query.
+      expect(await sourceEqArgs()).toContain("ppc");
+
+      const listRevenue = round2(rows.reduce((s, r) => s + r.correctedRevenue, 0));
+      const listRebates = round2(rows.reduce((s, r) => s + (r.invoiceRebateAmount ?? 0), 0));
+      const listAttributed = round2(
+        rows.reduce((s, r) => s + (r.matchLevel != null ? r.correctedRevenue : 0), 0),
+      );
+
+      // Summary run over the SAME filtered set — fed the aggregate Postgres
+      // computes for those rows.
+      mockDb.reset();
+      vi.clearAllMocks();
+      const summaryApp = await setupApp("super_admin", null);
+      mockDb.selectResults = [[aggregateOf(filteredJobs)]];
+      const summaryRes = await request(
+        summaryApp,
+        "GET",
+        "/drilldown/revenue-attributed/summary?tenantId=7&funnel=Roofing&source=ppc",
+      );
+      expect(summaryRes.status).toBe(200);
+      const summary = summaryRes.json as { revenue: number; rebates: number; attributed: number; count: number };
+      // The summary also wires the source filter (cards track the same subset).
+      expect(await sourceEqArgs()).toContain("ppc");
+
+      // The cards reconcile with the filtered list, column for column.
+      expect(summary.count).toBe(rows.length);
+      expect(summary.revenue).toBe(listRevenue);
+      expect(summary.rebates).toBe(listRebates);
+      expect(summary.attributed).toBe(listAttributed);
+      // Concrete totals: (900+150) + 500 = 1550; rebates 150; attributed 1050.
+      expect(summary.revenue).toBe(1550);
+      expect(summary.rebates).toBe(150);
+      expect(summary.attributed).toBe(1050);
+    });
+  });
+
+  // Sorting: the list accepts sort=<key>&dir=<asc|desc>. The DB applies the
+  // ordering, so the contract under test is (1) the route maps dir to the
+  // matching drizzle helper (asc/desc) for the funnel + source sort keys, and
+  // (2) it preserves the DB's ordering in the response. The revenue-attributed
+  // route only calls asc()/desc() once (for the orderBy), so exactly one of them
+  // fires per request — that's how we assert the direction was honoured.
+  describe("funnel/source sorting direction (asc/desc)", () => {
+    // Three jobs whose resolved funnel names sort F < G < H ascending and whose
+    // lead sources sort facebook < google < seo ascending.
+    const sortJobs = [
+      { id: 1, tenantId: 7, leadId: 201, stJobId: "j1", stInvoiceId: "i1", customerName: "A",
+        funnelName: "Heating", jobType: "hvac", jobTypeName: "HVAC", status: "completed",
+        revenue: 100, invoiceTotal: 100, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      { id: 2, tenantId: 7, leadId: 202, stJobId: "j2", stInvoiceId: "i2", customerName: "B",
+        funnelName: "Gutters", jobType: "gut", jobTypeName: "Gutters", status: "completed",
+        revenue: 200, invoiceTotal: 200, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+      { id: 3, tenantId: 7, leadId: 203, stJobId: "j3", stInvoiceId: "i3", customerName: "C",
+        funnelName: "Flooring", jobType: "floor", jobTypeName: "Flooring", status: "completed",
+        revenue: 300, invoiceTotal: 300, invoiceRebateAmount: null,
+        invoiceDate: null, completedAt: null, createdAt: null, matchLevel: null, matchedGclid: null },
+    ];
+    const sortLeads = [
+      { id: 201, firstName: "L", lastName: "1", source: "seo", originalSource: "seo", status: "sold", hubStatus: null, assignedTo: null },
+      { id: 202, firstName: "L", lastName: "2", source: "google", originalSource: "google", status: "sold", hubStatus: null, assignedTo: null },
+      { id: 203, firstName: "L", lastName: "3", source: "facebook", originalSource: "facebook", status: "sold", hubStatus: null, assignedTo: null },
+    ];
+
+    async function directionCalls() {
+      const drizzle = await import("drizzle-orm");
+      return {
+        asc: vi.mocked(drizzle.asc).mock.calls.length,
+        desc: vi.mocked(drizzle.desc).mock.calls.length,
+      };
+    }
+
+    for (const sortKey of ["funnel", "source"] as const) {
+      it(`sort=${sortKey}&dir=asc uses asc() (not desc()) and preserves the DB order`, async () => {
+        // Rows fed in the order Postgres would return for an ascending sort.
+        const ascending =
+          sortKey === "funnel"
+            ? [sortJobs[2], sortJobs[1], sortJobs[0]] // Flooring < Gutters < Heating
+            : [sortJobs[2], sortJobs[1], sortJobs[0]]; // facebook < google < seo
+        const app = await setupApp("super_admin", null);
+        mockDb.selectResults = [ascending, [{ total: 3 }], [], sortLeads];
+        const res = await request(
+          app,
+          "GET",
+          `/drilldown/revenue-attributed?tenantId=7&sort=${sortKey}&dir=asc`,
+        );
+        expect(res.status).toBe(200);
+        const ids = (res.json as Array<{ id: number }>).map((r) => r.id);
+        expect(ids).toEqual([3, 2, 1]);
+        const { asc, desc } = await directionCalls();
+        expect(asc).toBe(1);
+        expect(desc).toBe(0);
+      });
+
+      it(`sort=${sortKey}&dir=desc uses desc() (not asc()) and preserves the DB order`, async () => {
+        const descending = [sortJobs[0], sortJobs[1], sortJobs[2]];
+        const app = await setupApp("super_admin", null);
+        mockDb.selectResults = [descending, [{ total: 3 }], [], sortLeads];
+        const res = await request(
+          app,
+          "GET",
+          `/drilldown/revenue-attributed?tenantId=7&sort=${sortKey}&dir=desc`,
+        );
+        expect(res.status).toBe(200);
+        const ids = (res.json as Array<{ id: number }>).map((r) => r.id);
+        expect(ids).toEqual([1, 2, 3]);
+        const { asc, desc } = await directionCalls();
+        expect(desc).toBe(1);
+        expect(asc).toBe(0);
+      });
+    }
+  });
+
   describe("tenant scoping (clients cannot see other tenants' jobs)", () => {
     it("returns 403 'No tenant assigned' for a tenant-scoped role with no session tenant, and never reads the DB", async () => {
       const app = await setupApp("tenant_user", null);
@@ -656,6 +847,111 @@ describe("GET /drilldown/revenue-attributed", () => {
       const app = await setupApp("tenant_user", 7);
       mockDb.selectResults = [[], [{ total: 0 }], []];
       const res = await request(app, "GET", "/drilldown/revenue-attributed?tenantId=9");
+      expect(res.status).toBeLessThan(500);
+      const tenantArgs = await tenantEqArgsFor("jobs");
+      expect(tenantArgs).toContain(7);
+      expect(tenantArgs).not.toContain(9);
+      expect(tenantArgs).not.toContain("9");
+    });
+  });
+});
+
+// GET /drilldown/revenue-attributed/facets powers the funnel + source filter
+// dropdowns. It returns the DISTINCT funnels + sources present in the completed
+// jobs for a tenant/date range, de-duped and sorted, and — deliberately — NOT
+// scoped by the funnel/source filters themselves, so the user can always pivot
+// to another value without the current selection narrowing the options away.
+// The route runs a single db.selectDistinct({ funnel, source }) over the
+// job→lead→funnel_type join; the mock hands back the distinct rows Postgres
+// would, then the route de-dupes + sorts each axis independently.
+describe("GET /drilldown/revenue-attributed/facets", () => {
+  beforeEach(() => {
+    mockDb.reset();
+    vi.clearAllMocks();
+  });
+
+  it("returns distinct funnels + sources, de-duped and alphabetically sorted", async () => {
+    const app = await setupApp("super_admin", null);
+    // The distinct (funnel, source) pairs Postgres would return — intentionally
+    // out of order and with repeats across rows so the route must de-dupe + sort
+    // each axis independently.
+    mockDb.selectResults = [[
+      { funnel: "Roofing", source: "ppc" },
+      { funnel: "Gutters", source: "seo" },
+      { funnel: "Roofing", source: "seo" }, // dup funnel, dup source
+      { funnel: "Flooring", source: "facebook" },
+      { funnel: null, source: null }, // unmatched job → must be dropped
+      { funnel: "  ", source: "" }, // blank/whitespace → must be dropped
+    ]];
+
+    const res = await request(
+      app,
+      "GET",
+      "/drilldown/revenue-attributed/facets?tenantId=7&startDate=2026-01-01&endDate=2026-12-31",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({
+      funnels: ["Flooring", "Gutters", "Roofing"],
+      sources: ["facebook", "ppc", "seo"],
+    });
+  });
+
+  it("scopes to tenant + the completed-status + date filters, but NOT to funnel/source", async () => {
+    const app = await setupApp("super_admin", null);
+    mockDb.selectResults = [[{ funnel: "Roofing", source: "ppc" }]];
+
+    // Pass funnel/source query params that the list/summary WOULD honour; the
+    // facets endpoint must ignore them so the dropdowns keep every option.
+    const res = await request(
+      app,
+      "GET",
+      "/drilldown/revenue-attributed/facets?tenantId=7&startDate=2026-01-01&endDate=2026-12-31&funnel=Roofing&source=ppc",
+    );
+    expect(res.status).toBe(200);
+
+    const drizzle = await import("drizzle-orm");
+    // Tenant + completed status are applied via eq().
+    const tenantArgs = await tenantEqArgsFor("jobs");
+    expect(tenantArgs).toContain(7);
+    const statusArgs = vi
+      .mocked(drizzle.eq)
+      .mock.calls.filter((c) => (c[0] as unknown as string) === "jobs.status")
+      .map((c) => c[1]);
+    expect(statusArgs).toContain("completed");
+    // The funnel/source filters must NOT be self-applied: leads.source is never
+    // eq-filtered, and the only `=` over the funnel expression would be the
+    // self-filter the route deliberately omits here.
+    const sourceArgs = vi
+      .mocked(drizzle.eq)
+      .mock.calls.filter((c) => (c[0] as unknown as string) === "leads.source")
+      .map((c) => c[1]);
+    expect(sourceArgs).not.toContain("ppc");
+  });
+
+  it("uses db.selectDistinct (a true DISTINCT query, not a plain select)", async () => {
+    const app = await setupApp("super_admin", null);
+    mockDb.selectResults = [[{ funnel: "Roofing", source: "ppc" }]];
+    const res = await request(app, "GET", "/drilldown/revenue-attributed/facets?tenantId=7");
+    expect(res.status).toBe(200);
+    const dbMod = await import("@workspace/db");
+    expect(vi.mocked(dbMod.db.selectDistinct)).toHaveBeenCalled();
+  });
+
+  describe("tenant scoping (clients cannot see other tenants' facets)", () => {
+    it("returns 403 'No tenant assigned' for a tenant-scoped role with no session tenant, and never reads the DB", async () => {
+      const app = await setupApp("tenant_user", null);
+      const res = await request(app, "GET", "/drilldown/revenue-attributed/facets?tenantId=9");
+      expect(res.status).toBe(403);
+      expect(res.json).toEqual(NO_TENANT_ASSIGNED_ERROR);
+      const dbMod = await import("@workspace/db");
+      expect(vi.mocked(dbMod.db.selectDistinct)).not.toHaveBeenCalled();
+    });
+
+    it("forces the session tenantId, ignoring an attacker-supplied query.tenantId", async () => {
+      const app = await setupApp("tenant_user", 7);
+      mockDb.selectResults = [[{ funnel: "Roofing", source: "ppc" }]];
+      const res = await request(app, "GET", "/drilldown/revenue-attributed/facets?tenantId=9");
       expect(res.status).toBeLessThan(500);
       const tenantArgs = await tenantEqArgsFor("jobs");
       expect(tenantArgs).toContain(7);

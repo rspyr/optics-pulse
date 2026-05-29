@@ -240,3 +240,131 @@ describe("Revenue Attributed — CSV export reconciles with summary cards (Task 
     expect(dataRows.some((r) => r.includes("Smith, Bob & Co"))).toBe(true);
   });
 });
+
+// Same dataset as above but tagged with funnels so a funnel filter splits it:
+//   id 1 — Roofing, attributed (gclid), corrected 1050
+//   id 2 — Gutters, NOT attributed, corrected 500 (dropped by funnel=Roofing)
+//   id 3 — Roofing, attributed (manual), corrected 750
+const filterJobs: RevenueJob[] = [
+  { ...exportJobs[0], funnel: "Roofing" },
+  { ...exportJobs[1], funnel: "Gutters" },
+  { ...exportJobs[2], funnel: "Roofing" },
+];
+const roofingJobs = filterJobs.filter((j) => j.funnel === "Roofing");
+// The /summary aggregate the server returns for the SAME funnel=Roofing filter.
+// Derived from the filtered subset so the test reconciles the CSV against the
+// (filtered) cards, not a literal.
+const roofingSummary = {
+  revenue: round2(roofingJobs.reduce((s, j) => s + j.correctedRevenue, 0)),
+  rebates: round2(roofingJobs.reduce((s, j) => s + (j.invoiceRebateAmount ?? 0), 0)),
+  attributed: round2(
+    roofingJobs.reduce((s, j) => s + (j.matchLevel != null ? j.correctedRevenue : 0), 0),
+  ),
+  count: roofingJobs.length,
+};
+
+// URL-aware fetch: list + summary honour the funnel param (returning the
+// server-filtered subset), facets always offer every funnel, mirroring the real
+// endpoints. This lets the test drive the actual funnel dropdown and prove the
+// download reconciles with the filtered cards.
+function installFilteredFetch() {
+  vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const hasRoofing = url.includes("funnel=Roofing");
+    if (url.includes("/api/drilldown/revenue-attributed/facets")) {
+      // Facets are deliberately NOT self-filtered — every funnel stays offered.
+      return { ok: true, status: 200, json: async () => ({ funnels: ["Gutters", "Roofing"], sources: [] }) } as Response;
+    }
+    if (url.includes("/api/drilldown/revenue-attributed/summary")) {
+      return { ok: true, status: 200, json: async () => (hasRoofing ? roofingSummary : summary) } as Response;
+    }
+    if (url.includes("/api/drilldown/revenue-attributed")) {
+      const data = hasRoofing ? roofingJobs : filterJobs;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (k: string) => (k === "X-Total-Count" ? String(data.length) : null) },
+        json: async () => data,
+      } as unknown as Response;
+    }
+    return { ok: true, status: 200, json: async () => ({}) } as Response;
+  });
+}
+
+describe("Revenue Attributed — CSV export reconciles with summary cards under a funnel filter", () => {
+  beforeEach(() => {
+    // Radix Select drives selection through pointer capture + scrollIntoView,
+    // neither of which jsdom implements; stub them so the dropdown opens.
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false;
+    }
+    if (!Element.prototype.setPointerCapture) {
+      Element.prototype.setPointerCapture = () => {};
+    }
+    if (!Element.prototype.releasePointerCapture) {
+      Element.prototype.releasePointerCapture = () => {};
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {};
+    }
+  });
+
+  it("applies the funnel filter and the downloaded CSV totals equal the filtered cards", async () => {
+    setUser();
+    installFilteredFetch();
+    const user = userEvent.setup();
+    render(<RevenueAttributed />);
+
+    // Unfiltered load shows every row (including the Gutters one).
+    await screen.findByText("Acme HVAC");
+    expect(screen.getByText("Smith, Bob & Co")).toBeInTheDocument();
+
+    // Open the Funnel filter (its trigger shows the placeholder selection
+    // "All funnels") and pick Roofing.
+    const funnelTrigger = screen
+      .getAllByRole("combobox")
+      .find((el) => /all funnels/i.test(el.textContent || ""));
+    expect(funnelTrigger).toBeTruthy();
+    await user.click(funnelTrigger!);
+    const roofingOption = await screen.findByRole("option", { name: "Roofing" });
+    await user.click(roofingOption);
+
+    // The Gutters row drops out once the filter is applied (list re-fetched).
+    await waitFor(() => expect(screen.queryByText("Smith, Bob & Co")).not.toBeInTheDocument());
+
+    // Now export — the CSV must cover only the filtered rows and reconcile with
+    // the filtered summary cards.
+    capturedCsv = null;
+    const downloadBtn = screen.getByRole("button", { name: /download csv/i });
+    await user.click(downloadBtn);
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalled());
+    await waitFor(() => expect(capturedCsv).not.toBeNull());
+
+    const grid = parseCsv(capturedCsv!);
+    const header = grid[0];
+    const dataRows = grid.slice(1);
+
+    const correctedIdx = header.indexOf("Corrected Revenue");
+    const rebateIdx = header.indexOf("Rebate Amount");
+    const matchIdx = header.indexOf("Match Tier");
+
+    // Only the two Roofing jobs were exported (the Gutters row is gone).
+    expect(dataRows).toHaveLength(roofingSummary.count);
+    expect(dataRows.some((r) => r.includes("Smith, Bob & Co"))).toBe(false);
+
+    const csvCorrected = round2(dataRows.reduce((s, r) => s + Number(r[correctedIdx]), 0));
+    const csvRebates = round2(dataRows.reduce((s, r) => s + Number(r[rebateIdx]), 0));
+    const csvAttributed = round2(
+      dataRows.reduce((s, r) => s + (r[matchIdx] !== "unmatched" ? Number(r[correctedIdx]) : 0), 0),
+    );
+
+    // The filtered download reconciles with the filtered cards, column for column.
+    expect(csvCorrected).toBe(roofingSummary.revenue);
+    expect(csvRebates).toBe(roofingSummary.rebates);
+    expect(csvAttributed).toBe(roofingSummary.attributed);
+    // Concrete: 1050 + 750 = 1800 corrected; 150 rebates; 1800 attributed.
+    expect(csvCorrected).toBe(1800);
+    expect(csvAttributed).toBe(1800);
+  });
+});
