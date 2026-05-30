@@ -5,9 +5,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // of the /admin/dashboard-stats route it mirrors.
 //
 // Minimal db.select() chain. Every select call shifts the next queued result
-// off `state.selectQueue`. The chain is thenable after `.from().where()`, which
-// covers every select issued by computeTenantMetrics (campaigns, then — only
-// when campaigns exist — spend, then leads and jobs in parallel).
+// off `state.selectQueue`. The chain is thenable after `.from()/.innerJoin()/
+// .where()/.groupBy()`, which covers every select issued by the batch helper
+// computeTenantMetrics now delegates to: three grouped queries fired in
+// Promise.all order — leads, jobs, then spend.
 const state = {
   selectQueue: [] as unknown[][],
   reset() {
@@ -22,6 +23,7 @@ function makeSelectChain(): Record<string, unknown> {
   chain.from = vi.fn().mockReturnValue(chain);
   chain.innerJoin = vi.fn().mockReturnValue(chain);
   chain.where = vi.fn().mockReturnValue(chain);
+  chain.groupBy = vi.fn().mockReturnValue(chain);
   chain.then = (r: Function) => resolveResult().then(r as (v: unknown) => unknown);
   return chain;
 }
@@ -103,34 +105,19 @@ async function loadComputeTenantMetrics() {
   return mod.computeTenantMetrics;
 }
 
-// A tenant that exercises every money/rate path: campaigns with a spend row, a
-// mix of lead statuses, and completed/non-completed jobs.
-// Select order inside computeTenantMetrics: [campaigns, spend, leads, jobs].
+// A tenant that exercises every money/rate path. The batch helper aggregates in
+// SQL, so each query returns a single grouped row keyed by tenantId rather than
+// raw rows counted in JS.
+// Select order inside the batch helper (Promise.all): [leads, jobs, spend].
+//   leads = 10 total, 4 booked (booked + sold), 2 sold
+//   jobs  = 5000 completed revenue
 //   spend = 1000
-//   leads = 10 total → 2 sold + 2 booked = 4 booked, 2 sold
-//   jobs  = 5000 completed revenue (the in_progress 9999 is ignored)
 // Derived: cpl 100, bookingRate 40.0, closeRate 50.0, roas 5, revenue 5000.
 function seedRichTenant() {
   state.selectQueue = [
-    [{ id: 101 }], // campaigns
-    [{ total: 1000 }], // spend
-    [
-      { status: "sold" },
-      { status: "sold" },
-      { status: "booked" },
-      { status: "booked" },
-      { status: "new" },
-      { status: "new" },
-      { status: "new" },
-      { status: "new" },
-      { status: "new" },
-      { status: "new" },
-    ],
-    [
-      { status: "completed", revenue: 2500 },
-      { status: "completed", revenue: 2500 },
-      { status: "in_progress", revenue: 9999 },
-    ],
+    [{ tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 }], // leads
+    [{ tenantId: 1, revenue: 5000 }], // jobs
+    [{ tenantId: 1, total: 1000 }], // spend
   ];
 }
 
@@ -170,13 +157,14 @@ describe("computeTenantMetrics — money & rate math", () => {
     expect(m.roas).toBe(5); // 5000 revenue / 1000 spend
   });
 
-  it("zeroes spend-derived rates when the tenant has no campaigns", async () => {
+  it("zeroes spend-derived rates when the tenant has no campaign spend", async () => {
     const compute = await loadComputeTenantMetrics();
-    // No campaigns → no spend select fires. Order: [campaigns, leads, jobs].
+    // No spend rows → the grouped spend query returns empty. Order still fires
+    // all three: [leads, jobs, spend].
     state.selectQueue = [
-      [], // campaigns (empty → spend query skipped)
-      [{ status: "booked" }, { status: "new" }],
-      [{ status: "completed", revenue: 3000 }],
+      [{ tenantId: 1, totalLeads: 2, bookedLeads: 1, soldLeads: 0 }], // leads
+      [{ tenantId: 1, revenue: 3000 }], // jobs
+      [], // spend (empty → spend 0)
     ];
 
     const m = await compute(1, "2026-05-01", "2026-05-28");
@@ -197,10 +185,9 @@ describe("computeTenantMetrics — date-boundary expansion", () => {
   it("expands startDate/endDate to full-day UTC boundaries on the lead and job windows", async () => {
     const compute = await loadComputeTenantMetrics();
     state.selectQueue = [
-      [{ id: 101 }], // campaigns
-      [{ total: 0 }], // spend
       [], // leads
       [], // jobs
+      [], // spend
     ];
 
     drizzle.gte.mockClear();

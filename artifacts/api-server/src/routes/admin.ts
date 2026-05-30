@@ -338,59 +338,33 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
 });
 
 export async function computeTenantMetrics(tenantId: number, startDate?: string, endDate?: string) {
-  const leadConditions = [eq(leadsTable.tenantId, tenantId)];
-  const jobConditions = [eq(jobsTable.tenantId, tenantId)];
-
-  if (startDate) {
-    leadConditions.push(gte(leadsTable.createdAt, new Date(startDate + "T00:00:00.000Z")));
-    jobConditions.push(gte(jobsTable.createdAt, new Date(startDate + "T00:00:00.000Z")));
-  }
-  if (endDate) {
-    leadConditions.push(lte(leadsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
-    jobConditions.push(lte(jobsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
-  }
-
-  const campaigns = await db.select().from(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
-  const campaignIds = campaigns.map(c => c.id);
-
-  let mtdSpend = 0;
-  if (campaignIds.length > 0) {
-    const spendConds = [
-      sql`${campaignDailyStatsTable.campaignId} IN (${sql.join(campaignIds.map(id => sql`${id}`), sql`,`)})`
-    ];
-    if (startDate) spendConds.push(gte(campaignDailyStatsTable.date, startDate));
-    if (endDate) spendConds.push(lte(campaignDailyStatsTable.date, endDate));
-
-    const [spendResult] = await db.select({
-      total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`
-    }).from(campaignDailyStatsTable).where(and(...spendConds));
-    mtdSpend = Number(spendResult?.total || 0);
-  }
-
-  const [leads, jobs] = await Promise.all([
-    db.select().from(leadsTable).where(and(...leadConditions)),
-    db.select().from(jobsTable).where(and(...jobConditions)),
-  ]);
-
-  const totalLeads = leads.length;
-  const bookedLeads = leads.filter(l => l.status === "booked" || l.status === "sold").length;
-  const soldLeads = leads.filter(l => l.status === "sold").length;
-  const revenue = jobs.filter(j => j.status === "completed").reduce((s, j) => s + (j.revenue || 0), 0);
-
-  return {
-    totalLeads,
-    bookedLeads,
-    soldLeads,
-    revenue: Math.round(revenue * 100) / 100,
-    spend: Math.round(mtdSpend * 100) / 100,
-    closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
-    bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
-    cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
-    roas: mtdSpend > 0 ? Math.round((revenue / mtdSpend) * 100) / 100 : 0,
-  };
+  const batch = await computeTenantMetricsBatch([tenantId], startDate, endDate);
+  return batch.get(tenantId) ?? ZERO_TENANT_METRICS;
 }
 
-type TenantMetrics = Awaited<ReturnType<typeof computeTenantMetrics>>;
+type TenantMetrics = {
+  totalLeads: number;
+  bookedLeads: number;
+  soldLeads: number;
+  revenue: number;
+  spend: number;
+  closeRate: number;
+  bookingRate: number;
+  cpl: number;
+  roas: number;
+};
+
+const ZERO_TENANT_METRICS: TenantMetrics = {
+  totalLeads: 0,
+  bookedLeads: 0,
+  soldLeads: 0,
+  revenue: 0,
+  spend: 0,
+  closeRate: 0,
+  bookingRate: 0,
+  cpl: 0,
+  roas: 0,
+};
 
 /**
  * Batched equivalent of `computeTenantMetrics` for many tenants in one period.
