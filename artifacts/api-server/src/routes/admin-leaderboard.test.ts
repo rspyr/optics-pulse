@@ -10,8 +10,10 @@ import http from "http";
 //   tenants                -> [callerLookup?, activeTenantsList]
 //   campaigns / spend /    -> [t1_current, t1_previous, t2_current, ...]
 //   leads / jobs              (current always shifts before previous per tenant)
-// training_purchases is left empty (the leaderboard's products payload is not
-// under test here), which the chain handles by defaulting to [].
+//   training_purchases     -> [t1_products, t2_products, ...] (one shift per
+//                             tenant, fired after that tenant's metrics resolve)
+// Tenants that don't seed products leave the queue empty, which the chain
+// handles by defaulting to [].
 const state = {
   byTable: {} as Record<string, unknown[][]>,
   reset() {
@@ -156,11 +158,22 @@ type Period = {
   leads?: Array<{ status: string }>;
   jobs?: Array<{ status: string; revenue: number }>;
 };
+// Raw rows as the products select projects them: training_items.title ->
+// itemTitle, training_items.category -> itemCategory, plus the purchase's own
+// pricePaid / purchasedAt. The route maps these onto {name, category,
+// pricePaid, purchasedAt}.
+type ProductRow = {
+  itemTitle: string;
+  itemCategory: string;
+  pricePaid: number;
+  purchasedAt: string;
+};
 type TenantCfg = {
   id: number;
   name: string;
   current: Period;
   previous: Period;
+  products?: ProductRow[];
 };
 
 // Build per-table FIFO queues from tenant configs. Every period gets one
@@ -180,6 +193,7 @@ function seed({
     campaign_daily_stats: [],
     leads: [],
     jobs: [],
+    training_purchases: [],
   };
   if (callerRow) byTable.tenants.push([callerRow]);
   byTable.tenants.push(tenants.map((t) => ({ id: t.id, name: t.name })));
@@ -190,6 +204,9 @@ function seed({
       byTable.leads.push(p.leads ?? []);
       byTable.jobs.push(p.jobs ?? []);
     }
+    // Products are per-tenant (one select after metrics), so push once per
+    // tenant in tenant order to keep the queue aligned.
+    byTable.training_purchases.push(t.products ?? []);
   }
   state.byTable = byTable;
 }
@@ -410,6 +427,132 @@ describe("GET /admin/leaderboard — outlier flagging", () => {
     const outlier = findRank(json, 4);
     expect(outlier.isOutlier).toBe(true);
     expect(outlier.outlierDirection).toBe("underperforming");
+  });
+});
+
+describe("GET /admin/leaderboard — products payload", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("maps name, category, pricePaid and purchasedAt from the purchases/items join", async () => {
+    seed({
+      tenants: [
+        {
+          id: 1,
+          name: "Alpha",
+          current: { jobs: jobsRev(5000) },
+          previous: {},
+          products: [
+            {
+              itemTitle: "Sales Bootcamp",
+              itemCategory: "sales",
+              pricePaid: 1200,
+              purchasedAt: "2026-05-10T00:00:00.000Z",
+            },
+            {
+              itemTitle: "Ops Masterclass",
+              itemCategory: "operations",
+              pricePaid: 800,
+              purchasedAt: "2026-05-12T00:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+    const alpha = findRank(json, 1);
+    expect(alpha.products).toEqual([
+      {
+        name: "Sales Bootcamp",
+        category: "sales",
+        pricePaid: 1200,
+        purchasedAt: "2026-05-10T00:00:00.000Z",
+      },
+      {
+        name: "Ops Masterclass",
+        category: "operations",
+        pricePaid: 800,
+        purchasedAt: "2026-05-12T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("defaults to an empty products list when a tenant has no purchases", async () => {
+    seed({
+      tenants: [
+        { id: 1, name: "Alpha", current: { jobs: jobsRev(5000) }, previous: {} },
+      ],
+    });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+    expect(findRank(json, 1).products).toEqual([]);
+  });
+
+  it("scopes each tenant's products to that tenant", async () => {
+    seed({
+      tenants: [
+        {
+          id: 1,
+          name: "Alpha",
+          current: { jobs: jobsRev(5000) },
+          previous: {},
+          products: [
+            {
+              itemTitle: "Alpha Course",
+              itemCategory: "sales",
+              pricePaid: 500,
+              purchasedAt: "2026-05-01T00:00:00.000Z",
+            },
+          ],
+        },
+        {
+          id: 2,
+          name: "Beta",
+          current: { jobs: jobsRev(3000) },
+          previous: {},
+          products: [
+            {
+              itemTitle: "Beta Course",
+              itemCategory: "marketing",
+              pricePaid: 700,
+              purchasedAt: "2026-05-02T00:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+    expect(findRank(json, 1).products).toEqual([
+      {
+        name: "Alpha Course",
+        category: "sales",
+        pricePaid: 500,
+        purchasedAt: "2026-05-01T00:00:00.000Z",
+      },
+    ]);
+    expect(findRank(json, 2).products).toEqual([
+      {
+        name: "Beta Course",
+        category: "marketing",
+        pricePaid: 700,
+        purchasedAt: "2026-05-02T00:00:00.000Z",
+      },
+    ]);
+
+    // The products select must filter by each tenant's own id, not a shared
+    // or wrong tenant scope.
+    expect(drizzle.eq).toHaveBeenCalledWith("training_purchases.tenantId", 1);
+    expect(drizzle.eq).toHaveBeenCalledWith("training_purchases.tenantId", 2);
   });
 });
 
