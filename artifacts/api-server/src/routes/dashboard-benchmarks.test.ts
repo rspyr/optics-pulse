@@ -305,3 +305,72 @@ describe("GET /dashboard/benchmarks — active-tenant scoping", () => {
     expect(json.avgSaleValue).toBe(2000);
   });
 });
+
+// /dashboard/benchmarks accepts startDate/endDate query params and must narrow
+// every aggregate to that window: the lead and close-rate queries bound
+// `leads.createdAt` with gte/lte, the spend query bounds the string
+// `campaign_daily_stats.date` column with gte/lte, and the job query bounds the
+// COALESCE(invoiceDate, completedAt, createdAt) `jobDateExpr` via a raw `sql`
+// comparison (NOT gte/lte). Without these assertions a refactor could silently
+// drop the window and return all-time numbers. Mirrors the "date range
+// narrowing" suite in admin-dashboard-stats.test.ts, adapted for the job query's
+// sql-based date expression.
+describe("GET /dashboard/benchmarks — date range narrowing", () => {
+  beforeEach(() => {
+    mockDb.reset();
+  });
+
+  it("wires startDate/endDate into the lead, job and spend query windows", async () => {
+    seed({
+      totalLeads: 100,
+      bookedLeads: 40,
+      soldLeads: 20,
+      revenue: 50000,
+      invoicedJobCount: 25,
+      spend: 10000,
+      bookedWithInvoice: 20,
+    });
+
+    const app = await setupApp("super_admin");
+
+    // Only the request (not module load) calls gte/lte/sql for the date window,
+    // so clearing here gives us a clean record of exactly the conditions this
+    // request builds.
+    drizzle.gte.mockClear();
+    drizzle.lte.mockClear();
+    drizzle.sql.mockClear();
+
+    const { status } = await getJson(
+      app,
+      "/dashboard/benchmarks?startDate=2026-05-01&endDate=2026-05-28",
+    );
+
+    expect(status).toBe(200);
+
+    // Lead window (used by both the lead-stats and close-rate queries) bounds
+    // Date-converted createdAt at both ends.
+    expect(drizzle.gte).toHaveBeenCalledWith("leads.createdAt", expect.any(Date));
+    expect(drizzle.lte).toHaveBeenCalledWith("leads.createdAt", expect.any(Date));
+
+    // Spend window narrows campaign_daily_stats by its string date column.
+    expect(drizzle.gte).toHaveBeenCalledWith(
+      "campaign_daily_stats.date",
+      "2026-05-01",
+    );
+    expect(drizzle.lte).toHaveBeenCalledWith(
+      "campaign_daily_stats.date",
+      "2026-05-28",
+    );
+
+    // Job window bounds the COALESCE(invoiceDate, completedAt, createdAt)
+    // jobDateExpr via a raw sql comparison. Each bound is built as
+    // sql`${jobDateExpr} >= ${date}` / `<= ${date}`, so the sql tag receives the
+    // template strings, the (already-evaluated) jobDateExpr and a trailing Date.
+    // No other sql comparison in the request carries a Date argument, so this is
+    // the distinctive guard that the job query is date-bounded at both ends.
+    const sqlDateCalls = drizzle.sql.mock.calls.filter(
+      (args) => args.some((a) => a instanceof Date),
+    );
+    expect(sqlDateCalls).toHaveLength(2);
+  });
+});
