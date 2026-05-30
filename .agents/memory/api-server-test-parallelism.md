@@ -3,17 +3,20 @@ name: api-server vitest parallelism
 description: Why artifacts/api-server runs vitest with fileParallelism:false and how to debug "passes alone, fails in full run" flakiness.
 ---
 
-# api-server test suite must run files sequentially
+# api-server test parallelism
 
-`artifacts/api-server/vitest.config.ts` sets `fileParallelism: false`. Do not
-remove it without addressing both root causes below.
+`artifacts/api-server/vitest.config.ts` runs files in parallel (`maxWorkers:
+4`). Each run now gets its OWN throwaway Postgres DB (see
+`api-server-test-db-isolation.md`), so the historical shared-DB pollution below
+no longer applies — cross-file writes land in an isolated DB and global-count
+assertions are safe again. Keep the worker cap for the CPU reason below.
 
-**Why:**
-- Integration tests (`*.integration.test.ts`) all share ONE Postgres instance,
-  and some assert on *global* table state. The worst offender snapshots every
-  `leads` row id before/after a write to find the single new row; if any sibling
-  integration file inserts leads concurrently, the diff count balloons (saw 17
-  vs expected 1). This is genuine concurrent-write pollution, not residue.
+**Why (historical shared-DB pollution — pre-isolation):**
+- Integration tests (`*.integration.test.ts`) used to share ONE Postgres
+  instance, and some assert on *global* table state. The worst offender
+  snapshots every `leads` row id before/after a write to find the single new
+  row; if any sibling integration file inserted leads concurrently, the diff
+  count ballooned (saw 17 vs expected 1).
 - The container CPU is throttled well below the reported `nproc` (8). With the
   default forks pool (one fork per CPU) the workers starve each other, so mocked
   unit tests that should take ~50ms blow past the 10s `testTimeout`. A timed-out
