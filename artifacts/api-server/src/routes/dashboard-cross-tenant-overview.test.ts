@@ -62,7 +62,12 @@ vi.mock("@workspace/db", () => ({
   tenantsTable: tableProxy("tenants"),
 }));
 
-vi.mock("drizzle-orm", () => ({
+// Shared, stable drizzle-orm spies. They must survive the vi.resetModules() in
+// setupApp so that, after dashboard.ts is re-imported, the route still calls the
+// *same* eq mock the tests inspect. vi.hoisted gives us that stable reference;
+// an inline factory would mint fresh fns on every re-import, breaking the
+// `eq(tenantsTable.isActive, true)` assertion below.
+const drizzle = vi.hoisted(() => ({
   eq: vi.fn((...a: unknown[]) => a),
   and: vi.fn((...a: unknown[]) => a),
   gte: vi.fn((...a: unknown[]) => a),
@@ -74,6 +79,8 @@ vi.mock("drizzle-orm", () => ({
   desc: vi.fn((...a: unknown[]) => a),
   SQL: class {},
 }));
+
+vi.mock("drizzle-orm", () => drizzle);
 
 vi.mock("../middleware/auth", () => ({
   requireRole:
@@ -306,5 +313,124 @@ describe("GET /dashboard/cross-tenant-overview", () => {
     const avg = json.agencyAverages as Record<string, number>;
     expect(avg.totalSpend).toBe(200);
     expect(avg.totalLeads).toBe(10);
+  });
+});
+
+// /dashboard/cross-tenant-overview only aggregates tenants where isActive = true
+// (the route loads the tenant list with `WHERE isActive = true`, then maps the
+// per-tenant leads/jobs/spend aggregates over that list). A deactivated client
+// must not appear in the per-tenant `tenants` array nor leak into the agency-wide
+// averages. The tenant-list select returns only active rows — exactly what the
+// real filter yields — while the grouped metric results still carry rows for the
+// inactive tenant; because the route only maps over the active-only list, those
+// rows never reach the output. The `drizzle.eq(tenantsTable.isActive, true)`
+// assertion is the regression guard: if a refactor drops the isActive filter,
+// that expectation fails immediately. Mirrors the active-tenant scoping suites in
+// admin-leaderboard.test.ts and admin-dashboard-stats.test.ts.
+describe("GET /dashboard/cross-tenant-overview — active-tenant scoping", () => {
+  beforeEach(() => {
+    mockDb.reset();
+    drizzle.eq.mockClear();
+  });
+
+  it("excludes inactive tenants from the overview and agency averages", async () => {
+    // Active Alpha and Beta surface; the deactivated Zombie (id 3) carries far
+    // larger leads/spend/revenue in the underlying tables but is deliberately
+    // absent from the active-only tenant list, so it is never mapped into the
+    // output. Select order: [0]=active tenants, [1]=leads, [2]=jobs, [3]=spend.
+    mockDb.selectResults = [
+      // Active-tenant list (WHERE isActive = true) — Zombie deliberately absent.
+      [
+        { id: 1, name: "Alpha", monthlyBudget: 5000 },
+        { id: 2, name: "Beta", monthlyBudget: 5000 },
+      ],
+      // leads — includes a stray inactive Zombie row that must be ignored.
+      [
+        { tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 },
+        { tenantId: 2, totalLeads: 6, bookedLeads: 3, soldLeads: 1 },
+        { tenantId: 3, totalLeads: 9999, bookedLeads: 9999, soldLeads: 9999 },
+      ],
+      // jobs — Zombie revenue is huge; it must never reach the rollups.
+      [
+        { tenantId: 1, mtdRevenue: 1000 },
+        { tenantId: 2, mtdRevenue: 2000 },
+        { tenantId: 3, mtdRevenue: 999999 },
+      ],
+      // spend — Zombie spend is huge; it must never reach the rollups.
+      [
+        { tenantId: 1, total: 200 },
+        { tenantId: 2, total: 300 },
+        { tenantId: 3, total: 888888 },
+      ],
+    ];
+
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/dashboard/cross-tenant-overview");
+
+    expect(status).toBe(200);
+
+    // The route must scope the tenant list with `WHERE isActive = true`.
+    expect(drizzle.eq).toHaveBeenCalledWith("tenants.isActive", true);
+
+    // Only the two active tenants surface; the deactivated Zombie never does.
+    const tenants = json.tenants as Array<Record<string, number>>;
+    expect(tenants).toHaveLength(2);
+    expect(tenants.map((t) => t.tenantId).sort()).toEqual([1, 2]);
+    expect(tenants.some((t) => t.tenantId === 3)).toBe(false);
+
+    // Agency averages span the active tenants only: 200 + 300 spend, 1000 + 2000
+    // revenue, 10 + 6 leads — not the inactive tenant's far larger figures.
+    const avg = json.agencyAverages as Record<string, number>;
+    expect(avg.totalSpend).toBe(500);
+    expect(avg.totalRevenue).toBe(3000);
+    expect(avg.totalLeads).toBe(16);
+  });
+
+  it("excludes inactive tenants even when filtering to a single client", async () => {
+    // Filtering to the deactivated Zombie (id 3) must return no tenant rows: the
+    // active-only list never contains it, so the filter matches nothing — a
+    // deactivated client cannot be resurrected via the tenantId query param.
+    mockDb.selectResults = [
+      // Active-tenant list (WHERE isActive = true) — Zombie deliberately absent.
+      [
+        { id: 1, name: "Alpha", monthlyBudget: 5000 },
+        { id: 2, name: "Beta", monthlyBudget: 5000 },
+      ],
+      [
+        { tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 },
+        { tenantId: 2, totalLeads: 6, bookedLeads: 3, soldLeads: 1 },
+        { tenantId: 3, totalLeads: 9999, bookedLeads: 9999, soldLeads: 9999 },
+      ],
+      [
+        { tenantId: 1, mtdRevenue: 1000 },
+        { tenantId: 2, mtdRevenue: 2000 },
+        { tenantId: 3, mtdRevenue: 999999 },
+      ],
+      [
+        { tenantId: 1, total: 200 },
+        { tenantId: 2, total: 300 },
+        { tenantId: 3, total: 888888 },
+      ],
+    ];
+
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(
+      app,
+      "/dashboard/cross-tenant-overview?tenantId=3",
+    );
+
+    expect(status).toBe(200);
+    expect(drizzle.eq).toHaveBeenCalledWith("tenants.isActive", true);
+
+    // The deactivated tenant yields no rows.
+    const tenants = json.tenants as Array<Record<string, number>>;
+    expect(tenants).toHaveLength(0);
+
+    // Agency averages still span the active tenants only — the inactive tenant's
+    // numbers never appear even though it was the requested filter.
+    const avg = json.agencyAverages as Record<string, number>;
+    expect(avg.totalSpend).toBe(500);
+    expect(avg.totalRevenue).toBe(3000);
+    expect(avg.totalLeads).toBe(16);
   });
 });
