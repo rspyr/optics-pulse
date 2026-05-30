@@ -1513,9 +1513,9 @@ export default function Internal() {
             </thead>
             <tbody className="divide-y divide-white/5">
               {sortedTenants.map((row) => {
-                const pacePercent = row.monthlyBudget > 0 ? (row.projectedSpend / row.monthlyBudget) * 100 : 0;
-                const isOverBudget = pacePercent > 110;
-                const isUnderBudget = pacePercent < 85;
+                const pacePercent = row.pacePercent;
+                const isOverBudget = row.overPace;
+                const isUnderBudget = row.underPace;
                 const projectedOverBudget = row.overBudget;
 
                 return (

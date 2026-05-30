@@ -15,6 +15,12 @@ export interface CrossTenantOverviewRow {
   monthlyBudget: number;
   /** True when projectedSpend exceeds monthlyBudget. */
   overBudget: boolean;
+  /** projectedSpend / monthlyBudget * 100, rounded to one decimal. */
+  pacePercent: number;
+  /** True when pacePercent exceeds 110. */
+  overPace: boolean;
+  /** True when pacePercent is below 85. */
+  underPace: boolean;
   cpl: number;
   bookingRate: number;
   closeRate: number;

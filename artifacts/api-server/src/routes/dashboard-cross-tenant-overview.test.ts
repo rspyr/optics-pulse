@@ -241,6 +241,54 @@ describe("GET /dashboard/cross-tenant-overview", () => {
     }
   });
 
+  it("returns backend-driven pace indicators per tenant", async () => {
+    // May 15 of a 31-day month: 1000 MTD projects to 2067.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 15, 12, 0, 0));
+    try {
+      mockDb.selectResults = [
+        [
+          { id: 1, name: "OverPace", monthlyBudget: 1000 },
+          { id: 2, name: "UnderPace", monthlyBudget: 100000 },
+          { id: 3, name: "OnPace", monthlyBudget: 2067 },
+        ],
+        [], // leads
+        [], // jobs
+        [
+          { tenantId: 1, total: 1000 },
+          { tenantId: 2, total: 1000 },
+          { tenantId: 3, total: 1000 },
+        ],
+      ];
+
+      const app = await setupApp("super_admin");
+      const { status, json } = await getJson(app, "/dashboard/cross-tenant-overview");
+      expect(status).toBe(200);
+
+      const tenants = json.tenants as Array<Record<string, number | boolean>>;
+
+      // 2067 / 1000 * 100 = 206.7 -> over pace
+      const over = tenants.find((t) => t.tenantId === 1)!;
+      expect(over.pacePercent).toBe(206.7);
+      expect(over.overPace).toBe(true);
+      expect(over.underPace).toBe(false);
+
+      // 2067 / 100000 * 100 = 2.1 -> under pace
+      const under = tenants.find((t) => t.tenantId === 2)!;
+      expect(under.pacePercent).toBe(2.1);
+      expect(under.overPace).toBe(false);
+      expect(under.underPace).toBe(true);
+
+      // 2067 / 2067 * 100 = 100 -> on pace (neither over nor under)
+      const on = tenants.find((t) => t.tenantId === 3)!;
+      expect(on.pacePercent).toBe(100);
+      expect(on.overPace).toBe(false);
+      expect(on.underPace).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters the tenants array by tenantId but keeps agency-wide averages", async () => {
     seed();
     const app = await setupApp("super_admin");

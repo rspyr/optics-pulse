@@ -2122,6 +2122,13 @@ export const GetCrossTenantOverviewResponse = zod.object({
       overBudget: zod
         .boolean()
         .describe("True when projectedSpend exceeds monthlyBudget."),
+      pacePercent: zod
+        .number()
+        .describe(
+          "projectedSpend \/ monthlyBudget \* 100, rounded to one decimal.",
+        ),
+      overPace: zod.boolean().describe("True when pacePercent exceeds 110."),
+      underPace: zod.boolean().describe("True when pacePercent is below 85."),
       cpl: zod.number(),
       bookingRate: zod.number(),
       closeRate: zod.number(),

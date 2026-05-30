@@ -3199,6 +3199,15 @@ components:
         overBudget:
           type: boolean
           description: True when projectedSpend exceeds monthlyBudget.
+        pacePercent:
+          type: number
+          description: projectedSpend / monthlyBudget * 100, rounded to one decimal.
+        overPace:
+          type: boolean
+          description: True when pacePercent exceeds 110.
+        underPace:
+          type: boolean
+          description: True when pacePercent is below 85.
         cpl:
           type: number
         bookingRate:
@@ -3213,7 +3222,7 @@ components:
           type: integer
         soldLeads:
           type: integer
-      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, overBudget, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
+      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, overBudget, pacePercent, overPace, underPace, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
 
     CrossTenantOverview:
       type: object

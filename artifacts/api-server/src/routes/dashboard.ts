@@ -512,6 +512,7 @@ router.get("/dashboard/cross-tenant-overview", requireRole("super_admin", "agenc
 
     const projectedSpend = dayOfMonth > 0 ? Math.round((mtdSpend / dayOfMonth) * daysInMonth) : 0;
     const monthlyBudget = tenant.monthlyBudget ?? MONTHLY_BUDGET_DEFAULT;
+    const pacePercent = monthlyBudget > 0 ? Math.round((projectedSpend / monthlyBudget) * 100 * 10) / 10 : 0;
 
     return {
       tenantId: tenant.id,
@@ -521,6 +522,9 @@ router.get("/dashboard/cross-tenant-overview", requireRole("super_admin", "agenc
       projectedSpend,
       monthlyBudget,
       overBudget: projectedSpend > monthlyBudget,
+      pacePercent,
+      overPace: pacePercent > 110,
+      underPace: pacePercent < 85,
       cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
       bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
       closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
