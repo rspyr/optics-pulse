@@ -23,7 +23,7 @@
  * "configured?" error sync_log rows it writes are cleaned up in afterAll.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const dbModule = await import("@workspace/db");
 const { db, pool, tenantsTable, integrationSyncLogsTable } = dbModule;
@@ -33,16 +33,7 @@ const { recomputeServiceTitanRevenue } = await import("./sync-scheduler");
 // Must match the lock key used in `recomputeServiceTitanRevenue`.
 const STRV_LOCK_KEY = 0x53545256;
 
-async function resyncSerial(table: string, idCol = "id"): Promise<void> {
-  await db.execute(
-    sql.raw(
-      `SELECT setval(pg_get_serial_sequence('${table}','${idCol}'), COALESCE((SELECT MAX(${idCol}) FROM ${table}), 0) + 1, false)`,
-    ),
-  );
-}
-
 async function createTestTenant(): Promise<number> {
-  await resyncSerial("tenants");
   const slug = `strv-lock-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const [row] = await db
     .insert(tenantsTable)

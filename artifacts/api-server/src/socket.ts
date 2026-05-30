@@ -822,14 +822,22 @@ async function loadFunnelTypesCache(): Promise<void> {
   } catch { /* ignore */ }
 }
 
-export async function createDemoLead(): Promise<void> {
+export async function createDemoLead(forcedTenantId?: number): Promise<void> {
   try {
     const firstName = randomFrom(DEMO_FIRST_NAMES);
     const lastName = randomFrom(DEMO_LAST_NAMES);
     const source = randomFrom(DEMO_SOURCES);
-    const demoTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isDemo, true));
-    if (demoTenants.length === 0) return;
-    const tenantId = randomFrom(demoTenants).id;
+    // Normally a demo lead lands in a random isDemo tenant. Tests pass an
+    // explicit tenant so the write is deterministic and scoped to their own
+    // fixture (safe to run alongside other test files on the shared DB).
+    let tenantId: number;
+    if (forcedTenantId != null) {
+      tenantId = forcedTenantId;
+    } else {
+      const demoTenants = await db.select({ id: tenantsTable.id }).from(tenantsTable).where(eq(tenantsTable.isDemo, true));
+      if (demoTenants.length === 0) return;
+      tenantId = randomFrom(demoTenants).id;
+    }
 
     const tenantFunnels = cachedFunnelTypes[tenantId];
     const selectedFunnel = tenantFunnels && tenantFunnels.length > 0

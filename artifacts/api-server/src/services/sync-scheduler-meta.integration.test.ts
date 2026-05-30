@@ -43,17 +43,7 @@ const { syncMetaCampaigns } = await import("./sync-scheduler");
 const TODAY = new Date().toISOString().slice(0, 10);
 const ACCOUNT_ID = "999000111";
 
-async function resyncSerial(table: string, idCol = "id"): Promise<void> {
-  await db.execute(sql.raw(
-    `SELECT setval(pg_get_serial_sequence('${table}','${idCol}'), COALESCE((SELECT MAX(${idCol}) FROM ${table}), 0) + 1, false)`,
-  ));
-}
-
 async function createTestTenant(slugSuffix: string): Promise<number> {
-  // The shared dev DB occasionally has rows inserted with explicit ids
-  // (seeds, fixtures from other tests), leaving the serial sequence behind
-  // the actual MAX(id). Resync before every insert to keep this test robust.
-  await resyncSerial("tenants");
   const slug = `meta-int-test-${slugSuffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const [row] = await db.insert(tenantsTable).values({
     name: `Meta Int Test ${slug}`,

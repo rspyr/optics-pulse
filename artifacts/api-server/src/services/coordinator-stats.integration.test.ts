@@ -24,7 +24,7 @@
  *     getComparisonStats path for the same day.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { sql, eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 const dbModule = await import("@workspace/db");
 const {
@@ -45,12 +45,6 @@ const {
   aggregateDailyStats,
   getComparisonStats,
 } = await import("./coordinator-stats");
-
-async function resyncSerial(table: string, idCol = "id"): Promise<void> {
-  await db.execute(sql.raw(
-    `SELECT setval(pg_get_serial_sequence('${table}','${idCol}'), COALESCE((SELECT MAX(${idCol}) FROM ${table}), 0) + 1, false)`,
-  ));
-}
 
 interface Fixtures {
   tenantId: number;
@@ -93,12 +87,6 @@ beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-
-  await resyncSerial("tenants");
-  await resyncSerial("users");
-  await resyncSerial("leads");
-  await resyncSerial("call_attempts");
-  await resyncSerial("funnel_types");
 
   const slug = `stl-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   // Tenant carries a spiff config exercising both byFunnel (Solar = $100)
@@ -621,11 +609,6 @@ describe("login-aware speed subtracts mid-day logout gaps (real Postgres)", () =
   let ofx: OfflineFixtures;
 
   beforeAll(async () => {
-    await resyncSerial("tenants");
-    await resyncSerial("users");
-    await resyncSerial("leads");
-    await resyncSerial("call_attempts");
-
     const slug = `stl-offline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const [tenant] = await db.insert(tenantsTable).values({
       name: `Speed-to-Lead Offline ${slug}`,

@@ -19,7 +19,7 @@
  *   - the reaper writes the orphan error message + clears progress columns
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 const dbModule = await import("@workspace/db");
 const { db, tenantsTable, integrationSyncLogsTable } = dbModule;
@@ -37,16 +37,7 @@ function minutesAgo(minutes: number): Date {
   return new Date(Date.now() - minutes * MIN_MS);
 }
 
-async function resyncSerial(table: string, idCol = "id"): Promise<void> {
-  await db.execute(
-    sql.raw(
-      `SELECT setval(pg_get_serial_sequence('${table}','${idCol}'), COALESCE((SELECT MAX(${idCol}) FROM ${table}), 0) + 1, false)`,
-    ),
-  );
-}
-
 async function createTestTenant(): Promise<number> {
-  await resyncSerial("tenants");
   const slug = `orphan-reaper-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const [row] = await db
     .insert(tenantsTable)

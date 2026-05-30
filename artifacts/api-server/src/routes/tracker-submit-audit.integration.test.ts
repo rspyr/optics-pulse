@@ -138,18 +138,6 @@ async function latestAuditRow(tenantId: number | null, clientId: string) {
   return row;
 }
 
-async function latestAuditRowByClientIdNullable(clientId: string | null) {
-  // Invalid-payload rows never resolve a client_id, so we cannot look them
-  // up by clientId. We grab the most recent row written by this test suite
-  // and filter by a sentinel field we can control (the user-agent header).
-  const [row] = await db
-    .select()
-    .from(trackerSubmitAttemptsTable)
-    .orderBy(desc(trackerSubmitAttemptsTable.id))
-    .limit(1);
-  return row;
-}
-
 beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});

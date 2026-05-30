@@ -254,23 +254,22 @@ describe("leads-hub write sites — POST /leads-hub/create + POST /leads-hub/act
 
 describe("socket demo write site — createDemoLead()", () => {
   it("createDemoLead writes (null → day_1, reason='demo_created') with no changedByUserId", async () => {
-    // createDemoLead picks a random tenant out of ALL isDemo=true tenants, so
-    // we can't filter by our tenant alone (the dev DB seeds other demo
-    // tenants). Snapshot every lead id beforehand and identify the one new
-    // row regardless of which tenant it landed in.
-    const beforeRows = await db.select({ id: leadsTable.id }).from(leadsTable);
+    // createDemoLead normally picks a random isDemo tenant, but we pass our
+    // own fixture tenant so the write is deterministic and scoped — letting
+    // this file run in parallel with siblings on the shared DB. Snapshot only
+    // our tenant's leads and identify the single new row.
+    const beforeRows = await db.select({ id: leadsTable.id }).from(leadsTable)
+      .where(eq(leadsTable.tenantId, fx.tenantId));
     const beforeIds = new Set(beforeRows.map(b => b.id));
 
-    await createDemoLead();
+    await createDemoLead(fx.tenantId);
 
-    const afterRows = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId }).from(leadsTable);
+    const afterRows = await db.select({ id: leadsTable.id, tenantId: leadsTable.tenantId }).from(leadsTable)
+      .where(eq(leadsTable.tenantId, fx.tenantId));
     const fresh = afterRows.filter(a => !beforeIds.has(a.id));
     expect(fresh.length).toBe(1);
     const leadId = fresh[0].id;
-    // Only track for cleanup if it landed in our tenant (otherwise cleanup
-    // by tenant scope in afterAll won't apply and we leave the other
-    // tenant's demo lead alone, which is fine).
-    if (fresh[0].tenantId === fx.tenantId) fx.leadIds.push(leadId);
+    fx.leadIds.push(leadId);
 
     const rows = await historyFor(leadId);
     expect(rows.length).toBe(1);

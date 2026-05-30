@@ -62,6 +62,35 @@ export default async function setup(project: TestProject): Promise<void> {
 
   await runSchemaMigrations();
 
+  // Resync every serial/identity sequence to MAX(id)+1 once, before any test
+  // worker starts. The shared dev DB can have rows inserted with explicit ids
+  // (seeds, fixtures), leaving a sequence behind its table's MAX(id) and
+  // causing duplicate-key errors on the next auto-id insert. Doing the resync
+  // here — in a single process, before any inserts — is safe under cross-file
+  // parallelism. (Per-file `setval` calls are NOT: a stale MAX(id) read can
+  // reset a sequence backwards beneath a sibling file's concurrent inserts.)
+  await pool.query(`
+    DO $$
+    DECLARE
+      rec RECORD;
+      maxid BIGINT;
+    BEGIN
+      FOR rec IN
+        SELECT t.relname AS table_name, a.attname AS col_name,
+               pg_get_serial_sequence(quote_ident(t.relname), a.attname) AS seq
+        FROM pg_class s
+        JOIN pg_depend d ON d.objid = s.oid AND d.deptype = 'a'
+        JOIN pg_class t ON t.oid = d.refobjid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+        WHERE s.relkind = 'S' AND t.relkind = 'r'
+      LOOP
+        EXECUTE format('SELECT COALESCE(MAX(%I), 0) FROM %I', rec.col_name, rec.table_name)
+          INTO maxid;
+        PERFORM setval(rec.seq, maxid + 1, false);
+      END LOOP;
+    END $$;
+  `);
+
   // Release the shared pool so vitest's globalSetup process exits cleanly.
   // Each test suite re-imports `@workspace/db` and gets its own pool client.
   await pool.end().catch(() => {});

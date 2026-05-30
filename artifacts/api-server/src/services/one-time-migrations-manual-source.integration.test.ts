@@ -36,14 +36,7 @@ const {
 
 const { backfillManualSourceForLegacyEvents } = await import("./one-time-migrations");
 
-async function resyncSerial(table: string, idCol = "id"): Promise<void> {
-  await db.execute(sql.raw(
-    `SELECT setval(pg_get_serial_sequence('${table}','${idCol}'), COALESCE((SELECT MAX(${idCol}) FROM ${table}), 0) + 1, false)`,
-  ));
-}
-
 async function createTestTenant(suffix: string): Promise<number> {
-  await resyncSerial("tenants");
   const slug = `man-src-bf-${suffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const [row] = await db.insert(tenantsTable).values({
     name: `Manual-source backfill ${slug}`,
@@ -53,7 +46,6 @@ async function createTestTenant(suffix: string): Promise<number> {
 }
 
 async function createTestLead(tenantId: number): Promise<number> {
-  await resyncSerial("leads");
   const [row] = await db.insert(leadsTable).values({
     tenantId,
     firstName: "Test",
@@ -76,7 +68,6 @@ interface SeedEventOpts {
 }
 
 async function seedLegacyManualEvent(opts: SeedEventOpts): Promise<number> {
-  await resyncSerial("attribution_events");
   // We need a deterministic createdAt so the migration's "signal happened
   // AFTER the event" temporal gate is testable; drizzle's defaultNow()
   // would shadow whatever we pass, so go through raw SQL.
