@@ -2,19 +2,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express, { type Request, type Response, type NextFunction } from "express";
 import http from "http";
 
-// /admin/leaderboard runs computeTenantMetrics twice per tenant (current and
-// previous period) inside nested Promise.all calls, so a strictly positional
-// single select-queue would depend on fragile microtask interleaving. Instead
-// we keep the same select-queue mocking style but key each queue by the table
-// passed to `.from()`. Within a table, FIFO order is deterministic:
+// /admin/leaderboard now computes per-client metrics with computeTenantMetricsBatch:
+// two grouped passes (current + previous period), each issuing one grouped query
+// per table keyed by tenantId, instead of computeTenantMetrics twice per tenant.
+// We keep the select-queue mocking style but key each queue by the table passed
+// to `.from()`. Within a table, FIFO order is deterministic — the route awaits
+// Promise.all([batch(current), batch(previous)]), so current always shifts
+// before previous:
 //   tenants                -> [callerLookup?, activeTenantsList]
-//   campaigns / spend /    -> [t1_current, t1_previous, t2_current, ...]
-//   leads / jobs              (current always shifts before previous per tenant)
+//   leads / jobs /         -> [current_grouped, previous_grouped] (each is a
+//   campaign_daily_stats      single grouped result row-set carrying tenantId)
 //   training_purchases     -> [allProductsAcrossTenants] (a single grouped
 //                             query for every active tenant; each row carries
 //                             its own tenantId so the route groups in memory)
-// An empty queue leaves the products list empty, which the chain handles by
-// defaulting to [].
+// The spend pass selects from campaign_daily_stats (innerJoin campaigns), so its
+// queue key is campaign_daily_stats; there is no longer a separate campaigns
+// query. An empty queue leaves the products list empty, which the chain handles
+// by defaulting to [].
 const state = {
   byTable: {} as Record<string, unknown[][]>,
   reset() {
@@ -37,6 +41,7 @@ function makeSelectChain(): Record<string, unknown> {
   });
   chain.innerJoin = vi.fn().mockReturnValue(chain);
   chain.where = vi.fn().mockReturnValue(chain);
+  chain.groupBy = vi.fn().mockReturnValue(chain);
   chain.then = (r: Function) => resolveResult().then(r as (v: unknown) => unknown);
   return chain;
 }
@@ -178,10 +183,13 @@ type TenantCfg = {
   products?: ProductRow[];
 };
 
-// Build per-table FIFO queues from tenant configs. Every period gets one
-// campaign row so the spend select always fires and the spend queue stays
-// aligned with campaigns. callerRow, when present, is the non-agency caller's
-// tenant lookup that the route issues before the active-tenant list.
+// Build per-table FIFO queues from tenant configs. The route now aggregates in
+// SQL via computeTenantMetricsBatch, so the mock pre-aggregates each period's
+// raw leads/jobs/spend into the grouped row-set the real query would return
+// (one row per tenant carrying tenantId). The per-period inputs (leads arrays,
+// jobs revenue, spend) stay the same; only the emitted shape is grouped.
+// callerRow, when present, is the non-agency caller's tenant lookup that the
+// route issues before the active-tenant list.
 function seed({
   tenants,
   callerRow,
@@ -191,7 +199,6 @@ function seed({
 }) {
   const byTable: Record<string, unknown[][]> = {
     tenants: [],
-    campaigns: [],
     campaign_daily_stats: [],
     leads: [],
     jobs: [],
@@ -199,17 +206,36 @@ function seed({
   };
   if (callerRow) byTable.tenants.push([callerRow]);
   byTable.tenants.push(tenants.map((t) => ({ id: t.id, name: t.name })));
-  // Products are now fetched once for all active tenants in a single grouped
+
+  // Emit one grouped result per period (current first, then previous), each a
+  // row-set spanning every tenant — matching the two batched passes the route
+  // runs via Promise.all([batch(current), batch(previous)]).
+  for (const period of ["current", "previous"] as const) {
+    const leadRows: Array<{ tenantId: number; totalLeads: number; bookedLeads: number; soldLeads: number }> = [];
+    const jobRows: Array<{ tenantId: number; revenue: number }> = [];
+    const spendRows: Array<{ tenantId: number; total: number }> = [];
+    for (const t of tenants) {
+      const p = t[period];
+      const leads = p.leads ?? [];
+      const bookedLeads = leads.filter((l) => l.status === "booked" || l.status === "sold").length;
+      const soldLeads = leads.filter((l) => l.status === "sold").length;
+      const revenue = (p.jobs ?? [])
+        .filter((j) => j.status === "completed")
+        .reduce((s, j) => s + (j.revenue || 0), 0);
+      leadRows.push({ tenantId: t.id, totalLeads: leads.length, bookedLeads, soldLeads });
+      jobRows.push({ tenantId: t.id, revenue });
+      spendRows.push({ tenantId: t.id, total: p.spend ?? 0 });
+    }
+    byTable.leads.push(leadRows);
+    byTable.jobs.push(jobRows);
+    byTable.campaign_daily_stats.push(spendRows);
+  }
+
+  // Products are still fetched once for all active tenants in a single grouped
   // query, so flatten every tenant's rows (tagged with their tenantId) into a
   // single result and push it as the lone training_purchases shift.
   const allProducts: Array<ProductRow & { tenantId: number }> = [];
   for (const t of tenants) {
-    for (const p of [t.current, t.previous]) {
-      byTable.campaigns.push([{ id: t.id * 100 }]);
-      byTable.campaign_daily_stats.push([{ total: p.spend ?? 0 }]);
-      byTable.leads.push(p.leads ?? []);
-      byTable.jobs.push(p.jobs ?? []);
-    }
     for (const product of t.products ?? []) {
       allProducts.push({ ...product, tenantId: t.id });
     }

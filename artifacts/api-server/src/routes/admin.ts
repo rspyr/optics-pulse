@@ -386,6 +386,92 @@ export async function computeTenantMetrics(tenantId: number, startDate?: string,
   };
 }
 
+type TenantMetrics = Awaited<ReturnType<typeof computeTenantMetrics>>;
+
+/**
+ * Batched equivalent of `computeTenantMetrics` for many tenants in one period.
+ * Instead of issuing the campaigns/spend/leads/jobs lookups once per tenant
+ * (the N+1 fan-out on `/admin/leaderboard`), this fetches each in a single
+ * grouped query keyed by tenantId and buckets the aggregates back per tenant.
+ * Returns a map keyed by tenantId; every requested tenant id is present (a
+ * tenant with no rows gets zeroed metrics), so callers can index directly.
+ * Mirrors `computeTenantMetrics`' math and rounding so values are identical.
+ */
+export async function computeTenantMetricsBatch(
+  tenantIds: number[],
+  startDate?: string,
+  endDate?: string,
+): Promise<Map<number, TenantMetrics>> {
+  const result = new Map<number, TenantMetrics>();
+  if (tenantIds.length === 0) return result;
+
+  const leadConditions = [inArray(leadsTable.tenantId, tenantIds)];
+  const jobConditions = [inArray(jobsTable.tenantId, tenantIds)];
+  if (startDate) {
+    leadConditions.push(gte(leadsTable.createdAt, new Date(startDate + "T00:00:00.000Z")));
+    jobConditions.push(gte(jobsTable.createdAt, new Date(startDate + "T00:00:00.000Z")));
+  }
+  if (endDate) {
+    leadConditions.push(lte(leadsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
+    jobConditions.push(lte(jobsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
+  }
+
+  const spendConditions = [inArray(campaignsTable.tenantId, tenantIds)];
+  if (startDate) spendConditions.push(gte(campaignDailyStatsTable.date, startDate));
+  if (endDate) spendConditions.push(lte(campaignDailyStatsTable.date, endDate));
+
+  const [leadsByTenant, jobsByTenant, spendByTenant] = await Promise.all([
+    db.select({
+      tenantId: leadsTable.tenantId,
+      totalLeads: count(),
+      bookedLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} IN ('booked', 'sold'))`,
+      soldLeads: sql<number>`COUNT(*) FILTER (WHERE ${leadsTable.status} = 'sold')`,
+    }).from(leadsTable)
+      .where(and(...leadConditions))
+      .groupBy(leadsTable.tenantId),
+    db.select({
+      tenantId: jobsTable.tenantId,
+      revenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN ${jobsTable.revenue} ELSE 0 END), 0)`,
+    }).from(jobsTable)
+      .where(and(...jobConditions))
+      .groupBy(jobsTable.tenantId),
+    db.select({
+      tenantId: campaignsTable.tenantId,
+      total: sql<number>`COALESCE(SUM(${campaignDailyStatsTable.spend}), 0)`,
+    }).from(campaignDailyStatsTable)
+      .innerJoin(campaignsTable, eq(campaignDailyStatsTable.campaignId, campaignsTable.id))
+      .where(and(...spendConditions))
+      .groupBy(campaignsTable.tenantId),
+  ]);
+
+  const leadMap = new Map(leadsByTenant.map((r) => [r.tenantId, r]));
+  const jobMap = new Map(jobsByTenant.map((r) => [r.tenantId, r]));
+  const spendMap = new Map(spendByTenant.map((r) => [r.tenantId, r]));
+
+  for (const tenantId of tenantIds) {
+    const l = leadMap.get(tenantId);
+    const totalLeads = Number(l?.totalLeads ?? 0);
+    const bookedLeads = Number(l?.bookedLeads ?? 0);
+    const soldLeads = Number(l?.soldLeads ?? 0);
+    const revenue = Number(jobMap.get(tenantId)?.revenue ?? 0);
+    const mtdSpend = Number(spendMap.get(tenantId)?.total ?? 0);
+
+    result.set(tenantId, {
+      totalLeads,
+      bookedLeads,
+      soldLeads,
+      revenue: Math.round(revenue * 100) / 100,
+      spend: Math.round(mtdSpend * 100) / 100,
+      closeRate: bookedLeads > 0 ? Math.round((soldLeads / bookedLeads) * 100 * 10) / 10 : 0,
+      bookingRate: totalLeads > 0 ? Math.round((bookedLeads / totalLeads) * 100 * 10) / 10 : 0,
+      cpl: totalLeads > 0 ? Math.round((mtdSpend / totalLeads) * 100) / 100 : 0,
+      roas: mtdSpend > 0 ? Math.round((revenue / mtdSpend) * 100) / 100 : 0,
+    });
+  }
+
+  return result;
+}
+
 router.get("/admin/leaderboard", requireAuth, async (req, res) => {
   try {
     if (req.session.userRole === "client_user") {
@@ -462,11 +548,17 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
       purchasesByTenant.set(p.tenantId, list);
     }
 
-    const entries = await Promise.all(tenants.map(async (tenant) => {
-      const [current, previous] = await Promise.all([
-        computeTenantMetrics(tenant.id, startDate, endDate),
-        computeTenantMetrics(tenant.id, prevStartDate, prevEndDate),
-      ]);
+    // Compute every active tenant's current- and previous-period metrics in
+    // two batched passes (grouped queries keyed by tenantId) rather than the
+    // per-tenant N+1 fan-out of two computeTenantMetrics calls each.
+    const [currentMetrics, previousMetrics] = await Promise.all([
+      computeTenantMetricsBatch(tenantIds, startDate, endDate),
+      computeTenantMetricsBatch(tenantIds, prevStartDate, prevEndDate),
+    ]);
+
+    const entries = tenants.map((tenant) => {
+      const current = currentMetrics.get(tenant.id)!;
+      const previous = previousMetrics.get(tenant.id)!;
 
       const currentVal = current[metric as keyof typeof current] as number;
       const previousVal = previous[metric as keyof typeof previous] as number;
@@ -489,7 +581,7 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
         spend: current.spend,
         products: purchasesByTenant.get(tenant.id) ?? [],
       };
-    }));
+    });
 
     const higherIsBetter = metric !== "cpl";
     entries.sort((a, b) => higherIsBetter ? b.metricValue - a.metricValue : a.metricValue - b.metricValue);
