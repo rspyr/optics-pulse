@@ -105,6 +105,12 @@ async function loadComputeTenantMetrics() {
   return mod.computeTenantMetrics;
 }
 
+async function loadComputeTenantMetricsBatch() {
+  vi.resetModules();
+  const mod = await import("./admin");
+  return mod.computeTenantMetricsBatch;
+}
+
 // A tenant that exercises every money/rate path. The batch helper aggregates in
 // SQL, so each query returns a single grouped row keyed by tenantId rather than
 // raw rows counted in JS.
@@ -222,5 +228,91 @@ describe("computeTenantMetrics — date-boundary expansion", () => {
       "campaign_daily_stats.date",
       "2026-05-28",
     );
+  });
+});
+
+describe("computeTenantMetricsBatch — per-tenant bucketing", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("buckets each grouped row back to its own tenant without cross-contamination", async () => {
+    const computeBatch = await loadComputeTenantMetricsBatch();
+    // Grouped rows for two tenants arrive interleaved (tenant 2 before tenant 1
+    // in the jobs/spend queries) to prove the helper keys by tenantId rather
+    // than by row position. Order across queries: [leads, jobs, spend].
+    state.selectQueue = [
+      [
+        { tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 },
+        { tenantId: 2, totalLeads: 20, bookedLeads: 5, soldLeads: 5 },
+      ], // leads
+      [
+        { tenantId: 2, revenue: 8000 },
+        { tenantId: 1, revenue: 5000 },
+      ], // jobs
+      [
+        { tenantId: 2, total: 2000 },
+        { tenantId: 1, total: 1000 },
+      ], // spend
+    ];
+
+    const batch = await computeBatch([1, 2], "2026-05-01", "2026-05-28");
+
+    const t1 = batch.get(1)!;
+    expect(t1.totalLeads).toBe(10);
+    expect(t1.bookedLeads).toBe(4);
+    expect(t1.soldLeads).toBe(2);
+    expect(t1.revenue).toBe(5000);
+    expect(t1.spend).toBe(1000);
+    expect(t1.cpl).toBe(100); // 1000 / 10
+    expect(t1.bookingRate).toBe(40); // 4 / 10
+    expect(t1.closeRate).toBe(50); // 2 / 4
+    expect(t1.roas).toBe(5); // 5000 / 1000
+
+    const t2 = batch.get(2)!;
+    expect(t2.totalLeads).toBe(20);
+    expect(t2.bookedLeads).toBe(5);
+    expect(t2.soldLeads).toBe(5);
+    expect(t2.revenue).toBe(8000);
+    expect(t2.spend).toBe(2000);
+    expect(t2.cpl).toBe(100); // 2000 / 20
+    expect(t2.bookingRate).toBe(25); // 5 / 20
+    expect(t2.closeRate).toBe(100); // 5 / 5
+    expect(t2.roas).toBe(4); // 8000 / 2000
+  });
+
+  it("zero-fills a requested tenant that is absent from every grouped result", async () => {
+    const computeBatch = await loadComputeTenantMetricsBatch();
+    // Only tenant 1 has rows; tenant 3 is requested but appears in no query.
+    state.selectQueue = [
+      [{ tenantId: 1, totalLeads: 10, bookedLeads: 4, soldLeads: 2 }], // leads
+      [{ tenantId: 1, revenue: 5000 }], // jobs
+      [{ tenantId: 1, total: 1000 }], // spend
+    ];
+
+    const batch = await computeBatch([1, 3], "2026-05-01", "2026-05-28");
+
+    // Every requested tenant id is present in the map.
+    expect(batch.has(3)).toBe(true);
+
+    const t3 = batch.get(3)!;
+    expect(t3).toEqual({
+      totalLeads: 0,
+      bookedLeads: 0,
+      soldLeads: 0,
+      revenue: 0,
+      spend: 0,
+      closeRate: 0,
+      bookingRate: 0,
+      cpl: 0,
+      roas: 0,
+    });
+
+    // Tenant 1's aggregates are untouched by the empty tenant 3.
+    const t1 = batch.get(1)!;
+    expect(t1.totalLeads).toBe(10);
+    expect(t1.revenue).toBe(5000);
+    expect(t1.spend).toBe(1000);
   });
 });
