@@ -434,6 +434,34 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
 
     const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
 
+    // Fetch every active tenant's purchased products in a single query and
+    // group them by tenantId, avoiding an N+1 query per tenant inside the map.
+    const tenantIds = tenants.map((t) => t.id);
+    const allPurchases = tenantIds.length > 0
+      ? await db.select({
+          tenantId: trainingPurchasesTable.tenantId,
+          itemTitle: trainingItemsTable.title,
+          itemCategory: trainingItemsTable.category,
+          pricePaid: trainingPurchasesTable.pricePaid,
+          purchasedAt: trainingPurchasesTable.purchasedAt,
+        })
+          .from(trainingPurchasesTable)
+          .innerJoin(trainingItemsTable, eq(trainingPurchasesTable.trainingItemId, trainingItemsTable.id))
+          .where(inArray(trainingPurchasesTable.tenantId, tenantIds))
+      : [];
+
+    const purchasesByTenant = new Map<number, Array<{ name: string; category: string; pricePaid: number; purchasedAt: Date }>>();
+    for (const p of allPurchases) {
+      const list = purchasesByTenant.get(p.tenantId) ?? [];
+      list.push({
+        name: p.itemTitle,
+        category: p.itemCategory,
+        pricePaid: p.pricePaid,
+        purchasedAt: p.purchasedAt,
+      });
+      purchasesByTenant.set(p.tenantId, list);
+    }
+
     const entries = await Promise.all(tenants.map(async (tenant) => {
       const [current, previous] = await Promise.all([
         computeTenantMetrics(tenant.id, startDate, endDate),
@@ -445,16 +473,6 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
       const trend = previousVal > 0
         ? Math.round(((currentVal - previousVal) / previousVal) * 100 * 10) / 10
         : currentVal > 0 ? 100 : 0;
-
-      const purchases = await db.select({
-        itemTitle: trainingItemsTable.title,
-        itemCategory: trainingItemsTable.category,
-        pricePaid: trainingPurchasesTable.pricePaid,
-        purchasedAt: trainingPurchasesTable.purchasedAt,
-      })
-        .from(trainingPurchasesTable)
-        .innerJoin(trainingItemsTable, eq(trainingPurchasesTable.trainingItemId, trainingItemsTable.id))
-        .where(eq(trainingPurchasesTable.tenantId, tenant.id));
 
       return {
         tenantId: tenant.id,
@@ -469,12 +487,7 @@ router.get("/admin/leaderboard", requireAuth, async (req, res) => {
         roas: current.roas,
         totalLeads: current.totalLeads,
         spend: current.spend,
-        products: purchases.map(p => ({
-          name: p.itemTitle,
-          category: p.itemCategory,
-          pricePaid: p.pricePaid,
-          purchasedAt: p.purchasedAt,
-        })),
+        products: purchasesByTenant.get(tenant.id) ?? [],
       };
     }));
 

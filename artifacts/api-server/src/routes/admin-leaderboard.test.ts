@@ -10,10 +10,11 @@ import http from "http";
 //   tenants                -> [callerLookup?, activeTenantsList]
 //   campaigns / spend /    -> [t1_current, t1_previous, t2_current, ...]
 //   leads / jobs              (current always shifts before previous per tenant)
-//   training_purchases     -> [t1_products, t2_products, ...] (one shift per
-//                             tenant, fired after that tenant's metrics resolve)
-// Tenants that don't seed products leave the queue empty, which the chain
-// handles by defaulting to [].
+//   training_purchases     -> [allProductsAcrossTenants] (a single grouped
+//                             query for every active tenant; each row carries
+//                             its own tenantId so the route groups in memory)
+// An empty queue leaves the products list empty, which the chain handles by
+// defaulting to [].
 const state = {
   byTable: {} as Record<string, unknown[][]>,
   reset() {
@@ -161,7 +162,8 @@ type Period = {
 // Raw rows as the products select projects them: training_items.title ->
 // itemTitle, training_items.category -> itemCategory, plus the purchase's own
 // pricePaid / purchasedAt. The route maps these onto {name, category,
-// pricePaid, purchasedAt}.
+// pricePaid, purchasedAt}. The grouped query also selects tenantId so the
+// route can bucket each row; seed() attaches it from the owning tenant.
 type ProductRow = {
   itemTitle: string;
   itemCategory: string;
@@ -197,6 +199,10 @@ function seed({
   };
   if (callerRow) byTable.tenants.push([callerRow]);
   byTable.tenants.push(tenants.map((t) => ({ id: t.id, name: t.name })));
+  // Products are now fetched once for all active tenants in a single grouped
+  // query, so flatten every tenant's rows (tagged with their tenantId) into a
+  // single result and push it as the lone training_purchases shift.
+  const allProducts: Array<ProductRow & { tenantId: number }> = [];
   for (const t of tenants) {
     for (const p of [t.current, t.previous]) {
       byTable.campaigns.push([{ id: t.id * 100 }]);
@@ -204,10 +210,11 @@ function seed({
       byTable.leads.push(p.leads ?? []);
       byTable.jobs.push(p.jobs ?? []);
     }
-    // Products are per-tenant (one select after metrics), so push once per
-    // tenant in tenant order to keep the queue aligned.
-    byTable.training_purchases.push(t.products ?? []);
+    for (const product of t.products ?? []) {
+      allProducts.push({ ...product, tenantId: t.id });
+    }
   }
+  byTable.training_purchases.push(allProducts);
   state.byTable = byTable;
 }
 
@@ -549,10 +556,10 @@ describe("GET /admin/leaderboard — products payload", () => {
       },
     ]);
 
-    // The products select must filter by each tenant's own id, not a shared
-    // or wrong tenant scope.
-    expect(drizzle.eq).toHaveBeenCalledWith("training_purchases.tenantId", 1);
-    expect(drizzle.eq).toHaveBeenCalledWith("training_purchases.tenantId", 2);
+    // The single grouped products select must filter by all active tenant ids
+    // via inArray, and the route then buckets rows back to each tenant by the
+    // tenantId carried on each row.
+    expect(drizzle.inArray).toHaveBeenCalledWith("training_purchases.tenantId", [1, 2]);
   });
 });
 
