@@ -1,10 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useGetDashboardOverview, useGetSpendRevenueChart } from "@workspace/api-client-react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useGetAdminDashboardStats } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency, formatPercentage, round2, PLATFORM_COLORS } from "@/lib/utils";
-import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2, X, ExternalLink } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2, X, ExternalLink, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { MetaCampaignBreakdown } from "@/components/MetaCampaignBreakdown";
 
@@ -204,6 +204,8 @@ export default function Dashboard() {
         ))}
       </div>
 
+      <AgencyBudgetPace />
+
       <PremiumCard className="h-[450px] p-6 flex flex-col" transition={{ delay: 0.5 }}>
         <div className="mb-6">
           <div className="flex items-center justify-between">
@@ -395,5 +397,99 @@ function JobRevenueDrilldown({
         </div>
       </div>
     </div>
+  );
+}
+
+// Per-client budget-pace overview for the agency Command Center. Pace flags
+// (overPace / underPace / overBudget) come straight from /admin/dashboard-stats
+// (AdminTenantStats) — no client-side recomputation. Badge styling mirrors the
+// Agency God View's cross-tenant table for consistency. The pace projection is
+// month-to-date, so we always request the current calendar month regardless of
+// the Command Center's chart date filter.
+function AgencyBudgetPace() {
+  const now = new Date();
+  const startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+  const endDate = now.toISOString().split("T")[0];
+  const { data } = useGetAdminDashboardStats({ startDate, endDate });
+
+  // Surface the worst-pacing clients first so problems are obvious at a glance.
+  const tenants = useMemo(
+    () => [...(data?.tenants ?? [])].sort((a, b) => b.pacePercent - a.pacePercent),
+    [data],
+  );
+
+  if (tenants.length === 0) return null;
+
+  return (
+    <PremiumCard className="p-0 overflow-hidden" transition={{ delay: 0.4 }}>
+      <div className="p-6 border-b border-white/5">
+        <h3 className="font-display text-xl text-white">Budget Pace by Client</h3>
+        <p className="text-muted-foreground text-sm">Month-to-date projected spend vs monthly budget. Flags clients pacing over or under target.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="border-b border-white/5 bg-background/50">
+              <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Client</th>
+              <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Budget Pace</th>
+              <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {tenants.map((row) => {
+              const isOverBudget = row.overPace;
+              const isUnderBudget = row.underPace;
+              const paceTitle = `Projected ${formatCurrency(row.projectedSpend)} of ${formatCurrency(row.monthlyBudget)} budget · ${row.pacePercent.toFixed(1)}% pace`;
+              return (
+                <tr key={row.tenantId} className="hover:bg-white/[0.02] transition-colors">
+                  <td className="p-4 font-medium text-white">
+                    <div className="flex items-center gap-2">
+                      <span>{row.tenantName}</span>
+                      {row.overBudget && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400 ring-1 ring-inset ring-red-500/30"
+                          title={`Projected spend ${formatCurrency(row.projectedSpend)} exceeds budget ${formatCurrency(row.monthlyBudget)}`}
+                        >
+                          <AlertTriangle className="w-3 h-3" />
+                          Over Budget
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="p-4 text-right">
+                    <div className="flex items-center justify-end gap-2" title={paceTitle}>
+                      <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${isOverBudget ? "bg-red-500" : isUnderBudget ? "bg-amber-500" : "bg-emerald-500"}`}
+                          style={{ width: `${Math.min(row.pacePercent, 100)}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-medium ${isOverBudget ? "text-red-400" : isUnderBudget ? "text-amber-400" : "text-emerald-400"}`}>
+                        {row.pacePercent.toFixed(0)}%
+                      </span>
+                      {isOverBudget && <AlertTriangle className="w-3 h-3 text-red-400" />}
+                    </div>
+                  </td>
+                  <td className="p-4 text-right">
+                    <span
+                      title={paceTitle}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${
+                        isOverBudget
+                          ? "bg-red-500/15 text-red-400 ring-red-500/30"
+                          : isUnderBudget
+                            ? "bg-amber-500/15 text-amber-400 ring-amber-500/30"
+                            : "bg-emerald-500/15 text-emerald-400 ring-emerald-500/30"
+                      }`}
+                    >
+                      {isOverBudget ? "Over Pace" : isUnderBudget ? "Under Pace" : "On Pace"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </PremiumCard>
   );
 }
