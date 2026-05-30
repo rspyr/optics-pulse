@@ -193,9 +193,11 @@ type TenantCfg = {
 function seed({
   tenants,
   callerRow,
+  inactiveTenants = [],
 }: {
   tenants: TenantCfg[];
   callerRow?: Record<string, unknown>;
+  inactiveTenants?: TenantCfg[];
 }) {
   const byTable: Record<string, unknown[][]> = {
     tenants: [],
@@ -205,7 +207,16 @@ function seed({
     training_purchases: [],
   };
   if (callerRow) byTable.tenants.push([callerRow]);
+  // The route lists tenants with `WHERE isActive = true`, so the active-tenant
+  // list query returns only active rows — exactly what the real filter yields.
+  // Inactive tenants are deliberately omitted here.
   byTable.tenants.push(tenants.map((t) => ({ id: t.id, name: t.name })));
+
+  // Underlying leads/jobs/spend tables hold rows for inactive tenants too, so
+  // seed metric rows for active AND inactive tenants. The route only ever maps
+  // over the (active-only) tenant list above, so inactive rows must never reach
+  // the rankings — proving the isActive filter, not the mock, scopes the data.
+  const metricTenants = [...tenants, ...inactiveTenants];
 
   // Emit one grouped result per period (current first, then previous), each a
   // row-set spanning every tenant — matching the two batched passes the route
@@ -214,7 +225,7 @@ function seed({
     const leadRows: Array<{ tenantId: number; totalLeads: number; bookedLeads: number; soldLeads: number }> = [];
     const jobRows: Array<{ tenantId: number; revenue: number }> = [];
     const spendRows: Array<{ tenantId: number; total: number }> = [];
-    for (const t of tenants) {
+    for (const t of metricTenants) {
       const p = t[period];
       const leads = p.leads ?? [];
       const bookedLeads = leads.filter((l) => l.status === "booked" || l.status === "sold").length;
@@ -807,5 +818,87 @@ describe("GET /admin/leaderboard — per-tenant isolation (no cross-contaminatio
     expect(gamma.metricValue).toBe(1200);
     expect(gamma.previousValue).toBe(2400);
     expect(gamma.trend).toBe(-50);
+  });
+});
+
+// The leaderboard ranks only tenants where isActive = true (the route filters
+// the tenant list with `WHERE isActive = true`). These tests seed a mix of
+// active and inactive tenants — the inactive ones carry their own leads/jobs/
+// spend rows in the underlying tables — and prove the deactivated clients never
+// surface in the rankings, the agency average or the outlier math. The
+// `drizzle.eq(tenantsTable.isActive, true)` assertion is the regression guard:
+// if a refactor drops the isActive filter, that expectation fails immediately.
+describe("GET /admin/leaderboard — active-tenant scoping", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("excludes inactive tenants from the rankings and agency average", async () => {
+    // Active: Alpha 1000, Beta 3000 → agency average 2000. Inactive Zombie has
+    // a far larger 9000 revenue; were the isActive filter dropped it would both
+    // appear in the rankings and drag the average up to 4333.
+    seed({
+      tenants: [
+        { id: 1, name: "Alpha", current: { jobs: jobsRev(1000) }, previous: {} },
+        { id: 2, name: "Beta", current: { jobs: jobsRev(3000) }, previous: {} },
+      ],
+      inactiveTenants: [
+        { id: 3, name: "Zombie", current: { jobs: jobsRev(9000) }, previous: {} },
+      ],
+    });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+
+    // The route must scope the tenant list with `WHERE isActive = true`.
+    expect(drizzle.eq).toHaveBeenCalledWith("tenants.isActive", true);
+
+    const rankings = json.rankings as Array<Record<string, unknown>>;
+    expect(rankings).toHaveLength(2);
+    expect(rankings.map((r) => r.tenantId).sort()).toEqual([1, 2]);
+    // The inactive tenant never surfaces, regardless of its (larger) revenue.
+    expect(rankings.some((r) => r.tenantId === 3)).toBe(false);
+
+    // Agency average is computed over active tenants only: (1000 + 3000) / 2.
+    expect(json.agencyAverage).toBe(2000);
+  });
+
+  it("computes outlier stats over active tenants only", async () => {
+    // Active revenue [100, 100, 100, 1000]: average 325, and D (1000) is an
+    // outlier above 1.5 standard deviations (mirrors the outlier-flagging
+    // suite). The inactive Zombie carries an extreme 100000 revenue; if it
+    // leaked into the population the average and standard deviation would shift
+    // dramatically and D would no longer flag.
+    seed({
+      tenants: [
+        { id: 1, name: "A", current: { jobs: jobsRev(100) }, previous: {} },
+        { id: 2, name: "B", current: { jobs: jobsRev(100) }, previous: {} },
+        { id: 3, name: "C", current: { jobs: jobsRev(100) }, previous: {} },
+        { id: 4, name: "D", current: { jobs: jobsRev(1000) }, previous: {} },
+      ],
+      inactiveTenants: [
+        { id: 5, name: "Zombie", current: { jobs: jobsRev(100000) }, previous: {} },
+      ],
+    });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+
+    const rankings = json.rankings as Array<Record<string, unknown>>;
+    expect(rankings.some((r) => r.tenantId === 5)).toBe(false);
+
+    // Average and outlier math reflect the four active tenants only.
+    expect(json.agencyAverage).toBe(325);
+
+    const outlier = findRank(json, 4);
+    expect(outlier.isOutlier).toBe(true);
+    expect(outlier.outlierDirection).toBe("outperforming");
+
+    const normal = findRank(json, 1);
+    expect(normal.isOutlier).toBe(false);
+    expect(normal.outlierDirection).toBeNull();
   });
 });
