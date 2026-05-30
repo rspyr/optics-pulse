@@ -119,7 +119,7 @@ async function historyFor(leadId: number) {
 }
 
 beforeAll(async () => {
-  const slug = `lsh-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `lsh-int`;
   const [tenant] = await db.insert(tenantsTable).values({
     name: `LSH Int ${slug}`,
     clientSlug: slug,
@@ -278,8 +278,8 @@ describe("socket demo write site — createDemoLead()", () => {
     expect(rows[0].reason).toBe("demo_created");
     expect(rows[0].changedByUserId).toBeNull();
 
-    // Clean up the demo lead (and its history row) regardless of which
-    // tenant it landed in to keep the dev DB tidy across reruns.
+    // Clean up the demo lead (and its history row) so later assertions in this
+    // file that snapshot the fixture tenant's leads stay precise.
     await db.delete(leadStatusHistoryTable).where(eq(leadStatusHistoryTable.leadId, leadId));
     await db.delete(callAttemptsTable).where(eq(callAttemptsTable.leadId, leadId));
     await db.delete(leadsTable).where(eq(leadsTable.id, leadId));
@@ -433,7 +433,7 @@ describe("un-book / re-book — getBookingStatsByIdsAndDate reflects the latest 
     // Use a fresh CSR scoped to this test so the per-user booking aggregate
     // is not polluted by leads booked in earlier describe blocks (which
     // assert lead-level history, not CSR-level aggregates).
-    const slug = `rebook-csr-${Date.now()}`;
+    const slug = `rebook-csr`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Rebook CSR",
@@ -579,7 +579,7 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a d
   it("resets status/disposition/bookedByCsrId/bookedAt and drops the lead from the daily booking aggregate", async () => {
     // Fresh CSR so the per-user aggregate isn't polluted by prior describe
     // blocks that book leads against fx.csrId.
-    const slug = `edit-unbook-csr-${Date.now()}`;
+    const slug = `edit-unbook-csr`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Edit Unbook CSR",
@@ -670,7 +670,7 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a c
   it("resets status/disposition/bookedByCsrId/bookedAt and drops the lead from the daily booking aggregate", async () => {
     // Fresh CSR so the per-user aggregate isn't polluted by prior describe
     // blocks that book leads against fx.csrId.
-    const slug = `edit-callback-csr-${Date.now()}`;
+    const slug = `edit-callback-csr`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Edit Callback CSR",
@@ -766,7 +766,7 @@ describe("PUT /leads-hub/action/:attemptId — editing a booked attempt into a c
 
 describe("POST /leads-hub/action — spoke + callbackAt on a booked lead un-books it", () => {
   it("resets disposition/bookedByCsrId/bookedAt when a previously-booked lead moves into call_back without a deadReason", async () => {
-    const slug = `post-callback-unbook-${Date.now()}`;
+    const slug = `post-callback-unbook`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Post Callback Unbook CSR",
@@ -832,7 +832,7 @@ describe("POST /leads-hub/action — spoke + callbackAt on a booked lead un-book
 
 describe("POST /leads-hub/action — day-aging a booked lead un-books it", () => {
   it("resets the booking cache when a no_answer attempt on an appt_set lead pushes it into a day_N bucket", async () => {
-    const slug = `post-aging-unbook-${Date.now()}`;
+    const slug = `post-aging-unbook`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Post Aging Unbook CSR",
@@ -900,7 +900,7 @@ describe("POST /leads-hub/action — day-aging a booked lead un-books it", () =>
 describe("PATCH /leads/:leadId — un-booking a lead by status change resets the booking cache", () => {
   it("resets disposition/bookedByCsrId/bookedAt when status transitions from booked to lost", async () => {
     const leadsRouter = (await import("../routes/leads")).default;
-    const slug = `patch-unbook-${Date.now()}`;
+    const slug = `patch-unbook`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Patch Unbook CSR",
@@ -966,7 +966,7 @@ describe("PATCH /leads/:leadId — un-booking a lead by status change resets the
 
 describe("POST /leads-hub/action — callbackAt with non-spoke callResult on a booked lead un-books it", () => {
   it("resets the booking cache when a no_answer attempt with callbackAt flips a booked lead into call_back via the broad callback branch", async () => {
-    const slug = `post-callback-broad-${Date.now()}`;
+    const slug = `post-callback-broad`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Post Callback Broad CSR",
@@ -1026,7 +1026,7 @@ describe("POST /leads-hub/action — callbackAt with non-spoke callResult on a b
 describe("PATCH /leads/:leadId — caller-supplied disposition cannot undo the booking-cache reset on un-book", () => {
   it("ignores body.disposition when status moves out of booked/sold so the reset is preserved", async () => {
     const leadsRouter = (await import("../routes/leads")).default;
-    const slug = `patch-unbook-disp-${Date.now()}`;
+    const slug = `patch-unbook-disp`;
     const [scopedCsr] = await db.insert(usersTable).values({
       email: `${slug}@example.com`,
       name: "Patch Unbook Disposition CSR",

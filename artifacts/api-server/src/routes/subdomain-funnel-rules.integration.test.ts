@@ -147,7 +147,7 @@ beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
 
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const stamp = `sfr`;
   const slug = `sub-int-${stamp}`;
   const subdomain = `protect-${stamp}`;
 
@@ -251,7 +251,7 @@ describe("subdomain rule → /collect/submit (real Postgres)", () => {
     const submitRes = await postJson(app, "/collect/submit", {
       client_id: fx.clientSlug,
       attribution: {},
-      fields: { email: `e2e-${Date.now()}@example.com` },
+      fields: { email: `e2e@example.com` },
       page_url: fx.pageUrl,
     });
     expect(submitRes.status).toBe(200);
@@ -291,7 +291,7 @@ describe("subdomain rule → /collect/submit (real Postgres)", () => {
     const submitRes = await postJson(app, "/collect/submit", {
       client_id: fx.clientSlug,
       attribution: {},
-      fields: { email: `e2e-after-delete-${Date.now()}@example.com` },
+      fields: { email: `e2e-after-delete@example.com` },
       page_url: fx.pageUrl,
     });
     expect(submitRes.status).toBe(200);

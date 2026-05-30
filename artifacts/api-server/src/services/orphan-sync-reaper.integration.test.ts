@@ -38,7 +38,7 @@ function minutesAgo(minutes: number): Date {
 }
 
 async function createTestTenant(): Promise<number> {
-  const slug = `orphan-reaper-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `orphan-reaper-int`;
   const [row] = await db
     .insert(tenantsTable)
     .values({
@@ -149,8 +149,9 @@ describe("reapOrphanedSyncLogs — real Postgres", () => {
   it("flips stale running orphans to error and leaves fresh/terminal rows untouched", async () => {
     const reapedCount = await reapOrphanedSyncLogs(STALE_MINUTES);
 
-    // The shared dev DB may contain other stale running rows; assert the
-    // reaper handled AT LEAST our seeded orphans.
+    // reapOrphanedSyncLogs sweeps every tenant's stale running rows, and a
+    // sibling sync test may add its own concurrently, so assert the reaper
+    // handled AT LEAST our seeded orphans.
     const expectedReaped = seeded.filter((s) => s.expectReaped);
     expect(reapedCount).toBeGreaterThanOrEqual(expectedReaped.length);
 

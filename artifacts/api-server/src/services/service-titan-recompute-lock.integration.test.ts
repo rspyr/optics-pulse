@@ -34,7 +34,7 @@ const { recomputeServiceTitanRevenue } = await import("./sync-scheduler");
 const STRV_LOCK_KEY = 0x53545256;
 
 async function createTestTenant(): Promise<number> {
-  const slug = `strv-lock-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `strv-lock-int`;
   const [row] = await db
     .insert(tenantsTable)
     .values({

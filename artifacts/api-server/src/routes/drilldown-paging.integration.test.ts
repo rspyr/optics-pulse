@@ -115,7 +115,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `drill-jobs-page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `drill-jobs-page`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Drilldown Jobs Paging ${slug}`, clientSlug: slug })
@@ -260,7 +260,7 @@ interface LeadFx {
 let leadFx: LeadFx;
 
 beforeAll(async () => {
-  const slug = `drill-leads-page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `drill-leads-page`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Drilldown Leads Paging ${slug}`, clientSlug: slug })

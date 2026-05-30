@@ -29,6 +29,23 @@ workers *after* globalSetup completes, so they inherit the mutated
 `process.env`. Verified empirically (`select current_database()` returns the
 `mos_test_` name inside a worker).
 
+**One DB per RUN, shared by parallel files (NOT per-file):** globalSetup runs
+once and all forked workers inherit the same `mos_test_` DB. With `maxWorkers:4`
+up to 4 `*.integration.test.ts` files write to it concurrently. Consequences for
+writing/simplifying tests:
+- Cross-file uniqueness still matters — keep a distinct *static* per-file slug
+  prefix (e.g. `list-iso-`, `cb-sweep-`). The old `-${Date.now()}-${Math.random()}`
+  suffix only guarded against a *persistent* DB across runs and is now redundant;
+  drop it for stable, debuggable identifiers.
+- A global `SELECT COUNT(*)` / "deleted exactly N" assertion is only safe when no
+  other file writes that table during the run — and that includes writes via a
+  *service* a sibling test exercises, not just direct `.insert`. Safe example:
+  re-derive cleanup asserts an exact delete count because its predicate
+  (`cancelled` + `rederive_selected_leads`) is produced by no other file.
+- Global service sweeps that aren't tenant-scoped (orphan-sync reaper, tracker
+  retention prune) can see sibling rows → keep `toBeGreaterThanOrEqual` + assert
+  only on own seeded ids.
+
 **How to apply:**
 - Needs Postgres superuser/createdb (Replit dev DB user `postgres` has it) and
   `pg_dump`/`psql` on PATH (provided by the postgres nix module).

@@ -109,7 +109,7 @@ type JobRow = { id: number; tenantId: number; status: string };
  * trivially distinguishable.
  */
 async function seedTenant(opts: { label: string; sourceOnly: string; scale: number }): Promise<TenantFx> {
-  const slug = `list-iso-${opts.label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `list-iso-${opts.label}`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `List Iso ${slug}`, clientSlug: slug })

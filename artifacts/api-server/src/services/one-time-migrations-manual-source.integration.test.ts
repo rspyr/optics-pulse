@@ -37,7 +37,7 @@ const {
 const { backfillManualSourceForLegacyEvents } = await import("./one-time-migrations");
 
 async function createTestTenant(suffix: string): Promise<number> {
-  const slug = `man-src-bf-${suffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `man-src-bf-${suffix}`;
   const [row] = await db.insert(tenantsTable).values({
     name: `Manual-source backfill ${slug}`,
     clientSlug: slug,
@@ -71,7 +71,7 @@ async function seedLegacyManualEvent(opts: SeedEventOpts): Promise<number> {
   // We need a deterministic createdAt so the migration's "signal happened
   // AFTER the event" temporal gate is testable; drizzle's defaultNow()
   // would shadow whatever we pass, so go through raw SQL.
-  const externalId = `man-src-bf-${opts.tenantId}-${opts.leadId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const externalId = `man-src-bf-${opts.tenantId}-${opts.leadId}`;
   const result = await db.execute(sql`
     INSERT INTO attribution_events (
       tenant_id, event_type, page_url, form_id, form_name, form_fields,

@@ -49,10 +49,11 @@ interface SeedSpec {
 let seeded: Array<{ id: number; label: string; expectDeleted: boolean }> = [];
 
 beforeAll(async () => {
-  // Use distinctive markers in `payload` and an isolated `OTHER_JOB_TYPE`
-  // so the test only touches rows it created — the dev DB can have real
-  // background_jobs rows from other code paths.
-  const marker = `cleanup-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  // Distinctive markers in `payload` and an isolated `OTHER_JOB_TYPE` label the
+  // seeded rows for readability. The run's database starts empty and no sibling
+  // file inserts cancelled rederive_selected_leads rows, so the cleanup
+  // predicate only ever matches this fixture.
+  const marker = `cleanup-int`;
 
   const specs: SeedSpec[] = [
     // --- Cancelled rederive_selected_leads, past cutoff: must be deleted.
@@ -186,11 +187,10 @@ describe("cleanupOldCancelledSelectedLeadsRederives — real Postgres", () => {
 
     const deletedCount = await cleanupOldCancelledSelectedLeadsRederives(RETENTION_DAYS);
 
-    // The function may delete OTHER stale cancelled rederive_selected_leads
-    // rows that pre-existed in the dev DB. We assert it deleted AT LEAST
-    // the rows we expected, and (below) that none of the rows we expected
-    // to keep were touched.
-    expect(deletedCount).toBeGreaterThanOrEqual(expectedDeletedIds.length);
+    // The DB starts empty and no sibling file produces cancelled
+    // rederive_selected_leads rows, so the global sweep deletes exactly the
+    // rows this fixture expected to be deleted — nothing more.
+    expect(deletedCount).toBe(expectedDeletedIds.length);
 
     const survivors = await db
       .select({ id: backgroundJobsTable.id })

@@ -31,7 +31,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `tracker-rollup-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `tracker-rollup-int`;
   const domain = `${slug}.example.com`;
 
   const [tA] = await db.insert(tenantsTable).values({

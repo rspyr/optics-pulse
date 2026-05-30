@@ -88,7 +88,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `stl-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `stl-int`;
   // Tenant carries a spiff config exercising both byFunnel (Solar = $100)
   // and default ($20) branches of computeSpiffCommission.
   const funnelName = `Solar-${slug}`;
@@ -303,7 +303,8 @@ describe("getFirstResponseEvents (real Postgres)", () => {
   it("returns exactly one event per (lead, assignedAt) for day1 across the seeded tenant", async () => {
     const events = await getFirstResponseEvents([fx.csr1, fx.csr2], fx.day1Start, fx.day1End);
 
-    // Restrict to our tenant's leads (the DB may contain unrelated rows).
+    // getFirstResponseEvents isn't tenant-scoped and sibling files seed leads
+    // concurrently, so restrict to our tenant's leads.
     const ours = events.filter(e => Object.values(fx.leadIds).includes(e.leadId));
 
     // Expect L1 (CSR1), L2 (CSR1), L3 (CSR2). No L4 (never called).
@@ -475,7 +476,7 @@ describe("lead_assignments history makes speed-to-lead reproducible (task #407)"
   let rfx: ReassignFx;
 
   beforeAll(async () => {
-    const slug = `stl-reassign-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `stl-reassign`;
     const [tenant] = await db.insert(tenantsTable).values({
       name: `Speed-to-Lead Reassign ${slug}`,
       clientSlug: slug,
@@ -609,7 +610,7 @@ describe("login-aware speed subtracts mid-day logout gaps (real Postgres)", () =
   let ofx: OfflineFixtures;
 
   beforeAll(async () => {
-    const slug = `stl-offline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `stl-offline`;
     const [tenant] = await db.insert(tenantsTable).values({
       name: `Speed-to-Lead Offline ${slug}`,
       clientSlug: slug,
@@ -757,7 +758,7 @@ describe("funnel rename keeps spiff payouts deterministic (task #412)", () => {
   let xfx: RenameFx;
 
   beforeAll(async () => {
-    const slug = `spiff-rename-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `spiff-rename`;
     const origFunnelName = `OrigFunnel-${slug}`;
     const renamedFunnelName = `RenamedFunnel-${slug}`;
 
@@ -968,7 +969,7 @@ describe("stale-funnel spiff warning surfaces on the spiff-config API (task #418
   let sfx: StaleFx;
 
   beforeAll(async () => {
-    const slug = `spiff-stale-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `spiff-stale`;
     const origFunnelName = `StaleOrig-${slug}`;
     const renamedFunnelName = `StaleRenamed-${slug}`;
 

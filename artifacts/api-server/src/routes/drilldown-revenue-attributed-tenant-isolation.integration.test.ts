@@ -133,7 +133,7 @@ async function seedTenant(opts: {
   sourceOnly: string;
   scale: number;
 }): Promise<TenantFx> {
-  const slug = `rev-iso-${opts.label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `rev-iso-${opts.label}`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Revenue Iso ${slug}`, clientSlug: slug })

@@ -38,12 +38,11 @@ const routerMod = await import("./drilldown");
 
 // Common surname shared by a lead in BOTH tenants so a single typeahead term
 // matches across the tenant boundary — the partition must be by tenant_id, not
-// by name. Randomised per run so it never collides with other rows in a shared
-// test DB.
-const RUN = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const SHARED_SURNAME = `Sharedsurname${RUN}`;
-const A_DISTINCT_NAME = `AonlyName${RUN}`;
-const B_DISTINCT_NAME = `BonlyName${RUN}`;
+// by name. The searches below are tenant-scoped and assert on specific seeded
+// ids, so a stable surname is safe on the empty per-run DB.
+const SHARED_SURNAME = `Sharedsurname`;
+const A_DISTINCT_NAME = `AonlyName`;
+const B_DISTINCT_NAME = `BonlyName`;
 
 interface TenantFx {
   tenantId: number;
@@ -127,7 +126,7 @@ type SearchRow = { id: number; firstName: string; lastName: string };
  *   - a completed, initially-unmatched job
  */
 async function seedTenant(opts: { label: string; distinctName: string }): Promise<TenantFx> {
-  const slug = `match-iso-${opts.label}-${RUN}`;
+  const slug = `match-iso-${opts.label}`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Match Iso ${slug}`, clientSlug: slug })
@@ -148,7 +147,7 @@ async function seedTenant(opts: { label: string; distinctName: string }): Promis
   };
 
   const sharedLead = await mkLead(`Person${opts.label}`, SHARED_SURNAME);
-  const distinctLead = await mkLead(opts.distinctName, `Last${opts.label}${RUN}`);
+  const distinctLead = await mkLead(opts.distinctName, `Last${opts.label}`);
 
   const [job] = await db
     .insert(jobsTable)

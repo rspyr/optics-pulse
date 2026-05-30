@@ -121,7 +121,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `rev-attr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `rev-attr`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Revenue Attr Int ${slug}`, clientSlug: slug })
@@ -406,7 +406,7 @@ interface PageFx {
 let pageFx: PageFx;
 
 beforeAll(async () => {
-  const slug = `rev-attr-page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `rev-attr-page`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Revenue Attr Paging ${slug}`, clientSlug: slug })
@@ -646,7 +646,7 @@ const DATE_EARLY = new Date("2026-03-10T12:00:00.000Z");
 const DATE_LATE = new Date("2026-03-20T12:00:00.000Z");
 
 beforeAll(async () => {
-  const slug = `rev-attr-sort-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `rev-attr-sort`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Revenue Attr Sort ${slug}`, clientSlug: slug })

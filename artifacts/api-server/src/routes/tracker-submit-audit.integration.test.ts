@@ -144,7 +144,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const stamp = `tsa`;
 
   const [sheetsTenant] = await db.insert(tenantsTable).values({
     name: `Tracker Submit Audit (sheets) ${stamp}`,
@@ -234,7 +234,7 @@ describe("POST /collect/submit → tracker_submit_attempts audit row", () => {
   });
 
   it("an invalid payload (missing client_id) lands as outcome=invalid_payload httpStatus=400", async () => {
-    const beaconSentinel = `tsa-invalid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const beaconSentinel = `tsa-invalid`;
     const res = await postJson(app, "/collect/submit", {
       // client_id intentionally missing → zod rejects the body
       fields: { email: "broken@example.com" },

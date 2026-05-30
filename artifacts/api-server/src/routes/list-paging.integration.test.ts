@@ -161,7 +161,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `list-page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `list-page`;
   bgType = `paging_test_${slug}`;
 
   const [tenant] = await db

@@ -44,7 +44,7 @@ const TODAY = new Date().toISOString().slice(0, 10);
 const ACCOUNT_ID = "999000111";
 
 async function createTestTenant(slugSuffix: string): Promise<number> {
-  const slug = `meta-int-test-${slugSuffix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `meta-int-test-${slugSuffix}`;
   const [row] = await db.insert(tenantsTable).values({
     name: `Meta Int Test ${slug}`,
     clientSlug: slug,

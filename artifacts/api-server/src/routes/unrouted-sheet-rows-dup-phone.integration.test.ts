@@ -135,7 +135,7 @@ beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
 
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const stamp = `udp`;
 
   const [tenant] = await db.insert(tenantsTable).values({
     name: `Unrouted Dup Phone Int ${stamp}`,

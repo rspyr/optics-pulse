@@ -79,7 +79,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `queue-ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `queue-ord`;
   const [tenant] = await db.insert(tenantsTable).values({
     name: `Queue Ordering Int ${slug}`,
     clientSlug: slug,

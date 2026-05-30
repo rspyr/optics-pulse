@@ -62,7 +62,7 @@ beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `cb-sweep-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `cb-sweep`;
   const [tenant] = await db
     .insert(tenantsTable)
     .values({ name: `Callback Sweep Int ${slug}`, clientSlug: slug })
@@ -277,7 +277,7 @@ let cfx: ConcurrentFx;
 
 describe("checkDueCallbacks — overlapping concurrent sweeps (real Postgres)", () => {
   beforeAll(async () => {
-    const slug = `cb-race-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `cb-race`;
     const [tenant] = await db
       .insert(tenantsTable)
       .values({ name: `Callback Race Int ${slug}`, clientSlug: slug })
@@ -406,7 +406,7 @@ let rfx: RescheduleFx;
 
 describe("checkDueCallbacks — rescheduled callback re-fires once (real Postgres)", () => {
   beforeAll(async () => {
-    const slug = `cb-resched-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `cb-resched`;
     const [tenant] = await db
       .insert(tenantsTable)
       .values({ name: `Callback Resched Int ${slug}`, clientSlug: slug })
@@ -563,7 +563,7 @@ let pfx: PartialFx;
 
 describe("checkDueCallbacks — partial-overlap sweeps (real Postgres)", () => {
   beforeAll(async () => {
-    const slug = `cb-partial-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const slug = `cb-partial`;
     const [tenant] = await db
       .insert(tenantsTable)
       .values({ name: `Callback Partial Int ${slug}`, clientSlug: slug })

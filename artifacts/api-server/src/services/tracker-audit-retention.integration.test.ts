@@ -27,7 +27,7 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const slug = `tracker-retention-int-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const slug = `tracker-retention-int`;
   const domain = `${slug}.example.com`;
 
   const [tenant] = await db.insert(tenantsTable).values({
@@ -75,8 +75,9 @@ describe("pruneOldTrackerAttempts (real Postgres)", () => {
   it("deletes rows older than the retention window and keeps newer rows", async () => {
     const deleted = await pruneOldTrackerAttempts(30);
 
-    // The sweep is global, so other dev rows older than 30d may also be
-    // pruned. We only assert on our own fixture's rows.
+    // The sweep is global and a sibling tracker test may add old rows
+    // concurrently, so it can prune more than ours. We only assert on our own
+    // fixture's rows.
     expect(deleted).toBeGreaterThanOrEqual(fx.oldIds.length);
 
     const survivingOld = await db
