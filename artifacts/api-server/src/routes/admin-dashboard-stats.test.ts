@@ -635,3 +635,44 @@ describe("GET /admin/dashboard-stats — active-tenant scoping", () => {
     expect(avg.totalRevenue).toBe(10000); // 4000 + 6000
   });
 });
+
+// Filtering directly to a deactivated client's id must yield an empty `tenants`
+// list. The route builds `tenantStats` from the active-only tenant list and then
+// applies `filterTenantId` as a post-filter, so an id that isn't in the active
+// set (a deactivated or unknown client) matches nothing — the deactivated client
+// is never shown, even when an admin asks for it by id. The agency benchmark,
+// computed before the filter, still spans every active tenant. Guards the
+// filterTenantId logic in admin.ts (~line 319).
+describe("GET /admin/dashboard-stats — filtering to a deactivated client", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("returns an empty tenants list while agencyAverages still spans active tenants", async () => {
+    // Active Alpha (1) and Beta (2) are the only tenants the active-only list
+    // yields. Tenant 3 is deactivated, so it is never queried. We request
+    // ?tenantId=3 to simulate an admin filtering straight to that dead client.
+    seedTwoRichTenants();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(
+      app,
+      "/admin/dashboard-stats?tenantId=3",
+    );
+
+    expect(status).toBe(200);
+
+    // The deactivated/unknown client is not shown — nothing matches the filter.
+    const tenants = json.tenants as Array<Record<string, number>>;
+    expect(tenants).toHaveLength(0);
+
+    // The agency benchmark still reflects the two active tenants only.
+    const avg = json.agencyAverages as Record<string, number>;
+    expect(avg.totalLeads).toBe(20); // 10 + 10
+    expect(avg.totalSpend).toBe(2000); // 1000 + 1000
+    expect(avg.totalRevenue).toBe(10000); // 4000 + 6000
+    expect(avg.cpl).toBe(100); // 2000 / 20
+    expect(avg.roas).toBe(5); // 10000 / 2000
+    expect(avg.bookingRate).toBe(50); // 10 booked / 20 leads
+  });
+});
