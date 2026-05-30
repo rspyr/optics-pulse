@@ -663,3 +663,149 @@ describe("GET /admin/leaderboard — anonymization", () => {
     expect(findRank(json, 2).isOwnTenant).toBe(false);
   });
 });
+
+// The batch helper's own bucketing is unit-tested in admin-tenant-metrics.test.ts.
+// These tests close the loop end-to-end through the route: with several tenants
+// each holding *distinct, non-zero* current AND previous numbers, every emitted
+// leaderboard row must reflect only its own tenant's metrics, previousValue and
+// delta — never a neighbour's. The earlier trend/sort suites only ever vary one
+// tenant at a time or zero out the previous period, so they cannot catch a
+// route-level mis-map of batch output to rows.
+describe("GET /admin/leaderboard — per-tenant isolation (no cross-contamination)", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  // Three tenants, all with distinct current+previous revenue and distinct
+  // spend/lead mixes so cpl differs too. If the route cross-attributed any
+  // batch row, at least one of metricValue/previousValue/trend/revenue/cpl
+  // below would land on the wrong tenant.
+  //   Alpha: rev 5000 (prev 4000, trend +25), spend 1000 / 10 leads → cpl 100
+  //   Beta : rev 3000 (prev 1500, trend +100), spend  600 / 20 leads → cpl  30
+  //   Gamma: rev 1200 (prev 2400, trend  -50), spend 1200 / 10 leads → cpl 120
+  const distinctTenants = (): TenantCfg[] => [
+    {
+      id: 1,
+      name: "Alpha",
+      current: { spend: 1000, leads: leadsN(10), jobs: jobsRev(5000) },
+      previous: { jobs: jobsRev(4000) },
+    },
+    {
+      id: 2,
+      name: "Beta",
+      current: { spend: 600, leads: leadsN(20), jobs: jobsRev(3000) },
+      previous: { jobs: jobsRev(1500) },
+    },
+    {
+      id: 3,
+      name: "Gamma",
+      current: { spend: 1200, leads: leadsN(10), jobs: jobsRev(1200) },
+      previous: { jobs: jobsRev(2400) },
+    },
+  ];
+
+  it("attributes each tenant's metric value, previous value and delta to only that tenant", async () => {
+    seed({ tenants: distinctTenants() });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+
+    const alpha = findRank(json, 1);
+    expect(alpha.metricValue).toBe(5000);
+    expect(alpha.previousValue).toBe(4000);
+    expect(alpha.trend).toBe(25); // (5000-4000)/4000
+    expect(alpha.revenue).toBe(5000);
+    expect(alpha.cpl).toBe(100); // 1000 / 10
+    expect(alpha.rank).toBe(1);
+
+    const beta = findRank(json, 2);
+    expect(beta.metricValue).toBe(3000);
+    expect(beta.previousValue).toBe(1500);
+    expect(beta.trend).toBe(100); // (3000-1500)/1500
+    expect(beta.revenue).toBe(3000);
+    expect(beta.cpl).toBe(30); // 600 / 20
+    expect(beta.rank).toBe(2);
+
+    const gamma = findRank(json, 3);
+    expect(gamma.metricValue).toBe(1200);
+    expect(gamma.previousValue).toBe(2400);
+    expect(gamma.trend).toBe(-50); // (1200-2400)/2400
+    expect(gamma.revenue).toBe(1200);
+    expect(gamma.cpl).toBe(120); // 1200 / 10
+    expect(gamma.rank).toBe(3);
+  });
+
+  it("keeps the selected metric independent per tenant when ranking by cpl", async () => {
+    // Same tenants, different metric: cpl is lower-is-better, so the ordering
+    // must invert relative to revenue while each row still carries its own
+    // cpl current/previous and delta. previous cpl: Alpha 0 (no prev spend/leads),
+    // Beta 0, Gamma 0 → trend falls back to 100 (current cpl > 0) for all.
+    seed({ tenants: distinctTenants() });
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=cpl");
+
+    expect(status).toBe(200);
+
+    const beta = findRank(json, 2);
+    expect(beta.metricValue).toBe(30); // cheapest cpl
+    expect(beta.rank).toBe(1);
+
+    const alpha = findRank(json, 1);
+    expect(alpha.metricValue).toBe(100);
+    expect(alpha.rank).toBe(2);
+
+    const gamma = findRank(json, 3);
+    expect(gamma.metricValue).toBe(120);
+    expect(gamma.rank).toBe(3);
+
+    // The secondary fields stay glued to their own tenant regardless of the
+    // sort metric: each row's revenue is still its own.
+    expect(alpha.revenue).toBe(5000);
+    expect(beta.revenue).toBe(3000);
+    expect(gamma.revenue).toBe(1200);
+  });
+
+  it("keeps metrics bound to the correct tenant even when names are anonymized", async () => {
+    // Non-agency caller (Beta) in anonymized mode. Names get masked by post-sort
+    // index, but each tenantId's metricValue/previousValue/trend must remain its
+    // own — masking the label must never shuffle the numbers.
+    //   revenue desc: Alpha 5000 (idx0), Beta 3000 (idx1, caller), Gamma 1200 (idx2)
+    //   labels: Alpha "Client A", Beta keeps "Beta", Gamma "Client C"
+    seed({
+      callerRow: {
+        id: 2,
+        name: "Beta",
+        leaderboardConfig: { visible: true, displayMode: "anonymized" },
+      },
+      tenants: distinctTenants(),
+    });
+    const app = await setupApp("client_admin", 2);
+    const { status, json } = await getJson(app, "/admin/leaderboard?metric=revenue");
+
+    expect(status).toBe(200);
+    expect(json.forceAnonymized).toBe(true);
+
+    const alpha = findRank(json, 1);
+    expect(alpha.tenantName).toBe("Client A"); // sort idx 0, not caller
+    expect(alpha.isOwnTenant).toBe(false);
+    expect(alpha.metricValue).toBe(5000);
+    expect(alpha.previousValue).toBe(4000);
+    expect(alpha.trend).toBe(25);
+
+    const beta = findRank(json, 2);
+    expect(beta.tenantName).toBe("Beta"); // caller keeps real name
+    expect(beta.isOwnTenant).toBe(true);
+    expect(beta.metricValue).toBe(3000);
+    expect(beta.previousValue).toBe(1500);
+    expect(beta.trend).toBe(100);
+
+    const gamma = findRank(json, 3);
+    expect(gamma.tenantName).toBe("Client C"); // sort idx 2
+    expect(gamma.isOwnTenant).toBe(false);
+    expect(gamma.metricValue).toBe(1200);
+    expect(gamma.previousValue).toBe(2400);
+    expect(gamma.trend).toBe(-50);
+  });
+});
