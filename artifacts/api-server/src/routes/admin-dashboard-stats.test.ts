@@ -569,3 +569,69 @@ describe("GET /admin/dashboard-stats — date range narrowing", () => {
     );
   });
 });
+
+// /admin/dashboard-stats only aggregates tenants where isActive = true (the
+// route loads the tenant list with `WHERE isActive = true`, then fans per-tenant
+// leads/jobs/spend queries over that list). A deactivated client must not show
+// up in the per-tenant `tenants` array nor leak into the agency-wide rollups.
+// The tenant-list select returns only active rows — exactly what the real filter
+// yields — so the inactive tenant has no per-tenant queue entries and never gets
+// queried. The `drizzle.eq(tenantsTable.isActive, true)` assertion is the
+// regression guard: if a refactor drops the isActive filter, that expectation
+// fails immediately. Mirrors the active-tenant scoping suite in
+// admin-leaderboard.test.ts.
+describe("GET /admin/dashboard-stats — active-tenant scoping", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("excludes inactive tenants from the per-tenant list and agency rollups", async () => {
+    // Active Alpha and Beta each contribute leads/jobs/spend. The deactivated
+    // Zombie (id 3) carries far larger revenue/spend in the underlying tables,
+    // but the active-only tenant list never includes it, so it is never queried
+    // and never reaches the output. We mirror seedTwoRichTenants: the tenant
+    // list returns only the two active rows, followed by their per-tenant
+    // leads/jobs/campaigns/spend results.
+    const tenOf = (booked: number) =>
+      Array.from({ length: 10 }, (_, i) => ({
+        status: i < booked ? "booked" : "new",
+      }));
+    state.selectQueue = [
+      // Active-tenant list (WHERE isActive = true) — Zombie deliberately absent.
+      [
+        { id: 1, name: "Alpha", monthlyBudget: 10000 },
+        { id: 2, name: "Beta", monthlyBudget: 20000 },
+      ],
+      tenOf(5), // tenant 1 leads
+      [{ status: "completed", revenue: 4000 }], // tenant 1 jobs
+      [{ id: 101 }], // tenant 1 campaigns
+      [{ total: 1000 }], // tenant 1 spend
+      tenOf(5), // tenant 2 leads
+      [{ status: "completed", revenue: 6000 }], // tenant 2 jobs
+      [{ id: 201 }], // tenant 2 campaigns
+      [{ total: 1000 }], // tenant 2 spend
+    ];
+
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+
+    // The route must scope the tenant list with `WHERE isActive = true`.
+    expect(drizzle.eq).toHaveBeenCalledWith("tenants.isActive", true);
+
+    // Only the two active tenants surface; the deactivated Zombie never does.
+    const tenants = json.tenants as Array<Record<string, number>>;
+    expect(tenants).toHaveLength(2);
+    expect(tenants.map((t) => t.tenantId).sort()).toEqual([1, 2]);
+    expect(tenants.some((t) => t.tenantId === 3)).toBe(false);
+
+    // Agency rollups span the active tenants only: 4000 + 6000 revenue, not the
+    // inactive tenant's larger figures.
+    const avg = json.agencyAverages as Record<string, number>;
+    expect(avg.totalLeads).toBe(20); // 10 + 10
+    expect(avg.totalSpend).toBe(2000); // 1000 + 1000
+    expect(avg.totalRevenue).toBe(10000); // 4000 + 6000
+  });
+});
