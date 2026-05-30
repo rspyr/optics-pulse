@@ -1096,6 +1096,12 @@ export interface AdminTenantStats {
   monthlyBudget: number;
   /** True when projectedSpend exceeds monthlyBudget. */
   overBudget: boolean;
+  /** projectedSpend as a percentage of monthlyBudget (one decimal place). */
+  pacePercent: number;
+  /** True when pacePercent exceeds 110. */
+  overPace: boolean;
+  /** True when pacePercent is below 85. */
+  underPace: boolean;
   cpl: number;
   bookingRate: number;
   closeRate: number;

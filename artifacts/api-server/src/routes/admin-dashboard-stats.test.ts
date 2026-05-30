@@ -441,6 +441,89 @@ describe("GET /admin/dashboard-stats — over budget warning", () => {
   });
 });
 
+// pacePercent expresses projectedSpend as a percentage of monthlyBudget
+// (projectedSpend / monthlyBudget * 100, one decimal). overPace is pacePercent
+// > 110 and underPace is pacePercent < 85, so we pin the clock (projectedSpend
+// depends on "today") and contrast a tiny budget (way over pace) with a
+// generous one (well under pace).
+// Select order: [tenants, then per tenant leads, jobs, campaigns, spend].
+//   tenant 1 (Hot):  budget 1000, spend 1000 → projected 2067 → pace 206.7 → over
+//   tenant 2 (Cold): budget 100000, spend 1000 → projected 2067 → pace 2.1 → under
+function seedPaceContrastTenants() {
+  state.selectQueue = [
+    [
+      { id: 1, name: "Hot", monthlyBudget: 1000 },
+      { id: 2, name: "Cold", monthlyBudget: 100000 },
+    ],
+    [], // tenant 1 leads
+    [], // tenant 1 jobs
+    [{ id: 101 }], // tenant 1 campaigns
+    [{ total: 1000 }], // tenant 1 spend
+    [], // tenant 2 leads
+    [], // tenant 2 jobs
+    [{ id: 201 }], // tenant 2 campaigns
+    [{ total: 1000 }], // tenant 2 spend
+  ];
+}
+
+describe("GET /admin/dashboard-stats — budget pace badges", () => {
+  beforeEach(() => {
+    state.reset();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns pacePercent and flags overPace / underPace per tenant", async () => {
+    // May 15 of a 31-day month: 1000 / 15 * 31 = 2066.67 → projects to 2067.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 15, 12, 0, 0));
+
+    seedPaceContrastTenants();
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number | boolean>>;
+
+    const hot = tenants.find((t) => t.tenantId === 1)!;
+    expect(hot.pacePercent).toBe(206.7); // 2067 / 1000 * 100
+    expect(hot.overPace).toBe(true); // 206.7 > 110
+    expect(hot.underPace).toBe(false);
+
+    const cold = tenants.find((t) => t.tenantId === 2)!;
+    expect(cold.pacePercent).toBe(2.1); // 2067 / 100000 * 100 → 2.067 → 2.1
+    expect(cold.overPace).toBe(false);
+    expect(cold.underPace).toBe(true); // 2.1 < 85
+  });
+
+  it("does not flag overPace or underPace when pace sits in the 85–110 band", async () => {
+    // May 31 (last day): 1000 / 31 * 31 = 1000 projected. budget 1000 → pace 100.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 31, 12, 0, 0));
+
+    state.selectQueue = [
+      [{ id: 1, name: "OnPace", monthlyBudget: 1000 }],
+      [], // leads
+      [], // jobs
+      [{ id: 101 }], // campaigns
+      [{ total: 1000 }], // spend
+    ];
+
+    const app = await setupApp("super_admin");
+    const { status, json } = await getJson(app, "/admin/dashboard-stats");
+
+    expect(status).toBe(200);
+    const tenants = json.tenants as Array<Record<string, number | boolean>>;
+    const onPace = tenants.find((t) => t.tenantId === 1)!;
+    expect(onPace.pacePercent).toBe(100); // 1000 / 1000 * 100
+    expect(onPace.overPace).toBe(false);
+    expect(onPace.underPace).toBe(false);
+  });
+});
+
 describe("GET /admin/dashboard-stats — date range narrowing", () => {
   beforeEach(() => {
     state.reset();

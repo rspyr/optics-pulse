@@ -284,6 +284,7 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
 
       const monthlyBudget = tenant.monthlyBudget ?? MONTHLY_BUDGET_DEFAULT;
       const overBudget = projectedSpend > monthlyBudget;
+      const pacePercent = monthlyBudget > 0 ? Math.round((projectedSpend / monthlyBudget) * 100 * 10) / 10 : 0;
 
       tenantStats.push({
         tenantId: tenant.id,
@@ -293,6 +294,9 @@ router.get("/admin/dashboard-stats", ...agencyOnly, async (req, res) => {
         projectedSpend,
         monthlyBudget,
         overBudget,
+        pacePercent,
+        overPace: pacePercent > 110,
+        underPace: pacePercent < 85,
         cpl,
         bookingRate,
         closeRate,

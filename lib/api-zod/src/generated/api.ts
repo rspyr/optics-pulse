@@ -2007,6 +2007,13 @@ export const GetAdminDashboardStatsResponse = zod.object({
       overBudget: zod
         .boolean()
         .describe("True when projectedSpend exceeds monthlyBudget."),
+      pacePercent: zod
+        .number()
+        .describe(
+          "projectedSpend as a percentage of monthlyBudget (one decimal place).",
+        ),
+      overPace: zod.boolean().describe("True when pacePercent exceeds 110."),
+      underPace: zod.boolean().describe("True when pacePercent is below 85."),
       cpl: zod.number(),
       bookingRate: zod.number(),
       closeRate: zod.number(),
