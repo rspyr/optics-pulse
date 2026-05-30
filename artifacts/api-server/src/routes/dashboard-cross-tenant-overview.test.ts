@@ -203,6 +203,44 @@ describe("GET /dashboard/cross-tenant-overview", () => {
     expect(status).toBe(403);
   });
 
+  it("returns a backend-driven overBudget flag per tenant", async () => {
+    // May 15 of a 31-day month: a tenant spending 1000 MTD projects to
+    // 1000 / 15 * 31 = 2067. Pair a tiny budget (over) and a roomy one (under).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 4, 15, 12, 0, 0));
+    try {
+      mockDb.selectResults = [
+        [
+          { id: 1, name: "Tight", monthlyBudget: 100 },
+          { id: 2, name: "Roomy", monthlyBudget: 100000 },
+        ],
+        [], // leads
+        [], // jobs
+        [
+          { tenantId: 1, total: 1000 },
+          { tenantId: 2, total: 1000 },
+        ],
+      ];
+
+      const app = await setupApp("super_admin");
+      const { status, json } = await getJson(app, "/dashboard/cross-tenant-overview");
+      expect(status).toBe(200);
+
+      const tenants = json.tenants as Array<Record<string, number | boolean>>;
+      const tight = tenants.find((t) => t.tenantId === 1)!;
+      expect(tight.projectedSpend).toBe(2067);
+      expect(tight.monthlyBudget).toBe(100);
+      expect(tight.overBudget).toBe(true); // 2067 > 100
+
+      const roomy = tenants.find((t) => t.tenantId === 2)!;
+      expect(roomy.projectedSpend).toBe(2067);
+      expect(roomy.monthlyBudget).toBe(100000);
+      expect(roomy.overBudget).toBe(false); // 2067 < 100000
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters the tenants array by tenantId but keeps agency-wide averages", async () => {
     seed();
     const app = await setupApp("super_admin");

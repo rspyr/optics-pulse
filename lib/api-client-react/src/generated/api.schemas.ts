@@ -971,6 +971,8 @@ export interface CrossTenantOverviewRow {
   mtdRevenue: number;
   projectedSpend: number;
   monthlyBudget: number;
+  /** True when projectedSpend exceeds monthlyBudget. */
+  overBudget: boolean;
   cpl: number;
   bookingRate: number;
   closeRate: number;

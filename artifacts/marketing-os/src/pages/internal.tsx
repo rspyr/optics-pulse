@@ -1516,7 +1516,7 @@ export default function Internal() {
                 const pacePercent = row.monthlyBudget > 0 ? (row.projectedSpend / row.monthlyBudget) * 100 : 0;
                 const isOverBudget = pacePercent > 110;
                 const isUnderBudget = pacePercent < 85;
-                const projectedOverBudget = row.projectedSpend > row.monthlyBudget;
+                const projectedOverBudget = row.overBudget;
 
                 return (
                   <tr key={row.tenantId} className="group hover:bg-white/[0.02] transition-colors">

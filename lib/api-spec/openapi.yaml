@@ -3196,6 +3196,9 @@ components:
           type: number
         monthlyBudget:
           type: number
+        overBudget:
+          type: boolean
+          description: True when projectedSpend exceeds monthlyBudget.
         cpl:
           type: number
         bookingRate:
@@ -3210,7 +3213,7 @@ components:
           type: integer
         soldLeads:
           type: integer
-      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
+      required: [tenantId, tenantName, mtdSpend, mtdRevenue, projectedSpend, monthlyBudget, overBudget, cpl, bookingRate, closeRate, roas, totalLeads, bookedLeads, soldLeads]
 
     CrossTenantOverview:
       type: object
