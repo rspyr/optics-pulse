@@ -238,6 +238,36 @@ export default async function setup(
         `[test-setup] expected to connect to ${testDbName} but got ${res.rows[0]?.db}`,
       );
     }
+
+    // Self-enforce the isolation guarantee: a freshly schema-cloned DB must
+    // start completely empty. Running this BEFORE any worker forks (and thus
+    // before any test seeds data) means a stray seed copied in by the clone,
+    // a leftover from a misconfigured run, or a DATABASE_URL pointed at a
+    // populated DB fails the whole run loudly here instead of silently
+    // weakening every "exact count" assertion downstream. Cheap to verify
+    // once; invaluable for trusting global-count assertions.
+    const KEY_TABLES = ["tenants", "leads", "jobs", "background_jobs"] as const;
+    const counts = await Promise.all(
+      KEY_TABLES.map(async (table) => {
+        const r = await pool.query<{ count: string }>(
+          // Identifiers are hardcoded literals above, never user input.
+          `SELECT count(*)::text AS count FROM ${quoteIdent(table)}`,
+        );
+        return { table, count: Number(r.rows[0]?.count ?? 0) };
+      }),
+    );
+    const dirty = counts.filter((c) => c.count > 0);
+    if (dirty.length > 0) {
+      const detail = dirty.map((c) => `${c.table}=${c.count}`).join(", ");
+      throw new Error(
+        `[test-setup] expected a clean test database but found leftover ` +
+          `rows before any seeding ran (${detail}). The per-run isolated DB ` +
+          `(${testDbName}) should start empty — this means the schema clone ` +
+          `copied data, DATABASE_URL points at a populated database, or a ` +
+          `previous run leaked state. Refusing to run so global-count ` +
+          `assertions stay trustworthy.`,
+      );
+    }
   } finally {
     await pool.end().catch(() => {});
   }
