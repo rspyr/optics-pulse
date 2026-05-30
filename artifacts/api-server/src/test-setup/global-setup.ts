@@ -82,6 +82,69 @@ function quoteIdent(name: string): string {
 }
 
 /**
+ * Tables checked by {@link assertTestDbEmpty}. These are the high-traffic
+ * tables every "exact count" assertion in the integration suite depends on, so
+ * if any of them already has rows the clean-DB guarantee is broken and counts
+ * can't be trusted.
+ */
+export const KEY_TABLES = [
+  "tenants",
+  "leads",
+  "jobs",
+  "background_jobs",
+] as const;
+
+/**
+ * Minimal shape of a queryable Postgres client — just enough of `pg.Pool` /
+ * `pg.Client` for the emptiness check. Declared locally so the check can be
+ * unit-tested with a tiny stub instead of a real pool.
+ */
+export interface CountQueryable {
+  query<R>(sql: string): Promise<{ rows: R[] }>;
+}
+
+/**
+ * Self-enforce the isolation guarantee: a freshly schema-cloned DB must start
+ * completely empty. Run BEFORE any worker forks (and thus before any test seeds
+ * data) so a stray seed copied in by the clone, a leftover from a misconfigured
+ * run, or a `DATABASE_URL` pointed at a populated DB fails the whole run loudly
+ * here instead of silently weakening every "exact count" assertion downstream.
+ *
+ * Counts `KEY_TABLES` and throws if any has rows. Extracted as a standalone
+ * exported helper so this protective check is itself unit-tested, independent of
+ * vitest's globalSetup lifecycle. Cheap to verify once; invaluable for trusting
+ * global-count assertions.
+ */
+export async function assertTestDbEmpty(
+  db: CountQueryable,
+  testDbName: string,
+  tables: readonly string[] = KEY_TABLES,
+): Promise<void> {
+  const counts = await Promise.all(
+    tables.map(async (table) => {
+      const r = await db.query<{ count: string }>(
+        // Identifiers come from KEY_TABLES (or an explicit caller list in
+        // tests), never user input; quoteIdent is defence-in-depth.
+        `SELECT count(*)::text AS count FROM ${quoteIdent(table)}`,
+      );
+      return { table, count: Number(r.rows[0]?.count ?? 0) };
+    }),
+  );
+  const dirty = counts.filter((c) => c.count > 0);
+  if (dirty.length > 0) {
+    const detail = dirty.map((c) => `${c.table}=${c.count}`).join(", ");
+    throw new Error(
+      `[test-setup] expected a clean test database but found leftover ` +
+        `rows before any seeding ran (${detail}). The per-run isolated DB ` +
+        `(${testDbName}) should start empty — this means the schema clone ` +
+        `copied data, DATABASE_URL points at a populated database, or a ` +
+        `previous run leaked state. Refusing to run so global-count ` +
+        `assertions stay trustworthy.`,
+    );
+  }
+}
+
+/**
  * Clone the schema (no data) of `fromUrl` into `toUrl` by piping
  * `pg_dump --schema-only` straight into `psql`. `ON_ERROR_STOP=1` makes psql
  * fail loudly on the first bad statement instead of silently leaving a
@@ -239,35 +302,10 @@ export default async function setup(
       );
     }
 
-    // Self-enforce the isolation guarantee: a freshly schema-cloned DB must
-    // start completely empty. Running this BEFORE any worker forks (and thus
-    // before any test seeds data) means a stray seed copied in by the clone,
-    // a leftover from a misconfigured run, or a DATABASE_URL pointed at a
-    // populated DB fails the whole run loudly here instead of silently
-    // weakening every "exact count" assertion downstream. Cheap to verify
-    // once; invaluable for trusting global-count assertions.
-    const KEY_TABLES = ["tenants", "leads", "jobs", "background_jobs"] as const;
-    const counts = await Promise.all(
-      KEY_TABLES.map(async (table) => {
-        const r = await pool.query<{ count: string }>(
-          // Identifiers are hardcoded literals above, never user input.
-          `SELECT count(*)::text AS count FROM ${quoteIdent(table)}`,
-        );
-        return { table, count: Number(r.rows[0]?.count ?? 0) };
-      }),
-    );
-    const dirty = counts.filter((c) => c.count > 0);
-    if (dirty.length > 0) {
-      const detail = dirty.map((c) => `${c.table}=${c.count}`).join(", ");
-      throw new Error(
-        `[test-setup] expected a clean test database but found leftover ` +
-          `rows before any seeding ran (${detail}). The per-run isolated DB ` +
-          `(${testDbName}) should start empty — this means the schema clone ` +
-          `copied data, DATABASE_URL points at a populated database, or a ` +
-          `previous run leaked state. Refusing to run so global-count ` +
-          `assertions stay trustworthy.`,
-      );
-    }
+    // Self-enforce the isolation guarantee before any worker forks: the
+    // freshly schema-cloned DB must start completely empty. See
+    // assertTestDbEmpty for the full rationale.
+    await assertTestDbEmpty(pool, testDbName);
   } finally {
     await pool.end().catch(() => {});
   }
