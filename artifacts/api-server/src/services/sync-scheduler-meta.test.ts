@@ -129,6 +129,7 @@ vi.mock("./integrations/service-titan", () => ({
   formatLocationAddress: vi.fn(), fetchInvoices: vi.fn(),
   parseInvoiceData: vi.fn(), fetchSoldEstimates: vi.fn(),
   parseEstimateData: vi.fn(), resolveEmployeeName: vi.fn(), clearEmployeeCache: vi.fn(),
+  hashStJobId: vi.fn((stJobId: string) => `hash-${stJobId}`),
 }));
 vi.mock("./integrations/google-ads", () => ({ fetchCampaignPerformance: vi.fn(), formatCampaignRow: vi.fn() }));
 vi.mock("./integrations/podium", () => ({ syncPodiumReviews: vi.fn() }));

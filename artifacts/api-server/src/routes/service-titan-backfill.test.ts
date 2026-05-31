@@ -163,19 +163,25 @@ const stMocks = vi.hoisted(() => ({
   formatSTJobForSync: vi.fn(),
 }));
 
-vi.mock("../services/integrations/service-titan", () => ({
-  fetchCompletedJobs: stMocks.fetchCompletedJobs,
-  formatSTJobForSync: stMocks.formatSTJobForSync,
-  fetchCustomerContactsById: vi.fn(),
-  fetchLocationsByIds: vi.fn(),
-  formatLocationAddress: vi.fn(),
-  fetchInvoices: vi.fn(),
-  parseInvoiceData: vi.fn(),
-  fetchSoldEstimates: vi.fn(),
-  parseEstimateData: vi.fn(),
-  resolveEmployeeName: vi.fn(),
-  clearEmployeeCache: vi.fn(),
-}));
+vi.mock("../services/integrations/service-titan", async () => {
+  const actual = await vi.importActual<typeof import("../services/integrations/service-titan")>(
+    "../services/integrations/service-titan",
+  );
+  return {
+    fetchCompletedJobs: stMocks.fetchCompletedJobs,
+    formatSTJobForSync: stMocks.formatSTJobForSync,
+    fetchCustomerContactsById: vi.fn(),
+    fetchLocationsByIds: vi.fn(),
+    formatLocationAddress: vi.fn(),
+    fetchInvoices: vi.fn(),
+    parseInvoiceData: vi.fn(),
+    fetchSoldEstimates: vi.fn(),
+    parseEstimateData: vi.fn(),
+    resolveEmployeeName: vi.fn(),
+    clearEmployeeCache: vi.fn(),
+    hashStJobId: actual.hashStJobId,
+  };
+});
 
 // ─── Test app + helpers ──────────────────────────────────────────────────────
 

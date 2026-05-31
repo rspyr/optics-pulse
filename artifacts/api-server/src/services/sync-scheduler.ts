@@ -2,7 +2,7 @@ import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyS
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
+import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -11,11 +11,6 @@ import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
 import { DEFAULT_INACTIVITY_STALE_MINUTES } from "./orphan-sync-reaper";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
-import crypto from "crypto";
-
-function hashStJobId(stJobId: string): string {
-  return crypto.createHash("sha256").update(stJobId).digest("hex");
-}
 
 interface TenantApiConfig {
   serviceTitanClientId?: string;
