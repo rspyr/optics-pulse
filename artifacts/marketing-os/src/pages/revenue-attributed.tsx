@@ -533,8 +533,12 @@ export default function RevenueAttributed() {
         <SummaryCard label="Jobs" value={summary ? String(summary.count) : "—"} icon={<User className="w-4 h-4" />} />
       </div>
 
-      {!needsClientSelection && summary?.byMatchLevel && summary.byMatchLevel.length > 0 && (
-        <MatchTierBreakdownCard breakdown={summary.byMatchLevel} attributed={summary.attributed} />
+      {!needsClientSelection && summary && (
+        summary.byMatchLevel && summary.byMatchLevel.length > 0 ? (
+          <MatchTierBreakdownCard breakdown={summary.byMatchLevel} attributed={summary.attributed} />
+        ) : (
+          <MatchTierEmptyCard />
+        )
       )}
 
       <PremiumCard className="p-0 overflow-hidden">
@@ -806,6 +810,25 @@ function MatchTierBreakdownCard({
       </div>
       <p className="text-[11px] text-muted-foreground/70 mt-4">
         Non-unmatched tiers sum to Attributed Revenue ({formatCurrency(attributed)}).
+      </p>
+    </PremiumCard>
+  );
+}
+
+// Shown in place of the breakdown when the summary loaded but has no match-tier
+// data for the selected range/filters. Keeps the same header so the section
+// reads as intentionally empty rather than missing.
+function MatchTierEmptyCard() {
+  return (
+    <PremiumCard className="p-5">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider">
+          <Link2 className="w-4 h-4" /> Revenue by Match Tier
+        </div>
+        <span className="text-[11px] text-muted-foreground/70">Corrected revenue · job count</span>
+      </div>
+      <p className="text-sm text-muted-foreground py-4 text-center">
+        No attributed revenue in this range.
       </p>
     </PremiumCard>
   );

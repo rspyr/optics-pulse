@@ -164,25 +164,58 @@ describe("Revenue Attributed — Match Tier breakdown card (Task #809)", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides the breakdown card when byMatchLevel is absent (graceful-empty path)", async () => {
+  it("shows the empty-state card (header + message, no tier rows) when byMatchLevel is absent", async () => {
     setUser();
     installFetch({ revenue: 2450, rebates: 150, attributed: 1950, count: 5 });
 
     render(<RevenueAttributed />);
 
-    // Wait for the page to settle (list row arrives) before asserting absence.
-    await screen.findByText("Acme HVAC");
-    expect(screen.queryByText("Revenue by Match Tier")).not.toBeInTheDocument();
+    // The section header still renders so the area reads as intentionally empty.
+    const heading = await screen.findByText("Revenue by Match Tier");
+    expect(screen.getByText("No attributed revenue in this range.")).toBeInTheDocument();
+
+    // No tier rows or reconciliation footnote in the empty state.
+    const card = heading.parentElement!.parentElement!;
+    expect(within(card).queryByText("Diamond")).not.toBeInTheDocument();
+    expect(within(card).queryByText(/Non-unmatched tiers sum to Attributed Revenue/)).not.toBeInTheDocument();
   });
 
-  it("hides the breakdown card when byMatchLevel is an empty array", async () => {
+  it("shows the empty-state card when byMatchLevel is an empty array", async () => {
     setUser();
     installFetch({ revenue: 2450, rebates: 150, attributed: 1950, count: 5, byMatchLevel: [] });
 
     render(<RevenueAttributed />);
 
+    await screen.findByText("Revenue by Match Tier");
+    expect(screen.getByText("No attributed revenue in this range.")).toBeInTheDocument();
+  });
+
+  it("does not render the empty-state card before the summary has loaded", async () => {
+    setUser();
+    // Summary endpoint never resolves; only the list/facets respond.
+    vi.spyOn(global, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/drilldown/revenue-attributed/summary")) {
+        return new Promise(() => {}) as unknown as Response;
+      }
+      if (url.includes("/api/drilldown/revenue-attributed/facets")) {
+        return { ok: true, status: 200, json: async () => FACETS } as Response;
+      }
+      if (url.includes("/api/drilldown/revenue-attributed")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (k: string) => (k === "X-Total-Count" ? String(JOBS.length) : null) },
+          json: async () => JOBS,
+        } as unknown as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    });
+
+    render(<RevenueAttributed />);
+
     await screen.findByText("Acme HVAC");
-    await waitFor(() => expect(screen.getByText("Attributed Revenue")).toBeInTheDocument());
     expect(screen.queryByText("Revenue by Match Tier")).not.toBeInTheDocument();
+    expect(screen.queryByText("No attributed revenue in this range.")).not.toBeInTheDocument();
   });
 });
