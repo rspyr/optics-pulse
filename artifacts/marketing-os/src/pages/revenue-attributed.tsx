@@ -76,11 +76,18 @@ type RebateItem = { label: string; amount: number };
 type SortKey = "revenue" | "date" | "customer" | "funnel" | "source";
 type SortDir = "asc" | "desc";
 
+type MatchTierBreakdown = {
+  tier: string;
+  revenue: number;
+  count: number;
+};
+
 type RevenueSummary = {
   revenue: number;
   rebates: number;
   attributed: number;
   count: number;
+  byMatchLevel?: MatchTierBreakdown[];
 };
 
 type LeadSummary = {
@@ -465,6 +472,10 @@ export default function RevenueAttributed() {
         <SummaryCard label="Jobs" value={summary ? String(summary.count) : "—"} icon={<User className="w-4 h-4" />} />
       </div>
 
+      {!needsClientSelection && summary?.byMatchLevel && summary.byMatchLevel.length > 0 && (
+        <MatchTierBreakdownCard breakdown={summary.byMatchLevel} attributed={summary.attributed} />
+      )}
+
       <PremiumCard className="p-0 overflow-hidden">
         <div className="p-5 border-b border-white/5 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
@@ -670,6 +681,71 @@ function SummaryCard({ label, value, icon }: { label: string; value: string; ico
         {icon}{label}
       </div>
       <div className="font-display text-2xl text-white">{value}</div>
+    </PremiumCard>
+  );
+}
+
+// Accent colours for the match-tier bars, strongest → weakest. "unmatched" is
+// intentionally muted so it reads as "not attributed" at a glance.
+const TIER_BAR_COLORS: Record<string, string> = {
+  diamond: "bg-cyan-300",
+  golden: "bg-amber-300",
+  silver: "bg-slate-300",
+  bronze: "bg-orange-400",
+  gclid: "bg-cyan-300",
+  manual: "bg-violet-300",
+  unmatched: "bg-white/15",
+};
+
+function tierLabel(tier: string): string {
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
+
+// "Revenue by match tier" breakdown: corrected revenue + job count per tier for
+// the current range/filters. The non-"unmatched" rows sum to the Attributed
+// Revenue card (the breakdown is computed from the same filtered set server-side),
+// so the footnote can call that reconciliation out explicitly.
+function MatchTierBreakdownCard({
+  breakdown,
+  attributed,
+}: {
+  breakdown: MatchTierBreakdown[];
+  attributed: number;
+}) {
+  // Scale each bar against the largest tier's revenue so the longest bar fills
+  // the track. Guard against an all-zero range (no division by zero).
+  const maxRevenue = Math.max(0, ...breakdown.map((b) => b.revenue));
+  return (
+    <PremiumCard className="p-5">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider">
+          <Link2 className="w-4 h-4" /> Revenue by Match Tier
+        </div>
+        <span className="text-[11px] text-muted-foreground/70">Corrected revenue · job count</span>
+      </div>
+      <div className="space-y-2.5">
+        {breakdown.map((b) => {
+          const pct = maxRevenue > 0 ? Math.max(2, (b.revenue / maxRevenue) * 100) : 0;
+          const color = TIER_BAR_COLORS[b.tier] ?? "bg-ice/40";
+          return (
+            <div key={b.tier} className="flex items-center gap-3">
+              <span className="w-20 shrink-0 text-xs capitalize text-white/90">{tierLabel(b.tier)}</span>
+              <div className="flex-1 h-2 rounded-full bg-white/[0.04] overflow-hidden">
+                <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+              </div>
+              <span className="w-28 shrink-0 text-right text-sm font-display text-white tabular-nums">
+                {formatCurrency(b.revenue)}
+              </span>
+              <span className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+                {b.count} {b.count === 1 ? "job" : "jobs"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-muted-foreground/70 mt-4">
+        Non-unmatched tiers sum to Attributed Revenue ({formatCurrency(attributed)}).
+      </p>
     </PremiumCard>
   );
 }

@@ -88,8 +88,12 @@ function makeSelectChain(results: () => unknown[]) {
         }),
       ),
       limit: vi.fn().mockImplementation(limitReturn),
+      // The summary's per-tier rollup ends in `.where(...).groupBy(expr)`, which
+      // is terminal (awaited) — resolve it to the same seeded results.
+      groupBy: vi.fn().mockImplementation(() => thenResult()),
     }),
   );
+  chain.groupBy = vi.fn().mockImplementation(() => thenResult());
   chain.orderBy = vi.fn().mockReturnValue(
     Object.assign(thenResult(), { limit: vi.fn().mockImplementation(limitReturn) }),
   );
@@ -1025,9 +1029,17 @@ describe("GET /drilldown/revenue-attributed/summary", () => {
 
   it("returns full-range corrected revenue, rebate add-back, attributed revenue, and job count", async () => {
     const app = await setupApp("super_admin", null);
-    // The summary route issues a single aggregate SELECT; feed the row Postgres
-    // would return for rangeJobs (raw sums; the route rounds to whole cents).
-    mockDb.selectResults = [[aggregateOf(rangeJobs)]];
+    // The summary route issues two SELECTs: [0] the aggregate row, [1] the
+    // grouped per-tier rollup. Feed both the rows Postgres would return for
+    // rangeJobs (raw sums; the route rounds to whole cents).
+    mockDb.selectResults = [
+      [aggregateOf(rangeJobs)],
+      [
+        { tier: "gclid", revenue: 1050, count: 1 }, // id 1 (900+150)
+        { tier: "manual", revenue: 750, count: 1 }, // id 3
+        { tier: "unmatched", revenue: 500, count: 1 }, // id 2 (NULL → unmatched)
+      ],
+    ];
 
     const res = await request(
       app,
@@ -1041,6 +1053,13 @@ describe("GET /drilldown/revenue-attributed/summary", () => {
       rebates: 150, //  150 + 0 + 0
       attributed: 1800, // (900+150 gclid) + 750 (manual); id 2 excluded
       count: 3,
+      // Per-tier rollup, strongest tier first. The non-"unmatched" tiers
+      // (1050 + 750) sum to the attributed total above.
+      byMatchLevel: [
+        { tier: "gclid", revenue: 1050, count: 1 },
+        { tier: "manual", revenue: 750, count: 1 },
+        { tier: "unmatched", revenue: 500, count: 1 },
+      ],
     });
   });
 
@@ -1103,10 +1122,19 @@ describe("GET /drilldown/revenue-attributed/summary", () => {
       },
     ]];
 
+    // Second SELECT (the per-tier rollup) — also rounded to whole cents.
+    mockDb.selectResults.push([{ tier: "gclid", revenue: 12.005, count: 1 }]);
+
     const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=7");
 
     expect(res.status).toBe(200);
-    expect(res.json).toEqual({ revenue: 1050.15, rebates: 0.3, attributed: 12.01, count: 4 });
+    expect(res.json).toEqual({
+      revenue: 1050.15,
+      rebates: 0.3,
+      attributed: 12.01,
+      count: 4,
+      byMatchLevel: [{ tier: "gclid", revenue: 12.01, count: 1 }],
+    });
   });
 
   it("only aggregates completed jobs (status filter is always applied)", async () => {

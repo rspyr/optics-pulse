@@ -322,7 +322,18 @@ describe("GET /drilldown/revenue-attributed — match-level filtering (real Post
     const listRevenue = Math.round(rows.reduce((s, r) => s + r.correctedRevenue, 0) * 100) / 100;
     // Only J1 (1100) + J3 (750) survive; both are real matches, so the whole
     // filtered set is attributed.
-    expect(summaryRes.json).toEqual({ revenue: listRevenue, rebates: 100, attributed: 1850, count: 2 });
+    expect(summaryRes.json).toEqual({
+      revenue: listRevenue,
+      rebates: 100,
+      attributed: 1850,
+      count: 2,
+      // Breakdown scopes to the same match-level filter; both tiers are real
+      // matches so they sum to attributed (1100 + 750 = 1850).
+      byMatchLevel: [
+        { tier: "gclid", revenue: 1100, count: 1 },
+        { tier: "manual", revenue: 750, count: 1 },
+      ],
+    });
   });
 });
 
@@ -382,21 +393,53 @@ describe("GET /drilldown/revenue-attributed/summary — filtered totals (real Po
     // revenue = 1100 + 550 + 750 + 2200 = 4600
     // rebates = 100 + 50 + 0 + 200 = 350
     // attributed = J1 (1100) + J3 (750) = 1850 (J2, J4 have null matchLevel)
-    expect(res.json).toEqual({ revenue: 4600, rebates: 350, attributed: 1850, count: 4 });
+    expect(res.json).toEqual({
+      revenue: 4600,
+      rebates: 350,
+      attributed: 1850,
+      count: 4,
+      // gclid 1100 + manual 750 = 1850 (attributed); J2+J4 (NULL) fold into the
+      // unmatched bucket (550 + 2200 = 2750).
+      byMatchLevel: [
+        { tier: "gclid", revenue: 1100, count: 1 },
+        { tier: "manual", revenue: 750, count: 1 },
+        { tier: "unmatched", revenue: 2750, count: 2 },
+      ],
+    });
   });
 
   it("scopes the totals to a funnel filter (Heat Pump → J1 + J4)", async () => {
     const res = await getJson(app, `/drilldown/revenue-attributed/summary?${range()}&funnel=${encodeURIComponent(FUNNEL_HEAT_PUMP)}`);
     expect(res.status).toBe(200);
     // J1 corrected 1100 (attributed) + J4 corrected 2200 (not attributed)
-    expect(res.json).toEqual({ revenue: 3300, rebates: 300, attributed: 1100, count: 2 });
+    expect(res.json).toEqual({
+      revenue: 3300,
+      rebates: 300,
+      attributed: 1100,
+      count: 2,
+      // gclid 1100 (= attributed); J4 (NULL) → unmatched 2200.
+      byMatchLevel: [
+        { tier: "gclid", revenue: 1100, count: 1 },
+        { tier: "unmatched", revenue: 2200, count: 1 },
+      ],
+    });
   });
 
   it("scopes the totals to a source filter (Meta → J2 + J3)", async () => {
     const res = await getJson(app, `/drilldown/revenue-attributed/summary?${range()}&source=${encodeURIComponent(SOURCE_META)}`);
     expect(res.status).toBe(200);
     // J2 corrected 550 (not attributed) + J3 corrected 750 (attributed)
-    expect(res.json).toEqual({ revenue: 1300, rebates: 50, attributed: 750, count: 2 });
+    expect(res.json).toEqual({
+      revenue: 1300,
+      rebates: 50,
+      attributed: 750,
+      count: 2,
+      // manual 750 (= attributed); J2 (NULL) → unmatched 550.
+      byMatchLevel: [
+        { tier: "manual", revenue: 750, count: 1 },
+        { tier: "unmatched", revenue: 550, count: 1 },
+      ],
+    });
   });
 
   it("excludes the literal 'unmatched' tier (and NULL) from attributed, but counts it in revenue", async () => {
@@ -424,7 +467,19 @@ describe("GET /drilldown/revenue-attributed/summary — filtered totals (real Po
       // Baseline was {revenue:4600, rebates:350, attributed:1850, count:4}.
       // The +300 "unmatched" job lifts revenue→4900 and count→5, but attributed
       // stays 1850 because the literal "unmatched" tier is not a real match.
-      expect(res.json).toEqual({ revenue: 4900, rebates: 350, attributed: 1850, count: 5 });
+      expect(res.json).toEqual({
+        revenue: 4900,
+        rebates: 350,
+        attributed: 1850,
+        count: 5,
+        // The literal "unmatched" job folds into the same bucket as the NULL
+        // ones (2750 + 300 = 3050, count 3); attributed tiers are unchanged.
+        byMatchLevel: [
+          { tier: "gclid", revenue: 1100, count: 1 },
+          { tier: "manual", revenue: 750, count: 1 },
+          { tier: "unmatched", revenue: 3050, count: 3 },
+        ],
+      });
     } finally {
       await db.delete(jobsTable).where(eq(jobsTable.id, job.id));
     }

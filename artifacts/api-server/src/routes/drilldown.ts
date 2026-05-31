@@ -404,11 +404,43 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
     .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
     .where(where);
 
+  // Per-match-tier rollup powering the "revenue by match tier" breakdown. Same
+  // WHERE as the cards, grouped by tier, so the breakdown always reconciles with
+  // the summary (attributed = SUM of every non-"unmatched" tier's corrected
+  // revenue). The bucket expression mirrors isAttributedExpr exactly: NULL and
+  // the literal "unmatched" sentinel fold into one "unmatched" bucket, and every
+  // real tier is lower-cased so case variants merge (matching the lower-cased
+  // facets + Match Level filter).
+  //
+  // GROUP BY references the first SELECT column by ordinal (`1`) rather than
+  // repeating tierBucketExpr: drizzle parameterizes the "unmatched" literals, so
+  // a repeated expression gets *different* bind-parameter positions in SELECT vs
+  // GROUP BY and Postgres no longer sees them as the same expression (error
+  // 42803, "must appear in the GROUP BY clause"). Ordinal grouping sidesteps it.
+  const tierBucketExpr = sql<string>`CASE WHEN ${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = ${UNMATCHED_TIER} THEN ${UNMATCHED_TIER} ELSE LOWER(${jobsTable.matchLevel}) END`;
+  const tierRows = await db
+    .select({
+      tier: tierBucketExpr,
+      revenue: sql<number>`COALESCE(SUM(${jobRevenueExpr}), 0)`,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
+    .where(where)
+    .groupBy(sql`1`);
+
+  // Strongest tier first (diamond → unmatched), matching the facets ordering.
+  const byMatchLevel = tierRows
+    .map((r) => ({ tier: String(r.tier), revenue: round2(Number(r.revenue ?? 0)), count: Number(r.count ?? 0) }))
+    .sort((a, b) => matchLevelRank(a.tier) - matchLevelRank(b.tier) || a.tier.localeCompare(b.tier));
+
   res.json({
     revenue: round2(Number(agg?.revenue ?? 0)),
     rebates: round2(Number(agg?.rebates ?? 0)),
     attributed: round2(Number(agg?.attributed ?? 0)),
     count: Number(agg?.count ?? 0),
+    byMatchLevel,
   });
 });
 
