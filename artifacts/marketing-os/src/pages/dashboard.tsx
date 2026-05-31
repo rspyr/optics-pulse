@@ -1,12 +1,13 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useGetDashboardOverview, useGetSpendRevenueChart, useGetAdminDashboardStats } from "@workspace/api-client-react";
+import { useGetDashboardOverview, useGetSpendRevenueChart, useGetAdminDashboardStats, getGetAdminDashboardStatsQueryKey } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency, formatPercentage, round2, PLATFORM_COLORS } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, DollarSign, Users, Target, Activity, Link, Download, Loader2, X, ExternalLink, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { MetaCampaignBreakdown } from "@/components/MetaCampaignBreakdown";
+import { useAuth } from "@/components/auth-context";
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
@@ -213,6 +214,14 @@ export default function Dashboard() {
               <h3 className="font-display text-xl text-white">Spend vs Revenue Attribution</h3>
               <p className="text-muted-foreground text-sm">Nightly reconciled ServiceTitan revenue mapped to Google/Meta ad spend.</p>
             </div>
+            {/*
+              Hidden by design when there's no pre-range revenue. Unlike the
+              budget/revenue sections that vanished and read as "missing", this
+              is a small contextual adornment on the chart card (which itself
+              never disappears), so a "$0 · 0 jobs before range" badge would add
+              noise without conveying anything. The chart stays put either way,
+              so there's no "is this section missing?" confusion to fix here.
+            */}
             {historicalRevenue > 0 && (
               <div className="text-right bg-white/5 border border-white/10 rounded-lg px-3 py-2">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Historical Revenue</p>
@@ -407,10 +416,15 @@ function JobRevenueDrilldown({
 // month-to-date, so we always request the current calendar month regardless of
 // the Command Center's chart date filter.
 function AgencyBudgetPace() {
+  const { isAgency } = useAuth();
   const now = new Date();
   const startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
   const endDate = now.toISOString().split("T")[0];
-  const { data } = useGetAdminDashboardStats({ startDate, endDate });
+  // Admin stats are agency-only; gate the request so client users never fire it.
+  const { data } = useGetAdminDashboardStats(
+    { startDate, endDate },
+    { query: { enabled: isAgency, queryKey: getGetAdminDashboardStatsQueryKey({ startDate, endDate }) } },
+  );
 
   // Surface the worst-pacing clients first so problems are obvious at a glance.
   const tenants = useMemo(
@@ -418,7 +432,27 @@ function AgencyBudgetPace() {
     [data],
   );
 
-  if (tenants.length === 0) return null;
+  // Stays hidden for non-agency/client users.
+  if (!isAgency) return null;
+  // Distinguish loading from loaded-but-empty: while the admin stats are still
+  // in flight `data` is undefined, so render nothing rather than flashing the
+  // empty-state. Only once the stats have resolved do we choose between the
+  // populated table and the friendly empty-state below.
+  if (data === undefined) return null;
+
+  if (tenants.length === 0) {
+    return (
+      <PremiumCard className="p-0 overflow-hidden" transition={{ delay: 0.4 }}>
+        <div className="p-6 border-b border-white/5">
+          <h3 className="font-display text-xl text-white">Budget Pace by Client</h3>
+          <p className="text-muted-foreground text-sm">Month-to-date projected spend vs monthly budget. Flags clients pacing over or under target.</p>
+        </div>
+        <p className="text-sm text-muted-foreground py-8 text-center">
+          No client budgets to show yet.
+        </p>
+      </PremiumCard>
+    );
+  }
 
   return (
     <PremiumCard className="p-0 overflow-hidden" transition={{ delay: 0.4 }}>
