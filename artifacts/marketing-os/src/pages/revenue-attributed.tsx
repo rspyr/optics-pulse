@@ -399,6 +399,28 @@ export default function RevenueAttributed() {
     window.history.replaceState(window.history.state, "", next);
   }, [dateRange, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir, page]);
 
+  // Make the browser Back/Forward buttons restore the previous view. The
+  // URL-writer above only uses replaceState, so the page itself never re-reads
+  // the query string after a history pop — wire up popstate to pull the range,
+  // filters, sort, and page back out of the URL. React 19 batches these state
+  // updates into a single render, so arming the page-reset guard once keeps the
+  // restored page from being knocked back to 0 by the reset effect.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => {
+      skipPageReset.current = true;
+      setDateRange(initialRangeFromUrl());
+      setFunnelFilter(initialFilterFromUrl("funnel"));
+      setSourceFilter(initialFilterFromUrl("source"));
+      setMatchLevelFilter(initialMatchLevelsFromUrl());
+      setSortKey(initialSortKeyFromUrl());
+      setSortDir(initialSortDirFromUrl());
+      setPage(initialPageFromUrl());
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   // Toggle sort: clicking the active column flips direction; a new column starts
   // descending (largest/Z-A first), matching the default revenue view.
   const toggleSort = useCallback((key: SortKey) => {
