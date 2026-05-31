@@ -144,7 +144,7 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
         </div>
       ) : !campaigns || campaigns.length === 0 ? (
         <div className="py-10 text-center text-muted-foreground text-sm">
-          No Meta campaigns found for this date range.
+          No Meta campaigns in this range.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -529,7 +529,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
     return (
       <tr>
         <td colSpan={6} className="py-4 pl-12 text-muted-foreground italic text-xs">
-          No ad sets with stats in this date range.
+          No ad sets with stats in this range.
         </td>
       </tr>
     );
@@ -600,7 +600,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
             {open && set.ads.length === 0 && (
               <tr key={`set-${set.externalId}-empty`}>
                 <td colSpan={6} className="py-2 pl-16 text-muted-foreground italic text-xs">
-                  {hideInactive ? "No active ads with stats in this date range." : "No ads with stats in this date range."}
+                  {hideInactive ? "No active ads with stats in this range." : "No ads with stats in this range."}
                 </td>
               </tr>
             )}
