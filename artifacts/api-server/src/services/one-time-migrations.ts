@@ -1710,8 +1710,12 @@ export interface StJobNumberRecoveryAuthConfig {
  * `apiConfig`, returning null when the tenant has no usable ST credentials
  * (no config, undecryptable, or missing required fields). Shared by both
  * st-job-number migrations so they gate tenants identically.
+ *
+ * Exported for direct coverage in
+ * one-time-migrations-st-job-number-gating.integration.test.ts so a regression
+ * in the credential gating (which silently skips real tenants) trips a test.
  */
-function resolveStAuthConfigForTenant(
+export function resolveStAuthConfigForTenant(
   tenant: typeof tenantsTable.$inferSelect,
 ): StJobNumberRecoveryAuthConfig | null {
   if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") return null;
