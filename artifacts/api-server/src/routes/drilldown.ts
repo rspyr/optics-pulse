@@ -315,6 +315,9 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       tenantId: job.tenantId,
       stJobId: job.stJobId,
       stInvoiceId: job.stInvoiceId,
+      // Portal-findable ServiceTitan job number (also serves as the invoice
+      // number — ServiceTitan has no separate invoice number). Task #819.
+      stJobNumber: job.stJobNumber,
       customerName: job.customerName,
       // ServiceTitan contact fields surfaced for the match-explanation panel so
       // the UI can show exactly what came from the invoice vs. Optics/Pulse.

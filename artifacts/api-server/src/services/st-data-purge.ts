@@ -4,11 +4,15 @@ import { and, or, isNull, isNotNull, lte, eq, sql } from "drizzle-orm";
 async function purgeExpiredStData(): Promise<void> {
   const now = new Date();
 
+  // Only the genuinely-sensitive fields are still purged at 24h: phone, email,
+  // and the internal ServiceTitan ids. Customer name + service address are now
+  // retained indefinitely (Task #819) and the job number (st_job_number) is a
+  // portal reference, not PII — so none of those appear here. Keeping them out
+  // of the predicate also stops retained rows from being re-selected every
+  // cycle (which would inflate the purge count and re-write unchanged rows).
   const hasAnyStPii = or(
-    isNotNull(jobsTable.customerName),
     isNotNull(jobsTable.customerPhone),
     isNotNull(jobsTable.customerEmail),
-    isNotNull(jobsTable.serviceAddress),
     isNotNull(jobsTable.stJobId),
     isNotNull(jobsTable.stCustomerId),
     isNotNull(jobsTable.stLocationId),
@@ -40,10 +44,12 @@ async function purgeExpiredStData(): Promise<void> {
 
     await db.update(jobsTable)
       .set({
-        customerName: null,
+        // customerName, serviceAddress and stJobNumber are deliberately retained
+        // (Task #819): name + address survive past 24h, and the job number is a
+        // portal reference, not PII. Only phone, email and the internal ST ids
+        // are nulled.
         customerPhone: null,
         customerEmail: null,
-        serviceAddress: null,
         stJobId: null,
         stCustomerId: null,
         stLocationId: null,

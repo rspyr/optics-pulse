@@ -39,7 +39,7 @@ You have access to the following database tables for this tenant's marketing dat
 
 4. **jobs** - Service jobs / completed work with revenue
    Columns: id, tenantId, jobType, revenue (float), status (enum: "pending","in_progress","completed","cancelled"), matchedGclid, matchLevel (text - "diamond","golden","silver","bronze","unmatched"), completedAt, createdAt, updatedAt
-   NOTE: customerName, serviceAddress, stJobId and other ST PII fields are purged (set to NULL) after 24 hours for data retention compliance. Do not rely on these fields for historical queries.
+   NOTE: customerName, serviceAddress and stJobNumber (the portal-findable ServiceTitan job/invoice number) are RETAINED long-term. Phone, email and the internal ServiceTitan ids (stJobId, stCustomerId, stLocationId) are purged (set to NULL) after 24 hours for data retention compliance — do not rely on those for historical queries.
 
 5. **attribution_events** - Click/call/form tracking events
    Columns: id, tenantId, eventType (enum: "click","call","form_fill"), gclid, wbraid, fbclid, utmSource, utmCampaign, utmMedium, landingPage, matchLevel, matchConfidence, createdAt

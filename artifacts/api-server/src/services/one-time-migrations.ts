@@ -7,6 +7,8 @@ import { rerouteLeadsStrandedOnPausedStickyCsr } from "./auto-pass-scheduler";
 import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizePhone } from "../lib/phone-utils";
+import { decryptConfig } from "../lib/encryption";
+import { fetchInvoicesByIds } from "./integrations/service-titan";
 
 interface Migration {
   id: string;
@@ -122,10 +124,12 @@ const migrations: Migration[] = [
 
       const purged = await db.update(jobsTable)
         .set({
-          customerName: null,
+          // customerName + serviceAddress are now retained indefinitely
+          // (Task #819) and st_job_number is a portal reference (not PII), so
+          // they are no longer wiped here — only phone, email and the internal
+          // ServiceTitan ids are nulled.
           customerPhone: null,
           customerEmail: null,
-          serviceAddress: null,
           stJobId: null,
           stCustomerId: null,
           stLocationId: null,
@@ -1351,6 +1355,87 @@ const migrations: Migration[] = [
           END
       `);
       console.log(`[Migration] Normalized phone on ${result.rowCount ?? 0} lead row(s)`);
+    },
+  },
+  {
+    id: "2026-05-31_backfill-st-job-number",
+    description: "Resolve portal-findable ServiceTitan job numbers for jobs that retain an internal invoice id but no job number (Task #819)",
+    run: async () => {
+      // Existing rows store only the internal ServiceTitan invoice id, which is
+      // not searchable in the portal. ServiceTitan has no invoice number — the
+      // human-readable identifier is the job number (invoice.job.number). Fetch
+      // each retained invoice by id and store its job number so today's broken
+      // records become findable. Defensive throughout: this runs at boot, so a
+      // failure for one tenant must never abort startup.
+      const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+      let totalUpdated = 0;
+
+      for (const tenant of tenants) {
+        try {
+          if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") continue;
+          let config: {
+            serviceTitanClientId?: string;
+            serviceTitanClientSecret?: string;
+            serviceTitanTenantId?: string;
+            serviceTitanAppKey?: string;
+          };
+          try {
+            config = decryptConfig(tenant.apiConfig) as typeof config;
+          } catch {
+            continue;
+          }
+          if (!config.serviceTitanClientId || !config.serviceTitanClientSecret || !config.serviceTitanAppKey) {
+            continue;
+          }
+
+          const rows = await db.select({ id: jobsTable.id, stInvoiceId: jobsTable.stInvoiceId })
+            .from(jobsTable)
+            .where(and(
+              eq(jobsTable.tenantId, tenant.id),
+              isNotNull(jobsTable.stInvoiceId),
+              isNull(jobsTable.stJobNumber),
+            ));
+          if (rows.length === 0) continue;
+
+          // Map internal invoice id -> the job rows that reference it.
+          const jobsByInvoiceId = new Map<number, number[]>();
+          for (const row of rows) {
+            const invId = Number(row.stInvoiceId);
+            if (!Number.isFinite(invId)) continue;
+            const list = jobsByInvoiceId.get(invId) ?? [];
+            list.push(row.id);
+            jobsByInvoiceId.set(invId, list);
+          }
+          if (jobsByInvoiceId.size === 0) continue;
+
+          const stConfig = {
+            clientId: config.serviceTitanClientId,
+            clientSecret: config.serviceTitanClientSecret,
+            tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+            appKey: config.serviceTitanAppKey,
+          };
+
+          const invoices = await fetchInvoicesByIds(stConfig, [...jobsByInvoiceId.keys()]);
+          for (const invoice of invoices) {
+            const jobNumber = invoice.job?.number ? String(invoice.job.number) : null;
+            if (!jobNumber) continue;
+            const jobIds = jobsByInvoiceId.get(invoice.id);
+            if (!jobIds || jobIds.length === 0) continue;
+            const updated = await db.update(jobsTable)
+              .set({ stJobNumber: jobNumber, updatedAt: new Date() })
+              .where(and(
+                inArray(jobsTable.id, jobIds),
+                isNull(jobsTable.stJobNumber),
+              ))
+              .returning({ id: jobsTable.id });
+            totalUpdated += updated.length;
+          }
+        } catch (err) {
+          console.warn(`[Migration] ST job-number backfill failed for tenant ${tenant.id}:`, (err as Error).message);
+        }
+      }
+
+      console.log(`[Migration] Backfilled st_job_number on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
     },
   },
 ];

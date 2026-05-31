@@ -386,6 +386,16 @@ export interface STInvoiceItem {
   skuName: string;
 }
 
+// ServiceTitan address shape as returned embedded on invoices (customerAddress
+// / locationAddress). Mirrors STLocation.address but declared locally because
+// the invoice endpoint inlines it rather than nesting under `location`.
+interface STInvoiceAddress {
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+}
+
 export interface STInvoice {
   id: number;
   total: string;
@@ -393,8 +403,29 @@ export interface STInvoice {
   invoiceDate: string;
   paidOn: string | null;
   job: { id: number; number: string; type: string } | null;
+  // The Accounting invoice object carries the customer + service location
+  // inline (name + address). We capture these so customer name / service
+  // address can be populated straight from the invoice when separate job
+  // enrichment is absent (Task #819).
+  customer?: { id: number; name: string } | null;
+  customerAddress?: STInvoiceAddress | null;
+  location?: { id: number; name: string } | null;
+  locationAddress?: STInvoiceAddress | null;
   items: STInvoiceItem[];
   active: boolean;
+}
+
+/**
+ * Formats a ServiceTitan inline invoice address into the same single-line
+ * string shape used for job-enriched addresses, tolerating partially-populated
+ * objects (the invoice endpoint can omit individual parts). Returns null when
+ * nothing usable is present.
+ */
+function formatInvoiceAddress(address: STInvoiceAddress | null | undefined): string | null {
+  if (!address) return null;
+  const stateZip = [address.state, address.zip].filter(Boolean).join(" ").trim();
+  const parts = [address.street, address.city, stateZip].filter((p) => p && p.trim());
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 interface STInvoicesResponse {
@@ -478,6 +509,43 @@ export async function fetchInvoices(
   }
 
   return allInvoices;
+}
+
+/**
+ * Fetches specific invoices by their internal ServiceTitan ids. Used by the
+ * one-time backfill (Task #819) to resolve the human-readable job number
+ * (invoice.job.number) for jobs that still carry a retained internal invoice id
+ * but no job number. Batches into the `ids=` filter (same pattern as
+ * fetchCustomersByIds) and tolerates partial failures by skipping a failed
+ * batch rather than aborting the whole backfill.
+ */
+export async function fetchInvoicesByIds(
+  config: STAuthConfig,
+  invoiceIds: number[],
+): Promise<STInvoice[]> {
+  const out: STInvoice[] = [];
+  if (invoiceIds.length === 0) return out;
+
+  const uniqueIds = [...new Set(invoiceIds)];
+  const batchSize = 50;
+
+  for (let i = 0; i < uniqueIds.length; i += batchSize) {
+    const batch = uniqueIds.slice(i, i + batchSize);
+    const idsParam = batch.join(",");
+    try {
+      const response = await stFetch<STInvoicesResponse>(
+        config,
+        `/invoices?ids=${idsParam}&pageSize=${batchSize}`,
+        {},
+        "accounting",
+      );
+      out.push(...response.data);
+    } catch (err) {
+      console.warn(`[ServiceTitan] Failed to fetch invoice batch by ids: ${(err as Error).message}`);
+    }
+  }
+
+  return out;
 }
 
 // ServiceTitan subtracts certain rebates (e.g. Energy Trust of Oregon "ETO"
@@ -567,6 +635,14 @@ export function parseInvoiceData(invoice: STInvoice, patterns: RegExp[] = REBATE
     invoiceDate: invoice.invoiceDate ? new Date(invoice.invoiceDate) : null,
     invoicePaidOn: invoice.paidOn ? new Date(invoice.paidOn) : null,
     stJobId: invoice.job ? String(invoice.job.id) : null,
+    // ServiceTitan has no invoice number — the job number IS the invoice number.
+    stJobNumber: invoice.job?.number ? String(invoice.job.number) : null,
+    // Customer name + service address straight from the invoice, used as a
+    // fallback when job-based enrichment didn't populate them (Task #819).
+    customerName: invoice.customer?.name?.trim() || null,
+    serviceAddress:
+      formatInvoiceAddress(invoice.locationAddress) ??
+      formatInvoiceAddress(invoice.customerAddress),
   };
 }
 
@@ -591,6 +667,8 @@ export function formatSTJobForSync(stJob: STJob) {
 
   return {
     stJobId: String(stJob.id),
+    // Human-readable job number = portal-findable job/invoice number (Task #819).
+    stJobNumber: stJob.number ? String(stJob.number) : null,
     stCustomerId: String(stJob.customerId),
     stLocationId: stJob.locationId ? String(stJob.locationId) : null,
     customerName: stJob.customer?.name || `Customer ${stJob.customerId}`,

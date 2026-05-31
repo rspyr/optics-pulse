@@ -470,7 +470,11 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
         const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         if (existing) {
-          const wasPurged = existing.customerName === null && existing.stJobId === null;
+          // A purged row is detected by its internal ST job id being nulled.
+          // customerName can NO LONGER be used as the purge marker (Task #819
+          // retains it indefinitely), so keying off it would misclassify purged
+          // rows as live and rehydrate phone/email/internal ids on re-sync.
+          const wasPurged = existing.stJobId === null;
           if (wasPurged) {
             await db.update(jobsTable)
               .set({
@@ -479,6 +483,9 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 completedAt: formatted.completedAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
+                // Job number is a reference (not PII) and is never purged, so
+                // refresh it even on an otherwise-purged row (Task #819).
+                stJobNumber: formatted.stJobNumber || existing.stJobNumber,
                 updatedAt: new Date(),
               })
               .where(eq(jobsTable.id, existing.id));
@@ -492,6 +499,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,
                 serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+                stJobNumber: formatted.stJobNumber || existing.stJobNumber,
                 stCustomerId: formatted.stCustomerId || existing.stCustomerId,
                 stLocationId: formatted.stLocationId || existing.stLocationId,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
@@ -2176,7 +2184,11 @@ export async function backfillServiceTitanJobs(
 
         const stDataExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         if (existing) {
-          const wasPurged = existing.customerName === null && existing.stJobId === null;
+          // A purged row is detected by its internal ST job id being nulled.
+          // customerName can NO LONGER be used as the purge marker (Task #819
+          // retains it indefinitely), so keying off it would misclassify purged
+          // rows as live and rehydrate phone/email/internal ids on re-sync.
+          const wasPurged = existing.stJobId === null;
           if (wasPurged) {
             await db.update(jobsTable)
               .set({
@@ -2185,6 +2197,9 @@ export async function backfillServiceTitanJobs(
                 completedAt: formatted.completedAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
+                // Job number is a reference (not PII) and is never purged, so
+                // refresh it even on an otherwise-purged row (Task #819).
+                stJobNumber: formatted.stJobNumber || existing.stJobNumber,
                 updatedAt: new Date(),
               })
               .where(eq(jobsTable.id, existing.id));
@@ -2198,6 +2213,7 @@ export async function backfillServiceTitanJobs(
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,
                 serviceAddress: formatted.serviceAddress || existing.serviceAddress,
+                stJobNumber: formatted.stJobNumber || existing.stJobNumber,
                 stCustomerId: formatted.stCustomerId || existing.stCustomerId,
                 stLocationId: formatted.stLocationId || existing.stLocationId,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
@@ -2394,7 +2410,13 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       for (const [stJobId, jobInvoices] of jobInvoiceMap.entries()) {
         const jobIdHash = hashStJobId(stJobId);
 
-        const [existingJob] = await db.select({ id: jobsTable.id, stInvoiceId: jobsTable.stInvoiceId })
+        const [existingJob] = await db.select({
+            id: jobsTable.id,
+            stInvoiceId: jobsTable.stInvoiceId,
+            stJobNumber: jobsTable.stJobNumber,
+            customerName: jobsTable.customerName,
+            serviceAddress: jobsTable.serviceAddress,
+          })
           .from(jobsTable)
           .where(and(
             eq(jobsTable.tenantId, tenantId),
@@ -2429,6 +2451,18 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
 
         const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
 
+        // ServiceTitan has no invoice number — the job number is the
+        // portal-findable invoice number. Backfill it from the invoice when the
+        // job row doesn't already carry one (Task #819). Customer name + service
+        // address from the invoice are used only as a fallback so richer
+        // job-based enrichment is never overwritten.
+        const resolvedJobNumber =
+          existingJob.stJobNumber || latestInvoice.stJobNumber || null;
+        const resolvedCustomerName =
+          existingJob.customerName || latestInvoice.customerName || null;
+        const resolvedServiceAddress =
+          existingJob.serviceAddress || latestInvoice.serviceAddress || null;
+
         await db.update(jobsTable)
           .set({
             hasInvoice: true,
@@ -2437,6 +2471,9 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             invoicePaidAmount: totalPaid > 0 ? totalPaid : 0,
             invoiceBalance: totalBalance,
             stInvoiceId: latestInvoice.stInvoiceId,
+            stJobNumber: resolvedJobNumber,
+            customerName: resolvedCustomerName,
+            serviceAddress: resolvedServiceAddress,
             invoiceDate: latestInvoice.invoiceDate,
             invoicePaidOn: latestPaidOn,
             updatedAt: new Date(),

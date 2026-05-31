@@ -142,6 +142,9 @@ export type RevenueJob = {
   tenantId: number;
   stJobId: string | null;
   stInvoiceId: string | null;
+  // Portal-findable ServiceTitan job number. ServiceTitan has no separate
+  // invoice number, so this doubles as the invoice number shown to clients.
+  stJobNumber: string | null;
   customerName: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
@@ -205,7 +208,7 @@ export function buildRevenueAttributedCsv(exportJobs: RevenueJob[]): string {
       resolveCustomerName(job),
       job.funnel || "",
       job.jobTypeName || job.jobType || "",
-      job.stJobId || `#${job.id}`,
+      job.stJobNumber || `#${job.id}`,
       job.matchLevel || "unmatched",
       String(job.invoiceRebateAmount ?? 0),
       String(job.correctedRevenue),
@@ -670,7 +673,7 @@ export default function RevenueAttributed() {
                         <td className="p-4 text-sm text-muted-foreground">{job.funnel || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{job.source || job.lead?.source || "—"}</td>
                         <td className="p-4 text-sm text-muted-foreground">{job.jobTypeName || job.jobType || "—"}</td>
-                        <td className="p-4 text-sm text-muted-foreground font-mono">{job.stJobId || `#${job.id}`}</td>
+                        <td className="p-4 text-sm text-muted-foreground font-mono">{job.stJobNumber || `#${job.id}`}</td>
                         <td className="p-4 text-sm">
                           {job.matchLevel ? (
                             <span className="text-xs text-ice/80 capitalize">{job.matchLevel}</span>
@@ -899,8 +902,10 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
     ["Phone", job.customerPhone],
     ["Email", job.customerEmail],
     ["Service address", job.serviceAddress],
-    ["ST job", job.stJobId],
-    ["Invoice", job.stInvoiceId],
+    // ServiceTitan has no invoice number — the job number is the portal-findable
+    // identifier and serves as the invoice number. The internal stInvoiceId is
+    // an opaque API id (not searchable in the portal), so it is no longer shown.
+    ["Job / Invoice #", job.stJobNumber],
   ];
   const opticsRows: [string, string | null | undefined][] = [
     ["Matched lead", leadName],

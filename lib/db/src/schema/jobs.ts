@@ -12,6 +12,12 @@ export const jobsTable = pgTable("jobs", {
   leadId: integer("lead_id").references(() => leadsTable.id),
   stJobId: text("st_job_id"),
   stJobIdHash: text("st_job_id_hash"),
+  // Human-readable ServiceTitan job number (e.g. "75070"). ServiceTitan has no
+  // separate invoice number — an invoice is identified by its job number — so
+  // this single value serves as BOTH the portal-findable job # and invoice #.
+  // Unlike stJobId/stCustomerId/stLocationId, this is a reference (not PII) and
+  // is NEVER purged.
+  stJobNumber: text("st_job_number"),
   stCustomerId: text("st_customer_id"),
   stLocationId: text("st_location_id"),
   customerName: text("customer_name"),
