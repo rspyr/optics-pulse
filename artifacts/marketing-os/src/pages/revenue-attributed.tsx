@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, Fragment } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
@@ -202,7 +205,14 @@ export default function RevenueAttributed() {
   // stay complete even though the list itself is paged.
   const [funnelFilter, setFunnelFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
-  const [facets, setFacets] = useState<{ funnels: string[]; sources: string[] }>({ funnels: [], sources: [] });
+  // Multi-select match-tier filter. Empty = no filter (show all tiers), mirroring
+  // the "all" sentinel the funnel/source single-selects use.
+  const [matchLevelFilter, setMatchLevelFilter] = useState<string[]>([]);
+  const [facets, setFacets] = useState<{ funnels: string[]; sources: string[]; matchLevels: string[] }>({
+    funnels: [],
+    sources: [],
+    matchLevels: [],
+  });
 
   // Sort state for the list. Mirrors the server's sort keys; default matches the
   // historical "biggest corrected invoice first".
@@ -213,7 +223,7 @@ export default function RevenueAttributed() {
   // sort change, so a user on page 3 doesn't land on an out-of-bounds page.
   useEffect(() => {
     setPage(0);
-  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, sortKey, sortDir]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir]);
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
@@ -236,6 +246,7 @@ export default function RevenueAttributed() {
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    matchLevelFilter.forEach((m) => params.append("matchLevel", m));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`, { credentials: "include" })
       .then((r) => {
         if (!r.ok) return Promise.reject(new Error(`HTTP ${r.status}`));
@@ -248,7 +259,7 @@ export default function RevenueAttributed() {
       })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, sortKey, sortDir, needsClientSelection]);
+  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir, needsClientSelection]);
 
   useEffect(() => loadJobs(), [loadJobs]);
 
@@ -263,12 +274,13 @@ export default function RevenueAttributed() {
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    matchLevelFilter.forEach((m) => params.append("matchLevel", m));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed/summary?${params.toString()}`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: RevenueSummary) => { if (!cancelled) setSummary(data); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, needsClientSelection]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, matchLevelFilter, needsClientSelection]);
 
   // Filter facets (distinct funnels + sources in the range) for the dropdowns.
   // Scoped only by tenant/date — NOT by the active funnel/source filters — so the
@@ -276,26 +288,30 @@ export default function RevenueAttributed() {
   useEffect(() => {
     let cancelled = false;
     if (needsClientSelection) {
-      setFacets({ funnels: [], sources: [] });
+      setFacets({ funnels: [], sources: [], matchLevels: [] });
       return () => { cancelled = true; };
     }
     const params = new URLSearchParams({ startDate, endDate });
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed/facets?${params.toString()}`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: { funnels?: string[]; sources?: string[] }) => {
+      .then((data: { funnels?: string[]; sources?: string[]; matchLevels?: string[] }) => {
         if (cancelled) return;
-        setFacets({ funnels: data.funnels ?? [], sources: data.sources ?? [] });
+        setFacets({ funnels: data.funnels ?? [], sources: data.sources ?? [], matchLevels: data.matchLevels ?? [] });
       })
-      .catch(() => { if (!cancelled) setFacets({ funnels: [], sources: [] }); });
+      .catch(() => { if (!cancelled) setFacets({ funnels: [], sources: [], matchLevels: [] }); });
     return () => { cancelled = true; };
   }, [startDate, endDate, effectiveTenantId, needsClientSelection]);
 
-  // If the active filter value disappears from the facets (e.g. after switching
-  // date range), fall back to "all" so the list isn't stuck showing nothing.
+  // If an active filter value disappears from the facets (e.g. after switching
+  // date range), drop it so the list isn't stuck showing nothing.
   useEffect(() => {
     if (funnelFilter !== "all" && !facets.funnels.includes(funnelFilter)) setFunnelFilter("all");
     if (sourceFilter !== "all" && !facets.sources.includes(sourceFilter)) setSourceFilter("all");
+    setMatchLevelFilter((prev) => {
+      const next = prev.filter((m) => facets.matchLevels.includes(m));
+      return next.length === prev.length ? prev : next;
+    });
   }, [facets, funnelFilter, sourceFilter]);
 
   // Toggle sort: clicking the active column flips direction; a new column starts
@@ -341,6 +357,7 @@ export default function RevenueAttributed() {
       if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
       if (funnelFilter !== "all") params.set("funnel", funnelFilter);
       if (sourceFilter !== "all") params.set("source", sourceFilter);
+      matchLevelFilter.forEach((m) => params.append("matchLevel", m));
       const res = await fetch(
         `${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`,
         { credentials: "include" },
@@ -439,12 +456,50 @@ export default function RevenueAttributed() {
                 </SelectContent>
               </Select>
             </div>
-            {(funnelFilter !== "all" || sourceFilter !== "all") && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Match Level</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-9 w-44 justify-between font-normal"
+                    disabled={facets.matchLevels.length === 0}
+                  >
+                    <span className="truncate">
+                      {matchLevelFilter.length === 0
+                        ? "All match levels"
+                        : matchLevelFilter.length === 1
+                          ? matchLevelFilter[0]
+                          : `${matchLevelFilter.length} selected`}
+                    </span>
+                    <ChevronDown className="w-4 h-4 opacity-60 shrink-0" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-44">
+                  {facets.matchLevels.map((m) => (
+                    <DropdownMenuCheckboxItem
+                      key={m}
+                      checked={matchLevelFilter.includes(m)}
+                      onCheckedChange={(checked) =>
+                        setMatchLevelFilter((prev) =>
+                          checked ? [...prev, m] : prev.filter((x) => x !== m),
+                        )
+                      }
+                      onSelect={(e) => e.preventDefault()}
+                      className="capitalize"
+                    >
+                      {m}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {(funnelFilter !== "all" || sourceFilter !== "all" || matchLevelFilter.length > 0) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-9 self-end text-muted-foreground hover:text-white"
-                onClick={() => { setFunnelFilter("all"); setSourceFilter("all"); }}
+                onClick={() => { setFunnelFilter("all"); setSourceFilter("all"); setMatchLevelFilter([]); }}
               >
                 Clear filters
               </Button>
@@ -462,7 +517,7 @@ export default function RevenueAttributed() {
           </div>
         ) : jobs.length === 0 ? (
           <div className="text-center text-muted-foreground py-10">
-            No completed jobs{funnelFilter !== "all" || sourceFilter !== "all" ? " match these filters" : " in this range"}.
+            No completed jobs{funnelFilter !== "all" || sourceFilter !== "all" || matchLevelFilter.length > 0 ? " match these filters" : " in this range"}.
           </div>
         ) : (
           <div className="overflow-x-auto">

@@ -294,6 +294,38 @@ describe("GET /drilldown/revenue-attributed — funnel/source filtering (real Po
   });
 });
 
+describe("GET /drilldown/revenue-attributed — match-level filtering (real Postgres)", () => {
+  // Fixture tiers: J1=gclid, J3=manual (real matches); J2, J4 have NULL
+  // matchLevel (the "unmatched" bucket).
+  it("filters to a single real tier (gclid → J1)", async () => {
+    const res = await getJson(app, `/drilldown/revenue-attributed?${range()}&limit=all&matchLevel=gclid`);
+    expect(res.status).toBe(200);
+    expect((res.json as ListRow[]).map((r) => r.id)).toEqual([fx.J1]);
+  });
+
+  it("filters to multiple real tiers, OR-ed together (gclid + manual → J1 + J3)", async () => {
+    const res = await getJson(app, `/drilldown/revenue-attributed?${range()}&limit=all&matchLevel=gclid&matchLevel=manual`);
+    expect(res.status).toBe(200);
+    expect((res.json as ListRow[]).map((r) => r.id).sort((a, b) => a - b)).toEqual([fx.J1, fx.J3]);
+  });
+
+  it("folds NULL matchLevel into the 'unmatched' bucket (unmatched → J2 + J4)", async () => {
+    const res = await getJson(app, `/drilldown/revenue-attributed?${range()}&limit=all&matchLevel=unmatched`);
+    expect(res.status).toBe(200);
+    expect((res.json as ListRow[]).map((r) => r.id).sort((a, b) => a - b)).toEqual([fx.J2, fx.J4]);
+  });
+
+  it("summary totals scope to the match-level filter and reconcile with the list (gclid + manual)", async () => {
+    const listRes = await getJson(app, `/drilldown/revenue-attributed?${range()}&limit=all&matchLevel=gclid&matchLevel=manual`);
+    const summaryRes = await getJson(app, `/drilldown/revenue-attributed/summary?${range()}&matchLevel=gclid&matchLevel=manual`);
+    const rows = listRes.json as ListRow[];
+    const listRevenue = Math.round(rows.reduce((s, r) => s + r.correctedRevenue, 0) * 100) / 100;
+    // Only J1 (1100) + J3 (750) survive; both are real matches, so the whole
+    // filtered set is attributed.
+    expect(summaryRes.json).toEqual({ revenue: listRevenue, rebates: 100, attributed: 1850, count: 2 });
+  });
+});
+
 describe("GET /drilldown/revenue-attributed — asc/desc sorting (real Postgres)", () => {
   const funnelsOf = (rows: ListRow[]) => rows.map((r) => r.funnel as string);
   const sourcesOf = (rows: ListRow[]) => rows.map((r) => r.source as string);
@@ -365,6 +397,37 @@ describe("GET /drilldown/revenue-attributed/summary — filtered totals (real Po
     expect(res.status).toBe(200);
     // J2 corrected 550 (not attributed) + J3 corrected 750 (attributed)
     expect(res.json).toEqual({ revenue: 1300, rebates: 50, attributed: 750, count: 2 });
+  });
+
+  it("excludes the literal 'unmatched' tier (and NULL) from attributed, but counts it in revenue", async () => {
+    // Seed one extra completed in-range job stamped with the literal "unmatched"
+    // tier (what reconciliation writes when it ran but found no match). It must
+    // raise revenue/count but NOT attributed — the bug this task fixes.
+    const [job] = await db
+      .insert(jobsTable)
+      .values({
+        tenantId: fx.tenantId,
+        leadId: fx.leadIds[0],
+        jobType: "hvac",
+        jobTypeName: "HVAC",
+        status: "completed",
+        revenue: 300,
+        invoiceTotal: 300,
+        invoiceRebateAmount: 0,
+        matchLevel: "unmatched",
+        invoiceDate: IN_RANGE,
+      })
+      .returning();
+    try {
+      const res = await getJson(app, `/drilldown/revenue-attributed/summary?${range()}`);
+      expect(res.status).toBe(200);
+      // Baseline was {revenue:4600, rebates:350, attributed:1850, count:4}.
+      // The +300 "unmatched" job lifts revenue→4900 and count→5, but attributed
+      // stays 1850 because the literal "unmatched" tier is not a real match.
+      expect(res.json).toEqual({ revenue: 4900, rebates: 350, attributed: 1850, count: 5 });
+    } finally {
+      await db.delete(jobsTable).where(eq(jobsTable.id, job.id));
+    }
   });
 
   it("summary totals reconcile with the sum of the filtered list rows (Heat Pump)", async () => {
@@ -600,6 +663,16 @@ describe("GET /drilldown/revenue-attributed/facets — distinct sorted values (r
     expect(funnels).not.toContain("ExcludedFunnel");
     expect(sources).not.toContain("PendingSource");
     expect(sources).not.toContain("ExcludedSource");
+  });
+
+  it("returns the distinct match levels present, NULL folded into 'unmatched', tier-ordered", async () => {
+    const res = await getJson(app, `/drilldown/revenue-attributed/facets?${range()}`);
+    expect(res.status).toBe(200);
+    const { matchLevels } = res.json as { matchLevels: string[] };
+    // Tiers present across J1-J4: gclid (J1), manual (J3), and the NULLs of
+    // J2/J4 folded into "unmatched". Sorted by tier strength: gclid < manual <
+    // unmatched. The pending/out-of-range jobs (gclid) are excluded.
+    expect(matchLevels).toEqual(["gclid", "manual", "unmatched"]);
   });
 });
 

@@ -14,6 +14,51 @@ const jobRevenueExpr = sql<number>`COALESCE(${jobsTable.invoiceTotal} + COALESCE
 // on leadsTable + funnelTypesTable being left-joined into the query.
 const funnelNameExpr = sql<string | null>`COALESCE(${funnelTypesTable.name}, ${leadsTable.leadType})`;
 
+// Reconciliation stamps jobs it could not tie to a marketing touch with the
+// literal tier "unmatched" (and leaves never-reconciled jobs NULL). Both mean
+// "not attributed", so we treat NULL and "unmatched" as the same bucket for
+// the Attributed total and the Match Level filter.
+const UNMATCHED_TIER = "unmatched";
+// A job counts as attributed only when it carries a real match tier — not NULL
+// and not the "unmatched" sentinel.
+const isAttributedExpr = sql`${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER}`;
+// Display/sort order for match tiers, strongest first. "gclid" is an exact
+// click-id match; "manual" is a human-assigned match; "unmatched" sorts last.
+// Any tier not listed here sorts after the known ones (then alphabetically).
+const MATCH_LEVEL_ORDER = ["diamond", "golden", "silver", "bronze", "gclid", "manual", UNMATCHED_TIER];
+function matchLevelRank(level: string): number {
+  const i = MATCH_LEVEL_ORDER.indexOf(level);
+  return i === -1 ? MATCH_LEVEL_ORDER.length : i;
+}
+
+// Parse the repeatable/comma-separated `matchLevel` query param into a deduped,
+// lower-cased list. Accepts ?matchLevel=diamond&matchLevel=golden or
+// ?matchLevel=diamond,golden. Empty/absent → [] (no filter).
+function parseMatchLevels(raw: unknown): string[] {
+  const vals = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+  const flat = vals
+    .flatMap((v) => String(v).split(","))
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(flat)];
+}
+
+// Build the SQL predicate for a match-level selection. Selecting "unmatched"
+// also catches NULL matchLevel jobs so the bucket mirrors the Attributed math.
+// Returns undefined when nothing is selected (no filtering).
+function matchLevelCondition(levels: string[]): SQL | undefined {
+  if (levels.length === 0) return undefined;
+  const includeUnmatched = levels.includes(UNMATCHED_TIER);
+  const realLevels = levels.filter((l) => l !== UNMATCHED_TIER);
+  const ors: SQL[] = [];
+  if (realLevels.length > 0) ors.push(inArray(jobsTable.matchLevel, realLevels));
+  if (includeUnmatched) {
+    ors.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = ${UNMATCHED_TIER})`);
+  }
+  if (ors.length === 0) return undefined;
+  return ors.length === 1 ? ors[0] : or(...ors);
+}
+
 // Revenue columns (subtotal, rebateAmount, invoiceTotal, invoiceRebateAmount)
 // are stored as floating-point `real`, so summing them in JS can produce
 // values like 1050.1500000000001 (900.10 + 150.05). We round corrected
@@ -142,6 +187,10 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   // reconcile with the visible rows under any active filter.
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+  // Optional multi-select match-tier filter (diamond/golden/silver/bronze/
+  // manual/unmatched). Applied identically to the list, count, and summary so
+  // the cards/CSV reconcile with the visible rows under any active selection.
+  const matchLevels = parseMatchLevels(req.query.matchLevel);
 
   // Sort key + direction. Defaults to corrected-revenue desc (the historical
   // behaviour) so existing callers are unaffected.
@@ -181,6 +230,8 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
   if (funnel) conditions.push(sql`${funnelNameExpr} = ${funnel}`);
   if (source) conditions.push(eq(leadsTable.source, source));
+  const matchCond = matchLevelCondition(matchLevels);
+  if (matchCond) conditions.push(matchCond);
 
   const where = and(...conditions);
   // Left-join the originating lead (+ its funnel type) so funnel/source filters
@@ -318,6 +369,7 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   // rows + CSV under any active funnel/source filter.
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+  const matchLevels = parseMatchLevels(req.query.matchLevel);
 
   // requireTenant: same heavy jobs→leads→funnel_types join as the list, here
   // aggregated with SUM/COUNT. An unfiltered request would scan every tenant's
@@ -332,6 +384,8 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   if (endDate) conditions.push(sql`${jobDateExpr} <= ${new Date(endDate)}`);
   if (funnel) conditions.push(sql`${funnelNameExpr} = ${funnel}`);
   if (source) conditions.push(eq(leadsTable.source, source));
+  const matchCond = matchLevelCondition(matchLevels);
+  if (matchCond) conditions.push(matchCond);
 
   const where = and(...conditions);
 
@@ -339,7 +393,10 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
     .select({
       revenue: sql<number>`COALESCE(SUM(${jobRevenueExpr}), 0)`,
       rebates: sql<number>`COALESCE(SUM(COALESCE(${jobsTable.invoiceRebateAmount}, 0)), 0)`,
-      attributed: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.matchLevel} IS NOT NULL THEN ${jobRevenueExpr} ELSE 0 END), 0)`,
+      // Attributed = corrected revenue only for jobs with a real match tier.
+      // Excludes the "unmatched" sentinel (and NULL) so it reflects revenue
+      // genuinely tied to a marketing touch, not merely "reconciliation ran".
+      attributed: sql<number>`COALESCE(SUM(CASE WHEN ${isAttributedExpr} THEN ${jobRevenueExpr} ELSE 0 END), 0)`,
       count: sql<number>`COUNT(*)`,
     })
     .from(jobsTable)
@@ -379,7 +436,7 @@ router.get("/drilldown/revenue-attributed/facets", async (req, res) => {
   const where = and(...conditions);
 
   const rows = await db
-    .selectDistinct({ funnel: funnelNameExpr, source: leadsTable.source })
+    .selectDistinct({ funnel: funnelNameExpr, source: leadsTable.source, matchLevel: jobsTable.matchLevel })
     .from(jobsTable)
     .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
     .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
@@ -391,8 +448,20 @@ router.get("/drilldown/revenue-attributed/facets", async (req, res) => {
   const sources = [...new Set(rows.map((r) => r.source).filter((v): v is string => !!v && v.trim() !== ""))].sort(
     (a, b) => a.localeCompare(b),
   );
+  // Match tiers present in the range. NULL matchLevel folds into the
+  // "unmatched" bucket so it mirrors the Attributed math + the filter; blank/
+  // whitespace tiers are dropped (like funnels/sources) so the dropdown never
+  // offers an unfilterable empty option. Sorted by tier strength (diamond →
+  // unmatched) rather than alphabetically.
+  const matchLevels = [
+    ...new Set(
+      rows
+        .map((r) => (r.matchLevel == null ? UNMATCHED_TIER : r.matchLevel.trim().toLowerCase()))
+        .filter((v) => v !== ""),
+    ),
+  ].sort((a, b) => matchLevelRank(a) - matchLevelRank(b) || a.localeCompare(b));
 
-  res.json({ funnels, sources });
+  res.json({ funnels, sources, matchLevels });
 });
 
 // Typeahead lead search for manual job→lead matching. Agency/admin only —

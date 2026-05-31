@@ -876,12 +876,12 @@ describe("GET /drilldown/revenue-attributed/facets", () => {
     // out of order and with repeats across rows so the route must de-dupe + sort
     // each axis independently.
     mockDb.selectResults = [[
-      { funnel: "Roofing", source: "ppc" },
-      { funnel: "Gutters", source: "seo" },
-      { funnel: "Roofing", source: "seo" }, // dup funnel, dup source
-      { funnel: "Flooring", source: "facebook" },
-      { funnel: null, source: null }, // unmatched job → must be dropped
-      { funnel: "  ", source: "" }, // blank/whitespace → must be dropped
+      { funnel: "Roofing", source: "ppc", matchLevel: "silver" },
+      { funnel: "Gutters", source: "seo", matchLevel: "diamond" },
+      { funnel: "Roofing", source: "seo", matchLevel: "silver" }, // dup funnel/source/tier
+      { funnel: "Flooring", source: "facebook", matchLevel: "manual" },
+      { funnel: null, source: null, matchLevel: null }, // unmatched job → null folds into "unmatched"
+      { funnel: "  ", source: "", matchLevel: "unmatched" }, // blank funnel/source dropped; tier kept
     ]];
 
     const res = await request(
@@ -894,6 +894,9 @@ describe("GET /drilldown/revenue-attributed/facets", () => {
     expect(res.json).toEqual({
       funnels: ["Flooring", "Gutters", "Roofing"],
       sources: ["facebook", "ppc", "seo"],
+      // Deduped + sorted by tier strength (diamond → unmatched), with NULL folded
+      // into the "unmatched" bucket.
+      matchLevels: ["diamond", "silver", "manual", "unmatched"],
     });
   });
 
