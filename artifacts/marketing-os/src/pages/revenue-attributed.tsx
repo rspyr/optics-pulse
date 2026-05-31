@@ -33,6 +33,18 @@ function initialRangeFromUrl(): DateRange {
   return r && (VALID_RANGES as string[]).includes(r) ? (r as DateRange) : "last30";
 }
 
+// Funnel/source filters are persisted as single query params; absent → "all".
+function initialFilterFromUrl(key: string): string {
+  if (typeof window === "undefined") return "all";
+  return new URLSearchParams(window.location.search).get(key) || "all";
+}
+
+// Match-level filter is multi-select, persisted as repeated `matchLevel` params.
+function initialMatchLevelsFromUrl(): string[] {
+  if (typeof window === "undefined") return [];
+  return new URLSearchParams(window.location.search).getAll("matchLevel");
+}
+
 function getDateRange(range: DateRange): { startDate: string; endDate: string; label: string } {
   const now = new Date();
   const end = now.toISOString().split("T")[0];
@@ -203,11 +215,11 @@ export default function RevenueAttributed() {
   // Filters on the originating lead's funnel/source. "all" = no filter. Options
   // come from the facets endpoint (every value in the range), so the dropdowns
   // stay complete even though the list itself is paged.
-  const [funnelFilter, setFunnelFilter] = useState<string>("all");
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [funnelFilter, setFunnelFilter] = useState<string>(() => initialFilterFromUrl("funnel"));
+  const [sourceFilter, setSourceFilter] = useState<string>(() => initialFilterFromUrl("source"));
   // Multi-select match-tier filter. Empty = no filter (show all tiers), mirroring
   // the "all" sentinel the funnel/source single-selects use.
-  const [matchLevelFilter, setMatchLevelFilter] = useState<string[]>([]);
+  const [matchLevelFilter, setMatchLevelFilter] = useState<string[]>(initialMatchLevelsFromUrl);
   const [facets, setFacets] = useState<{ funnels: string[]; sources: string[]; matchLevels: string[] }>({
     funnels: [],
     sources: [],
@@ -304,15 +316,42 @@ export default function RevenueAttributed() {
   }, [startDate, endDate, effectiveTenantId, needsClientSelection]);
 
   // If an active filter value disappears from the facets (e.g. after switching
-  // date range), drop it so the list isn't stuck showing nothing.
+  // date range), drop it so the list isn't stuck showing nothing. Each facet
+  // list is only pruned once it has loaded (non-empty), so a filter pre-selected
+  // from the URL isn't wiped during the initial render before facets arrive.
   useEffect(() => {
-    if (funnelFilter !== "all" && !facets.funnels.includes(funnelFilter)) setFunnelFilter("all");
-    if (sourceFilter !== "all" && !facets.sources.includes(sourceFilter)) setSourceFilter("all");
-    setMatchLevelFilter((prev) => {
-      const next = prev.filter((m) => facets.matchLevels.includes(m));
-      return next.length === prev.length ? prev : next;
-    });
+    if (facets.funnels.length > 0 && funnelFilter !== "all" && !facets.funnels.includes(funnelFilter)) {
+      setFunnelFilter("all");
+    }
+    if (facets.sources.length > 0 && sourceFilter !== "all" && !facets.sources.includes(sourceFilter)) {
+      setSourceFilter("all");
+    }
+    if (facets.matchLevels.length > 0) {
+      setMatchLevelFilter((prev) => {
+        const next = prev.filter((m) => facets.matchLevels.includes(m));
+        return next.length === prev.length ? prev : next;
+      });
+    }
   }, [facets, funnelFilter, sourceFilter]);
+
+  // Mirror the active range + filters into the URL query string so a filtered
+  // view is bookmarkable/shareable and survives a refresh. replaceState keeps it
+  // out of the back-stack (toggling filters shouldn't spam browser history).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("range");
+    params.delete("funnel");
+    params.delete("source");
+    params.delete("matchLevel");
+    if (dateRange !== "last30") params.set("range", dateRange);
+    if (funnelFilter !== "all") params.set("funnel", funnelFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    matchLevelFilter.forEach((m) => params.append("matchLevel", m));
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", next);
+  }, [dateRange, funnelFilter, sourceFilter, matchLevelFilter]);
 
   // Toggle sort: clicking the active column flips direction; a new column starts
   // descending (largest/Z-A first), matching the default revenue view.
