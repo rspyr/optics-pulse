@@ -151,6 +151,12 @@ export default function Dashboard() {
   const historicalRevenue = chartData?.historicalRevenue ?? 0;
   const historicalJobCount = chartData?.historicalJobCount ?? 0;
   const displayChartData = chartDaily.length > 0 ? chartDaily : [];
+  // Distinguish loading from loaded-but-empty so the chart card shows a neutral
+  // "Loading…" while the request is in flight, then a friendly empty-state once
+  // it resolves with no data — mirroring the Budget Pace / Match Tier cards.
+  // `chartData` only stays undefined until the very first response lands (the
+  // ref keeps prior data across re-fetches), so this is the initial-load case.
+  const chartLoading = chartData === undefined;
 
   return (
     <div className="space-y-8">
@@ -231,9 +237,13 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-        {displayChartData.length === 0 ? (
+        {chartLoading ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
-            <p>No chart data available for this date range.</p>
+            <p className="text-sm">Loading…</p>
+          </div>
+        ) : displayChartData.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            <p className="text-sm text-center">No spend or revenue to show for this date range yet.</p>
           </div>
         ) : (
           <div className="flex-1 min-h-0">
