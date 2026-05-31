@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { TokenBucketRateLimiter, withRetry } from "./rate-limiter";
 
 const ST_API_BASE = "https://api.servicetitan.io";
@@ -239,6 +240,20 @@ export async function fetchLocationsByIds(
 export function formatLocationAddress(address: { street: string; city: string; state: string; zip: string }): string {
   const parts = [address.street, address.city, `${address.state} ${address.zip}`].filter(Boolean);
   return parts.join(", ");
+}
+
+/**
+ * Hashes an internal ServiceTitan job id into the privacy-preserving
+ * `st_job_id_hash` value stored on jobs. The raw st_job_id is purged at 24h
+ * (PII), but this hash is retained, so it is the only stable key that links a
+ * purged historical job row back to its ServiceTitan record. The date-range
+ * reconciliation (Task #821) re-fetches completed jobs and matches them to
+ * purged rows by hashing each fetched job id with this function. The sync
+ * scheduler computes the same hash when it first ingests a job, so this MUST
+ * stay identical to the hashing used there or the match silently yields nothing.
+ */
+export function hashStJobId(stJobId: string): string {
+  return crypto.createHash("sha256").update(stJobId).digest("hex");
 }
 
 export async function fetchCompletedJobs(

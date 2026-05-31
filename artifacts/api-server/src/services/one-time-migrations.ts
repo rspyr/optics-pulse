@@ -8,7 +8,7 @@ import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizePhone } from "../lib/phone-utils";
 import { decryptConfig } from "../lib/encryption";
-import { fetchInvoicesByIds } from "./integrations/service-titan";
+import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId } from "./integrations/service-titan";
 
 interface Migration {
   id: string;
@@ -1436,6 +1436,114 @@ const migrations: Migration[] = [
       }
 
       console.log(`[Migration] Backfilled st_job_number on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
+    },
+  },
+  {
+    id: "2026-05-31_reconcile-st-job-number-by-date",
+    description: "Reconcile portal-findable ServiceTitan job numbers for historical completed jobs whose internal ids (including st_invoice_id) were purged before 24h retention shipped, by re-fetching completed jobs from ServiceTitan by date range and matching on the retained st_job_id_hash (Task #821)",
+    run: async () => {
+      // The invoice-id backfill (Task #819) can only recover jobs that still
+      // carry an internal st_invoice_id. Rows purged before retention shipped
+      // lost their st_job_id and st_invoice_id, so the only stable key left
+      // pointing back at ServiceTitan is the retained st_job_id_hash (the purge
+      // nulls st_job_id but keeps its hash). Here we re-fetch completed jobs by
+      // date range, hash each fetched job's id the same way ingestion does, and
+      // fill in the job number for any matching purged row. Defensive
+      // throughout: this runs at boot, so a failure for one tenant must never
+      // abort startup.
+      const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+      let totalUpdated = 0;
+
+      for (const tenant of tenants) {
+        try {
+          if (!tenant.apiConfig || typeof tenant.apiConfig !== "string") continue;
+          let config: {
+            serviceTitanClientId?: string;
+            serviceTitanClientSecret?: string;
+            serviceTitanTenantId?: string;
+            serviceTitanAppKey?: string;
+          };
+          try {
+            config = decryptConfig(tenant.apiConfig) as typeof config;
+          } catch {
+            continue;
+          }
+          if (!config.serviceTitanClientId || !config.serviceTitanClientSecret || !config.serviceTitanAppKey) {
+            continue;
+          }
+
+          // Target jobs missing the portal-findable number that still retain the
+          // hash key. (Rows that kept st_invoice_id were already handled by the
+          // Task #819 backfill, but those are also matched here harmlessly.)
+          const rows = await db.select({
+            id: jobsTable.id,
+            stJobIdHash: jobsTable.stJobIdHash,
+            completedAt: jobsTable.completedAt,
+            createdAt: jobsTable.createdAt,
+          })
+            .from(jobsTable)
+            .where(and(
+              eq(jobsTable.tenantId, tenant.id),
+              isNull(jobsTable.stJobNumber),
+              isNotNull(jobsTable.stJobIdHash),
+            ));
+          if (rows.length === 0) continue;
+
+          // Map retained hash -> the job rows that carry it, and find the
+          // earliest timestamp so we only walk ServiceTitan from there forward.
+          const jobsByHash = new Map<string, number[]>();
+          let earliest: Date | null = null;
+          for (const row of rows) {
+            if (!row.stJobIdHash) continue;
+            const list = jobsByHash.get(row.stJobIdHash) ?? [];
+            list.push(row.id);
+            jobsByHash.set(row.stJobIdHash, list);
+            const ts = row.completedAt ?? row.createdAt;
+            if (ts && (!earliest || ts < earliest)) earliest = ts;
+          }
+          if (jobsByHash.size === 0) continue;
+
+          // ServiceTitan filters completed jobs by modification date, which is
+          // >= completion/creation, so anchoring on the earliest affected row
+          // (with a buffer) is safe. fetchCompletedJobs has its own page cap.
+          const WINDOW_BUFFER_MS = 7 * 24 * 60 * 60 * 1000;
+          const anchor = earliest ?? new Date(0);
+          const modifiedAfter = new Date(anchor.getTime() - WINDOW_BUFFER_MS).toISOString();
+
+          const stConfig = {
+            clientId: config.serviceTitanClientId,
+            clientSecret: config.serviceTitanClientSecret,
+            tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
+            appKey: config.serviceTitanAppKey,
+          };
+
+          // Stream batches so wide windows never buffer the whole history in
+          // memory; for each fetched job, hash its id and fill matching rows.
+          await fetchCompletedJobs(stConfig, modifiedAfter, async (stJobs) => {
+            for (const stJob of stJobs) {
+              const jobNumber = stJob.number ? String(stJob.number) : null;
+              if (!jobNumber) continue;
+              const hash = hashStJobId(String(stJob.id));
+              const jobIds = jobsByHash.get(hash);
+              if (!jobIds || jobIds.length === 0) continue;
+              const updated = await db.update(jobsTable)
+                .set({ stJobNumber: jobNumber, updatedAt: new Date() })
+                .where(and(
+                  inArray(jobsTable.id, jobIds),
+                  isNull(jobsTable.stJobNumber),
+                ))
+                .returning({ id: jobsTable.id });
+              totalUpdated += updated.length;
+              // Done with this hash — drop it so later batches skip the lookup.
+              jobsByHash.delete(hash);
+            }
+          });
+        } catch (err) {
+          console.warn(`[Migration] ST job-number reconciliation failed for tenant ${tenant.id}:`, (err as Error).message);
+        }
+      }
+
+      console.log(`[Migration] Reconciled st_job_number on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
     },
   },
 ];
