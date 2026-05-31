@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, Fragment } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -45,6 +45,29 @@ function initialMatchLevelsFromUrl(): string[] {
   return new URLSearchParams(window.location.search).getAll("matchLevel");
 }
 
+// Column sort is persisted as `sort` (key) + `dir` (direction); absent → the
+// default "biggest corrected invoice first" (revenue/desc).
+function initialSortKeyFromUrl(): SortKey {
+  if (typeof window === "undefined") return "revenue";
+  const s = new URLSearchParams(window.location.search).get("sort");
+  return s && (VALID_SORT_KEYS as string[]).includes(s) ? (s as SortKey) : "revenue";
+}
+
+function initialSortDirFromUrl(): SortDir {
+  if (typeof window === "undefined") return "desc";
+  const d = new URLSearchParams(window.location.search).get("dir");
+  return d === "asc" || d === "desc" ? d : "desc";
+}
+
+// Page is persisted 1-based in the URL (human-friendly) but tracked 0-based in
+// state. Absent / invalid → first page.
+function initialPageFromUrl(): number {
+  if (typeof window === "undefined") return 0;
+  const p = new URLSearchParams(window.location.search).get("page");
+  const n = p != null ? Number(p) : NaN;
+  return Number.isInteger(n) && n >= 1 ? n - 1 : 0;
+}
+
 function getDateRange(range: DateRange): { startDate: string; endDate: string; label: string } {
   const now = new Date();
   const end = now.toISOString().split("T")[0];
@@ -81,6 +104,8 @@ type MatchTierBreakdown = {
   revenue: number;
   count: number;
 };
+
+const VALID_SORT_KEYS: SortKey[] = ["revenue", "date", "customer", "funnel", "source"];
 
 type RevenueSummary = {
   revenue: number;
@@ -217,7 +242,7 @@ export default function RevenueAttributed() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(initialPageFromUrl);
 
   // Filters on the originating lead's funnel/source. "all" = no filter. Options
   // come from the facets endpoint (every value in the range), so the dropdowns
@@ -235,12 +260,19 @@ export default function RevenueAttributed() {
 
   // Sort state for the list. Mirrors the server's sort keys; default matches the
   // historical "biggest corrected invoice first".
-  const [sortKey, setSortKey] = useState<SortKey>("revenue");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sortKey, setSortKey] = useState<SortKey>(initialSortKeyFromUrl);
+  const [sortDir, setSortDir] = useState<SortDir>(initialSortDirFromUrl);
 
   // Reset to the first page whenever the date range, tenant, active filters, or
   // sort change, so a user on page 3 doesn't land on an out-of-bounds page.
+  // Skip the very first render so a page number restored from the URL isn't
+  // immediately clobbered back to 0 before the user changes anything.
+  const skipPageReset = useRef(true);
   useEffect(() => {
+    if (skipPageReset.current) {
+      skipPageReset.current = false;
+      return;
+    }
     setPage(0);
   }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir]);
 
@@ -351,14 +383,21 @@ export default function RevenueAttributed() {
     params.delete("funnel");
     params.delete("source");
     params.delete("matchLevel");
+    params.delete("sort");
+    params.delete("dir");
+    params.delete("page");
     if (dateRange !== "last30") params.set("range", dateRange);
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
     matchLevelFilter.forEach((m) => params.append("matchLevel", m));
+    if (sortKey !== "revenue") params.set("sort", sortKey);
+    if (sortDir !== "desc") params.set("dir", sortDir);
+    // Stored 1-based for humans; page 0 (default) is left implicit.
+    if (page > 0) params.set("page", String(page + 1));
     const qs = params.toString();
     const next = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", next);
-  }, [dateRange, funnelFilter, sourceFilter, matchLevelFilter]);
+  }, [dateRange, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir, page]);
 
   // Toggle sort: clicking the active column flips direction; a new column starts
   // descending (largest/Z-A first), matching the default revenue view.
