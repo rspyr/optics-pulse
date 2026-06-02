@@ -1,7 +1,7 @@
 import { db, jobsTable, integrationSyncLogsTable, tenantsTable } from "@workspace/db";
 import { and, or, isNull, isNotNull, lte, eq, sql } from "drizzle-orm";
 
-async function purgeExpiredStData(): Promise<void> {
+export async function purgeExpiredStData(): Promise<void> {
   const now = new Date();
 
   // Only the internal ServiceTitan ids are still purged at 24h. Customer name +
