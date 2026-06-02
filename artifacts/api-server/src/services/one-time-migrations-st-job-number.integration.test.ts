@@ -455,6 +455,7 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
         email: "mark@example.com",
         address: { street: "10 Heat Pump Way", city: "Portland", state: "OR", zip: "97201" },
       })]);
+      return [];
     });
 
     const updated = await backfillStCustomerDataByHashForTenant(
@@ -496,6 +497,7 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
         email: "new@example.com",
         address: { street: "5 New Ave", city: "Dallas", state: "TX", zip: "75201" },
       })]);
+      return [];
     });
 
     const updated = await backfillStCustomerDataByHashForTenant(
@@ -529,6 +531,7 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
       onBatch?: (jobs: STJob[]) => Promise<void> | void,
     ) => {
       await onBatch?.([makeJobWithCustomer(700003, "JN3", { customerName: "Real Person" })]);
+      return [];
     });
 
     const updated = await backfillStCustomerDataByHashForTenant(
@@ -555,6 +558,7 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
     ) => {
       // A different ServiceTitan id → different hash → no match.
       await onBatch?.([makeJobWithCustomer(999999, "OTHER", { customerName: "Nope" })]);
+      return [];
     });
 
     const updated = await backfillStCustomerDataByHashForTenant(
@@ -577,12 +581,66 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
       customerEmail: "e",
     });
 
-    const fetchCompletedJobs = vi.fn(async () => {});
+    const fetchCompletedJobs = vi.fn(async () => []);
     const updated = await backfillStCustomerDataByHashForTenant(
       tenantId, STUB_CONFIG, { fetchCompletedJobs },
     );
 
     expect(updated).toBe(0);
     expect(fetchCompletedJobs).not.toHaveBeenCalled();
+  });
+
+  it("recovers phone/email via the contacts subresource when the fetched job has no contacts (real enrichment path)", async () => {
+    const tenantId = await createTestTenant("hash-contacts");
+    const hash = hashStJobId("700006");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hash,
+      stJobNumber: null,
+      customerName: null,
+      serviceAddress: null,
+      customerPhone: null,
+      customerEmail: null,
+      completedAt: new Date("2026-05-11T00:00:00Z"),
+    });
+
+    // Mirror production: fetchCompletedJobs enriches name/address from the
+    // customers LIST endpoint, which omits contacts — so the job arrives with
+    // NO phone/email. The backfill must pull them from the contacts subresource.
+    const jobWithoutContacts = makeJobWithCustomer(700006, "75080", {
+      customerName: "Mark Lobbestael",
+      address: { street: "10 Heat Pump Way", city: "Portland", state: "OR", zip: "97201" },
+    });
+    expect(jobWithoutContacts.customer?.contacts ?? []).toHaveLength(0);
+
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      _modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void>,
+    ) => {
+      await onBatch?.([jobWithoutContacts]);
+      return [];
+    });
+    const fetchCustomerContactsById = vi.fn(async (_cfg: unknown, customerId: number) => {
+      expect(customerId).toBe(700006 * 100);
+      return [
+        { type: "MobilePhone", value: "5035551234" },
+        { type: "Email", value: "mark@example.com" },
+      ];
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs, fetchCustomerContactsById },
+    );
+
+    expect(updated).toBe(1);
+    expect(fetchCustomerContactsById).toHaveBeenCalledTimes(1);
+    expect(await getJobFullContact(jobId)).toEqual({
+      stJobNumber: "75080",
+      customerName: "Mark Lobbestael",
+      serviceAddress: "10 Heat Pump Way, Portland, OR 97201",
+      customerPhone: "5035551234",
+      customerEmail: "mark@example.com",
+    });
   });
 });

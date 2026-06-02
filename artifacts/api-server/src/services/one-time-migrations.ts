@@ -8,7 +8,7 @@ import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizePhone } from "../lib/phone-utils";
 import { decryptConfig } from "../lib/encryption";
-import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId, parseInvoiceData, formatSTJobForSync } from "./integrations/service-titan";
+import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId, parseInvoiceData, formatSTJobForSync, fetchCustomerContactsById } from "./integrations/service-titan";
 
 interface Migration {
   id: string;
@@ -2023,8 +2023,13 @@ export async function backfillStCustomerDataFromInvoicesForTenant(
 export async function backfillStCustomerDataByHashForTenant(
   tenantId: number,
   stConfig: StJobNumberRecoveryAuthConfig,
-  deps: { fetchCompletedJobs: typeof fetchCompletedJobs } = { fetchCompletedJobs },
+  deps: {
+    fetchCompletedJobs?: typeof fetchCompletedJobs;
+    fetchCustomerContactsById?: typeof fetchCustomerContactsById;
+  } = {},
 ): Promise<number> {
+  const fetchJobs = deps.fetchCompletedJobs ?? fetchCompletedJobs;
+  const fetchContacts = deps.fetchCustomerContactsById ?? fetchCustomerContactsById;
   const rows = await db.select({
     id: jobsTable.id,
     stJobIdHash: jobsTable.stJobIdHash,
@@ -2069,11 +2074,27 @@ export async function backfillStCustomerDataByHashForTenant(
   const modifiedAfter = new Date(anchor.getTime() - WINDOW_BUFFER_MS).toISOString();
 
   let totalUpdated = 0;
-  await deps.fetchCompletedJobs(stConfig, modifiedAfter, async (stJobs) => {
+  await fetchJobs(stConfig, modifiedAfter, async (stJobs) => {
     for (const stJob of stJobs) {
       const hash = hashStJobId(String(stJob.id));
       const jobRows = jobsByHash.get(hash);
       if (!jobRows || jobRows.length === 0) continue;
+
+      // Phone/email live ONLY on the customer contacts subresource — the
+      // customers list endpoint used by fetchCompletedJobs omits them, so a
+      // hash-matched stJob has no contacts and would recover name/address but
+      // never phone/email. When any matched row still lacks a contact method,
+      // pull the contacts directly and attach them so formatSTJobForSync can
+      // extract phone/email (#825).
+      const needsContacts = jobRows.some((j) => !j.customerPhone || !j.customerEmail);
+      if (needsContacts && stJob.customerId && !stJob.customer?.contacts?.length) {
+        const contacts = await fetchContacts(stConfig, stJob.customerId);
+        if (contacts.length > 0) {
+          stJob.customer = stJob.customer
+            ? { ...stJob.customer, contacts }
+            : { id: stJob.customerId, name: "", contacts };
+        }
+      }
 
       const formatted = formatSTJobForSync(stJob);
       const newNameIsReal = !!formatted.customerName && !PLACEHOLDER_CUSTOMER_NAME.test(formatted.customerName);

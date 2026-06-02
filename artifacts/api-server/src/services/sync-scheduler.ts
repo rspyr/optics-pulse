@@ -2465,6 +2465,12 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             stJobNumber: latestInvoice.stJobNumber,
             customerName: latestInvoice.customerName,
             serviceAddress: latestInvoice.serviceAddress,
+            // Persist the internal customer + location ids the invoice carries so
+            // the contact-enrichment pass (which keys off stCustomerId) can fill
+            // phone/email — and the address pass can fill a missing address — on
+            // these invoice-only rows before the 24h purge clears the ids (#825).
+            stCustomerId: sorted[0].customer?.id ? String(sorted[0].customer.id) : null,
+            stLocationId: sorted[0].location?.id ? String(sorted[0].location.id) : null,
             jobType: sorted[0].job?.type || "Service",
             status: "completed",
             revenue: 0,
