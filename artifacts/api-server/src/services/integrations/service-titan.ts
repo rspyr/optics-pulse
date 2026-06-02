@@ -273,9 +273,13 @@ export async function fetchCompletedJobs(
 
   async function enrichBatch(jobs: STJob[]): Promise<STJob[]> {
     if (jobs.length === 0) return jobs;
-    const revenueJobs = jobs.filter((j) => j.total > 0);
-    const customerIds = revenueJobs.map((j) => j.customerId).filter(Boolean);
-    const locationIds = revenueJobs.map((j) => j.locationId).filter(Boolean);
+    // Enrich EVERY completed job, not just those carrying revenue at sync time.
+    // Most jobs are $0 when first synced (they are invoiced/closed out later),
+    // so gating enrichment on total>0 left ~70% of jobs with no customer name
+    // or service address — which blanked the revenue-attribution panel and
+    // prevented lead matching (Task #825).
+    const customerIds = jobs.map((j) => j.customerId).filter(Boolean);
+    const locationIds = jobs.map((j) => j.locationId).filter(Boolean);
 
     const [customerMap, locationMap] = await Promise.all([
       customerIds.length > 0

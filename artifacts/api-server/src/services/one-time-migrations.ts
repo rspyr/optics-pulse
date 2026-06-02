@@ -8,7 +8,7 @@ import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizePhone } from "../lib/phone-utils";
 import { decryptConfig } from "../lib/encryption";
-import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId } from "./integrations/service-titan";
+import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId, parseInvoiceData, formatSTJobForSync } from "./integrations/service-titan";
 
 interface Migration {
   id: string;
@@ -1412,6 +1412,59 @@ const migrations: Migration[] = [
       console.log(`[Migration] Reconciled st_job_number on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
     },
   },
+  {
+    id: "2026-06-02_backfill-st-customer-data-from-invoices",
+    description: "Fill customer name + service address on jobs that retain an internal st_invoice_id but were left blank because enrichment only ran for revenue-bearing jobs (Task #825)",
+    run: async () => {
+      // ~70% of historical jobs have no customer name/address: the job sync only
+      // enriched jobs that carried revenue at sync time, and most jobs are $0
+      // then. Invoiced jobs kept their (never-purged) st_invoice_id, so re-fetch
+      // each invoice and refill name + address from its inline customer object.
+      // Defensive throughout: this runs at boot, so a failure for one tenant
+      // must never abort startup.
+      const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+      let totalUpdated = 0;
+
+      for (const tenant of tenants) {
+        try {
+          const stConfig = resolveStAuthConfigForTenant(tenant);
+          if (!stConfig) continue;
+          totalUpdated += await backfillStCustomerDataFromInvoicesForTenant(tenant.id, stConfig);
+        } catch (err) {
+          console.warn(`[Migration] ST customer-data backfill failed for tenant ${tenant.id}:`, (err as Error).message);
+        }
+      }
+
+      console.log(`[Migration] Backfilled customer name/address on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
+    },
+  },
+  {
+    id: "2026-06-02_backfill-st-customer-data-by-hash",
+    description: "Bulk-recover customer name/address/phone/email on fully-purged jobs (no internal ST id left, only st_job_id_hash) by re-fetching completed jobs by date and matching the retained hash (Task #825)",
+    run: async () => {
+      // The invoice-id backfill above only reaches jobs that still carry an
+      // st_invoice_id (~1% of blanks). The overwhelming majority were fully
+      // purged — every internal ST id stripped at 24h — but retain the one-way
+      // st_job_id_hash. This pass re-fetches completed jobs by date window,
+      // matches each fetched job's hashed id against that retained hash, and
+      // refills the missing contact fields from the (already-expanded) customer
+      // + location. Per-tenant try/catch so a failure can't abort startup.
+      const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+      let totalUpdated = 0;
+
+      for (const tenant of tenants) {
+        try {
+          const stConfig = resolveStAuthConfigForTenant(tenant);
+          if (!stConfig) continue;
+          totalUpdated += await backfillStCustomerDataByHashForTenant(tenant.id, stConfig);
+        } catch (err) {
+          console.warn(`[Migration] ST hash customer-data backfill failed for tenant ${tenant.id}:`, (err as Error).message);
+        }
+      }
+
+      console.log(`[Migration] Hash-recovered customer data on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
+    },
+  },
 ];
 
 export const BACKFILL_MANUAL_SOURCE_MIGRATION_ID =
@@ -1865,6 +1918,186 @@ export async function reconcileStJobNumberByDateForTenant(
         ))
         .returning({ id: jobsTable.id });
       totalUpdated += updated.length;
+      // Done with this hash — drop it so later batches skip the lookup.
+      jobsByHash.delete(hash);
+    }
+  });
+  return totalUpdated;
+}
+
+/** Matches the `Customer <id>` placeholder the job sync writes when ServiceTitan
+ * returned no customer object — treated as missing so an invoice name overrides it. */
+const PLACEHOLDER_CUSTOMER_NAME = /^Customer\s+\d+$/;
+
+/**
+ * Task #825 recovery for one tenant: fill customer name + service address on
+ * jobs that still retain an internal `st_invoice_id` but have a missing name
+ * (NULL or the `Customer <id>` placeholder) or a missing service address, by
+ * fetching each invoice and reading its inline customer + address. This is the
+ * high-value backfill: ~70% of historical jobs were blanked because enrichment
+ * only ran for jobs with revenue at sync time, but invoiced jobs kept their
+ * (non-PII, never-purged) st_invoice_id, so the invoice can refill them.
+ *
+ * Phone/email are NOT recoverable here — invoices carry no contact info and the
+ * internal customer id needed to fetch contacts was purged on historical rows.
+ * Going forward, the enrichment + retention changes capture and keep them.
+ *
+ * `deps.fetchInvoicesByIds` is injectable for tests. Returns rows updated.
+ */
+export async function backfillStCustomerDataFromInvoicesForTenant(
+  tenantId: number,
+  stConfig: StJobNumberRecoveryAuthConfig,
+  deps: { fetchInvoicesByIds: typeof fetchInvoicesByIds } = { fetchInvoicesByIds },
+): Promise<number> {
+  const rows = await db.select({
+    id: jobsTable.id,
+    stInvoiceId: jobsTable.stInvoiceId,
+    customerName: jobsTable.customerName,
+    serviceAddress: jobsTable.serviceAddress,
+  })
+    .from(jobsTable)
+    .where(and(
+      eq(jobsTable.tenantId, tenantId),
+      isNotNull(jobsTable.stInvoiceId),
+      or(
+        isNull(jobsTable.customerName),
+        sql`${jobsTable.customerName} ~ '^Customer [0-9]+$'`,
+        isNull(jobsTable.serviceAddress),
+      ),
+    ));
+  if (rows.length === 0) return 0;
+
+  // Map internal invoice id -> the job rows that reference it.
+  const jobsByInvoiceId = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const invId = Number(row.stInvoiceId);
+    if (!Number.isFinite(invId)) continue;
+    const list = jobsByInvoiceId.get(invId) ?? [];
+    list.push(row);
+    jobsByInvoiceId.set(invId, list);
+  }
+  if (jobsByInvoiceId.size === 0) return 0;
+
+  let totalUpdated = 0;
+  const invoices = await deps.fetchInvoicesByIds(stConfig, [...jobsByInvoiceId.keys()]);
+  for (const invoice of invoices) {
+    const jobRows = jobsByInvoiceId.get(invoice.id);
+    if (!jobRows || jobRows.length === 0) continue;
+    const parsed = parseInvoiceData(invoice);
+    for (const job of jobRows) {
+      const set: { customerName?: string; serviceAddress?: string; updatedAt: Date } = { updatedAt: new Date() };
+      const nameMissing = !job.customerName || PLACEHOLDER_CUSTOMER_NAME.test(job.customerName.trim());
+      if (nameMissing && parsed.customerName) set.customerName = parsed.customerName;
+      if (!job.serviceAddress && parsed.serviceAddress) set.serviceAddress = parsed.serviceAddress;
+      if (set.customerName === undefined && set.serviceAddress === undefined) continue;
+      await db.update(jobsTable).set(set).where(eq(jobsTable.id, job.id));
+      totalUpdated++;
+    }
+  }
+  return totalUpdated;
+}
+
+/**
+ * Task #825 BULK recovery for one tenant: fill customer name, service address,
+ * phone and email on jobs that were fully purged — they lost every internal
+ * ServiceTitan id (st_job_id / st_invoice_id / st_customer_id) at 24h but kept
+ * the one-way `st_job_id_hash` recovery key. This is the path that actually
+ * covers the bulk of blank jobs (~99% of them have no invoice id to fetch by,
+ * only the hash), so it complements the invoice-id backfill above.
+ *
+ * It re-fetches completed jobs over a date window anchored on the earliest
+ * affected row and matches each fetched job's hashed id against the retained
+ * hash — the SAME mechanism the Task #821 job-number reconcile uses. Because
+ * `fetchCompletedJobs` already expands each job's `.customer` and `.location`,
+ * the full contact set is available with no extra API calls, and we reuse
+ * `formatSTJobForSync` so the recovered values match live-sync ingestion exactly.
+ *
+ * Only currently-missing fields are filled (real data is never overwritten;
+ * the `Customer <id>` placeholder counts as missing). The purged internal ids
+ * are deliberately NOT restored — recovery wants the contact data, not the ids
+ * the 24h purge is meant to drop. `st_job_number` is refilled opportunistically
+ * since the same fetched job carries it.
+ *
+ * `deps.fetchCompletedJobs` is injectable for tests. Returns rows updated.
+ */
+export async function backfillStCustomerDataByHashForTenant(
+  tenantId: number,
+  stConfig: StJobNumberRecoveryAuthConfig,
+  deps: { fetchCompletedJobs: typeof fetchCompletedJobs } = { fetchCompletedJobs },
+): Promise<number> {
+  const rows = await db.select({
+    id: jobsTable.id,
+    stJobIdHash: jobsTable.stJobIdHash,
+    stJobNumber: jobsTable.stJobNumber,
+    customerName: jobsTable.customerName,
+    serviceAddress: jobsTable.serviceAddress,
+    customerPhone: jobsTable.customerPhone,
+    customerEmail: jobsTable.customerEmail,
+    completedAt: jobsTable.completedAt,
+    createdAt: jobsTable.createdAt,
+  })
+    .from(jobsTable)
+    .where(and(
+      eq(jobsTable.tenantId, tenantId),
+      isNotNull(jobsTable.stJobIdHash),
+      or(
+        isNull(jobsTable.customerName),
+        sql`${jobsTable.customerName} ~ '^Customer [0-9]+$'`,
+        isNull(jobsTable.serviceAddress),
+        isNull(jobsTable.customerPhone),
+        isNull(jobsTable.customerEmail),
+      ),
+    ));
+  if (rows.length === 0) return 0;
+
+  // Map retained hash -> the job rows that carry it, and find the earliest
+  // timestamp so ServiceTitan is only walked from there forward.
+  const jobsByHash = new Map<string, typeof rows>();
+  let earliest: Date | null = null;
+  for (const row of rows) {
+    if (!row.stJobIdHash) continue;
+    const list = jobsByHash.get(row.stJobIdHash) ?? [];
+    list.push(row);
+    jobsByHash.set(row.stJobIdHash, list);
+    const ts = row.completedAt ?? row.createdAt;
+    if (ts && (!earliest || ts < earliest)) earliest = ts;
+  }
+  if (jobsByHash.size === 0) return 0;
+
+  const WINDOW_BUFFER_MS = 7 * 24 * 60 * 60 * 1000;
+  const anchor = earliest ?? new Date(0);
+  const modifiedAfter = new Date(anchor.getTime() - WINDOW_BUFFER_MS).toISOString();
+
+  let totalUpdated = 0;
+  await deps.fetchCompletedJobs(stConfig, modifiedAfter, async (stJobs) => {
+    for (const stJob of stJobs) {
+      const hash = hashStJobId(String(stJob.id));
+      const jobRows = jobsByHash.get(hash);
+      if (!jobRows || jobRows.length === 0) continue;
+
+      const formatted = formatSTJobForSync(stJob);
+      const newNameIsReal = !!formatted.customerName && !PLACEHOLDER_CUSTOMER_NAME.test(formatted.customerName);
+
+      for (const job of jobRows) {
+        const set: {
+          customerName?: string; serviceAddress?: string;
+          customerPhone?: string; customerEmail?: string;
+          stJobNumber?: string; updatedAt: Date;
+        } = { updatedAt: new Date() };
+        const nameMissing = !job.customerName || PLACEHOLDER_CUSTOMER_NAME.test(job.customerName.trim());
+        if (nameMissing && newNameIsReal) set.customerName = formatted.customerName;
+        if (!job.serviceAddress && formatted.serviceAddress) set.serviceAddress = formatted.serviceAddress;
+        if (!job.customerPhone && formatted.customerPhone) set.customerPhone = formatted.customerPhone;
+        if (!job.customerEmail && formatted.customerEmail) set.customerEmail = formatted.customerEmail;
+        if (!job.stJobNumber && formatted.stJobNumber) set.stJobNumber = formatted.stJobNumber;
+        if (
+          set.customerName === undefined && set.serviceAddress === undefined &&
+          set.customerPhone === undefined && set.customerEmail === undefined &&
+          set.stJobNumber === undefined
+        ) continue;
+        await db.update(jobsTable).set(set).where(eq(jobsTable.id, job.id));
+        totalUpdated++;
+      }
       // Done with this hash — drop it so later batches skip the lookup.
       jobsByHash.delete(hash);
     }

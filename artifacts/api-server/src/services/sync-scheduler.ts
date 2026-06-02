@@ -45,6 +45,15 @@ function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiCon
   }
 }
 
+// `formatSTJobForSync` writes `Customer <id>` as the customer name when
+// ServiceTitan returned no customer object for a job. That placeholder is not a
+// real name, so the invoice merge treats it as missing and lets the invoice's
+// inline customer name override it (Task #825).
+function isPlaceholderCustomerName(name: string | null | undefined): boolean {
+  if (!name) return true;
+  return /^Customer\s+\d+$/.test(name.trim());
+}
+
 /**
  * Resolves the compiled rebate label patterns for a tenant. Reads the
  * staff-editable list from `tenant.revenueConfig.rebateLabels`, falling back to
@@ -621,7 +630,6 @@ async function enrichCustomerContacts(
       isNotNull(jobsTable.stCustomerId),
       isNull(jobsTable.customerPhone),
       isNull(jobsTable.customerEmail),
-      sql`${jobsTable.revenue} > 0`,
     ),
   );
 
@@ -691,7 +699,6 @@ async function enrichJobAddresses(
       eq(jobsTable.tenantId, tenantId),
       isNotNull(jobsTable.stLocationId),
       isNull(jobsTable.serviceAddress),
-      sql`${jobsTable.revenue} > 0`,
     ),
   );
 
@@ -2419,8 +2426,6 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
           ))
           .limit(1);
 
-        if (!existingJob) continue;
-
         const sorted = jobInvoices.sort((a, b) => {
           const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
           const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
@@ -2446,15 +2451,50 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
 
         const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
 
+        if (!existingJob) {
+          // Invoice-only job: the completed-jobs sync never created a row for it
+          // (e.g. the job isn't in a "Completed" status, or its row was wiped).
+          // The invoice carries enough to make it appear in revenue attribution,
+          // so create the row authoritatively from the invoice rather than
+          // dropping the data on the floor (Task #825). Revenue is left at 0 —
+          // corrected revenue is derived from invoiceTotal + rebate downstream.
+          await db.insert(jobsTable).values({
+            tenantId,
+            stJobId,
+            stJobIdHash: jobIdHash,
+            stJobNumber: latestInvoice.stJobNumber,
+            customerName: latestInvoice.customerName,
+            serviceAddress: latestInvoice.serviceAddress,
+            jobType: sorted[0].job?.type || "Service",
+            status: "completed",
+            revenue: 0,
+            hasInvoice: true,
+            invoiceTotal: totalInvoiceAmount,
+            invoiceRebateAmount: totalRebate,
+            invoicePaidAmount: totalPaid > 0 ? totalPaid : 0,
+            invoiceBalance: totalBalance,
+            stInvoiceId: latestInvoice.stInvoiceId,
+            invoiceDate: latestInvoice.invoiceDate,
+            invoicePaidOn: latestPaidOn,
+            stDataExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          });
+          synced++;
+          continue;
+        }
+
         // ServiceTitan has no invoice number — the job number is the
         // portal-findable invoice number. Backfill it from the invoice when the
-        // job row doesn't already carry one (Task #819). Customer name + service
-        // address from the invoice are used only as a fallback so richer
-        // job-based enrichment is never overwritten.
+        // job row doesn't already carry one (Task #819). For customer name +
+        // service address the invoice is authoritative: it fills a missing value
+        // AND overrides the `Customer <id>` placeholder the job sync writes when
+        // ServiceTitan returned no customer object, but a real job-enriched
+        // value is preserved over the invoice's (Task #825).
         const resolvedJobNumber =
           existingJob.stJobNumber || latestInvoice.stJobNumber || null;
         const resolvedCustomerName =
-          existingJob.customerName || latestInvoice.customerName || null;
+          isPlaceholderCustomerName(existingJob.customerName)
+            ? (latestInvoice.customerName || existingJob.customerName || null)
+            : existingJob.customerName;
         const resolvedServiceAddress =
           existingJob.serviceAddress || latestInvoice.serviceAddress || null;
 

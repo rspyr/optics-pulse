@@ -35,6 +35,8 @@ type STInvoice = import("./integrations/service-titan").STInvoice;
 const {
   backfillStJobNumberFromInvoicesForTenant,
   reconcileStJobNumberByDateForTenant,
+  backfillStCustomerDataFromInvoicesForTenant,
+  backfillStCustomerDataByHashForTenant,
 } = await import("./one-time-migrations");
 
 const STUB_CONFIG = {
@@ -63,6 +65,10 @@ interface SeedJobOpts {
   stInvoiceId?: string | null;
   stJobIdHash?: string | null;
   completedAt?: Date | null;
+  customerName?: string | null;
+  serviceAddress?: string | null;
+  customerPhone?: string | null;
+  customerEmail?: string | null;
 }
 
 async function seedJob(opts: SeedJobOpts): Promise<number> {
@@ -73,6 +79,10 @@ async function seedJob(opts: SeedJobOpts): Promise<number> {
     stInvoiceId: opts.stInvoiceId ?? null,
     stJobIdHash: opts.stJobIdHash ?? null,
     completedAt: opts.completedAt ?? null,
+    customerName: opts.customerName ?? null,
+    serviceAddress: opts.serviceAddress ?? null,
+    customerPhone: opts.customerPhone ?? null,
+    customerEmail: opts.customerEmail ?? null,
   }).returning();
   createdJobs.push(row.id);
   return row.id;
@@ -108,6 +118,79 @@ async function getJobNumber(jobId: number): Promise<string | null> {
   const [row] = await db.select({ stJobNumber: jobsTable.stJobNumber })
     .from(jobsTable).where(eq(jobsTable.id, jobId));
   return row.stJobNumber;
+}
+
+async function getJobContact(jobId: number): Promise<{ customerName: string | null; serviceAddress: string | null }> {
+  const [row] = await db.select({
+    customerName: jobsTable.customerName,
+    serviceAddress: jobsTable.serviceAddress,
+  }).from(jobsTable).where(eq(jobsTable.id, jobId));
+  return row;
+}
+
+async function getJobFullContact(jobId: number): Promise<{
+  stJobNumber: string | null; customerName: string | null; serviceAddress: string | null;
+  customerPhone: string | null; customerEmail: string | null;
+}> {
+  const [row] = await db.select({
+    stJobNumber: jobsTable.stJobNumber,
+    customerName: jobsTable.customerName,
+    serviceAddress: jobsTable.serviceAddress,
+    customerPhone: jobsTable.customerPhone,
+    customerEmail: jobsTable.customerEmail,
+  }).from(jobsTable).where(eq(jobsTable.id, jobId));
+  return row;
+}
+
+/** A completed STJob with the `.customer` + `.location` objects `fetchCompletedJobs`
+ * expands — the shape the hash backfill reads contact data from. */
+function makeJobWithCustomer(
+  id: number,
+  number: string,
+  opts: {
+    customerName?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: { street: string; city: string; state: string; zip: string } | null;
+  } = {},
+): STJob {
+  const contacts = [
+    ...(opts.phone ? [{ type: "MobilePhone", value: opts.phone }] : []),
+    ...(opts.email ? [{ type: "Email", value: opts.email }] : []),
+  ];
+  return {
+    id,
+    number,
+    customerId: id * 100,
+    locationId: id * 1000,
+    jobStatus: "Completed",
+    summary: "",
+    total: 0,
+    completedOn: "2026-01-01T00:00:00Z",
+    customer: opts.customerName === null
+      ? undefined
+      : { id: id * 100, name: opts.customerName ?? `Customer ${id}`, contacts },
+    location: opts.address ? { id: id * 1000, address: opts.address } : undefined,
+  };
+}
+
+function makeCustomerInvoice(
+  id: number,
+  customerName: string | null,
+  address: { street?: string; city?: string; state?: string; zip?: string } | null,
+): STInvoice {
+  return {
+    id,
+    total: "0",
+    balance: "0",
+    invoiceDate: "2026-01-01",
+    paidOn: null,
+    job: { id: id * 10, number: "JN", type: "Install" },
+    customer: customerName === null ? null : { id: id * 100, name: customerName },
+    locationAddress: address,
+    items: [],
+    active: true,
+  };
 }
 
 beforeAll(() => {
@@ -266,5 +349,240 @@ describe("reconcileStJobNumberByDateForTenant (real Postgres, task #821/#822)", 
 
     expect(updated).toBe(0);
     expect(await getJobNumber(jobId)).toBeNull();
+  });
+});
+
+describe("backfillStCustomerDataFromInvoicesForTenant (real Postgres, task #825)", () => {
+  it("fills a NULL customer name + service address from the invoice's inline customer/location", async () => {
+    const tenantId = await createTestTenant("cust-fill-null");
+    const jobId = await seedJob({ tenantId, stInvoiceId: "6001", customerName: null, serviceAddress: null });
+
+    const fetchInvoicesByIds = vi.fn(async () => [
+      makeCustomerInvoice(6001, "Jane Doe", { street: "1 Main St", city: "Austin", state: "TX", zip: "78701" }),
+    ]);
+    const updated = await backfillStCustomerDataFromInvoicesForTenant(
+      tenantId, STUB_CONFIG, { fetchInvoicesByIds },
+    );
+
+    expect(updated).toBe(1);
+    expect(await getJobContact(jobId)).toEqual({
+      customerName: "Jane Doe",
+      serviceAddress: "1 Main St, Austin, TX 78701",
+    });
+    expect(fetchInvoicesByIds).toHaveBeenCalledWith(STUB_CONFIG, [6001]);
+  });
+
+  it("overrides a `Customer <id>` placeholder name but preserves an existing real name", async () => {
+    const tenantId = await createTestTenant("cust-placeholder");
+    const placeholderJob = await seedJob({ tenantId, stInvoiceId: "6002", customerName: "Customer 123", serviceAddress: "9 Old Rd" });
+    const realJob = await seedJob({ tenantId, stInvoiceId: "6003", customerName: "Real Name", serviceAddress: null });
+
+    const fetchInvoicesByIds = vi.fn(async () => [
+      makeCustomerInvoice(6002, "Resolved Name", null),
+      makeCustomerInvoice(6003, "Should Not Win", { street: "5 New Ave", city: "Dallas", state: "TX", zip: "75201" }),
+    ]);
+    const updated = await backfillStCustomerDataFromInvoicesForTenant(
+      tenantId, STUB_CONFIG, { fetchInvoicesByIds },
+    );
+
+    expect(updated).toBe(2);
+    // Placeholder name replaced; its already-present address is left untouched.
+    expect(await getJobContact(placeholderJob)).toEqual({
+      customerName: "Resolved Name",
+      serviceAddress: "9 Old Rd",
+    });
+    // Real name kept; only the missing address is filled from the invoice.
+    expect(await getJobContact(realJob)).toEqual({
+      customerName: "Real Name",
+      serviceAddress: "5 New Ave, Dallas, TX 75201",
+    });
+  });
+
+  it("never selects a row that has both a real name and an address (ServiceTitan not queried)", async () => {
+    const tenantId = await createTestTenant("cust-complete");
+    const jobId = await seedJob({ tenantId, stInvoiceId: "6004", customerName: "Complete Co", serviceAddress: "7 Done St" });
+
+    const fetchInvoicesByIds = vi.fn(async () => [makeCustomerInvoice(6004, "Other", null)]);
+    const updated = await backfillStCustomerDataFromInvoicesForTenant(
+      tenantId, STUB_CONFIG, { fetchInvoicesByIds },
+    );
+
+    expect(updated).toBe(0);
+    expect(fetchInvoicesByIds).not.toHaveBeenCalled();
+    expect(await getJobContact(jobId)).toEqual({
+      customerName: "Complete Co",
+      serviceAddress: "7 Done St",
+    });
+  });
+
+  it("performs no update when the invoice carries no customer name and no address", async () => {
+    const tenantId = await createTestTenant("cust-empty-invoice");
+    const jobId = await seedJob({ tenantId, stInvoiceId: "6005", customerName: null, serviceAddress: null });
+
+    const fetchInvoicesByIds = vi.fn(async () => [makeCustomerInvoice(6005, null, null)]);
+    const updated = await backfillStCustomerDataFromInvoicesForTenant(
+      tenantId, STUB_CONFIG, { fetchInvoicesByIds },
+    );
+
+    expect(updated).toBe(0);
+    expect(await getJobContact(jobId)).toEqual({ customerName: null, serviceAddress: null });
+  });
+});
+
+describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk recovery)", () => {
+  it("recovers name/address/phone/email/number on a fully-purged row by matching the retained hash", async () => {
+    const tenantId = await createTestTenant("hash-fill");
+    const hash = hashStJobId("700001");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hash,
+      stJobNumber: null,
+      customerName: null,
+      serviceAddress: null,
+      customerPhone: null,
+      customerEmail: null,
+      completedAt: new Date("2026-05-11T00:00:00Z"),
+    });
+
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      _modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void> | void,
+    ) => {
+      await onBatch?.([makeJobWithCustomer(700001, "75070", {
+        customerName: "Mark Lobbestael",
+        phone: "5035551234",
+        email: "mark@example.com",
+        address: { street: "10 Heat Pump Way", city: "Portland", state: "OR", zip: "97201" },
+      })]);
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(1);
+    expect(await getJobFullContact(jobId)).toEqual({
+      stJobNumber: "75070",
+      customerName: "Mark Lobbestael",
+      serviceAddress: "10 Heat Pump Way, Portland, OR 97201",
+      customerPhone: "5035551234",
+      customerEmail: "mark@example.com",
+    });
+  });
+
+  it("fills only the missing fields and never overwrites real existing data", async () => {
+    const tenantId = await createTestTenant("hash-partial");
+    const hash = hashStJobId("700002");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hash,
+      stJobNumber: "EXISTING-NUM",
+      customerName: "Existing Name",
+      serviceAddress: null,
+      customerPhone: null,
+      customerEmail: "old@example.com",
+      completedAt: new Date("2026-05-11T00:00:00Z"),
+    });
+
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      _modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void> | void,
+    ) => {
+      await onBatch?.([makeJobWithCustomer(700002, "NEW-NUM", {
+        customerName: "Should Not Win",
+        phone: "5039999999",
+        email: "new@example.com",
+        address: { street: "5 New Ave", city: "Dallas", state: "TX", zip: "75201" },
+      })]);
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(1);
+    // Existing number/name/email preserved; only the blank address + phone filled.
+    expect(await getJobFullContact(jobId)).toEqual({
+      stJobNumber: "EXISTING-NUM",
+      customerName: "Existing Name",
+      serviceAddress: "5 New Ave, Dallas, TX 75201",
+      customerPhone: "5039999999",
+      customerEmail: "old@example.com",
+    });
+  });
+
+  it("overrides a `Customer <id>` placeholder name with the recovered real name", async () => {
+    const tenantId = await createTestTenant("hash-placeholder");
+    const hash = hashStJobId("700003");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hash,
+      customerName: "Customer 555",
+      completedAt: new Date("2026-05-11T00:00:00Z"),
+    });
+
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      _modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void> | void,
+    ) => {
+      await onBatch?.([makeJobWithCustomer(700003, "JN3", { customerName: "Real Person" })]);
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(1);
+    expect((await getJobFullContact(jobId)).customerName).toBe("Real Person");
+  });
+
+  it("makes no update when the fetched job's hash matches nothing", async () => {
+    const tenantId = await createTestTenant("hash-nomatch");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hashStJobId("700004"),
+      customerName: null,
+      completedAt: new Date("2026-05-11T00:00:00Z"),
+    });
+
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      _modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void> | void,
+    ) => {
+      // A different ServiceTitan id → different hash → no match.
+      await onBatch?.([makeJobWithCustomer(999999, "OTHER", { customerName: "Nope" })]);
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(0);
+    expect((await getJobFullContact(jobId)).customerName).toBeNull();
+  });
+
+  it("does not query ServiceTitan when no row needs recovery", async () => {
+    const tenantId = await createTestTenant("hash-complete");
+    await seedJob({
+      tenantId,
+      stJobIdHash: hashStJobId("700005"),
+      stJobNumber: "N",
+      customerName: "Done",
+      serviceAddress: "Addr",
+      customerPhone: "p",
+      customerEmail: "e",
+    });
+
+    const fetchCompletedJobs = vi.fn(async () => {});
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(0);
+    expect(fetchCompletedJobs).not.toHaveBeenCalled();
   });
 });
