@@ -1200,6 +1200,9 @@ function ActionHistoryTimeline({ leadId, tenantId, timezone, canEdit = false, cu
           {entry.spokeResult === "appointment_set" && (entry.appointmentDate || entry.appointmentTime) && (
             <span className="text-[10px] text-emerald-400/70">· Appt {entry.appointmentDate || ""}{entry.appointmentTime ? ` ${entry.appointmentTime}` : ""}</span>
           )}
+          {entry.outcome === "resubmission" && (entry.appointmentDate || entry.appointmentTime) && (
+            <span className="text-[10px] text-cyan-400/70">· Booked {entry.appointmentDate || ""}{entry.appointmentTime ? ` ${entry.appointmentTime}` : ""}</span>
+          )}
           {entry.id >= 0 && canEdit && (isAdminRole || entry.userId === currentUserId) && (
             <button
               onClick={e => { e.stopPropagation(); startEdit(entry); }}

@@ -1,5 +1,5 @@
-import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable, unroutedSheetRowsTable } from "@workspace/db";
-import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
+import { db, leadsTable, googleSheetConfigsTable, funnelTypesTable, callAttemptsTable, tenantsTable, unroutedSheetRowsTable, usersTable } from "@workspace/db";
+import { eq, and, isNotNull, ne, inArray, desc, sql } from "drizzle-orm";
 import { readRawSheetData } from "./integrations/google-sheets";
 import { emitLeadUpdated } from "../socket";
 import { scheduleOrEmitNewLead } from "./lead-notify-scheduler";
@@ -11,6 +11,7 @@ import { normalizeSource } from "./source-normalizer";
 import { normalizePhone } from "../lib/phone-utils";
 import { emitSheetDriftNotification } from "./notifications";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
+import { handleResubmission } from "./lead-resubmission";
 
 const DRIFT_ALERT_THRESHOLD_MS = 10 * 60 * 1000;
 
@@ -18,6 +19,44 @@ const UPDATABLE_FIELDS = [
   "appointmentDate", "appointmentTime", "appointmentBooked",
   "addOns", "address", "city", "state", "zip",
 ] as const;
+
+/** Parse a sheet submission timestamp (e.g. the mapped `dateTime` column). */
+function parseSubmissionMs(value: string | undefined | null): number | null {
+  if (!value) return null;
+  const t = Date.parse(value.trim());
+  return Number.isFinite(t) ? t : null;
+}
+
+interface OrderedRow {
+  row: ReturnType<typeof mapRawRows>[number];
+  index: number;
+  ms: number | null;
+}
+
+/** True when row `a` represents a later submission than row `b`. */
+function rowIsLater(a: OrderedRow, b: OrderedRow): boolean {
+  if (a.ms !== null && b.ms !== null) return a.ms !== b.ms ? a.ms > b.ms : a.index > b.index;
+  if (a.ms !== null) return true;
+  if (b.ms !== null) return false;
+  return a.index > b.index;
+}
+
+/**
+ * Collapse mapped rows to a single latest submission per normalized phone.
+ * Deterministic latest-wins (by submission timestamp, tie-broken by sheet
+ * order) — this is what kills the per-cycle appointment oscillation.
+ */
+function buildLatestRowByPhone(rows: ReturnType<typeof mapRawRows>): Map<string, OrderedRow> {
+  const latest = new Map<string, OrderedRow>();
+  rows.forEach((row, index) => {
+    const phone = normalizePhone(row.phone || "");
+    if (!phone) return;
+    const candidate: OrderedRow = { row, index, ms: parseSubmissionMs(row.dateTime) };
+    const existing = latest.get(phone);
+    if (!existing || rowIsLater(candidate, existing)) latest.set(phone, candidate);
+  });
+  return latest;
+}
 
 function headersMatch(current: string[], saved: string[]): boolean {
   if (current.length !== saved.length) return false;
@@ -101,6 +140,10 @@ async function rescanExistingRows(
   if (!hasUpdatableMapping) return 0;
 
   const allMappedRows = mapRawRows(currentHeaders, existingRows, mapping);
+  // Collapse duplicate-phone rows to one deterministic latest submission per
+  // phone. Comparing the lead against a stable "latest" each cycle is what
+  // stops the appointment date from oscillating across sync cycles.
+  const latestByPhone = buildLatestRowByPhone(allMappedRows);
 
   const existingLeads = await db.select({
     id: leadsTable.id,
@@ -114,6 +157,7 @@ async function rescanExistingRows(
     state: leadsTable.state,
     zip: leadsTable.zip,
     hubStatus: leadsTable.hubStatus,
+    hasSoldEstimate: leadsTable.hasSoldEstimate,
   }).from(leadsTable)
     .where(eq(leadsTable.tenantId, config.tenantId));
 
@@ -123,10 +167,7 @@ async function rescanExistingRows(
   }
 
   let updated = 0;
-  for (const row of allMappedRows) {
-    const normalizedPhone = normalizePhone(row.phone || "");
-    if (!normalizedPhone) continue;
-
+  for (const [normalizedPhone, { row }] of latestByPhone) {
     const existingLead = leadByPhone.get(normalizedPhone);
     if (!existingLead) continue;
 
@@ -141,8 +182,14 @@ async function rescanExistingRows(
     const newZip = row.zip || null;
     const newApptBooked = isPreBookedCellValue(row.appointmentBooked);
 
-    if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
-    if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
+    // A CSR-confirmed appointment (appt_set) or a sold lead is authoritative —
+    // never let a sheet row silently overwrite its appointment.
+    const apptLocked = existingLead.hubStatus === "appt_set" || existingLead.hasSoldEstimate;
+
+    if (!apptLocked) {
+      if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
+      if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
+    }
     if (newAddOns && newAddOns !== existingLead.addOns) updates.addOns = newAddOns;
     if (newAddress && newAddress !== existingLead.address) updates.address = newAddress;
     if (newCity && newCity !== existingLead.city) updates.city = newCity;
@@ -150,7 +197,7 @@ async function rescanExistingRows(
     if (newZip && newZip !== existingLead.zip) updates.zip = newZip;
 
     const hasNewApptInfo = newApptBooked || isValidAppointmentValue(newApptDate) || isValidAppointmentValue(newApptTime);
-    if (hasNewApptInfo && !existingLead.appointmentBooked) {
+    if (hasNewApptInfo && !existingLead.appointmentBooked && !apptLocked) {
       updates.preBooked = true;
       if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
         updates.hubStatus = "appt_booked";
@@ -261,12 +308,17 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
     return 0;
   }
 
-  const existingLeads = await db.select({ phone: leadsTable.phone })
+  const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
     .from(leadsTable)
     .where(eq(leadsTable.tenantId, config.tenantId));
   const existingPhones = new Set<string>();
+  const leadIdByPhone = new Map<string, number>();
   for (const l of existingLeads) {
-    if (l.phone) existingPhones.add(normalizePhone(l.phone));
+    if (l.phone) {
+      const np = normalizePhone(l.phone);
+      existingPhones.add(np);
+      leadIdByPhone.set(np, l.id);
+    }
   }
 
   const funnelIds = new Set<number>();
@@ -284,12 +336,28 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
   let imported = 0;
   const newLeads: (typeof leadsTable.$inferSelect)[] = [];
+  // Repeat rows (phone already has a lead) are deferred and processed per phone
+  // in ascending submission order AFTER the main loop, so the latest booking is
+  // the one that lands on the lead even if rows arrive out of timestamp order.
+  const deferredResub = new Map<string, OrderedRow[]>();
 
-  for (const row of rows) {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
     const normalizedPhone = normalizePhone(row.phone || "");
-    if (normalizedPhone && existingPhones.has(normalizedPhone)) continue;
-    if (!row.firstName && !row.lastName) continue;
     const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
+    if (normalizedPhone && existingPhones.has(normalizedPhone)) {
+      // A brand-new sheet row for a phone that already exists is a repeat
+      // submission. Defer it (the watermark advances past this row, so it never
+      // re-fires on later sync cycles) to capture this submission's appointment
+      // + source rather than silently dropping it.
+      if (!nameFields.includes("test")) {
+        const list = deferredResub.get(normalizedPhone) ?? [];
+        list.push({ row, index: rowIndex, ms: parseSubmissionMs(row.dateTime) });
+        deferredResub.set(normalizedPhone, list);
+      }
+      continue;
+    }
+    if (!row.firstName && !row.lastName) continue;
     if (nameFields.includes("test")) continue;
 
     const resolvedFunnelId = resolveFunnelForRow(row, funnelColumn, funnelValueMap, defaultFunnelTypeId);
@@ -354,6 +422,9 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
     }).returning();
 
     if (lead) {
+      // Register so a later repeat row for the same phone in this same batch
+      // routes through resubmission instead of trying to create a duplicate.
+      if (normalizedPhone) leadIdByPhone.set(normalizedPhone, lead.id);
       const { recordLeadStatusChange } = await import("./lead-status-history");
       await recordLeadStatusChange({
         leadId: lead.id,
@@ -400,6 +471,31 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
     }
     newLeads.push(lead);
     imported++;
+  }
+
+  // Process deferred repeat submissions: ascending submission order so the
+  // last (latest) call is the one that adopts the appointment onto the lead.
+  for (const [normalizedPhone, list] of deferredResub) {
+    const existingLeadId = leadIdByPhone.get(normalizedPhone);
+    if (!existingLeadId) continue;
+    // Ascending by submission order (same comparator as backfill) so the last
+    // call is the latest submission and its booking is the one adopted.
+    list.sort((a, b) => (rowIsLater(a, b) ? 1 : -1));
+    for (const { row, ms } of list) {
+      try {
+        const resubSource = await normalizeSource(config.tenantId, row.source || "Form");
+        await handleResubmission(config.tenantId, existingLeadId, resubSource, {
+          appointmentDate: row.appointmentDate || null,
+          appointmentTime: row.appointmentTime || null,
+          addOns: row.addOns || null,
+          submittedAt: ms !== null ? new Date(ms) : null,
+        });
+      } catch (err) {
+        console.error(`[SheetSync] Failed to record resubmission for lead ${existingLeadId} (sheet config ${config.id}):`, err);
+      }
+    }
+    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingLeadId));
+    if (refreshed) emitLeadUpdated(config.tenantId, refreshed as unknown as Record<string, unknown>);
   }
 
   await db.update(googleSheetConfigsTable)
@@ -513,4 +609,201 @@ export function stopSheetSyncScheduler(): void {
     clearInterval(syncTimer);
     syncTimer = null;
   }
+}
+
+/**
+ * One-time backfill: walk each configured sheet, group historical rows by
+ * phone, and create a discrete "resubmission" timeline entry for every repeat
+ * submission (all rows after the first/original) of an existing lead — capturing
+ * that submission's source + appointment. Also adopts the latest booking onto
+ * the lead (unless CSR-confirmed/sold).
+ *
+ * Idempotent: each candidate row is keyed by (submission time, appt date, appt
+ * time) and skipped if a matching resubmission entry already exists, so re-runs
+ * create nothing and unrelated (e.g. CallRail) resubmission attempts never
+ * suppress historical sheet rows. The lead is only mutated when at least one new
+ * entry is created, and resubmissionCount is never lowered.
+ */
+export async function backfillResubmissionTimeline(): Promise<{ entriesCreated: number; leadsUpdated: number }> {
+  const configs = await db.select().from(googleSheetConfigsTable)
+    .where(and(
+      isNotNull(googleSheetConfigsTable.googleSheetId),
+      isNotNull(googleSheetConfigsTable.googleSheetTab),
+      isNotNull(googleSheetConfigsTable.columnMapping),
+      isNotNull(googleSheetConfigsTable.mappingHeaders),
+    ));
+
+  let entriesCreated = 0;
+  let leadsUpdated = 0;
+
+  for (const config of configs) {
+    const mapping = config.columnMapping as Record<string, string>;
+    const savedHeaders = config.mappingHeaders as string[];
+
+    let currentHeaders: string[];
+    let rawRows: string[][];
+    try {
+      const data = await readRawSheetData(config.googleSheetId, config.googleSheetTab);
+      currentHeaders = data.headers;
+      rawRows = data.rawRows;
+    } catch (err) {
+      console.warn(`[Backfill][Resub] Could not read sheet for config ${config.id} (tenant ${config.tenantId}):`, (err as Error).message);
+      continue;
+    }
+
+    if (!headersMatch(currentHeaders, savedHeaders)) {
+      console.warn(`[Backfill][Resub] Headers drifted for config ${config.id} (tenant ${config.tenantId}) — skipping`);
+      continue;
+    }
+
+    const mappedRows = mapRawRows(currentHeaders, rawRows, mapping);
+
+    // Build a normalized-phone → lead map for this tenant so we match leads even
+    // when a legacy lead's phone was stored in a non-normalized format.
+    const tenantLeads = await db.select().from(leadsTable)
+      .where(eq(leadsTable.tenantId, config.tenantId));
+    const leadByPhone = new Map<string, typeof tenantLeads[number]>();
+    for (const l of tenantLeads) {
+      if (l.phone) leadByPhone.set(normalizePhone(l.phone), l);
+    }
+
+    // Group rows by normalized phone, preserving sheet order via index.
+    const byPhone = new Map<string, OrderedRow[]>();
+    mappedRows.forEach((row, index) => {
+      const phone = normalizePhone(row.phone || "");
+      if (!phone) return;
+      const list = byPhone.get(phone) ?? [];
+      list.push({ row, index, ms: parseSubmissionMs(row.dateTime) });
+      byPhone.set(phone, list);
+    });
+
+    for (const [phone, group] of byPhone) {
+      if (group.length < 2) continue;
+
+      const lead = leadByPhone.get(phone);
+      if (!lead) continue;
+
+      // Sort ascending: earliest submission first (the original/creation row).
+      group.sort((a, b) => (rowIsLater(a, b) ? 1 : -1));
+      const resubRows = group.slice(1); // all submissions after the first
+
+      // Idempotency: build a set of (submission time, appt date, appt time)
+      // keys already recorded as resubmission entries for this lead. A row whose
+      // key already exists is skipped, so re-runs create nothing and unrelated
+      // (e.g. CallRail) resubmission attempts never suppress historical sheet
+      // rows. Rows with no parseable submission time fall back to the lead's
+      // createdAt so the key is still stable across runs.
+      const leadCreatedMs = lead.createdAt ? lead.createdAt.getTime() : 0;
+      const resubKey = (ms: number, apptDate: string | null, apptTime: string | null) =>
+        `${ms}|${apptDate ?? ""}|${apptTime ?? ""}`;
+      const existingResub = await db.select({
+        attemptedAt: callAttemptsTable.attemptedAt,
+        appointmentDate: callAttemptsTable.appointmentDate,
+        appointmentTime: callAttemptsTable.appointmentTime,
+      })
+        .from(callAttemptsTable)
+        .where(and(eq(callAttemptsTable.leadId, lead.id), eq(callAttemptsTable.outcome, "resubmission")));
+      const seen = new Set<string>();
+      for (const e of existingResub) {
+        const ms = e.attemptedAt ? e.attemptedAt.getTime() : leadCreatedMs;
+        seen.add(resubKey(ms, e.appointmentDate ?? null, e.appointmentTime ?? null));
+      }
+
+      // Resolve a user for the system timeline entries (once per lead).
+      let attemptUserId: number | null = lead.assignedCsrId ?? null;
+      if (!attemptUserId) {
+        const [recent] = await db.select({ userId: callAttemptsTable.userId })
+          .from(callAttemptsTable)
+          .where(eq(callAttemptsTable.leadId, lead.id))
+          .orderBy(desc(callAttemptsTable.attemptedAt))
+          .limit(1);
+        attemptUserId = recent?.userId ?? null;
+      }
+      if (!attemptUserId) {
+        const [anyUser] = await db.select({ id: usersTable.id })
+          .from(usersTable)
+          .where(eq(usersTable.tenantId, config.tenantId))
+          .limit(1);
+        attemptUserId = anyUser?.id ?? null;
+      }
+      if (!attemptUserId) continue;
+
+      let createdForLead = 0;
+      for (const { row, ms } of resubRows) {
+        const apptDate = isValidAppointmentValue(row.appointmentDate) ? row.appointmentDate!.trim() : null;
+        const apptTime = isValidAppointmentValue(row.appointmentTime) ? row.appointmentTime!.trim() : null;
+        const rowMs = ms !== null ? ms : leadCreatedMs;
+        const key = resubKey(rowMs, apptDate, apptTime);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const sourceLabel = await normalizeSource(config.tenantId, row.source || "Form");
+        const bookedLabel = (apptDate || apptTime)
+          ? ` — booked ${[apptDate, apptTime].filter(Boolean).join(" ")}`
+          : "";
+        await db.insert(callAttemptsTable).values({
+          leadId: lead.id,
+          userId: attemptUserId,
+          method: "system",
+          outcome: "resubmission",
+          platform: "native",
+          actionType: "system",
+          notes: `Lead resubmitted from ${sourceLabel}${bookedLabel}`,
+          appointmentDate: apptDate,
+          appointmentTime: apptTime,
+          attemptedAt: new Date(rowMs),
+        });
+        entriesCreated++;
+        createdForLead++;
+      }
+
+      // Only mutate the lead when we actually recorded new history — keeps a
+      // re-run a true no-op (no churn on updatedAt/resubmittedAt or emits).
+      if (createdForLead === 0) continue;
+
+      // Adopt the latest booking + resubmission metadata onto the lead.
+      const latest = resubRows[resubRows.length - 1];
+      const latestApptDate = isValidAppointmentValue(latest.row.appointmentDate) ? latest.row.appointmentDate!.trim() : null;
+      const latestApptTime = isValidAppointmentValue(latest.row.appointmentTime) ? latest.row.appointmentTime!.trim() : null;
+      const apptLocked = lead.hubStatus === "appt_set" || lead.hasSoldEstimate;
+      const latestMs = latest.ms !== null ? latest.ms : leadCreatedMs;
+
+      const leadUpdates: Record<string, unknown> = {
+        // Never lower an existing count (other sources also increment it).
+        resubmissionCount: sql`GREATEST(COALESCE(${leadsTable.resubmissionCount}, 0), ${resubRows.length})`,
+        resubmittedAt: new Date(latestMs),
+        updatedAt: new Date(),
+      };
+      if (!apptLocked && (latestApptDate || latestApptTime)) {
+        if (latestApptDate) leadUpdates.appointmentDate = latestApptDate;
+        if (latestApptTime) leadUpdates.appointmentTime = latestApptTime;
+        leadUpdates.preBooked = true;
+        leadUpdates.visibleAfter = null;
+        if (lead.hubStatus !== "appt_booked" && lead.hubStatus !== "dead") {
+          leadUpdates.hubStatus = "appt_booked";
+        }
+      }
+
+      await db.update(leadsTable).set(leadUpdates).where(eq(leadsTable.id, lead.id));
+      leadsUpdated++;
+
+      if (leadUpdates.hubStatus && leadUpdates.hubStatus !== lead.hubStatus) {
+        const { recordLeadStatusChange } = await import("./lead-status-history");
+        await recordLeadStatusChange({
+          leadId: lead.id,
+          tenantId: config.tenantId,
+          fromStatus: lead.hubStatus,
+          toStatus: leadUpdates.hubStatus as string,
+          changedAt: leadUpdates.resubmittedAt as Date,
+          reason: "backfill_resubmission",
+        });
+      }
+
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, lead.id));
+      if (refreshed) emitLeadUpdated(config.tenantId, refreshed as unknown as Record<string, unknown>);
+    }
+  }
+
+  console.log(`[Backfill][Resub] Created ${entriesCreated} resubmission entr(ies) across ${leadsUpdated} lead(s)`);
+  return { entriesCreated, leadsUpdated };
 }

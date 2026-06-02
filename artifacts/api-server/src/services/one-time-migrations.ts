@@ -1465,6 +1465,15 @@ const migrations: Migration[] = [
       console.log(`[Migration] Hash-recovered customer data on ${totalUpdated} job(s) across ${tenants.length} tenant(s)`);
     },
   },
+  {
+    id: "2026-06-02_backfill-resubmission-timeline",
+    description: "Create discrete resubmission timeline entries for historical repeat sheet submissions and adopt latest booking per lead",
+    run: async () => {
+      const { backfillResubmissionTimeline } = await import("./sheet-sync");
+      const { entriesCreated, leadsUpdated } = await backfillResubmissionTimeline();
+      console.log(`[Migration] Resubmission backfill created ${entriesCreated} entr(ies) across ${leadsUpdated} lead(s)`);
+    },
+  },
 ];
 
 export const BACKFILL_MANUAL_SOURCE_MIGRATION_ID =

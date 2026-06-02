@@ -1,4 +1,4 @@
-- [Sheet-sync appt oscillation](sheet-sync-appt-oscillation.md) — duplicate-phone sheet rows + stale-map compare in rescanExistingRows make a lead's appointmentDate flip between two dates every sync cycle.
+- [Sheet-sync appt oscillation](sheet-sync-appt-oscillation.md) — dup-phone rows + stale-map compare flip a lead's appt date each sync; resubmission recording must keep live-sync + backfill paths behaviorally identical (ordering, dead-lead guard, idempotency).
 - [Revenue attribution data model](revenue-attribution-data-model.md) — rebate-corrected revenue math + itemized rebate breakdown lives only on sold_estimates, not jobs.
 - [ST PII purge & retention](st-pii-purge-retention.md) — name/address/stJobNumber retained; phone/email/ST-ids purged@24h; purged-row marker is stJobId===null, NOT customerName.
 - [Orphan reaper thresholds](orphan-reaper-thresholds.md) — reaper keys off progress_updated_at inactivity; threshold must exceed max inter-stamp gap (~5min Meta chunk); UI 3min is leading warning, reaper 15min recovers.
