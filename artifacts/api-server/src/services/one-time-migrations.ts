@@ -8,7 +8,7 @@ import { backfillDailyStats } from "./coordinator-stats";
 import { extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizePhone } from "../lib/phone-utils";
 import { decryptConfig } from "../lib/encryption";
-import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId, parseInvoiceData, formatSTJobForSync, fetchCustomerContactsById } from "./integrations/service-titan";
+import { fetchInvoicesByIds, fetchCompletedJobs, hashStJobId, parseInvoiceData, formatSTJobForSync, fetchCustomerContactsById, type STJob } from "./integrations/service-titan";
 
 interface Migration {
   id: string;
@@ -2071,10 +2071,9 @@ export async function backfillStCustomerDataByHashForTenant(
 
   const WINDOW_BUFFER_MS = 7 * 24 * 60 * 60 * 1000;
   const anchor = earliest ?? new Date(0);
-  const modifiedAfter = new Date(anchor.getTime() - WINDOW_BUFFER_MS).toISOString();
 
   let totalUpdated = 0;
-  await fetchJobs(stConfig, modifiedAfter, async (stJobs) => {
+  const handleBatch = async (stJobs: STJob[]) => {
     for (const stJob of stJobs) {
       const hash = hashStJobId(String(stJob.id));
       const jobRows = jobsByHash.get(hash);
@@ -2122,7 +2121,34 @@ export async function backfillStCustomerDataByHashForTenant(
       // Done with this hash — drop it so later batches skip the lookup.
       jobsByHash.delete(hash);
     }
-  });
+  };
+
+  // fetchCompletedJobs hard-stops at a 500-page (50k-job) safety cap per call,
+  // and production tenants can have >50k completed jobs — a single open-ended
+  // window would silently truncate and leave historical blanks unrecovered.
+  // Walk bounded date windows (modifiedOnOrAfter..modifiedBefore) from the
+  // earliest affected row forward to now, stopping as soon as every target
+  // hash is matched (#825).
+  const CHUNK_MS = 90 * 24 * 60 * 60 * 1000;
+  const startMs = anchor.getTime() - WINDOW_BUFFER_MS;
+  const endMs = Date.now() + WINDOW_BUFFER_MS;
+  for (let winStart = startMs; winStart < endMs && jobsByHash.size > 0; winStart += CHUNK_MS) {
+    const winEnd = Math.min(winStart + CHUNK_MS, endMs);
+    await fetchJobs(
+      stConfig,
+      new Date(winStart).toISOString(),
+      handleBatch,
+      new Date(winEnd).toISOString(),
+    );
+  }
+
+  if (jobsByHash.size > 0) {
+    console.warn(
+      `[Migration] ST hash customer-data backfill: ${jobsByHash.size} target hash(es) ` +
+        `for tenant ${tenantId} had no matching ServiceTitan completed job across the ` +
+        `full window scan; those rows were left unchanged.`,
+    );
+  }
   return totalUpdated;
 }
 

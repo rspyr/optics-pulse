@@ -643,4 +643,49 @@ describe("backfillStCustomerDataByHashForTenant (real Postgres, task #825 bulk r
       customerEmail: "mark@example.com",
     });
   });
+
+  it("walks bounded date windows so a match beyond the first 50k-job window is still recovered", async () => {
+    const tenantId = await createTestTenant("hash-windowed");
+    const hash = hashStJobId("700007");
+    const jobId = await seedJob({
+      tenantId,
+      stJobIdHash: hash,
+      stJobNumber: null,
+      customerName: null,
+      completedAt: new Date("2025-01-01T00:00:00Z"),
+    });
+
+    // The job's ServiceTitan modification date sits ~5 months after the anchor,
+    // i.e. in a LATER 90-day window than the first one. A single open-ended
+    // fetch could truncate at the 50k-job cap before reaching it; the chunked
+    // scan must keep advancing windows until the hash is found.
+    const targetModified = new Date("2025-06-01T00:00:00Z").getTime();
+    const fetchCompletedJobs = vi.fn(async (
+      _cfg: unknown,
+      modifiedAfter: string,
+      onBatch?: (jobs: STJob[]) => Promise<void>,
+      modifiedBefore?: string,
+    ) => {
+      const after = new Date(modifiedAfter).getTime();
+      const before = modifiedBefore ? new Date(modifiedBefore).getTime() : Infinity;
+      if (targetModified >= after && targetModified < before) {
+        await onBatch?.([makeJobWithCustomer(700007, "75090", { customerName: "Late Mod" })]);
+      }
+      return [];
+    });
+
+    const updated = await backfillStCustomerDataByHashForTenant(
+      tenantId, STUB_CONFIG, { fetchCompletedJobs },
+    );
+
+    expect(updated).toBe(1);
+    // More than one window had to be requested to reach the later match.
+    expect(fetchCompletedJobs.mock.calls.length).toBeGreaterThan(1);
+    // Every call is a bounded window (both modifiedAfter and modifiedBefore set).
+    for (const call of fetchCompletedJobs.mock.calls) {
+      expect(typeof call[1]).toBe("string");
+      expect(typeof call[3]).toBe("string");
+    }
+    expect((await getJobFullContact(jobId)).customerName).toBe("Late Mod");
+  });
 });
