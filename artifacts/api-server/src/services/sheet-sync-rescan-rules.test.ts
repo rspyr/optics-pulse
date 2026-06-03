@@ -214,6 +214,151 @@ describe("computeRescanUpdates — first-time booking promotion", () => {
   });
 });
 
+describe("computeRescanUpdates — non-appointment fields (addOns/address/city/state/zip)", () => {
+  const FIELDS = ["addOns", "address", "city", "state", "zip"] as const;
+  type Field = (typeof FIELDS)[number];
+
+  const STORED: Record<Field, string> = {
+    addOns: "gutter guards",
+    address: "1 main st",
+    city: "town",
+    state: "CA",
+    zip: "90000",
+  };
+  const CHANGED: Record<Field, string> = {
+    addOns: "solar panels",
+    address: "2 oak ave",
+    city: "village",
+    state: "NY",
+    zip: "10001",
+  };
+
+  for (const field of FIELDS) {
+    describe(field, () => {
+      it("writes only when the cell actually changed", () => {
+        const lead = mkLead({ [field]: STORED[field] });
+        const row = mkRow({ [field]: CHANGED[field] });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        expect(updates[field]).toBe(CHANGED[field]);
+      });
+
+      it("produces no write when the cell already matches the stored value", () => {
+        const lead = mkLead({ [field]: STORED[field] });
+        const row = mkRow({ [field]: STORED[field] });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        expect(updates[field]).toBeUndefined();
+      });
+
+      it("an empty cell never clears the existing stored value", () => {
+        const lead = mkLead({ [field]: STORED[field] });
+        const row = mkRow({ [field]: "" });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        expect(updates[field]).toBeUndefined();
+      });
+
+      it("populates the field when the lead has none and the cell carries a value", () => {
+        const lead = mkLead({ [field]: null });
+        const row = mkRow({ [field]: CHANGED[field] });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        expect(updates[field]).toBe(CHANGED[field]);
+      });
+
+      it("updates independently of an appt_set-locked appointment", () => {
+        const lead = mkLead({
+          hubStatus: "appt_set",
+          appointmentDate: "2026-05-05",
+          appointmentTime: "08:00",
+          appointmentBooked: true,
+          [field]: STORED[field],
+        });
+        const row = mkRow({
+          appointmentDate: "2026-09-09",
+          appointmentTime: "14:00",
+          [field]: CHANGED[field],
+        });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        // Appointment stays protected...
+        expect(updates.appointmentDate).toBeUndefined();
+        expect(updates.appointmentTime).toBeUndefined();
+        // ...while the non-appointment field still flows through.
+        expect(updates[field]).toBe(CHANGED[field]);
+      });
+
+      it("updates independently of a sold-lead-locked appointment", () => {
+        const lead = mkLead({
+          hubStatus: "appt_booked",
+          hasSoldEstimate: true,
+          appointmentDate: "2026-04-04",
+          appointmentTime: "07:00",
+          appointmentBooked: true,
+          [field]: STORED[field],
+        });
+        const row = mkRow({
+          appointmentDate: "2026-12-12",
+          appointmentTime: "16:00",
+          [field]: CHANGED[field],
+        });
+
+        const updates = computeRescanUpdates(lead, row);
+
+        expect(updates.appointmentDate).toBeUndefined();
+        expect(updates.appointmentTime).toBeUndefined();
+        expect(updates[field]).toBe(CHANGED[field]);
+      });
+    });
+  }
+
+  it("an empty row leaves every stored non-appointment field untouched", () => {
+    const lead = mkLead({
+      addOns: STORED.addOns,
+      address: STORED.address,
+      city: STORED.city,
+      state: STORED.state,
+      zip: STORED.zip,
+    });
+    const row = mkRow({ addOns: "", address: "", city: "", state: "", zip: "" });
+
+    const updates = computeRescanUpdates(lead, row);
+
+    expect(updates).toEqual({});
+  });
+
+  it("writes only the changed field when several are stored and one differs", () => {
+    const lead = mkLead({
+      addOns: STORED.addOns,
+      address: STORED.address,
+      city: STORED.city,
+      state: STORED.state,
+      zip: STORED.zip,
+    });
+    const row = mkRow({
+      addOns: STORED.addOns,
+      address: CHANGED.address,
+      city: STORED.city,
+      state: STORED.state,
+      zip: STORED.zip,
+    });
+
+    const updates = computeRescanUpdates(lead, row);
+
+    expect(updates.address).toBe(CHANGED.address);
+    expect(updates.addOns).toBeUndefined();
+    expect(updates.city).toBeUndefined();
+    expect(updates.state).toBeUndefined();
+    expect(updates.zip).toBeUndefined();
+  });
+});
+
 describe("computeRescanUpdates — dead-lead guard", () => {
   it("never promotes a dead lead back to appt_booked", () => {
     const lead = mkLead({ hubStatus: "dead", appointmentBooked: null });
