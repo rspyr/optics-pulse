@@ -20,6 +20,10 @@ export type ListAttributionEventsParams = {
    * Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.
    */
   subdomainRule?: string;
+  /**
+   * Filter by route rule path, or `__none__` for events without a matching rule.
+   */
+  routeRule?: string;
   search?: string;
   limit?: number;
   offset?: number;

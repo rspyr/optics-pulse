@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import {
   db,
-  subdomainFunnelRulesTable,
-  subdomainSuggestionDismissalsTable,
+  routeFunnelRulesTable,
+  routeSuggestionDismissalsTable,
   funnelTypesTable,
   tenantFunnelTypesTable,
   attributionEventsTable,
@@ -11,7 +11,7 @@ import {
   funnelAliasesTable,
 } from "@workspace/db";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { invalidateSubdomainFunnelCache, extractSubdomain } from "../services/subdomain-funnel-resolver";
+import { invalidateRouteFunnelCache, normalizeRoutePath } from "../services/route-funnel-resolver";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
 const router: IRouter = Router();
@@ -34,27 +34,33 @@ function resolveTenantId(req: Request): number | null {
   return session.tenantId ?? null;
 }
 
-router.use("/subdomain-funnel-rules", requireManagerRole);
+router.use("/route-funnel-rules", requireManagerRole);
 
-function normalizeSubdomain(raw: string): string {
-  return raw.toLowerCase().trim().replace(/^www\./, "");
-}
+// SQL expression that extracts and normalizes the pathname from
+// attribution_events.page_url, mirroring normalizeRoutePath() in JS:
+//   - capture the path portion after the authority, before ?/# 
+//   - lowercase
+//   - collapse a trailing slash (except the root "/")
+//   - empty path → "/"
+// Requires the source table to be aliased `ae` in the surrounding query.
+const ROUTE_PATH_EXPR = sql`CASE
+  WHEN lower(coalesce(substring(ae.page_url from '^https?://[^/?#]+([^?#]*)'), '')) IN ('', '/') THEN '/'
+  ELSE regexp_replace(lower(coalesce(substring(ae.page_url from '^https?://[^/?#]+([^?#]*)'), '')), '/+$', '')
+END`;
 
 // Backfill: re-resolve historical attribution events whose page_url's
-// subdomain matches `subdomain` and whose resolved_funnel is currently
-// null/empty OR equals the tenant's default funnel (i.e. they fell through
-// to the fallback). We deliberately leave events that already have a
-// distinct resolved funnel alone — those came from explicit field/alias
-// matches and shouldn't be overwritten by a coarser subdomain rule.
+// normalized pathname matches `routePath` and whose resolved_funnel is
+// currently null/empty OR equals the tenant's default funnel (fell through to
+// the fallback). Events that already carry a distinct resolved funnel from an
+// explicit field/alias/subdomain match are left alone unless forceOverride.
 //
 // Returns counts so the UI can show "Saved · Updated N past events".
 type PriorEventValue = { id: number; resolvedFunnel: string | null };
 type PriorLeadValue = { id: number; leadType: string | null; funnelId: number | null };
 
 // Given a list of (possibly null/duplicate) candidate lead ids, return the
-// subset whose `funnel_overridden_at` is set. Used by the subdomain backfill /
-// revert to skip leads (and their events) that an operator has manually pinned,
-// so a coarser subdomain rule can never overwrite a per-lead override.
+// subset whose `funnel_overridden_at` is set, so a coarser route rule can
+// never overwrite a per-lead override.
 async function loadOverriddenLeadIds(
   tenantId: number,
   candidateLeadIds: Array<number | null>,
@@ -74,9 +80,9 @@ async function loadOverriddenLeadIds(
   return new Set(rows.map((r) => r.id));
 }
 
-async function backfillEventsForSubdomainRule(
+async function backfillEventsForRouteRule(
   tenantId: number,
-  subdomain: string,
+  routePath: string,
   funnelTypeId: number,
   canonicalFunnelName: string,
   priorFunnelName: string | null = null,
@@ -90,11 +96,10 @@ async function backfillEventsForSubdomainRule(
 }> {
   const dryRun = options.dryRun === true;
   const forceOverride = options.forceOverride === true;
-  const normSub = subdomain.toLowerCase().trim();
-  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [], priorEventValues: [], priorLeadValues: [] };
+  const normPath = normalizeRoutePath(routePath);
+  if (!normPath) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [], priorEventValues: [], priorLeadValues: [] };
   const priorLc = priorFunnelName?.toLowerCase() ?? null;
 
-  // Identify default funnel name to know which "fell-through" rows to claim.
   const [defaultAssoc] = await db
     .select({ funnelName: funnelTypesTable.name })
     .from(tenantFunnelTypesTable)
@@ -104,31 +109,20 @@ async function backfillEventsForSubdomainRule(
     .limit(1);
   const defaultFunnelName = defaultAssoc?.funnelName ?? null;
 
-  // SQL subdomain extraction mirrors extractSubdomain():
-  //  - lower(host), strip leading www.
-  //  - require at least 3 dot-separated labels (else null)
-  //  - subdomain = everything before the last 2 labels
-  // Implemented as a CTE so we can index into the resulting array per row.
-  const hostExpr = sql`regexp_replace(
-    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
-    '^www\\.', ''
-  )`;
-
   const candidates = await db.execute(sql`
     WITH parsed AS (
       SELECT
         ae.id,
         ae.created_lead_id,
         ae.resolved_funnel,
-        string_to_array(${hostExpr}, '.') AS parts
+        ${ROUTE_PATH_EXPR} AS route_path
       FROM attribution_events ae
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
     )
     SELECT id, created_lead_id, resolved_funnel
     FROM parsed
-    WHERE array_length(parts, 1) >= 3
-      AND array_to_string(parts[1:array_length(parts, 1) - 2], '.') = ${normSub}
+    WHERE route_path = ${normPath}
   `);
 
   const rows = (candidates.rows ?? []) as Array<{
@@ -137,12 +131,10 @@ async function backfillEventsForSubdomainRule(
     resolved_funnel: string | null;
   }>;
 
-  // Never let a (coarser) subdomain rule clobber a lead that an operator has
-  // explicitly pinned with a per-lead funnel override ("Just this lead"). We
-  // exclude both the overridden lead's row AND that lead's attribution events
-  // (whose resolved_funnel the drawer reads) so the manual correction survives
-  // subdomain-rule create / re-point / accept-suggestion / force-override.
-  // Mirrors the `funnel_overridden_at IS NULL` guard in the funnel-alias retag.
+  // Never let a (coarser) route rule clobber a lead an operator has explicitly
+  // pinned with a per-lead funnel override. We exclude both the overridden
+  // lead's row AND that lead's attribution events so the manual correction
+  // survives route-rule create / re-point / accept-suggestion / force-override.
   const overriddenLeadIds = await loadOverriddenLeadIds(
     tenantId,
     rows.map((r) => r.created_lead_id),
@@ -159,9 +151,6 @@ async function backfillEventsForSubdomainRule(
     const isFellThrough =
       !cur ||
       (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
-    // When re-pointing an existing rule, also reclaim events that
-    // previously matched the prior rule's funnel — those rows were
-    // attributed by this same subdomain rule and should follow it.
     const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
     if (curLc === newLc) continue;
     if (!isFellThrough && !isPriorRuleMatch && !forceOverride) continue;
@@ -180,10 +169,6 @@ async function backfillEventsForSubdomainRule(
       ));
   }
 
-  // Propagate to denormalized lead.lead_type / funnel_id for leads created by
-  // these events whose current funnel still reflects the fall-through value
-  // (null/empty/default). Don't clobber leads that already have a distinct
-  // funnel from another correction path.
   const updatedLeadIds: number[] = [];
   const priorLeadValues: PriorLeadValue[] = [];
   if (leadIdSet.size > 0) {
@@ -232,25 +217,16 @@ async function backfillEventsForSubdomainRule(
   };
 }
 
-// In-memory undo batches captured when a force-override save re-tags events
-// that were already attributed to a different funnel. Operators have a short
-// window from the UI (30s) to undo the move; we keep batches around for a
-// little longer server-side so a request that races with the UI countdown
-// still resolves cleanly. Restarts drop these — operators only ever see a
-// fresh banner after a save, so an expired/missing batch surfaces the same as
-// "window passed".
+// In-memory undo batches for force-override saves (see subdomain rules for the
+// rationale). Restarts drop these; operators only ever see a fresh banner.
 type UndoBatch = {
   tenantId: number;
-  subdomain: string;
+  routePath: string;
   createdAt: number;
   events: PriorEventValue[];
   leads: PriorLeadValue[];
 };
 const undoBatches = new Map<string, UndoBatch>();
-// The UI exposes a 30s undo window. We keep the server-side batch alive for a
-// few extra seconds so a click that races the countdown still resolves, but
-// no longer than that — undo via direct API replay should not outlive the
-// visible affordance.
 const UNDO_WINDOW_MS = 30 * 1000;
 const UNDO_GRACE_MS = 5 * 1000;
 const UNDO_TTL_MS = UNDO_WINDOW_MS + UNDO_GRACE_MS;
@@ -262,29 +238,12 @@ function pruneUndoBatches() {
   }
 }
 
-// Suggest subdomain → funnel rules from historical attribution events.
-// A subdomain is suggested when:
-//   * It is not already covered by an existing rule.
-//   * Within the last 90 days, every event whose resolved_funnel is set to a
-//     non-default value points at the same funnel (i.e. the subdomain has
-//     "only ever served one funnel" — reason: "observed"). Fell-through
-//     events (null/empty or the tenant's default funnel) are counted toward
-//     the backfill opportunity but do not count as a competing funnel signal.
-//   * OR every event on the subdomain has only ever fallen through to the
-//     default funnel AND the subdomain label heuristically matches the name
-//     of exactly one non-default tenant funnel (reason: "label-match"). This
-//     surfaces brand-new subdomains like "protect." that were never tagged
-//     correctly but clearly map to a tenant funnel by naming convention.
-//   * That funnel is enabled for the tenant.
-//   * At least 3 events were observed on the subdomain in the window, to
-//     avoid noise from one-off traffic.
-//
-// One-click accept happens via the existing POST /subdomain-funnel-rules,
-// which creates the rule and re-resolves matching past events.
-router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
+// Suggest route → funnel rules from historical attribution events, mirroring
+// the subdomain suggestion heuristic but keyed on the normalized pathname.
+router.get("/route-funnel-rules/suggestions", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
-    res.json({ suggestions: [], hiddenSubdomains: [] });
+    res.json({ suggestions: [], hiddenRoutePaths: [] });
     return;
   }
   const userId = req.session.userId ?? null;
@@ -317,63 +276,56 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
   }
 
   const existingRules = await db
-    .select({ subdomain: subdomainFunnelRulesTable.subdomain })
-    .from(subdomainFunnelRulesTable)
-    .where(eq(subdomainFunnelRulesTable.tenantId, tenantId));
-  const ruled = new Set(existingRules.map(r => r.subdomain.toLowerCase()));
+    .select({ routePath: routeFunnelRulesTable.routePath })
+    .from(routeFunnelRulesTable)
+    .where(eq(routeFunnelRulesTable.tenantId, tenantId));
+  const ruled = new Set(existingRules.map(r => r.routePath.toLowerCase()));
 
-  // Per-user dismissals (task #448). We compute suggestions normally, then
-  // partition into visible vs hidden so the UI can render an "N hidden — show"
-  // affordance without a second round-trip.
   const dismissedRows = userId
     ? await db
-        .select({ subdomain: subdomainSuggestionDismissalsTable.subdomain })
-        .from(subdomainSuggestionDismissalsTable)
+        .select({ routePath: routeSuggestionDismissalsTable.routePath })
+        .from(routeSuggestionDismissalsTable)
         .where(and(
-          eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
-          eq(subdomainSuggestionDismissalsTable.userId, userId),
+          eq(routeSuggestionDismissalsTable.tenantId, tenantId),
+          eq(routeSuggestionDismissalsTable.userId, userId),
         ))
     : [];
-  const dismissed = new Set(dismissedRows.map(r => r.subdomain.toLowerCase()));
-
-  const hostExpr = sql`regexp_replace(
-    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
-    '^www\\.', ''
-  )`;
+  const dismissed = new Set(dismissedRows.map(r => r.routePath.toLowerCase()));
 
   const grouped = await db.execute(sql`
     WITH parsed AS (
       SELECT
         ae.resolved_funnel,
-        string_to_array(${hostExpr}, '.') AS parts
+        ${ROUTE_PATH_EXPR} AS route_path
       FROM attribution_events ae
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
         AND ae.created_at > now() - interval '90 days'
     )
     SELECT
-      array_to_string(parts[1:array_length(parts, 1) - 2], '.') AS subdomain,
+      route_path,
       resolved_funnel,
       count(*)::int AS cnt
     FROM parsed
-    WHERE array_length(parts, 1) >= 3
-    GROUP BY subdomain, resolved_funnel
+    GROUP BY route_path, resolved_funnel
   `);
 
-  type Row = { subdomain: string; resolved_funnel: string | null; cnt: number };
+  type Row = { route_path: string; resolved_funnel: string | null; cnt: number };
   const rows = (grouped.rows ?? []) as Row[];
 
-  const bySub = new Map<string, Row[]>();
+  const byPath = new Map<string, Row[]>();
   for (const r of rows) {
-    if (!r.subdomain) continue;
-    if (ruled.has(r.subdomain)) continue;
-    const arr = bySub.get(r.subdomain) ?? [];
+    if (!r.route_path) continue;
+    // The bare root "/" is too generic to ever be a useful funnel rule.
+    if (r.route_path === "/") continue;
+    if (ruled.has(r.route_path)) continue;
+    const arr = byPath.get(r.route_path) ?? [];
     arr.push(r);
-    bySub.set(r.subdomain, arr);
+    byPath.set(r.route_path, arr);
   }
 
   const suggestions: Array<{
-    subdomain: string;
+    routePath: string;
     suggestedFunnelTypeId: number;
     suggestedFunnelName: string;
     eventCount: number;
@@ -382,19 +334,9 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
     matchedAlias?: string;
   }> = [];
 
-  // Tokenize a string into lowercase alphanumeric chunks for the label-match
-  // heuristic. We split on dots, dashes, underscores, and whitespace so that
-  // "Home Protection" and "protect" can still find each other via shared
-  // tokens / substrings.
   const tokenize = (s: string): string[] =>
     s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
-  // Pre-tokenize tenant funnels once for the heuristic. Exclude the default
-  // funnel from heuristic matching — we never want to suggest a rule that
-  // points back at the funnel traffic is already falling through to.
-  // We also fold in tenant-configured funnel aliases as additional match
-  // surfaces, since aliases (e.g. "protection", "shield") are often richer
-  // signal than the canonical funnel name.
   const heuristicFunnels = tenantFunnels
     .filter((f) => f.name.toLowerCase() !== defaultFunnelLcName)
     .map((f) => {
@@ -414,7 +356,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
       };
     });
 
-  for (const [subdomain, srows] of bySub.entries()) {
+  for (const [routePath, srows] of byPath.entries()) {
     const distinctFunnels = new Map<string, number>();
     let fellThrough = 0;
     let total = 0;
@@ -437,7 +379,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
       const funnel = funnelByLcName.get(funnelLcName);
       if (!funnel) continue;
       suggestions.push({
-        subdomain,
+        routePath,
         suggestedFunnelTypeId: funnel.id,
         suggestedFunnelName: funnel.name,
         eventCount: total,
@@ -447,19 +389,10 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
       continue;
     }
 
-    // Default-funnel-only subdomain (no competing non-default signal yet).
-    // Try to infer a funnel from the subdomain label. We only suggest when
-    // exactly one tenant funnel matches, to avoid steering the operator into
-    // a wrong rule. A token (>=4 chars to avoid stop-word collisions) on
-    // either side must be a substring of the other's full name, OR the two
-    // share at least one exact token.
     if (distinctFunnels.size === 0 && fellThrough >= 3 && heuristicFunnels.length > 0) {
-      const subTokens = tokenize(subdomain);
+      const subTokens = tokenize(routePath);
       if (subTokens.length === 0) continue;
-      const subLc = subdomain.toLowerCase();
-      // For each candidate funnel, find why it matched (if at all). A name
-      // match wins over an alias match for explanation purposes; if only an
-      // alias matched, we surface which alias it was.
+      const subLc = routePath.toLowerCase();
       type MatchInfo = { funnel: (typeof heuristicFunnels)[number]; matchedAlias?: string };
       const matches: MatchInfo[] = [];
       for (const f of heuristicFunnels) {
@@ -482,7 +415,6 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
           matches.push({ funnel: f });
           continue;
         }
-        // Try alias matches with the same heuristic.
         let aliasMatch: string | undefined;
         for (const t of subTokens) {
           const a = f.aliasTokenMap.get(t);
@@ -508,7 +440,7 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
       if (matches.length !== 1) continue;
       const { funnel, matchedAlias } = matches[0];
       suggestions.push({
-        subdomain,
+        routePath,
         suggestedFunnelTypeId: funnel.id,
         suggestedFunnelName: funnel.name,
         eventCount: total,
@@ -521,83 +453,77 @@ router.get("/subdomain-funnel-rules/suggestions", async (req, res) => {
 
   suggestions.sort((a, b) => b.eventCount - a.eventCount);
 
-  const visible = suggestions.filter(s => !dismissed.has(s.subdomain.toLowerCase()));
-  const hiddenSubdomains = suggestions
-    .filter(s => dismissed.has(s.subdomain.toLowerCase()))
-    .map(s => s.subdomain);
+  const visible = suggestions.filter(s => !dismissed.has(s.routePath.toLowerCase()));
+  const hiddenRoutePaths = suggestions
+    .filter(s => dismissed.has(s.routePath.toLowerCase()))
+    .map(s => s.routePath);
 
-  res.json({ suggestions: visible, hiddenSubdomains });
+  res.json({ suggestions: visible, hiddenRoutePaths });
 });
 
-// Persist a per-(tenant, user) dismissal so a suggestion stays hidden across
-// refreshes. We accept any subdomain string (normalized) — even if it isn't
-// currently in the suggestions list — so the UI can dismiss optimistically.
-router.post("/subdomain-funnel-rules/suggestions/dismiss", async (req, res) => {
+router.post("/route-funnel-rules/suggestions/dismiss", async (req, res) => {
   const tenantId = resolveTenantId(req);
   const userId = req.session.userId ?? null;
   if (!tenantId || !userId) {
     res.status(400).json({ error: "No tenant or user context" });
     return;
   }
-  const { subdomain } = req.body as { subdomain?: string };
-  if (!subdomain || typeof subdomain !== "string") {
-    res.status(400).json({ error: "subdomain is required" });
+  const { routePath } = req.body as { routePath?: string };
+  if (!routePath || typeof routePath !== "string") {
+    res.status(400).json({ error: "routePath is required" });
     return;
   }
-  const normSub = normalizeSubdomain(subdomain);
-  if (!normSub) {
-    res.status(400).json({ error: "subdomain cannot be empty" });
+  const normPath = normalizeRoutePath(routePath);
+  if (!normPath) {
+    res.status(400).json({ error: "routePath cannot be empty" });
     return;
   }
 
   await db
-    .insert(subdomainSuggestionDismissalsTable)
-    .values({ tenantId, userId, subdomain: normSub })
+    .insert(routeSuggestionDismissalsTable)
+    .values({ tenantId, userId, routePath: normPath })
     .onConflictDoNothing({
       target: [
-        subdomainSuggestionDismissalsTable.tenantId,
-        subdomainSuggestionDismissalsTable.userId,
-        subdomainSuggestionDismissalsTable.subdomain,
+        routeSuggestionDismissalsTable.tenantId,
+        routeSuggestionDismissalsTable.userId,
+        routeSuggestionDismissalsTable.routePath,
       ],
     });
 
   res.json({ success: true });
 });
 
-// Undo dismissals. With no body, clears every dismissal this user has for the
-// current tenant (the "show N hidden" link). With a `subdomain`, clears just
-// that one.
-router.post("/subdomain-funnel-rules/suggestions/undo-dismiss", async (req, res) => {
+router.post("/route-funnel-rules/suggestions/undo-dismiss", async (req, res) => {
   const tenantId = resolveTenantId(req);
   const userId = req.session.userId ?? null;
   if (!tenantId || !userId) {
     res.status(400).json({ error: "No tenant or user context" });
     return;
   }
-  const { subdomain } = (req.body ?? {}) as { subdomain?: string };
+  const { routePath } = (req.body ?? {}) as { routePath?: string };
 
-  if (subdomain && typeof subdomain === "string") {
-    const normSub = normalizeSubdomain(subdomain);
+  if (routePath && typeof routePath === "string") {
+    const normPath = normalizeRoutePath(routePath);
     await db
-      .delete(subdomainSuggestionDismissalsTable)
+      .delete(routeSuggestionDismissalsTable)
       .where(and(
-        eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
-        eq(subdomainSuggestionDismissalsTable.userId, userId),
-        eq(subdomainSuggestionDismissalsTable.subdomain, normSub),
+        eq(routeSuggestionDismissalsTable.tenantId, tenantId),
+        eq(routeSuggestionDismissalsTable.userId, userId),
+        eq(routeSuggestionDismissalsTable.routePath, normPath ?? routePath),
       ));
   } else {
     await db
-      .delete(subdomainSuggestionDismissalsTable)
+      .delete(routeSuggestionDismissalsTable)
       .where(and(
-        eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
-        eq(subdomainSuggestionDismissalsTable.userId, userId),
+        eq(routeSuggestionDismissalsTable.tenantId, tenantId),
+        eq(routeSuggestionDismissalsTable.userId, userId),
       ));
   }
 
   res.json({ success: true });
 });
 
-router.get("/subdomain-funnel-rules", async (req, res) => {
+router.get("/route-funnel-rules", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
     res.json({ rules: [] });
@@ -606,40 +532,40 @@ router.get("/subdomain-funnel-rules", async (req, res) => {
 
   const rows = await db
     .select({
-      id: subdomainFunnelRulesTable.id,
-      subdomain: subdomainFunnelRulesTable.subdomain,
-      funnelTypeId: subdomainFunnelRulesTable.funnelTypeId,
+      id: routeFunnelRulesTable.id,
+      routePath: routeFunnelRulesTable.routePath,
+      funnelTypeId: routeFunnelRulesTable.funnelTypeId,
       funnelName: funnelTypesTable.name,
-      createdAt: subdomainFunnelRulesTable.createdAt,
+      createdAt: routeFunnelRulesTable.createdAt,
     })
-    .from(subdomainFunnelRulesTable)
-    .innerJoin(funnelTypesTable, eq(subdomainFunnelRulesTable.funnelTypeId, funnelTypesTable.id))
-    .where(eq(subdomainFunnelRulesTable.tenantId, tenantId))
-    .orderBy(subdomainFunnelRulesTable.subdomain);
+    .from(routeFunnelRulesTable)
+    .innerJoin(funnelTypesTable, eq(routeFunnelRulesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(routeFunnelRulesTable.tenantId, tenantId))
+    .orderBy(routeFunnelRulesTable.routePath);
 
   res.json({ rules: rows });
 });
 
-router.post("/subdomain-funnel-rules/preview", async (req, res) => {
+router.post("/route-funnel-rules/preview", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
     res.status(400).json({ error: "No tenant context" });
     return;
   }
 
-  const { subdomain, funnelTypeId, forceOverride } = req.body as {
-    subdomain?: string;
+  const { routePath, funnelTypeId, forceOverride } = req.body as {
+    routePath?: string;
     funnelTypeId?: number | string;
     forceOverride?: boolean;
   };
-  if (!subdomain || typeof subdomain !== "string" || !funnelTypeId) {
-    res.status(400).json({ error: "subdomain and funnelTypeId are required" });
+  if (!routePath || typeof routePath !== "string" || !funnelTypeId) {
+    res.status(400).json({ error: "routePath and funnelTypeId are required" });
     return;
   }
 
-  const normSub = normalizeSubdomain(subdomain);
-  if (!normSub) {
-    res.status(400).json({ error: "subdomain cannot be empty" });
+  const normPath = normalizeRoutePath(routePath);
+  if (!normPath) {
+    res.status(400).json({ error: "routePath cannot be empty" });
     return;
   }
 
@@ -665,14 +591,6 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     return;
   }
 
-  // Identify how many historical events match this subdomain at all (any
-  // resolved funnel) and how many of those are still on a *different*,
-  // non-fall-through funnel — those would be skipped by the actual backfill
-  // and represent a "conflict" the operator should know about.
-  const hostExpr = sql`regexp_replace(
-    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
-    '^www\\.', ''
-  )`;
   const [defaultAssoc] = await db
     .select({ funnelName: funnelTypesTable.name })
     .from(tenantFunnelTypesTable)
@@ -687,15 +605,14 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
       SELECT
         ae.id,
         ae.resolved_funnel,
-        string_to_array(${hostExpr}, '.') AS parts
+        ${ROUTE_PATH_EXPR} AS route_path
       FROM attribution_events ae
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
     )
     SELECT id, resolved_funnel
     FROM parsed
-    WHERE array_length(parts, 1) >= 3
-      AND array_to_string(parts[1:array_length(parts, 1) - 2], '.') = ${normSub}
+    WHERE route_path = ${normPath}
   `);
   const allRows = (allCandidates.rows ?? []) as Array<{
     id: number;
@@ -714,9 +631,9 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     conflictingIds.push(r.id);
   }
 
-  const { updatedEventCount, updatedLeadIds, eligibleEventIds } = await backfillEventsForSubdomainRule(
+  const { updatedEventCount, updatedLeadIds, eligibleEventIds } = await backfillEventsForRouteRule(
     tenantId,
-    normSub,
+    normPath,
     numericFunnelTypeId,
     canonicalName,
     null,
@@ -776,7 +693,7 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
     .filter((e): e is SampleEvent => !!e);
 
   res.json({
-    subdomain: normSub,
+    routePath: normPath,
     funnelTypeId: numericFunnelTypeId,
     funnelName: canonicalName,
     updatedEventCount,
@@ -789,26 +706,26 @@ router.post("/subdomain-funnel-rules/preview", async (req, res) => {
   });
 });
 
-router.post("/subdomain-funnel-rules", async (req, res) => {
+router.post("/route-funnel-rules", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
     res.status(400).json({ error: "No tenant context" });
     return;
   }
 
-  const { subdomain, funnelTypeId, forceOverride } = req.body as {
-    subdomain?: string;
+  const { routePath, funnelTypeId, forceOverride } = req.body as {
+    routePath?: string;
     funnelTypeId?: number | string;
     forceOverride?: boolean;
   };
-  if (!subdomain || typeof subdomain !== "string" || !funnelTypeId) {
-    res.status(400).json({ error: "subdomain and funnelTypeId are required" });
+  if (!routePath || typeof routePath !== "string" || !funnelTypeId) {
+    res.status(400).json({ error: "routePath and funnelTypeId are required" });
     return;
   }
 
-  const normSub = normalizeSubdomain(subdomain);
-  if (!normSub) {
-    res.status(400).json({ error: "subdomain cannot be empty" });
+  const normPath = normalizeRoutePath(routePath);
+  if (!normPath) {
+    res.status(400).json({ error: "routePath cannot be empty" });
     return;
   }
 
@@ -836,10 +753,10 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
 
   const existing = await db
     .select()
-    .from(subdomainFunnelRulesTable)
+    .from(routeFunnelRulesTable)
     .where(and(
-      eq(subdomainFunnelRulesTable.tenantId, tenantId),
-      eq(subdomainFunnelRulesTable.subdomain, normSub),
+      eq(routeFunnelRulesTable.tenantId, tenantId),
+      eq(routeFunnelRulesTable.routePath, normPath),
     ));
 
   let ruleId: number;
@@ -850,62 +767,53 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
       ruleId = existing[0].id;
       created = false;
     } else {
-      // Look up the prior funnel's canonical name so the backfill can also
-      // reclaim events that previously matched the OLD rule's funnel.
       const [priorFunnel] = await db
         .select({ name: funnelTypesTable.name })
         .from(funnelTypesTable)
         .where(eq(funnelTypesTable.id, existing[0].funnelTypeId));
       priorFunnelName = priorFunnel?.name ?? null;
       const [updated] = await db
-        .update(subdomainFunnelRulesTable)
+        .update(routeFunnelRulesTable)
         .set({ funnelTypeId: numericFunnelTypeId })
-        .where(eq(subdomainFunnelRulesTable.id, existing[0].id))
+        .where(eq(routeFunnelRulesTable.id, existing[0].id))
         .returning();
       ruleId = updated.id;
       created = false;
     }
   } else {
     const [inserted] = await db
-      .insert(subdomainFunnelRulesTable)
-      .values({ tenantId, funnelTypeId: numericFunnelTypeId, subdomain: normSub })
+      .insert(routeFunnelRulesTable)
+      .values({ tenantId, funnelTypeId: numericFunnelTypeId, routePath: normPath })
       .returning();
     ruleId = inserted.id;
     created = true;
   }
 
-  invalidateSubdomainFunnelCache(tenantId);
+  invalidateRouteFunnelCache(tenantId);
 
-  // Clear any per-user dismissals for this (tenant, subdomain). Once a rule
-  // covers the subdomain the suggestions endpoint filters it out anyway, so
-  // the dismissal rows are dead weight; deleting them also means that if the
-  // rule is later removed, the suggestion can resurface for operators.
   await db
-    .delete(subdomainSuggestionDismissalsTable)
+    .delete(routeSuggestionDismissalsTable)
     .where(and(
-      eq(subdomainSuggestionDismissalsTable.tenantId, tenantId),
-      eq(subdomainSuggestionDismissalsTable.subdomain, normSub),
+      eq(routeSuggestionDismissalsTable.tenantId, tenantId),
+      eq(routeSuggestionDismissalsTable.routePath, normPath),
     ));
 
-  const { updatedEventCount, updatedLeadIds, priorEventValues, priorLeadValues } = await backfillEventsForSubdomainRule(
+  const { updatedEventCount, updatedLeadIds, priorEventValues, priorLeadValues } = await backfillEventsForRouteRule(
     tenantId,
-    normSub,
+    normPath,
     numericFunnelTypeId,
     funnelType.name,
     priorFunnelName,
     { forceOverride: forceOverride === true },
   );
 
-  // If the operator opted into force-override and we actually moved rows that
-  // were on a different funnel, mint an undo batch so the success banner can
-  // offer a one-click rollback for a short window.
   let undoBatchId: string | null = null;
   if (forceOverride === true && (priorEventValues.length > 0 || priorLeadValues.length > 0)) {
     pruneUndoBatches();
     undoBatchId = randomUUID();
     undoBatches.set(undoBatchId, {
       tenantId,
-      subdomain: normSub,
+      routePath: normPath,
       createdAt: Date.now(),
       events: priorEventValues,
       leads: priorLeadValues,
@@ -916,7 +824,7 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     rule: {
       id: ruleId,
       tenantId,
-      subdomain: normSub,
+      routePath: normPath,
       funnelTypeId: numericFunnelTypeId,
       funnelName: funnelType.name,
     },
@@ -925,16 +833,11 @@ router.post("/subdomain-funnel-rules", async (req, res) => {
     updatedLeadCount: updatedLeadIds.length,
     forceOverride: forceOverride === true,
     undoBatchId,
-    // Authoritative expiry the UI should display/enforce (window only —
-    // server holds the batch a few seconds longer to absorb click latency).
     undoExpiresAt: undoBatchId ? Date.now() + UNDO_WINDOW_MS : null,
   });
 });
 
-// Roll back a force-override save by restoring the prior resolved_funnel on
-// affected events and the prior lead_type / funnel_id on affected leads.
-// Single-use: the batch is consumed once applied.
-router.post("/subdomain-funnel-rules/undo/:batchId", async (req, res) => {
+router.post("/route-funnel-rules/undo/:batchId", async (req, res) => {
   const tenantId = resolveTenantId(req);
   if (!tenantId) {
     res.status(400).json({ error: "No tenant context" });
@@ -948,8 +851,6 @@ router.post("/subdomain-funnel-rules/undo/:batchId", async (req, res) => {
     return;
   }
 
-  // Group prior event values by resolved_funnel so we can issue one UPDATE
-  // per distinct prior value instead of one per row.
   const eventsByPrior = new Map<string, number[]>();
   for (const e of batch.events) {
     const key = e.resolvedFunnel === null ? "\0null" : `v:${e.resolvedFunnel}`;
@@ -987,33 +888,30 @@ router.post("/subdomain-funnel-rules/undo/:batchId", async (req, res) => {
   }
 
   undoBatches.delete(batchId);
-  invalidateSubdomainFunnelCache(tenantId);
+  invalidateRouteFunnelCache(tenantId);
 
   res.json({
     success: true,
     revertedEventCount: batch.events.length,
     revertedLeadCount: batch.leads.length,
-    subdomain: batch.subdomain,
+    routePath: batch.routePath,
   });
 });
 
 // Revert: when a rule is removed with ?revertEvents=true, re-resolve historical
-// attribution events on the rule's subdomain whose resolved_funnel currently
-// equals the (deleted) rule's funnel name back to the tenant's default funnel,
-// and propagate that change to any leads created from those events whose
-// lead_type still mirrors the rule's funnel. Same guardrails as the create-
-// time backfill: never clobber an event/lead that has since been retagged to
-// a different, unrelated funnel.
-async function revertEventsForSubdomainRule(
+// attribution events on the rule's route path whose resolved_funnel currently
+// equals the (deleted) rule's funnel name back to the tenant's default funnel.
+// Same guardrails as the backfill: never clobber an unrelated retag, and never
+// touch a per-lead override.
+async function revertEventsForRouteRule(
   tenantId: number,
-  subdomain: string,
+  routePath: string,
   ruleFunnelName: string,
 ): Promise<{ updatedEventCount: number; updatedLeadIds: number[] }> {
-  const normSub = subdomain.toLowerCase().trim();
-  if (!normSub) return { updatedEventCount: 0, updatedLeadIds: [] };
+  const normPath = normalizeRoutePath(routePath);
+  if (!normPath) return { updatedEventCount: 0, updatedLeadIds: [] };
   const ruleLc = ruleFunnelName.toLowerCase();
 
-  // Tenant's default funnel — destination for the revert.
   const [defaultAssoc] = await db
     .select({ funnelId: funnelTypesTable.id, funnelName: funnelTypesTable.name })
     .from(tenantFunnelTypesTable)
@@ -1024,26 +922,20 @@ async function revertEventsForSubdomainRule(
   const defaultFunnelName = defaultAssoc?.funnelName ?? null;
   const defaultFunnelId = defaultAssoc?.funnelId ?? null;
 
-  const hostExpr = sql`regexp_replace(
-    lower(substring(ae.page_url from '^https?://([^/?#]+)')),
-    '^www\\.', ''
-  )`;
-
   const candidates = await db.execute(sql`
     WITH parsed AS (
       SELECT
         ae.id,
         ae.created_lead_id,
         ae.resolved_funnel,
-        string_to_array(${hostExpr}, '.') AS parts
+        ${ROUTE_PATH_EXPR} AS route_path
       FROM attribution_events ae
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
     )
     SELECT id, created_lead_id, resolved_funnel
     FROM parsed
-    WHERE array_length(parts, 1) >= 3
-      AND array_to_string(parts[1:array_length(parts, 1) - 2], '.') = ${normSub}
+    WHERE route_path = ${normPath}
   `);
 
   const rows = (candidates.rows ?? []) as Array<{
@@ -1052,8 +944,6 @@ async function revertEventsForSubdomainRule(
     resolved_funnel: string | null;
   }>;
 
-  // Same override guard as the create-time backfill: a per-lead override must
-  // survive rule deletion + revert, so skip overridden leads and their events.
   const overriddenLeadIds = await loadOverriddenLeadIds(
     tenantId,
     rows.map((r) => r.created_lead_id),
@@ -1111,7 +1001,7 @@ async function revertEventsForSubdomainRule(
   return { updatedEventCount: eligibleIds.length, updatedLeadIds };
 }
 
-router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
+router.delete("/route-funnel-rules/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid id" });
@@ -1120,8 +1010,8 @@ router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
 
   const [existing] = await db
     .select()
-    .from(subdomainFunnelRulesTable)
-    .where(eq(subdomainFunnelRulesTable.id, id));
+    .from(routeFunnelRulesTable)
+    .where(eq(routeFunnelRulesTable.id, id));
   if (!existing) {
     res.status(404).json({ error: "Rule not found" });
     return;
@@ -1135,8 +1025,6 @@ router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
 
   const revertEvents = String(req.query.revertEvents ?? "").toLowerCase() === "true";
 
-  // If the caller asked for a revert, look up the rule's funnel name BEFORE
-  // deleting the row so we know which events/leads to unwind.
   let ruleFunnelName: string | null = null;
   if (revertEvents) {
     const [funnel] = await db
@@ -1146,13 +1034,13 @@ router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
     ruleFunnelName = funnel?.name ?? null;
   }
 
-  await db.delete(subdomainFunnelRulesTable).where(eq(subdomainFunnelRulesTable.id, id));
-  invalidateSubdomainFunnelCache(existing.tenantId);
+  await db.delete(routeFunnelRulesTable).where(eq(routeFunnelRulesTable.id, id));
+  invalidateRouteFunnelCache(existing.tenantId);
 
   if (revertEvents && ruleFunnelName) {
-    const { updatedEventCount, updatedLeadIds } = await revertEventsForSubdomainRule(
+    const { updatedEventCount, updatedLeadIds } = await revertEventsForRouteRule(
       existing.tenantId,
-      existing.subdomain,
+      existing.routePath,
       ruleFunnelName,
     );
     res.json({
@@ -1167,5 +1055,4 @@ router.delete("/subdomain-funnel-rules/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-export { extractSubdomain };
 export default router;

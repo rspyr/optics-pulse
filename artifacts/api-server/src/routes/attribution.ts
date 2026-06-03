@@ -86,6 +86,25 @@ router.get("/attribution/events", async (req, res) => {
     }
   }
 
+  if (query.routeRule) {
+    // Mirror normalizeRoutePath() from the frontend in SQL: take the URL's
+    // pathname (lower-cased), strip query/hash, ensure a leading slash, and
+    // drop the trailing slash except for the root "/".
+    const rawPathExpr = sql`regexp_replace(regexp_replace(lower(${attributionEventsTable.pageUrl}), '^https?://[^/]*', ''), '[?#].*$', '')`;
+    const routePathExpr = sql`(CASE
+      WHEN ${rawPathExpr} = '' OR ${rawPathExpr} IS NULL THEN '/'
+      WHEN left(${rawPathExpr}, 1) <> '/' THEN regexp_replace('/' || ${rawPathExpr}, '(.)/+$', '\\1')
+      ELSE regexp_replace(${rawPathExpr}, '(.)/+$', '\\1')
+    END)`;
+    if (query.routeRule === "__none__") {
+      conditions.push(
+        sql`NOT EXISTS (SELECT 1 FROM route_funnel_rules r WHERE r.tenant_id = ${attributionEventsTable.tenantId} AND r.route_path = ${routePathExpr})`,
+      );
+    } else {
+      conditions.push(sql`${routePathExpr} = ${query.routeRule}`);
+    }
+  }
+
   if (query.search) {
     const needle = `%${query.search}%`;
     const searchCond = or(

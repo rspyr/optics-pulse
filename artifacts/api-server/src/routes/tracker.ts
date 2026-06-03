@@ -14,6 +14,7 @@ import { trackerSubmitLimiter, trackerHeartbeatLimiter } from "../middleware/rat
 import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
 import { resolveSubdomainFunnel } from "../services/subdomain-funnel-resolver";
+import { resolveRouteFunnel } from "../services/route-funnel-resolver";
 import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
@@ -424,6 +425,16 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
           resolvedFunnelStr = urlAliasMatch.funnelName;
         }
       } catch {}
+    }
+
+    // Route/page rule beats subdomain (more specific): an exact pathname match
+    // (e.g. `/summer-relief`) wins over a coarser subdomain rule.
+    if (!resolvedFunnelId && pageUrl) {
+      const routeMatch = await resolveRouteFunnel(tenantId, pageUrl);
+      if (routeMatch) {
+        resolvedFunnelId = routeMatch.funnelTypeId;
+        resolvedFunnelStr = routeMatch.funnelName;
+      }
     }
 
     if (!resolvedFunnelId && pageUrl) {

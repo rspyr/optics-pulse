@@ -156,6 +156,11 @@ vi.mock("../services/subdomain-funnel-resolver", () => ({
   resolveSubdomainFunnel: (...args: unknown[]) => resolveSubdomainFunnelMock(...args),
 }));
 
+const resolveRouteFunnelMock = vi.fn();
+vi.mock("../services/route-funnel-resolver", () => ({
+  resolveRouteFunnel: (...args: unknown[]) => resolveRouteFunnelMock(...args),
+}));
+
 vi.mock("../services/reconciliation", () => ({
   normalizeAddress: vi.fn().mockImplementation((addr: string) => addr),
 }));
@@ -227,6 +232,10 @@ describe("/collect/submit funnel resolution waterfall", () => {
     vi.clearAllMocks();
     normalizeFunnelMock.mockReset();
     resolveSubdomainFunnelMock.mockReset();
+    resolveRouteFunnelMock.mockReset();
+    // Route stage falls through by default so existing subdomain-stage tests
+    // behave as before; tests that care set their own value.
+    resolveRouteFunnelMock.mockResolvedValue(null);
     await setupApp();
   });
 
@@ -252,6 +261,37 @@ describe("/collect/submit funnel resolution waterfall", () => {
     const ev = findEventInsert();
     expect(ev.resolvedFunnel).toBe("Protection Plan");
     expect(resolveSubdomainFunnelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("route/page rule wins over the subdomain rule (more specific, short-circuits)", async () => {
+    mockDb.selectResults = [
+      [{ id: 1, name: "Tenant", leadIngestionMode: "sheets" }], // tenant lookup
+    ];
+    normalizeFunnelMock.mockResolvedValue(null); // no path alias match
+    // Route rule resolves; subdomain rule, if consulted, would resolve to a
+    // different funnel — the test asserts the route stage short-circuits it.
+    resolveRouteFunnelMock.mockResolvedValue({
+      funnelTypeId: 42,
+      funnelName: "Summer Relief",
+    });
+    resolveSubdomainFunnelMock.mockResolvedValue({
+      funnelTypeId: 77,
+      funnelName: "Protection Plan (should-not-win)",
+    });
+
+    const res = await sendRequest("/collect/submit", {
+      client_id: "tenant-1",
+      page_url: "https://protect.example.com/summer-relief",
+      fields: {},
+    });
+
+    expect(res.status).toBe(200);
+    const ev = findEventInsert();
+    expect(ev.resolvedFunnel).toBe("Summer Relief");
+    // Critical: once the route stage resolves a funnel, the coarser subdomain
+    // stage must be skipped entirely.
+    expect(resolveRouteFunnelMock).toHaveBeenCalledTimes(1);
+    expect(resolveSubdomainFunnelMock).not.toHaveBeenCalled();
   });
 
   it("path alias wins over the subdomain rule (alias short-circuits)", async () => {

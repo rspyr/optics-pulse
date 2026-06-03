@@ -82,6 +82,7 @@ vi.mock("@workspace/db", () => ({
   callAttemptsTable: Symbol("callAttemptsTable"),
   fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
   funnelAliasesTable: Symbol("funnelAliasesTable"),
+  routeFunnelRulesTable: Symbol("routeFunnelRulesTable"),
 }));
 
 vi.mock("../socket", () => ({

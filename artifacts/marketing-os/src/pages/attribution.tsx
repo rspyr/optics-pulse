@@ -24,7 +24,7 @@ import {
   Tag, Fingerprint, MapPin, Briefcase, User, Link2, Filter, Copy, Check,
   Zap, ArrowRight, ShieldCheck, Settings2, Brain, Edit3, Activity, Settings,
   Upload, Info, Clock, Lightbulb, Loader2, ChevronLeft, ChevronRight,
-  DollarSign,
+  DollarSign, Route,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -49,13 +49,21 @@ export default function Attribution() {
   const [searchText, setSearchText] = useState("");
   const [pageSize, setPageSize] = useState<25 | 50 | 100>(50);
   const [page, setPage] = useState(1);
-  const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules">("events");
+  const [filterRouteRule, setFilterRouteRule] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState<"events" | "ingestion" | "funnel-aliases" | "subdomain-rules" | "route-rules">("events");
   const [highlightSubdomainRule, setHighlightSubdomainRule] = useState<{ subdomain: string; nonce: number } | null>(null);
+  const [highlightRouteRule, setHighlightRouteRule] = useState<{ routePath: string; nonce: number } | null>(null);
 
   const jumpToSubdomainRule = useCallback((subdomain: string) => {
     setSelectedEventId(null);
     setActiveTab("subdomain-rules");
     setHighlightSubdomainRule({ subdomain, nonce: Date.now() });
+  }, []);
+
+  const jumpToRouteRule = useCallback((routePath: string) => {
+    setSelectedEventId(null);
+    setActiveTab("route-rules");
+    setHighlightRouteRule({ routePath, nonce: Date.now() });
   }, []);
 
   // Mirrors extractSubdomain() on the server so we can show, inline on each
@@ -89,6 +97,36 @@ export default function Attribution() {
     return () => { cancelled = true; };
   }, [effectiveTenantId]);
 
+  // Mirrors normalizeRoutePath() on the server so we can show, inline on each
+  // event row, which route rule (if any) covers it.
+  const extractRoutePath = useCallback((pageUrl: string | null | undefined): string | null => {
+    if (!pageUrl) return null;
+    try {
+      let path = new URL(pageUrl).pathname.toLowerCase();
+      if (!path.startsWith("/")) path = "/" + path;
+      if (path.length > 1 && path.endsWith("/")) path = path.replace(/\/+$/, "");
+      return path || "/";
+    } catch { return null; }
+  }, []);
+
+  const [routeRules, setRouteRules] = useState<Map<string, { id: number; routePath: string; funnelName: string }>>(new Map());
+  useEffect(() => {
+    if (!effectiveTenantId) { setRouteRules(new Map()); return; }
+    let cancelled = false;
+    fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${effectiveTenantId}`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : { rules: [] }))
+      .then(d => {
+        if (cancelled) return;
+        const map = new Map<string, { id: number; routePath: string; funnelName: string }>();
+        for (const r of (d.rules || []) as Array<{ id: number; routePath: string; funnelName: string }>) {
+          map.set(r.routePath.toLowerCase(), r);
+        }
+        setRouteRules(map);
+      })
+      .catch(() => { if (!cancelled) setRouteRules(new Map()); });
+    return () => { cancelled = true; };
+  }, [effectiveTenantId]);
+
   const queryClient = useQueryClient();
 
   // Don't issue the cross-tenant "give me everything" fetch when the operator
@@ -104,6 +142,7 @@ export default function Attribution() {
     ...(filterFunnel !== "all" ? { funnel: filterFunnel } : {}),
     ...(filterDateRange !== "all" ? { dateRange: filterDateRange as "1d" | "7d" | "30d" } : {}),
     ...(filterSubdomainRule !== "all" ? { subdomainRule: filterSubdomainRule } : {}),
+    ...(filterRouteRule !== "all" ? { routeRule: filterRouteRule } : {}),
     ...(searchText.trim() !== "" ? { search: searchText.trim() } : {}),
     limit: pageSize,
     offset: (page - 1) * pageSize,
@@ -249,6 +288,128 @@ export default function Attribution() {
     }
   }, [effectiveTenantId, refetchSuggestions, queryClient]);
 
+  type RouteSuggestion = {
+    routePath: string;
+    suggestedFunnelTypeId: number;
+    suggestedFunnelName: string;
+    eventCount: number;
+    fellThroughCount: number;
+    reason?: "observed" | "label-match";
+    matchedAlias?: string;
+  };
+  const [routeSuggestions, setRouteSuggestions] = useState<RouteSuggestion[]>([]);
+  const [hiddenRoutePaths, setHiddenRoutePaths] = useState<string[]>([]);
+  const [acceptingRouteSuggestion, setAcceptingRouteSuggestion] = useState<string | null>(null);
+  const [routeSuggestionToast, setRouteSuggestionToast] = useState<string | null>(null);
+  const [showHiddenRouteList, setShowHiddenRouteList] = useState(false);
+
+  const refetchRouteSuggestions = useCallback(() => {
+    if (!effectiveTenantId) {
+      setRouteSuggestions([]);
+      setHiddenRoutePaths([]);
+      return;
+    }
+    fetch(`${API_BASE}/api/route-funnel-rules/suggestions?tenantId=${effectiveTenantId}`, {
+      credentials: "include",
+    })
+      .then(r => (r.ok ? r.json() : { suggestions: [], hiddenRoutePaths: [] }))
+      .then(d => {
+        setRouteSuggestions(d.suggestions || []);
+        setHiddenRoutePaths(d.hiddenRoutePaths || []);
+      })
+      .catch(() => {
+        setRouteSuggestions([]);
+        setHiddenRoutePaths([]);
+      });
+  }, [effectiveTenantId]);
+
+  useEffect(() => {
+    refetchRouteSuggestions();
+  }, [refetchRouteSuggestions]);
+
+  const dismissRouteSuggestion = useCallback(async (routePath: string) => {
+    if (!effectiveTenantId) return;
+    setRouteSuggestions(prev => prev.filter(s => s.routePath !== routePath));
+    setHiddenRoutePaths(prev => (prev.includes(routePath) ? prev : [...prev, routePath]));
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/suggestions/dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routePath }),
+      });
+      if (!res.ok) refetchRouteSuggestions();
+    } catch {
+      refetchRouteSuggestions();
+    }
+  }, [effectiveTenantId, refetchRouteSuggestions]);
+
+  const undoAllRouteDismissals = useCallback(async () => {
+    if (!effectiveTenantId) return;
+    try {
+      await fetch(`${API_BASE}/api/route-funnel-rules/suggestions/undo-dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    } finally {
+      refetchRouteSuggestions();
+    }
+  }, [effectiveTenantId, refetchRouteSuggestions]);
+
+  const undoSingleRouteDismissal = useCallback(async (routePath: string) => {
+    if (!effectiveTenantId) return;
+    setHiddenRoutePaths(prev => prev.filter(s => s !== routePath));
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/suggestions/undo-dismiss?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routePath }),
+      });
+      if (!res.ok) refetchRouteSuggestions();
+      else refetchRouteSuggestions();
+    } catch {
+      refetchRouteSuggestions();
+    }
+  }, [effectiveTenantId, refetchRouteSuggestions]);
+
+  const acceptRouteSuggestion = useCallback(async (s: RouteSuggestion) => {
+    if (!effectiveTenantId) return;
+    setAcceptingRouteSuggestion(s.routePath);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${effectiveTenantId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routePath: s.routePath, funnelTypeId: s.suggestedFunnelTypeId }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setRouteSuggestionToast(d.error || "Failed to create rule");
+      } else {
+        setRouteSuggestionToast(
+          `Rule created: ${s.routePath} → ${s.suggestedFunnelName}. Updated ${d.updatedEventCount ?? 0} past event${(d.updatedEventCount ?? 0) === 1 ? "" : "s"}.`,
+        );
+        refetchRouteSuggestions();
+        queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() });
+        try {
+          if (typeof BroadcastChannel !== "undefined") {
+            const ch = new BroadcastChannel("pulse");
+            ch.postMessage({ type: "leads-refresh", reason: "route-rule-created" });
+            ch.close();
+          }
+          window.dispatchEvent(new CustomEvent("pulse:leads-refresh", { detail: { reason: "route-rule-created" } }));
+        } catch {}
+      }
+    } catch {
+      setRouteSuggestionToast("Failed to create rule");
+    } finally {
+      setAcceptingRouteSuggestion(null);
+    }
+  }, [effectiveTenantId, refetchRouteSuggestions, queryClient]);
+
   const { data: detailData } = useGetAttributionEvent(selectedEventId!, {
     query: {
       queryKey: ["attribution-event", selectedEventId] as const,
@@ -276,6 +437,7 @@ export default function Attribution() {
     filterFunnel,
     filterDateRange,
     filterSubdomainRule,
+    filterRouteRule,
     searchText,
     effectiveTenantId,
   ]);
@@ -445,6 +607,7 @@ export default function Attribution() {
         <TabButton active={activeTab === "ingestion"} onClick={() => setActiveTab("ingestion")} icon={<Settings2 className="w-4 h-4" />} label="Ingestion Mode" />
         <TabButton active={activeTab === "funnel-aliases"} onClick={() => setActiveTab("funnel-aliases")} icon={<Brain className="w-4 h-4" />} label="Funnel Aliases" />
         <TabButton active={activeTab === "subdomain-rules"} onClick={() => setActiveTab("subdomain-rules")} icon={<Globe className="w-4 h-4" />} label="Subdomain Rules" />
+        <TabButton active={activeTab === "route-rules"} onClick={() => setActiveTab("route-rules")} icon={<Route className="w-4 h-4" />} label="Route Rules" />
       </div>
 
       {(activeTab === "events" || activeTab === "subdomain-rules") && (suggestions.length > 0 || hiddenSubdomains.length > 0) && (
@@ -553,6 +716,112 @@ export default function Attribution() {
         </PremiumCard>
       )}
 
+      {(activeTab === "events" || activeTab === "route-rules") && (routeSuggestions.length > 0 || hiddenRoutePaths.length > 0) && (
+        <PremiumCard className="p-4 border-amber-400/20 bg-amber-400/[0.03]">
+          <div className="flex items-start gap-3">
+            <Lightbulb className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-medium text-white">Suggested route rules</h4>
+                <span className="text-xs text-muted-foreground">
+                  Based on the last 90 days of traffic and your funnel names.
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {routeSuggestions.map(s => (
+                    <div
+                      key={s.routePath}
+                      className="flex items-start gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-2"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="font-mono text-sm text-white/80">{s.routePath}</span>
+                          <ArrowRight className="w-3 h-3 text-white/30 flex-shrink-0" />
+                          <span className="text-sm text-emerald-400">{s.suggestedFunnelName}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {s.eventCount} event{s.eventCount === 1 ? "" : "s"}
+                            {s.fellThroughCount > 0 && (
+                              <> · {s.fellThroughCount} would be re-tagged</>
+                            )}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/80 mt-1">
+                          {s.reason === "label-match"
+                            ? s.matchedAlias
+                              ? `All ${s.eventCount} events had no funnel match, but the route path matches alias "${s.matchedAlias}" for funnel "${s.suggestedFunnelName}".`
+                              : `All ${s.eventCount} events had no funnel match, but the route path matches "${s.suggestedFunnelName}".`
+                            : `Every tagged event on this route in the last 90 days resolved to "${s.suggestedFunnelName}".`}
+                        </p>
+                      </div>
+                      <div className="ml-auto flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={acceptingRouteSuggestion === s.routePath}
+                          onClick={() => acceptRouteSuggestion(s)}
+                        >
+                          {acceptingRouteSuggestion === s.routePath ? "Creating…" : "Create rule"}
+                        </Button>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:text-white/70 transition-colors px-1"
+                          onClick={() => dismissRouteSuggestion(s.routePath)}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              {hiddenRoutePaths.length > 0 && (
+                <div className="text-xs text-muted-foreground space-y-1.5">
+                  <p>
+                    <button
+                      type="button"
+                      className="underline hover:text-white/70 transition-colors"
+                      onClick={() => setShowHiddenRouteList(v => !v)}
+                    >
+                      {hiddenRoutePaths.length} hidden suggestion{hiddenRoutePaths.length === 1 ? "" : "s"}
+                    </button>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="underline hover:text-white/70 transition-colors"
+                      onClick={undoAllRouteDismissals}
+                    >
+                      Show all
+                    </button>
+                  </p>
+                  {showHiddenRouteList && (
+                    <ul className="space-y-1 pl-1">
+                      {hiddenRoutePaths.map(rp => (
+                        <li
+                          key={rp}
+                          className="flex items-center gap-3 bg-white/[0.02] border border-white/5 rounded-md px-3 py-1.5"
+                        >
+                          <span className="font-mono text-xs text-white/70 flex-1 min-w-0 truncate">{rp}</span>
+                          <button
+                            type="button"
+                            className="text-xs text-muted-foreground hover:text-white/80 transition-colors px-1"
+                            onClick={() => undoSingleRouteDismissal(rp)}
+                          >
+                            Restore
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {routeSuggestionToast && (
+                <p className="text-xs text-emerald-300/80">{routeSuggestionToast}</p>
+              )}
+            </div>
+          </div>
+        </PremiumCard>
+      )}
+
       {activeTab === "events" && (
         <>
           <LegacyManualSourceBackfillCard tenantId={effectiveTenantId} />
@@ -632,6 +901,22 @@ export default function Attribution() {
                     .map(r => (
                       <SelectItem key={r.id} value={r.subdomain}>
                         {r.subdomain} → {r.funnelName}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <Select value={filterRouteRule} onValueChange={setFilterRouteRule}>
+                <SelectTrigger className="w-[180px] bg-white/5 border border-white/10 text-sm">
+                  <SelectValue placeholder="Route Rule" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All routes</SelectItem>
+                  <SelectItem value="__none__">No matching rule</SelectItem>
+                  {[...routeRules.values()]
+                    .sort((a, b) => a.routePath.localeCompare(b.routePath))
+                    .map(r => (
+                      <SelectItem key={r.id} value={r.routePath}>
+                        {r.routePath} → {r.funnelName}
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -738,6 +1023,8 @@ export default function Attribution() {
                       const detectedCount = detectedMappings ? Object.keys(detectedMappings).length : 0;
                       const evSubdomain = extractSubdomain(ev.pageUrl);
                       const matchingRule = evSubdomain ? subdomainRules.get(evSubdomain) : undefined;
+                      const evRoutePath = extractRoutePath(ev.pageUrl);
+                      const matchingRouteRule = evRoutePath ? routeRules.get(evRoutePath) : undefined;
 
                       return (
                         <tr
@@ -760,6 +1047,17 @@ export default function Attribution() {
                                 >
                                   <Globe className="w-2.5 h-2.5" />
                                   <span>via {matchingRule.subdomain} rule</span>
+                                </button>
+                              )}
+                              {matchingRouteRule && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); jumpToRouteRule(matchingRouteRule.routePath); }}
+                                  className="self-start inline-flex items-center gap-1 text-[10px] font-sans text-purple-300/80 hover:text-purple-200 bg-purple-400/10 hover:bg-purple-400/15 border border-purple-400/20 rounded-full px-2 py-0.5 transition-colors"
+                                  title={`Matches route rule: ${matchingRouteRule.routePath} → ${matchingRouteRule.funnelName}`}
+                                >
+                                  <Route className="w-2.5 h-2.5" />
+                                  <span>via {matchingRouteRule.routePath} rule</span>
                                 </button>
                               )}
                             </div>
@@ -829,6 +1127,17 @@ export default function Attribution() {
         />
       )}
 
+      {activeTab === "route-rules" && effectiveTenantId && (
+        <RouteRulesPanel
+          tenantId={effectiveTenantId}
+          onOpenEvent={(id) => {
+            setActiveTab("events");
+            setSelectedEventId(id);
+          }}
+          highlightRule={highlightRouteRule}
+        />
+      )}
+
       <Sheet open={selectedEventId != null} onOpenChange={(open) => { if (!open) setSelectedEventId(null); }}>
         <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto bg-background border-white/10">
           {selectedEvent && (
@@ -891,6 +1200,7 @@ export default function Attribution() {
                     event={selectedEvent}
                     matchedLead={matchedLead as ({ id: number; firstName?: string; lastName?: string; funnelOverriddenAt?: string | Date | null } | null | undefined)}
                     onJumpToSubdomainRule={jumpToSubdomainRule}
+                    onJumpToRouteRule={jumpToRouteRule}
                   />
                 )}
 
@@ -1083,11 +1393,12 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpToSubdomainRule }: {
+export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpToSubdomainRule, onJumpToRouteRule }: {
   tenantId: number;
   event: AttributionEvent;
   matchedLead?: { id: number; firstName?: string; lastName?: string; funnelOverriddenAt?: string | Date | null } | null;
   onJumpToSubdomainRule?: (subdomain: string) => void;
+  onJumpToRouteRule?: (routePath: string) => void;
 }) {
   const queryClient = useQueryClient();
   const resolvedSource = event.resolvedLeadSource ?? undefined;
@@ -1449,6 +1760,99 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
     setSaving(false);
   };
 
+  // --- Route/page → funnel mapping (Task #836) ---
+  const pageRoutePath = (() => {
+    if (!event.pageUrl) return null;
+    try {
+      let path = new URL(event.pageUrl).pathname.toLowerCase();
+      if (!path.startsWith("/")) path = "/" + path;
+      if (path.length > 1 && path.endsWith("/")) path = path.replace(/\/+$/, "");
+      return path || "/";
+    } catch { return null; }
+  })();
+
+  const [routeRule, setRouteRule] = useState<
+    { id: number; routePath: string; funnelTypeId: number; funnelName: string } | null
+  >(null);
+  const [routeRuleLoaded, setRouteRuleLoaded] = useState(false);
+  const [routeFunnelTypeId, setRouteFunnelTypeId] = useState("");
+  const [routeEditing, setRouteEditing] = useState(false);
+  const [savedRouteCount, setSavedRouteCount] = useState<{ events: number; leads: number } | null>(null);
+
+  useEffect(() => {
+    if (!pageRoutePath) { setRouteRuleLoaded(true); return; }
+    fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${tenantId}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const rules: Array<{ id: number; routePath: string; funnelTypeId: number; funnelName: string }> = d.rules || [];
+        const match = rules.find(r => r.routePath.toLowerCase() === pageRoutePath) || null;
+        setRouteRule(match);
+        if (match) setRouteFunnelTypeId(String(match.funnelTypeId));
+      })
+      .catch(() => {})
+      .finally(() => setRouteRuleLoaded(true));
+  }, [tenantId, pageRoutePath]);
+
+  useEffect(() => {
+    if (savedRouteCount !== null) {
+      const t = setTimeout(() => setSavedRouteCount(null), 4000);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [savedRouteCount]);
+
+  const saveRouteRule = async () => {
+    if (!pageRoutePath || !routeFunnelTypeId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ routePath: pageRoutePath, funnelTypeId: parseInt(routeFunnelTypeId) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to save route rule");
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+        const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+        setSavedRouteCount({ events, leads });
+        if (d.rule) setRouteRule(d.rule);
+        setRouteEditing(false);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(event.id) as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: ["attribution-event", event.id] }),
+        ]);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
+  const removeRouteRule = async () => {
+    if (!routeRule) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/${routeRule.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to remove route rule");
+      } else {
+        setRouteRule(null);
+        setRouteFunnelTypeId("");
+        setRouteEditing(false);
+      }
+    } catch { setError("Network error"); }
+    setSaving(false);
+  };
+
   return (
     <DetailSection title="Resolved Identity" icon={<Zap className="w-4 h-4" />}>
       {error && (
@@ -1754,6 +2158,87 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
               <p className="text-[10px] text-emerald-400 pl-0.5">
                 {(() => {
                   const { events, leads } = savedSubdomainCount;
+                  if (events === 0 && leads === 0) return "Saved · Nothing else needed updating";
+                  const parts: string[] = [];
+                  if (events > 0) parts.push(`${events} past event${events === 1 ? "" : "s"}`);
+                  if (leads > 0) parts.push(`${leads} lead${leads === 1 ? "" : "s"}`);
+                  return `Saved · Updated ${parts.join(" and ")}`;
+                })()}
+              </p>
+            )}
+          </div>
+        )}
+
+        {pageRoutePath && routeRuleLoaded && (
+          <div className="space-y-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Route Path</span>
+            {routeRule && !routeEditing ? (
+              <div className="flex items-center gap-2">
+                {onJumpToRouteRule ? (
+                  <button
+                    type="button"
+                    onClick={() => onJumpToRouteRule(routeRule.routePath)}
+                    className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center hover:bg-black/60 hover:border-white/20 transition-colors text-left"
+                    title="Open in Route Rules"
+                  >
+                    <span className="font-mono text-white/60">{routeRule.routePath}</span>
+                    <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
+                    <span>{routeRule.funnelName}</span>
+                    <ExternalLink className="w-3 h-3 ml-auto text-white/30" />
+                  </button>
+                ) : (
+                  <div className="flex-1 text-xs text-white/80 bg-black/40 border border-white/10 rounded px-2 py-1.5 h-8 flex items-center">
+                    <span className="font-mono text-white/60">{routeRule.routePath}</span>
+                    <ArrowRight className="w-3 h-3 mx-1.5 text-white/30" />
+                    <span>{routeRule.funnelName}</span>
+                  </div>
+                )}
+                <Button size="sm" variant="ghost" disabled={saving} onClick={() => setRouteEditing(true)} className="text-xs h-8 px-2 shrink-0">
+                  Change
+                </Button>
+                <Button size="sm" variant="ghost" disabled={saving} onClick={removeRouteRule} className="text-xs h-8 px-2 shrink-0 text-white/50">
+                  Undo
+                </Button>
+                {savedRouteCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-white/60 min-w-[80px] truncate" title={pageRoutePath}>{pageRoutePath}</span>
+                <ArrowRight className="w-3 h-3 text-white/30 shrink-0" />
+                <select
+                  value={routeFunnelTypeId}
+                  onChange={e => setRouteFunnelTypeId(e.target.value)}
+                  className="flex-1 bg-black/40 border border-white/10 rounded text-xs text-white px-2 py-1.5 h-8"
+                >
+                  <option value="">Map to...</option>
+                  {funnelTypes.map(ft => <option key={ft.id} value={ft.id}>{ft.name}</option>)}
+                </select>
+                {routeFunnelTypeId && (
+                  <Button size="sm" variant="ghost" disabled={saving} onClick={saveRouteRule} className="text-xs h-8 px-2 shrink-0">
+                    Save
+                  </Button>
+                )}
+                {routeEditing && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={saving}
+                    onClick={() => {
+                      setRouteEditing(false);
+                      setRouteFunnelTypeId(routeRule ? String(routeRule.funnelTypeId) : "");
+                    }}
+                    className="text-xs h-8 px-2 shrink-0 text-white/50"
+                  >
+                    Cancel
+                  </Button>
+                )}
+                {savedRouteCount !== null && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+              </div>
+            )}
+            {savedRouteCount !== null && (
+              <p className="text-[10px] text-emerald-400 pl-0.5">
+                {(() => {
+                  const { events, leads } = savedRouteCount;
                   if (events === 0 && leads === 0) return "Saved · Nothing else needed updating";
                   const parts: string[] = [];
                   if (events > 0) parts.push(`${events} past event${events === 1 ? "" : "s"}`);
@@ -3752,6 +4237,742 @@ function SubdomainRulesPanel({
                               Also revert past events tagged{" "}
                               <span className="font-mono text-white/80">{rule.funnelName}</span> on{" "}
                               <span className="font-mono text-white/80">{rule.subdomain}</span> back to the tenant default
+                            </label>
+                            <div className="flex gap-1 justify-end items-center">
+                              <span className="text-xs text-amber-400/80 mr-1">Delete?</span>
+                              <Button size="sm" variant="ghost" disabled={deleting} onClick={() => confirmDelete(rule.id)} className="h-7 px-2 text-xs text-red-400">
+                                {deleting ? "Deleting..." : pendingDeleteRevert ? "Yes, delete & revert" : "Yes, delete"}
+                              </Button>
+                              <Button size="sm" variant="ghost" disabled={deleting} onClick={() => { setPendingDeleteId(null); setPendingDeleteRevert(false); }} className="h-7 px-2 text-xs text-white/50">
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 justify-end">
+                            <Button size="sm" variant="ghost" onClick={() => startEdit(rule)} className="h-7 px-2 text-xs">
+                              Edit
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => { setPendingDeleteId(rule.id); setPendingDeleteRevert(false); }} className="h-7 px-2 text-xs text-white/50 hover:text-red-400">
+                              Delete
+                            </Button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </PremiumCard>
+    </div>
+  );
+}
+
+interface RouteRule {
+  id: number;
+  routePath: string;
+  funnelTypeId: number;
+  funnelName: string;
+  createdAt?: string;
+}
+
+function normalizeRoutePathInput(raw: string): string {
+  let path = raw.trim().toLowerCase();
+  if (!path) return "";
+  if (!path.startsWith("/")) path = "/" + path;
+  if (path.length > 1 && path.endsWith("/")) path = path.replace(/\/+$/, "");
+  return path || "/";
+}
+
+function RouteRulesPanel({
+  tenantId,
+  onOpenEvent,
+  highlightRule,
+}: {
+  tenantId: number;
+  onOpenEvent?: (eventId: number) => void;
+  highlightRule?: { routePath: string; nonce: number } | null;
+}) {
+  const [rules, setRules] = useState<RouteRule[]>([]);
+  const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+  const [highlightedRuleId, setHighlightedRuleId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!highlightRule) return;
+    const match = rules.find(r => r.routePath.toLowerCase() === highlightRule.routePath.toLowerCase());
+    if (!match) return;
+    setHighlightedRuleId(match.id);
+    const el = rowRefs.current.get(match.id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = setTimeout(() => setHighlightedRuleId(null), 2500);
+    return () => clearTimeout(t);
+  }, [highlightRule, rules]);
+  const [funnelTypes, setFunnelTypes] = useState<{ id: number; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [newRoutePath, setNewRoutePath] = useState("");
+  const [newFunnelId, setNewFunnelId] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addPreview, setAddPreview] = useState<PreviewCounts | null>(null);
+  const [previewingAdd, setPreviewingAdd] = useState(false);
+  const [addForceOverride, setAddForceOverride] = useState(false);
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editFunnelId, setEditFunnelId] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editPreview, setEditPreview] = useState<PreviewCounts | null>(null);
+  const [previewingEdit, setPreviewingEdit] = useState(false);
+  const [editForceOverride, setEditForceOverride] = useState(false);
+
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [pendingDeleteRevert, setPendingDeleteRevert] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const [savedMessage, setSavedMessage] = useState<
+    | {
+        kind?: "saved";
+        routePath: string;
+        funnelName: string;
+        events: number;
+        leads: number;
+        undo?: { batchId: string; expiresAt: number };
+        reverted?: { events: number; leads: number };
+      }
+    | {
+        kind: "reverted";
+        routePath: string;
+        events: number;
+        leads: number;
+      }
+    | null
+  >(null);
+  const [undoing, setUndoing] = useState(false);
+  const [, setNowTick] = useState(0);
+
+  useEffect(() => {
+    if (savedMessage === null) return;
+    let timeout: number;
+    if (savedMessage.kind === "reverted") {
+      timeout = 6000;
+    } else if (savedMessage.reverted) {
+      timeout = 4000;
+    } else if (savedMessage.undo) {
+      timeout = Math.max(0, savedMessage.undo.expiresAt - Date.now()) + 500;
+    } else {
+      timeout = 6000;
+    }
+    const t = setTimeout(() => setSavedMessage(null), timeout);
+    return () => clearTimeout(t);
+  }, [savedMessage]);
+
+  const activeUndo = savedMessage && savedMessage.kind !== "reverted" ? savedMessage.undo : undefined;
+  useEffect(() => {
+    if (!activeUndo) return;
+    const i = setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => clearInterval(i);
+  }, [activeUndo]);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [rRes, fRes] = await Promise.all([
+        fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${tenantId}`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/funnel-types?tenantId=${tenantId}`, { credentials: "include" }),
+      ]);
+      const rData = await rRes.json();
+      const fData = await fRes.json();
+      setRules(rData.rules || []);
+      setFunnelTypes(fData.funnelTypes || fData || []);
+    } catch {
+      setError("Failed to load route rules");
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    setLoading(true);
+    loadAll().finally(() => setLoading(false));
+  }, [loadAll]);
+
+  const previewAdd = async (force = false) => {
+    const path = normalizeRoutePathInput(newRoutePath);
+    if (!path || !newFunnelId) return;
+    setPreviewingAdd(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/preview?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ routePath: path, funnelTypeId: Number(newFunnelId), forceOverride: force }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to preview rule");
+      } else {
+        setAddPreview({
+          updatedEventCount: d.updatedEventCount ?? 0,
+          updatedLeadCount: d.updatedLeadCount ?? 0,
+          conflictingEventCount: d.conflictingEventCount ?? 0,
+          matchedEventCount: d.matchedEventCount ?? 0,
+          eligibleSample: d.eligibleSample ?? [],
+          conflictingSample: d.conflictingSample ?? [],
+        });
+      }
+    } catch {
+      setError("Network error");
+    }
+    setPreviewingAdd(false);
+  };
+
+  const toggleAddForceOverride = async (checked: boolean) => {
+    setAddForceOverride(checked);
+    if (addPreview) {
+      await previewAdd(checked);
+    }
+  };
+
+  const cancelAddPreview = () => {
+    setAddPreview(null);
+    setAddForceOverride(false);
+  };
+
+  const addRule = async () => {
+    const path = normalizeRoutePathInput(newRoutePath);
+    if (!path || !newFunnelId) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ routePath: path, funnelTypeId: Number(newFunnelId), forceOverride: addForceOverride }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to add rule");
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const funnelName = d.rule?.funnelName
+          || funnelTypes.find(f => f.id === Number(newFunnelId))?.name
+          || "";
+        setSavedMessage({
+          routePath: path,
+          funnelName,
+          events: d.updatedEventCount ?? 0,
+          leads: d.updatedLeadCount ?? 0,
+          undo: d.undoBatchId
+            ? {
+                batchId: d.undoBatchId,
+                expiresAt: typeof d.undoExpiresAt === "number" ? d.undoExpiresAt : Date.now() + 30_000,
+              }
+            : undefined,
+        });
+        setNewRoutePath("");
+        setNewFunnelId("");
+        setAddPreview(null);
+        setAddForceOverride(false);
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setAdding(false);
+  };
+
+  const startEdit = (rule: RouteRule) => {
+    setEditingId(rule.id);
+    setEditFunnelId(String(rule.funnelTypeId));
+    setEditPreview(null);
+    setEditForceOverride(false);
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditFunnelId("");
+    setEditPreview(null);
+    setEditForceOverride(false);
+  };
+
+  const previewEdit = async (rule: RouteRule, force = false) => {
+    if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
+      cancelEdit();
+      return;
+    }
+    setPreviewingEdit(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/preview?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ routePath: rule.routePath, funnelTypeId: Number(editFunnelId), forceOverride: force }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to preview rule");
+      } else {
+        setEditPreview({
+          updatedEventCount: d.updatedEventCount ?? 0,
+          updatedLeadCount: d.updatedLeadCount ?? 0,
+          conflictingEventCount: d.conflictingEventCount ?? 0,
+          matchedEventCount: d.matchedEventCount ?? 0,
+          eligibleSample: d.eligibleSample ?? [],
+          conflictingSample: d.conflictingSample ?? [],
+        });
+      }
+    } catch {
+      setError("Network error");
+    }
+    setPreviewingEdit(false);
+  };
+
+  const toggleEditForceOverride = async (rule: RouteRule, checked: boolean) => {
+    setEditForceOverride(checked);
+    if (editPreview) {
+      await previewEdit(rule, checked);
+    }
+  };
+
+  const saveEdit = async (rule: RouteRule) => {
+    if (!editFunnelId || Number(editFunnelId) === rule.funnelTypeId) {
+      cancelEdit();
+      return;
+    }
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules?tenantId=${tenantId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ routePath: rule.routePath, funnelTypeId: Number(editFunnelId), forceOverride: editForceOverride }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to update rule");
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const funnelName = d.rule?.funnelName
+          || funnelTypes.find(f => f.id === Number(editFunnelId))?.name
+          || "";
+        setSavedMessage({
+          routePath: rule.routePath,
+          funnelName,
+          events: d.updatedEventCount ?? 0,
+          leads: d.updatedLeadCount ?? 0,
+          undo: d.undoBatchId
+            ? {
+                batchId: d.undoBatchId,
+                expiresAt: typeof d.undoExpiresAt === "number" ? d.undoExpiresAt : Date.now() + 30_000,
+              }
+            : undefined,
+        });
+        cancelEdit();
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setSavingEdit(false);
+  };
+
+  const doUndo = async () => {
+    if (!savedMessage || savedMessage.kind === "reverted" || !savedMessage.undo) return;
+    const current = savedMessage;
+    const undo = current.undo!;
+    if (Date.now() > undo.expiresAt) {
+      setSavedMessage(null);
+      return;
+    }
+    setUndoing(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/route-funnel-rules/undo/${encodeURIComponent(undo.batchId)}?tenantId=${tenantId}`,
+        { method: "POST", credentials: "include" },
+      );
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || "Failed to undo");
+      } else {
+        setSavedMessage({
+          kind: "saved",
+          routePath: current.routePath,
+          funnelName: current.funnelName,
+          events: current.events,
+          leads: current.leads,
+          reverted: {
+            events: d.revertedEventCount ?? 0,
+            leads: d.revertedLeadCount ?? 0,
+          },
+        });
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setUndoing(false);
+  };
+
+  const confirmDelete = async (id: number) => {
+    setDeleting(true);
+    setError(null);
+    try {
+      const rule = rules.find(r => r.id === id);
+      const wantsRevert = pendingDeleteRevert;
+      const qs = new URLSearchParams();
+      if (wantsRevert) qs.set("revertEvents", "true");
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(`${API_BASE}/api/route-funnel-rules/${id}${suffix}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Failed to delete rule");
+      } else {
+        if (wantsRevert && rule) {
+          const d = await res.json().catch(() => ({}));
+          const events = typeof d.updatedEventCount === "number" ? d.updatedEventCount : 0;
+          const leads = typeof d.updatedLeadCount === "number" ? d.updatedLeadCount : 0;
+          setSavedMessage({
+            kind: "reverted",
+            routePath: rule.routePath,
+            events,
+            leads,
+          });
+        }
+        setPendingDeleteId(null);
+        setPendingDeleteRevert(false);
+        await loadAll();
+      }
+    } catch {
+      setError("Network error");
+    }
+    setDeleting(false);
+  };
+
+  if (loading) {
+    return <PremiumCard className="p-8"><p className="text-muted-foreground text-sm">Loading...</p></PremiumCard>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <PremiumCard className="p-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-medium text-white mb-1">Route → Funnel Rules</h3>
+          <p className="text-sm text-muted-foreground">
+            When form field, alias, and subdomain matching can't resolve a funnel, fall back to the page's URL path.
+            Route rules take precedence over subdomain rules. For example,{" "}
+            <span className="font-mono text-white/70">/repair</span> routes to your Repair funnel.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          <Input
+            placeholder="route path (e.g. /repair)"
+            value={newRoutePath}
+            onChange={e => { setNewRoutePath(e.target.value); setAddPreview(null); setAddForceOverride(false); }}
+            disabled={!!addPreview}
+            className="max-w-[220px] bg-white/5 border-white/10 text-sm font-mono"
+          />
+          <ArrowRight className="w-4 h-4 text-white/30" />
+          <Select
+            value={newFunnelId}
+            onValueChange={(v) => { setNewFunnelId(v); setAddPreview(null); setAddForceOverride(false); }}
+            disabled={!!addPreview}
+          >
+            <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm">
+              <SelectValue placeholder="Select funnel type" />
+            </SelectTrigger>
+            <SelectContent>
+              {funnelTypes.map(ft => (
+                <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {addPreview ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={addRule}
+                disabled={adding}
+                className="border-emerald-500/30 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/10"
+              >
+                {adding ? "Saving..." : "Confirm & Save"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={cancelAddPreview}
+                disabled={adding}
+                className="text-white/50"
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => previewAdd(false)}
+              disabled={previewingAdd || !newRoutePath.trim() || !newFunnelId}
+            >
+              {previewingAdd ? "Previewing..." : "Preview"}
+            </Button>
+          )}
+        </div>
+
+        {addPreview && (
+          <div className="mb-4 text-xs bg-white/[0.03] border border-white/10 rounded-md px-3 py-2 space-y-1">
+            <div className="text-white/80">
+              This will re-tag{" "}
+              <span className="text-emerald-300 font-medium">{addPreview.updatedEventCount.toLocaleString()}</span>{" "}
+              past {addPreview.updatedEventCount === 1 ? "event" : "events"}
+              {addPreview.updatedLeadCount > 0 && (
+                <>
+                  {" "}and{" "}
+                  <span className="text-emerald-300 font-medium">{addPreview.updatedLeadCount.toLocaleString()}</span>{" "}
+                  {addPreview.updatedLeadCount === 1 ? "lead" : "leads"}
+                </>
+              )}
+              .
+            </div>
+            {addPreview.conflictingEventCount > 0 && !addForceOverride && (
+              <div className="text-amber-300/90">
+                ⚠ {addPreview.conflictingEventCount.toLocaleString()} matching{" "}
+                {addPreview.conflictingEventCount === 1 ? "event is" : "events are"} already attributed to a different funnel and will be left alone.
+              </div>
+            )}
+            {addPreview.conflictingEventCount > 0 && addForceOverride && (
+              <div className="text-amber-300/90">
+                Force-override on: those {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                {addPreview.conflictingEventCount === 1 ? "event" : "events"} will be re-tagged too.
+              </div>
+            )}
+            {(addPreview.conflictingEventCount > 0 || addForceOverride) && (
+              <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
+                <Checkbox
+                  checked={addForceOverride}
+                  onCheckedChange={(c) => toggleAddForceOverride(c === true)}
+                  disabled={previewingAdd}
+                  className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                />
+                <span className="text-white/70">
+                  Also re-tag the {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                  {addPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
+                </span>
+              </label>
+            )}
+            {addPreview.matchedEventCount === 0 && (
+              <div className="text-white/40">
+                No historical events match this route yet — the rule will apply to new traffic only.
+              </div>
+            )}
+            <PreviewSampleList
+              title="Sample events that would be re-tagged"
+              tone="eligible"
+              events={addPreview.eligibleSample}
+              totalCount={addPreview.updatedEventCount}
+              onOpenEvent={onOpenEvent}
+            />
+            <PreviewSampleList
+              title="Sample events left alone (conflicting funnel)"
+              tone="conflict"
+              events={addPreview.conflictingSample}
+              totalCount={addPreview.conflictingEventCount}
+              onOpenEvent={onOpenEvent}
+            />
+          </div>
+        )}
+
+        {savedMessage && savedMessage.kind === "reverted" && (
+          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2">
+            Removed rule <span className="font-mono">{savedMessage.routePath}</span> and reverted{" "}
+            {savedMessage.events.toLocaleString()} past {savedMessage.events === 1 ? "event" : "events"}
+            {savedMessage.leads > 0 && <> ({savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"})</>}
+            {" "}to the tenant default.
+          </div>
+        )}
+        {savedMessage && savedMessage.kind !== "reverted" && (
+          <div className="mb-4 text-xs text-emerald-300 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-md px-3 py-2 flex items-center justify-between gap-3">
+            {savedMessage.reverted ? (
+              <span>
+                Reverted <span className="font-mono">{savedMessage.routePath}</span> →{" "}
+                restored {savedMessage.reverted.events.toLocaleString()}{" "}
+                {savedMessage.reverted.events === 1 ? "event" : "events"}
+                {savedMessage.reverted.leads > 0 && (
+                  <> and {savedMessage.reverted.leads.toLocaleString()} {savedMessage.reverted.leads === 1 ? "lead" : "leads"}</>
+                )}{" "}to their previous funnel.
+              </span>
+            ) : (
+              <span>
+                Saved <span className="font-mono">{savedMessage.routePath}</span> → {savedMessage.funnelName}.
+                Updated {savedMessage.events.toLocaleString()} {savedMessage.events === 1 ? "event" : "events"}
+                {savedMessage.leads > 0 && <> and {savedMessage.leads.toLocaleString()} {savedMessage.leads === 1 ? "lead" : "leads"}</>}.
+              </span>
+            )}
+            {savedMessage.undo && !savedMessage.reverted && (() => {
+              const secondsLeft = Math.max(0, Math.ceil((savedMessage.undo.expiresAt - Date.now()) / 1000));
+              if (secondsLeft <= 0) return null;
+              return (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={doUndo}
+                  disabled={undoing}
+                  className="h-7 px-2 text-xs text-emerald-200 hover:text-white hover:bg-emerald-500/20 shrink-0"
+                >
+                  {undoing ? "Undoing..." : `Undo (${secondsLeft}s)`}
+                </Button>
+              );
+            })()}
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-4 text-xs text-red-400 bg-red-400/5 border border-red-400/20 rounded-md px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        {rules.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No route rules configured yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Route Path</th>
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Funnel</th>
+                  <th className="py-2 pr-4 text-xs font-medium text-muted-foreground uppercase tracking-wider w-[1%]"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {rules.map(rule => {
+                  const isEditing = editingId === rule.id;
+                  const isPendingDelete = pendingDeleteId === rule.id;
+                  const isHighlighted = highlightedRuleId === rule.id;
+                  return (
+                    <tr
+                      key={rule.id}
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(rule.id, el);
+                        else rowRefs.current.delete(rule.id);
+                      }}
+                      className={`transition-colors ${isHighlighted ? "bg-emerald-400/10 ring-1 ring-emerald-400/40" : "hover:bg-white/[0.02]"}`}>
+                      <td className="py-3 pr-4 font-mono text-sm text-white">{rule.routePath}</td>
+                      <td className="py-3 pr-4 text-sm">
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <Select value={editFunnelId} onValueChange={(v) => { setEditFunnelId(v); setEditPreview(null); setEditForceOverride(false); }}>
+                              <SelectTrigger className="w-[200px] bg-white/5 border-white/10 text-sm h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {funnelTypes.map(ft => (
+                                  <SelectItem key={ft.id} value={String(ft.id)}>{ft.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {editPreview && (
+                              <div className="text-xs bg-white/[0.03] border border-white/10 rounded-md px-2 py-1.5 space-y-0.5">
+                                <div className="text-white/80">
+                                  Re-tag{" "}
+                                  <span className="text-emerald-300 font-medium">{editPreview.updatedEventCount.toLocaleString()}</span>{" "}
+                                  {editPreview.updatedEventCount === 1 ? "event" : "events"}
+                                  {editPreview.updatedLeadCount > 0 && (
+                                    <> &middot; <span className="text-emerald-300 font-medium">{editPreview.updatedLeadCount.toLocaleString()}</span> {editPreview.updatedLeadCount === 1 ? "lead" : "leads"}</>
+                                  )}
+                                </div>
+                                {editPreview.conflictingEventCount > 0 && !editForceOverride && (
+                                  <div className="text-amber-300/90">
+                                    ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event" : "events"} already on a different funnel — left alone.
+                                  </div>
+                                )}
+                                {editPreview.conflictingEventCount > 0 && editForceOverride && (
+                                  <div className="text-amber-300/90">
+                                    Force-override on: {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                    {editPreview.conflictingEventCount === 1 ? "event" : "events"} on a different funnel will also be re-tagged.
+                                  </div>
+                                )}
+                                {(editPreview.conflictingEventCount > 0 || editForceOverride) && (
+                                  <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
+                                    <Checkbox
+                                      checked={editForceOverride}
+                                      onCheckedChange={(c) => toggleEditForceOverride(rule, c === true)}
+                                      disabled={previewingEdit}
+                                      className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                                    />
+                                    <span className="text-white/70">
+                                      Also re-tag the {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                      {editPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
+                                    </span>
+                                  </label>
+                                )}
+                                <PreviewSampleList
+                                  title="Sample events that would be re-tagged"
+                                  tone="eligible"
+                                  events={editPreview.eligibleSample}
+                                  totalCount={editPreview.updatedEventCount}
+                                  onOpenEvent={onOpenEvent}
+                                />
+                                <PreviewSampleList
+                                  title="Sample events left alone (conflicting funnel)"
+                                  tone="conflict"
+                                  events={editPreview.conflictingSample}
+                                  totalCount={editPreview.conflictingEventCount}
+                                  onOpenEvent={onOpenEvent}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-white/80">{rule.funnelName}</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 whitespace-nowrap">
+                        {isEditing ? (
+                          <div className="flex gap-1 justify-end">
+                            {editPreview ? (
+                              <>
+                                <Button size="sm" variant="ghost" disabled={savingEdit} onClick={() => saveEdit(rule)} className="h-7 px-2 text-xs text-emerald-300">
+                                  {savingEdit ? "Saving..." : "Confirm"}
+                                </Button>
+                                <Button size="sm" variant="ghost" disabled={savingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button size="sm" variant="ghost" disabled={previewingEdit || !editFunnelId || Number(editFunnelId) === rule.funnelTypeId} onClick={() => previewEdit(rule)} className="h-7 px-2 text-xs">
+                                  {previewingEdit ? "..." : "Preview"}
+                                </Button>
+                                <Button size="sm" variant="ghost" disabled={previewingEdit} onClick={cancelEdit} className="h-7 px-2 text-xs text-white/50">
+                                  Cancel
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        ) : isPendingDelete ? (
+                          <div className="flex flex-col gap-1 items-end">
+                            <label className="flex items-center gap-1.5 text-xs text-white/70 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={pendingDeleteRevert}
+                                onChange={(e) => setPendingDeleteRevert(e.target.checked)}
+                                disabled={deleting}
+                                className="h-3 w-3 accent-amber-400"
+                              />
+                              Also revert past events tagged{" "}
+                              <span className="font-mono text-white/80">{rule.funnelName}</span> on{" "}
+                              <span className="font-mono text-white/80">{rule.routePath}</span> back to the tenant default
                             </label>
                             <div className="flex gap-1 justify-end items-center">
                               <span className="text-xs text-amber-400/80 mr-1">Delete?</span>

@@ -1064,6 +1064,12 @@ export const ListAttributionEventsQueryParams = zod.object({
     .describe(
       "Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.",
     ),
+  routeRule: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Filter by route rule path, or `__none__` for events without a matching rule.",
+    ),
   search: zod.coerce.string().optional(),
   limit: zod.coerce.number().default(listAttributionEventsQueryLimitDefault),
   offset: zod.coerce.number().default(listAttributionEventsQueryOffsetDefault),

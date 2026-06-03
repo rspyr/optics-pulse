@@ -423,6 +423,8 @@ describe("POST /subdomain-funnel-rules", () => {
       { id: 301, created_lead_id: 9001, resolved_funnel: null },
       { id: 302, created_lead_id: 9002, resolved_funnel: "Default Funnel" },
     ]);
+    // Override-lead lookup (Task #836 guard) — none overridden here.
+    selectRowsQueue.push([]);
     // Lead snapshot — one fell-through (null), one already explicit; only
     // the first should be propagated to.
     selectRowsQueue.push([
@@ -537,6 +539,8 @@ describe("DELETE /subdomain-funnel-rules/:id", () => {
       { id: 703, created_lead_id: 8003, resolved_funnel: "Some Other Funnel" }, // unrelated — left alone
       { id: 704, created_lead_id: null, resolved_funnel: null }, // already fell through — left alone
     ]);
+    // Override-lead lookup (Task #836 guard) — none overridden here.
+    selectRowsQueue.push([]);
     // lead snapshot — only 8001 still mirrors the rule's funnel
     selectRowsQueue.push([
       { id: 8001, leadType: "Protection Plan", funnelId: 5 },
@@ -685,6 +689,8 @@ describe("POST /subdomain-funnel-rules — re-pointing an existing rule", () => 
       { id: 502, created_lead_id: 9002, resolved_funnel: "Old Funnel" },
       { id: 503, created_lead_id: 9003, resolved_funnel: "Some Explicit Funnel" },
     ]);
+    // Override-lead lookup (Task #836 guard) — none overridden here.
+    selectRowsQueue.push([]);
     // Lead snapshot — fell-through and old-rule leads should both be
     // propagated; the explicit-funnel lead is left alone.
     selectRowsQueue.push([

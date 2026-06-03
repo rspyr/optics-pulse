@@ -28,6 +28,8 @@ export * from "./funnel-aliases";
 export * from "./field-mapping-rules";
 export * from "./subdomain-funnel-rules";
 export * from "./subdomain-suggestion-dismissals";
+export * from "./route-funnel-rules";
+export * from "./route-suggestion-dismissals";
 export * from "./user-login-sessions";
 export * from "./podium-messages";
 export * from "./push-tokens";

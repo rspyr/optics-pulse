@@ -664,6 +664,11 @@ paths:
           schema:
             type: string
           description: Filter by subdomain rule subdomain, or `__none__` for events without a matching rule.
+        - name: routeRule
+          in: query
+          schema:
+            type: string
+          description: Filter by route rule path, or `__none__` for events without a matching rule.
         - name: search
           in: query
           schema:
