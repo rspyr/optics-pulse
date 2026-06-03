@@ -188,6 +188,60 @@ export async function emitSheetDriftNotification(params: {
   return true;
 }
 
+/**
+ * Operator-visible alert when the background sheet-sync poller has been unable
+ * to read ANY connected Google Sheet for several consecutive cycles — the
+ * signature of a broken Google connection (expired/invalid token, network, or
+ * a hung request). New leads are silently not importing until someone
+ * reconnects, so this surfaces it in the app instead of leads quietly dropping.
+ *
+ * De-duplication: a 30-minute per-tenant cooldown prevents re-emitting on every
+ * poll cycle while the outage persists, while still re-alerting if it drags on.
+ */
+export async function emitSheetSyncStalledNotification(params: {
+  tenantId: number;
+  stalledCycles: number;
+  errorMessage?: string | null;
+}) {
+  const { tenantId, stalledCycles, errorMessage } = params;
+  const cooldownMs = 30 * 60 * 1000;
+  const integrationKey = "google_sheets";
+
+  const [recent] = await db.select({ id: notificationsTable.id })
+    .from(notificationsTable)
+    .where(
+      and(
+        eq(notificationsTable.tenantId, tenantId),
+        eq(notificationsTable.type, "sheet_sync_stalled"),
+        eq(notificationsTable.integration, integrationKey),
+        sql`${notificationsTable.createdAt} > ${new Date(Date.now() - cooldownMs)}`,
+      ),
+    )
+    .limit(1);
+
+  if (recent) {
+    console.log(`[Notifications] Suppressed duplicate sheet_sync_stalled notification (tenant ${tenantId}) — within cooldown`);
+    return false;
+  }
+
+  await createNotification({
+    tenantId,
+    type: "sheet_sync_stalled",
+    severity: "critical",
+    title: `Google Sheets lead import stopped`,
+    message:
+      `Pulse has been unable to read your connected Google Sheet(s) for ${stalledCycles} consecutive checks, so new leads are not importing. ` +
+      `This usually means the Google Sheets connection needs to be reconnected.` +
+      (errorMessage ? ` (Last error: ${errorMessage})` : ""),
+    integration: integrationKey,
+    actionUrl: `/sales-manager?tenantId=${tenantId}`,
+    actionLabel: "Review sheet sync",
+  });
+
+  console.log(`[Notifications] Created sheet_sync_stalled notification (tenant ${tenantId}, ${stalledCycles} cycles)`);
+  return true;
+}
+
 export async function checkStaleHeartbeats() {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 

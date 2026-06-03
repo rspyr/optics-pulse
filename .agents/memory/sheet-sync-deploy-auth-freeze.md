@@ -41,3 +41,33 @@ herring — the watermark is row-index based and `parseSubmissionMs` uses
 Separately/independently: real header drift DOES freeze a single sheet with a
 `drift_detected_at` stamp + a one-time drift notification; those sheets need their
 column mapping re-approved. Don't conflate the two failure modes.
+
+## Durable fix: a hung read (not a thrown error) freezes ALL sheet sync forever
+
+The auth flood above throws, which the per-config try/catch handles fine. The
+worse failure mode is a read that **hangs and never settles**: the Google Sheets
+API (`googleapis` `spreadsheets.values.get`) and the connector `fetch` had NO
+timeout. A single hung read leaves both locks stuck: the module `syncing` flag
+AND `createGuardedRunner("SheetSync")`'s private `inProgress` only release when
+the sweep promise *settles* — a hang never settles, so every future 60s tick is
+dropped silently with no error and no log. This is the real "stayed dead for
+19h" mechanism, distinct from (but triggered by) the token death.
+
+**Rule:** every external call inside the sheet sync sweep MUST be timeout-bounded,
+AND the sweep must be bounded at the scheduler/guard boundary too — bounding only
+the inner reads is not enough, because an unforeseen hang elsewhere still locks
+`inProgress`. Two independent locks (`syncing` + guard `inProgress`) each need
+their own release path.
+
+What is in place now (api-server):
+- `google-sheets.ts`: `withTimeout()` helper; AbortController timeout on the
+  connector `fetch`; both `values.get` calls wrapped in `withTimeout`. Hang → throw.
+- `sheet-sync.ts`: `MAX_SWEEP_MS` watchdog resets the `syncing` flag; the guarded
+  runner also races `syncAllSheets()` against `MAX_SWEEP_MS` so a hang rejects and
+  releases the guard's `inProgress`.
+- Stall alerting is **per-tenant** (`consecutiveFullyFailedByTenant`): a tenant
+  whose every sheet errored and imported nothing for `STALL_ALERT_CYCLES` (5)
+  consecutive sweeps fires `emitSheetSyncStalledNotification` (30min cooldown).
+  Must be per-tenant — a global counter lets one healthy tenant mask another's
+  outage. Header-drift (`syncSingleSheet` returns -1) is NOT an error and must
+  never count toward stall.

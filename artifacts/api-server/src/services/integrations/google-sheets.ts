@@ -17,6 +17,30 @@ const FALLBACK_REFRESH_MS = 30 * 60 * 1000;
 const RETRY_DELAY_MS = 30 * 1000;
 const MAX_RETRIES = 3;
 
+// Hard timeouts so a hung network call can never stall the sheet-sync loop
+// indefinitely. Without these, a single never-resolving request freezes ALL
+// sheet imports for every tenant until the process is restarted.
+const CONNECTOR_FETCH_TIMEOUT_MS = 15 * 1000;
+const SHEETS_API_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * Reject a promise if it does not settle within `ms`. Used to bound external
+ * calls (Google Sheets API) that have no built-in timeout, so a hang surfaces
+ * as a normal error the caller already handles instead of locking up forever.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`[GoogleSheets] ${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 function extractAccessToken(cs: ConnectionSettings | null): string | undefined {
   return cs?.settings?.access_token || cs?.settings?.oauth?.credentials?.access_token;
 }
@@ -55,6 +79,8 @@ async function fetchConnectionSettings(): Promise<string> {
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const fetchTimer = setTimeout(() => controller.abort(), CONNECTOR_FETCH_TIMEOUT_MS);
     try {
       const resp = await fetch(
         "https://" +
@@ -65,6 +91,7 @@ async function fetchConnectionSettings(): Promise<string> {
             Accept: "application/json",
             "X-Replit-Token": xReplitToken,
           },
+          signal: controller.signal,
         },
       );
 
@@ -88,6 +115,8 @@ async function fetchConnectionSettings(): Promise<string> {
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       }
+    } finally {
+      clearTimeout(fetchTimer);
     }
   }
 
@@ -165,13 +194,21 @@ export async function readRawSheetData(
   let client = await getUncachableGoogleSheetClient();
   let response;
   try {
-    response = await client.spreadsheets.values.get({ spreadsheetId, range });
+    response = await withTimeout(
+      client.spreadsheets.values.get({ spreadsheetId, range }),
+      SHEETS_API_TIMEOUT_MS,
+      `values.get(${spreadsheetId})`,
+    );
   } catch (err) {
     if (!isAuthError(err)) throw err;
     console.warn("[GoogleSheets] Auth error on Sheets API call, clearing token and retrying once:", (err as Error).message);
     clearCachedToken();
     client = await getUncachableGoogleSheetClient();
-    response = await client.spreadsheets.values.get({ spreadsheetId, range });
+    response = await withTimeout(
+      client.spreadsheets.values.get({ spreadsheetId, range }),
+      SHEETS_API_TIMEOUT_MS,
+      `values.get(${spreadsheetId}) retry`,
+    );
   }
 
   const values = response.data.values;

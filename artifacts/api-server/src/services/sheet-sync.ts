@@ -9,7 +9,7 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "./source-normalizer";
 import { normalizePhone } from "../lib/phone-utils";
-import { emitSheetDriftNotification } from "./notifications";
+import { emitSheetDriftNotification, emitSheetSyncStalledNotification } from "./notifications";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
 import { handleResubmission } from "./lead-resubmission";
 
@@ -150,9 +150,44 @@ function resolveFunnelForRow(
 
 let syncing = false;
 
+// Safety net: a sweep should finish in seconds. If one ever exceeds this
+// (e.g. an unforeseen hang the per-read timeouts don't cover), force-release
+// the lock so future ticks can run instead of sheet sync freezing forever.
+const MAX_SWEEP_MS = 4 * 60 * 1000;
+let syncWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+// Health/alerting state. Tracked PER TENANT: a tenant is "fully-failed" for a
+// sweep when every one of its connected sheets threw (auth/connection/timeout)
+// and none imported — the signature of a broken Google connection for that
+// tenant. We count consecutive fully-failed sweeps per tenant and alert that
+// tenant's operators once it crosses the threshold, so one healthy tenant can
+// never mask another tenant's silent outage.
+const STALL_ALERT_CYCLES = 5;
+let lastSuccessfulSweepAt: number | null = null;
+let lastSweepError: string | null = null;
+const consecutiveFullyFailedByTenant = new Map<number, number>();
+
+export function getSheetSyncHealth() {
+  const stalledTenantIds = [...consecutiveFullyFailedByTenant.entries()]
+    .filter(([, n]) => n >= STALL_ALERT_CYCLES)
+    .map(([tenantId]) => tenantId);
+  return {
+    syncing,
+    lastSuccessfulSweepAt,
+    lastSweepError,
+    stalledTenantIds,
+    stalled: stalledTenantIds.length > 0,
+  };
+}
+
 async function syncAllSheets(): Promise<void> {
   if (syncing) return;
   syncing = true;
+  if (syncWatchdog) clearTimeout(syncWatchdog);
+  syncWatchdog = setTimeout(() => {
+    console.error(`[SheetSync] Watchdog: sweep exceeded ${MAX_SWEEP_MS}ms — force-releasing lock so future ticks can run`);
+    syncing = false;
+  }, MAX_SWEEP_MS);
   try {
     const trackerOnlyTenants = await db.select({ id: tenantsTable.id })
       .from(tenantsTable)
@@ -176,14 +211,30 @@ async function syncAllSheets(): Promise<void> {
     let totalImported = 0;
     let driftSkipped = 0;
     let errorCount = 0;
+    let lastErrorMessage: string | null = null;
+
+    // Per-tenant tallies so stall detection is scoped to each tenant's own
+    // sheets — a healthy tenant must never reset a broken tenant's counter.
+    type TenantTally = { sheets: number; imported: number; errors: number; lastError: string | null };
+    const perTenant = new Map<number, TenantTally>();
+    const tallyFor = (tenantId: number): TenantTally => {
+      let t = perTenant.get(tenantId);
+      if (!t) { t = { sheets: 0, imported: 0, errors: 0, lastError: null }; perTenant.set(tenantId, t); }
+      return t;
+    };
 
     for (const config of configs) {
+      const tally = tallyFor(config.tenantId);
+      tally.sheets++;
       try {
         const count = await syncSingleSheet(config);
         if (count === -1) driftSkipped++;
-        else totalImported += count;
+        else { totalImported += count; tally.imported += count; }
       } catch (err) {
         errorCount++;
+        tally.errors++;
+        lastErrorMessage = err instanceof Error ? err.message : String(err);
+        tally.lastError = lastErrorMessage;
         console.error(`[SheetSync] Error syncing sheet config ${config.id} (tenant ${config.tenantId}):`, err);
       }
     }
@@ -191,7 +242,51 @@ async function syncAllSheets(): Promise<void> {
     if (totalImported > 0 || driftSkipped > 0 || errorCount > 0) {
       console.log(`[SheetSync] Cycle complete: ${configs.length} sheet(s) checked, ${totalImported} lead(s) imported, ${driftSkipped} drift-skipped, ${errorCount} error(s)`);
     }
+
+    // Per-tenant stall accounting: a tenant whose EVERY sheet threw and which
+    // imported nothing this sweep has a (probably) broken Google connection.
+    for (const [tenantId, tally] of perTenant) {
+      const fullyFailed = tally.errors === tally.sheets && tally.imported === 0;
+      if (fullyFailed) {
+        const n = (consecutiveFullyFailedByTenant.get(tenantId) ?? 0) + 1;
+        consecutiveFullyFailedByTenant.set(tenantId, n);
+        lastSweepError = tally.lastError;
+        console.warn(`[SheetSync] Tenant ${tenantId}: fully-failed sweep #${n} (all ${tally.sheets} sheet(s) errored). Last error: ${tally.lastError}`);
+        if (n >= STALL_ALERT_CYCLES) {
+          try {
+            await emitSheetSyncStalledNotification({
+              tenantId,
+              stalledCycles: n,
+              errorMessage: tally.lastError,
+            });
+          } catch (err) {
+            console.error(`[SheetSync] Failed to emit stall notification for tenant ${tenantId}:`, err);
+          }
+        }
+      } else {
+        const prev = consecutiveFullyFailedByTenant.get(tenantId) ?? 0;
+        if (prev > 0) {
+          console.log(`[SheetSync] Tenant ${tenantId} recovered after ${prev} fully-failed sweep(s)`);
+        }
+        consecutiveFullyFailedByTenant.delete(tenantId);
+      }
+    }
+
+    // Drop counters for tenants no longer in the active config set (paused or
+    // removed) so the stall map can't accumulate stale entries.
+    for (const tenantId of [...consecutiveFullyFailedByTenant.keys()]) {
+      if (!perTenant.has(tenantId)) consecutiveFullyFailedByTenant.delete(tenantId);
+    }
+
+    if (errorCount < configs.length) {
+      lastSuccessfulSweepAt = Date.now();
+      if (errorCount === 0) lastSweepError = null;
+    }
   } finally {
+    if (syncWatchdog) {
+      clearTimeout(syncWatchdog);
+      syncWatchdog = null;
+    }
     syncing = false;
   }
 }
@@ -628,9 +723,21 @@ export function startSheetSyncScheduler(): void {
 
   // Re-entrancy guard: a 60s poll can outlast its interval when a sheet is
   // large or the DB is slow, so the next tick skips instead of stacking an
-  // overlapping sync.
+  // overlapping sync. We also bound the sweep at the guard boundary: if
+  // syncAllSheets ever hangs past MAX_SWEEP_MS (beyond the per-read timeouts),
+  // this rejection lets the guarded runner release its own in-progress flag so
+  // future ticks are not skipped forever.
   const runSheetSweep = createGuardedRunner("SheetSync", async () => {
-    await syncAllSheets();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`[SheetSync] sweep exceeded ${MAX_SWEEP_MS}ms — abandoning so the scheduler lock releases`)),
+        MAX_SWEEP_MS,
+      );
+      syncAllSheets().then(
+        () => { clearTimeout(timer); resolve(); },
+        (err) => { clearTimeout(timer); reject(err); },
+      );
+    });
   });
   syncTimer = setInterval(() => {
     void runSheetSweep().catch((err) => {
