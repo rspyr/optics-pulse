@@ -58,6 +58,75 @@ export function buildLatestRowByPhone(rows: ReturnType<typeof mapRawRows>): Map<
   return latest;
 }
 
+/** A lead's stored state, as far as the rescan write rules care about it. */
+export interface RescanLeadState {
+  appointmentDate: string | null;
+  appointmentTime: string | null;
+  /** Maps to leadsTable.preBooked. */
+  appointmentBooked: boolean | null;
+  addOns: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  hubStatus: string | null;
+  hasSoldEstimate: boolean | null;
+}
+
+/**
+ * Decide which fields (if any) a rescanned sheet row should write back onto an
+ * existing lead. Pure: no DB, no clock, no side-effects — returns the set of
+ * column updates (empty object means "no-op, leave the lead untouched").
+ *
+ * The non-obvious rules this enforces:
+ *   - A CSR-confirmed appointment (`appt_set`) or a sold lead is authoritative;
+ *     its appointment date/time/booked flag must NEVER be overwritten by a sheet
+ *     row, even a later one with a different date.
+ *   - Only changed values are written (write-only-on-real-change) so a row that
+ *     already matches the lead produces no churn.
+ *   - A dead lead is never promoted back to `appt_booked`.
+ */
+export function computeRescanUpdates(
+  existingLead: RescanLeadState,
+  row: ReturnType<typeof mapRawRows>[number],
+): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+
+  const newApptDate = row.appointmentDate || null;
+  const newApptTime = row.appointmentTime || null;
+  const newAddOns = row.addOns || null;
+  const newAddress = row.address || null;
+  const newCity = row.city || null;
+  const newState = row.state || null;
+  const newZip = row.zip || null;
+  const newApptBooked = isPreBookedCellValue(row.appointmentBooked);
+
+  // A CSR-confirmed appointment (appt_set) or a sold lead is authoritative —
+  // never let a sheet row silently overwrite its appointment.
+  const apptLocked = existingLead.hubStatus === "appt_set" || existingLead.hasSoldEstimate;
+
+  if (!apptLocked) {
+    if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
+    if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
+  }
+  if (newAddOns && newAddOns !== existingLead.addOns) updates.addOns = newAddOns;
+  if (newAddress && newAddress !== existingLead.address) updates.address = newAddress;
+  if (newCity && newCity !== existingLead.city) updates.city = newCity;
+  if (newState && newState !== existingLead.state) updates.state = newState;
+  if (newZip && newZip !== existingLead.zip) updates.zip = newZip;
+
+  const hasNewApptInfo = newApptBooked || isValidAppointmentValue(newApptDate) || isValidAppointmentValue(newApptTime);
+  if (hasNewApptInfo && !existingLead.appointmentBooked && !apptLocked) {
+    updates.preBooked = true;
+    if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
+      updates.hubStatus = "appt_booked";
+    }
+    updates.visibleAfter = null;
+  }
+
+  return updates;
+}
+
 function headersMatch(current: string[], saved: string[]): boolean {
   if (current.length !== saved.length) return false;
   const currentSet = new Set(current);
@@ -171,39 +240,7 @@ async function rescanExistingRows(
     const existingLead = leadByPhone.get(normalizedPhone);
     if (!existingLead) continue;
 
-    const updates: Record<string, unknown> = {};
-
-    const newApptDate = row.appointmentDate || null;
-    const newApptTime = row.appointmentTime || null;
-    const newAddOns = row.addOns || null;
-    const newAddress = row.address || null;
-    const newCity = row.city || null;
-    const newState = row.state || null;
-    const newZip = row.zip || null;
-    const newApptBooked = isPreBookedCellValue(row.appointmentBooked);
-
-    // A CSR-confirmed appointment (appt_set) or a sold lead is authoritative —
-    // never let a sheet row silently overwrite its appointment.
-    const apptLocked = existingLead.hubStatus === "appt_set" || existingLead.hasSoldEstimate;
-
-    if (!apptLocked) {
-      if (newApptDate && newApptDate !== existingLead.appointmentDate) updates.appointmentDate = newApptDate;
-      if (newApptTime && newApptTime !== existingLead.appointmentTime) updates.appointmentTime = newApptTime;
-    }
-    if (newAddOns && newAddOns !== existingLead.addOns) updates.addOns = newAddOns;
-    if (newAddress && newAddress !== existingLead.address) updates.address = newAddress;
-    if (newCity && newCity !== existingLead.city) updates.city = newCity;
-    if (newState && newState !== existingLead.state) updates.state = newState;
-    if (newZip && newZip !== existingLead.zip) updates.zip = newZip;
-
-    const hasNewApptInfo = newApptBooked || isValidAppointmentValue(newApptDate) || isValidAppointmentValue(newApptTime);
-    if (hasNewApptInfo && !existingLead.appointmentBooked && !apptLocked) {
-      updates.preBooked = true;
-      if (existingLead.hubStatus !== "appt_set" && existingLead.hubStatus !== "dead") {
-        updates.hubStatus = "appt_booked";
-      }
-      updates.visibleAfter = null;
-    }
+    const updates = computeRescanUpdates(existingLead, row);
 
     if (Object.keys(updates).length === 0) continue;
 
