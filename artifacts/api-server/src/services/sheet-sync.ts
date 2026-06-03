@@ -27,14 +27,14 @@ function parseSubmissionMs(value: string | undefined | null): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-interface OrderedRow {
+export interface OrderedRow {
   row: ReturnType<typeof mapRawRows>[number];
   index: number;
   ms: number | null;
 }
 
 /** True when row `a` represents a later submission than row `b`. */
-function rowIsLater(a: OrderedRow, b: OrderedRow): boolean {
+export function rowIsLater(a: OrderedRow, b: OrderedRow): boolean {
   if (a.ms !== null && b.ms !== null) return a.ms !== b.ms ? a.ms > b.ms : a.index > b.index;
   if (a.ms !== null) return true;
   if (b.ms !== null) return false;
@@ -46,7 +46,7 @@ function rowIsLater(a: OrderedRow, b: OrderedRow): boolean {
  * Deterministic latest-wins (by submission timestamp, tie-broken by sheet
  * order) — this is what kills the per-cycle appointment oscillation.
  */
-function buildLatestRowByPhone(rows: ReturnType<typeof mapRawRows>): Map<string, OrderedRow> {
+export function buildLatestRowByPhone(rows: ReturnType<typeof mapRawRows>): Map<string, OrderedRow> {
   const latest = new Map<string, OrderedRow>();
   rows.forEach((row, index) => {
     const phone = normalizePhone(row.phone || "");
