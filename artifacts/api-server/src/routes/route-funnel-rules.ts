@@ -178,7 +178,7 @@ async function backfillEventsForRouteRule(
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
     )
-    SELECT id, created_lead_id, resolved_funnel
+    SELECT id, created_lead_id, resolved_funnel, match_level, match_confidence, unmatched_reason, manual_source
     FROM parsed
     WHERE route_path = ${normPath}
   `);

@@ -339,6 +339,70 @@ describe("re-point an existing funnel rule (real Postgres)", () => {
     expect(status?.manualSource).toBe(`route_funnel_rule:${routePath}`);
   });
 
+  it("route force-override undo restores prior event match fields", async () => {
+    const routePath = `/force-undo-status-route`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+    const priorReason = "No match before route force override";
+    const priorManualSource = "legacy-prior-source";
+
+    const [lead] = await db.insert(leadsTable).values({
+      tenantId: routeFx.tenantId,
+      firstName: "Force",
+      lastName: "Undo",
+      source: "test",
+      leadType: routeFx.funnelAName,
+      funnelId: routeFx.funnelAId,
+    }).returning();
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId: routeFx.tenantId,
+      eventType: "form_fill",
+      pageUrl,
+      resolvedFunnel: routeFx.funnelAName,
+      createdLeadId: lead.id,
+      matchLevel: "unmatched",
+      matchConfidence: 0.37,
+      unmatchedReason: priorReason,
+      manualSource: priorManualSource,
+    }).returning();
+
+    const saveRes = await request(routeApp, "/route-funnel-rules", {
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+      forceOverride: true,
+    });
+    expect(saveRes.status).toBe(200);
+    expect(saveRes.json.updatedEventCount).toBe(1);
+    expect(saveRes.json.manualMatchedEventCount).toBe(1);
+    const batchId = saveRes.json.undoBatchId as string;
+    expect(typeof batchId).toBe("string");
+    expect(batchId.length).toBeGreaterThan(0);
+
+    const movedStatus = await eventStatus(event.id);
+    expect(await eventFunnel(event.id)).toBe(routeFx.funnelBName);
+    expect(movedStatus?.matchLevel).toBe("manual");
+    expect(movedStatus?.manualSource).toBe(`route_funnel_rule:${routePath}`);
+
+    const undoRes = await request(
+      routeApp,
+      `/route-funnel-rules/undo/${encodeURIComponent(batchId)}`,
+      null,
+    );
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.json.revertedEventCount).toBe(1);
+    expect(undoRes.json.revertedLeadCount).toBe(1);
+
+    expect(await eventFunnel(event.id)).toBe(routeFx.funnelAName);
+    const restoredStatus = await eventStatus(event.id);
+    expect(restoredStatus?.matchLevel).toBe("unmatched");
+    expect(Number(restoredStatus?.matchConfidence)).toBeCloseTo(0.37, 5);
+    expect(restoredStatus?.unmatchedReason).toBe(priorReason);
+    expect(restoredStatus?.manualSource).toBe(priorManualSource);
+
+    const restoredLead = await leadRow(lead.id);
+    expect(restoredLead?.leadType).toBe(routeFx.funnelAName);
+    expect(restoredLead?.funnelId).toBe(routeFx.funnelAId);
+  });
+
   it("subdomain re-point moves the control off the prior funnel but leaves the override", async () => {
     const subdomain = `repoint-sub`;
     const pageUrl = `https://${subdomain}.example-int-test.com/r`;
