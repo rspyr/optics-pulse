@@ -1,8 +1,9 @@
 // Regression coverage for the new `manual` match-level status (Task #580).
 //
-// The `manual` flip is invoked from three operator-action server paths
+// The `manual` flip is invoked from operator-action server paths
 // (field-mapping rule save, per-lead funnel override, rule-scope re-derive
-// fan-out). On the marketing-os side, three contracts have to hold:
+// fan-out, and route funnel rule backfill). On the marketing-os side, three
+// contracts have to hold:
 //
 //   1. The MATCH badge column renders `MANUAL` for `matchLevel === "manual"`
 //      so operators can see at-a-glance what they resolved by hand.
@@ -220,7 +221,7 @@ describe("Attribution page — `manual` match-level (Task #580)", () => {
     expect(screen.queryByTestId("unmatched-fields-panel")).not.toBeInTheDocument();
   });
 
-  // Task #584: each of the three flip sites writes a distinct manualSource
+  // Task #584: each flip site writes a distinct manualSource
   // stamp, and the event sheet has to surface that stamp as a human-readable
   // "Resolved by …" line with a deep-link back to the action. These three
   // assertions lock in the wire-up between the persisted stamp and the
@@ -261,6 +262,18 @@ describe("Attribution page — `manual` match-level (Task #580)", () => {
     fireEvent.click(row.closest("tr") as HTMLTableRowElement);
     expect(await screen.findByTestId("manual-source-rule-scope")).toBeInTheDocument();
     expect(screen.queryByTestId("manual-source-rule-link")).not.toBeInTheDocument();
+  });
+
+  it("renders a route-rule source line when manualSource = 'route_funnel_rule:<path>'", async () => {
+    const ev = makeEvent({ manualSource: "route_funnel_rule:/summer-relief-plan" });
+    useGetAttributionEventMock.mockReturnValue({
+      data: { event: ev, matchedJob: null, matchedLead: null },
+    });
+    renderPage();
+    const row = await screen.findByText("form fill");
+    fireEvent.click(row.closest("tr") as HTMLTableRowElement);
+    const line = await screen.findByTestId("manual-source-route-rule");
+    expect(line).toHaveTextContent("route rule /summer-relief-plan");
   });
 
   it("renders a legacy fallback line when manualSource is null on a `manual` row (pre-task #584 events)", async () => {

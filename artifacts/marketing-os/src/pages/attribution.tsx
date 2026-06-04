@@ -2565,7 +2565,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
  * Inline "Resolved by …" line that renders next to the MANUAL badge on the
  * attribution event sheet. Parses the `manualSource` stamp written by every
  * operator-action flip site (`field_mapping_rule:<id>` /
- * `funnel_override:lead/<leadId>`) and turns it into a human-readable label
+ * `funnel_override:lead/<leadId>` / `route_funnel_rule:<path>`) and turns it into a human-readable label
  * + deep-link back to the action that produced the manual match, so the
  * operator can revisit the rule/override without digging through audit logs
  * (task #584).
@@ -2623,6 +2623,15 @@ function ManualSourceLine({ manualSource }: { manualSource: string | null }) {
           lead #{leadId}
         </a>
         .
+      </p>
+    );
+  }
+  const routeRuleMatch = /^route_funnel_rule:(.+)$/.exec(manualSource);
+  if (routeRuleMatch) {
+    const routePath = routeRuleMatch[1];
+    return (
+      <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-route-rule">
+        Resolved by route rule <span className="font-mono">{routePath}</span>.
       </p>
     );
   }
