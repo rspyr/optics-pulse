@@ -140,6 +140,7 @@ router.get("/attribution/events", async (req, res) => {
               SELECT 1
               FROM leads l
               WHERE l.id = ${attributionEventsTable.createdLeadId}
+                AND l.tenant_id = ${attributionEventsTable.tenantId}
                 AND (${leadSearchCond})
             )`,
           ]
