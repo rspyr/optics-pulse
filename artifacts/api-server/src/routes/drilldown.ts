@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, leadsTable, jobsTable, soldEstimatesTable, funnelTypesTable, type RebateBreakdownItem } from "@workspace/db";
+import { db, leadsTable, jobsTable, soldEstimatesTable, funnelTypesTable, type RebateBreakdownItem, type SoldEstimate } from "@workspace/db";
 import { eq, and, gte, lte, asc, desc, SQL, inArray, sql, or, ilike, getTableColumns } from "drizzle-orm";
 import { resolveListTenantScope, assertResourceTenantAccess } from "../lib/tenant-scope";
 
@@ -23,9 +23,11 @@ const UNMATCHED_TIER = "unmatched";
 // and not the "unmatched" sentinel.
 const isAttributedExpr = sql`${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER}`;
 // Display/sort order for match tiers, strongest first. "gclid" is an exact
-// click-id match; "manual" is a human-assigned match; "unmatched" sorts last.
+// click-id match; "manual" is a human-assigned match; "lead_funnel" is a
+// linked lead with a known funnel but no stronger click/contact proof yet.
+// "unmatched" sorts last.
 // Any tier not listed here sorts after the known ones (then alphabetically).
-const MATCH_LEVEL_ORDER = ["diamond", "golden", "silver", "bronze", "gclid", "manual", UNMATCHED_TIER];
+const MATCH_LEVEL_ORDER = ["diamond", "golden", "silver", "bronze", "gclid", "manual", "lead_funnel", UNMATCHED_TIER];
 function matchLevelRank(level: string): number {
   const i = MATCH_LEVEL_ORDER.indexOf(level);
   return i === -1 ? MATCH_LEVEL_ORDER.length : i;
@@ -70,6 +72,102 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // invoiceRebateAmount can be null) but rounds any real number to whole cents.
 const round2Nullable = (n: number | null | undefined): number | null =>
   n == null ? null : round2(n);
+
+type EstimateOption = {
+  id: number;
+  stEstimateId: string;
+  stJobId: string | null;
+  name: string | null;
+  status: string | null;
+  summary: string | null;
+  subtotal: number;
+  rebateAmount: number;
+  totalAmount: number;
+  soldByName: string | null;
+  soldOn: Date | string | null;
+  followUpOn: Date | string | null;
+};
+
+type PotentialEstimateInput = Pick<SoldEstimate, "jobId" | "totalAmount">;
+
+function estimateAmount(est: Pick<SoldEstimate, "totalAmount" | "subtotal">): number {
+  const amount = Number(est.totalAmount ?? est.subtotal ?? 0);
+  return Number.isFinite(amount) ? round2(amount) : 0;
+}
+
+function isSoldEstimate(est: Pick<SoldEstimate, "estimateStatus">): boolean {
+  const status = est.estimateStatus?.trim().toLowerCase();
+  // Rows created before estimate_status existed came only from the sold-only
+  // sync, so keep treating them as sold until a fresh sync backfills status.
+  return status == null || status === "" || status === "sold";
+}
+
+function toEstimateOption(est: SoldEstimate): EstimateOption {
+  return {
+    id: est.id,
+    stEstimateId: est.stEstimateId,
+    stJobId: est.stJobId,
+    name: est.estimateName,
+    status: est.estimateStatus,
+    summary: est.summary,
+    subtotal: round2(Number(est.subtotal ?? 0)),
+    rebateAmount: round2(Number(est.rebateAmount ?? 0)),
+    totalAmount: estimateAmount(est),
+    soldByName: est.soldByName,
+    soldOn: est.soldOn,
+    followUpOn: est.followUpOn,
+  };
+}
+
+function estimatePotentialFromOptions(options: EstimateOption[]) {
+  const amounts = options.map((o) => o.totalAmount).filter((n) => Number.isFinite(n) && n > 0);
+  if (amounts.length === 0) {
+    return { low: null as number | null, avg: null as number | null, high: null as number | null, count: 0 };
+  }
+  let low = amounts[0];
+  let high = amounts[0];
+  let total = 0;
+  for (const amount of amounts) {
+    total += amount;
+    if (amount < low) low = amount;
+    if (amount > high) high = amount;
+  }
+  return { low: round2(low), avg: round2(total / amounts.length), high: round2(high), count: amounts.length };
+}
+
+function summarizePotentialByJob(estimates: PotentialEstimateInput[]) {
+  const byJob = new Map<number, { low: number; high: number; total: number; count: number }>();
+  for (const est of estimates) {
+    if (est.jobId == null) continue;
+    const amount = Number(est.totalAmount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const rounded = round2(amount);
+    const current = byJob.get(est.jobId);
+    if (!current) {
+      byJob.set(est.jobId, { low: rounded, high: rounded, total: rounded, count: 1 });
+    } else {
+      if (rounded < current.low) current.low = rounded;
+      if (rounded > current.high) current.high = rounded;
+      current.total += rounded;
+      current.count += 1;
+    }
+  }
+
+  let lowTotal = 0;
+  let avgTotal = 0;
+  let highTotal = 0;
+  for (const job of byJob.values()) {
+    lowTotal += job.low;
+    avgTotal += job.total / job.count;
+    highTotal += job.high;
+  }
+  return {
+    potentialRevenueLow: round2(lowTotal),
+    potentialRevenueAvg: round2(avgTotal),
+    potentialRevenueHigh: round2(highTotal),
+    potentialJobCount: byJob.size,
+  };
+}
 
 const router: IRouter = Router();
 
@@ -188,8 +286,9 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
   // Optional multi-select match-tier filter (diamond/golden/silver/bronze/
-  // manual/unmatched). Applied identically to the list, count, and summary so
-  // the cards/CSV reconcile with the visible rows under any active selection.
+  // manual/lead_funnel/unmatched). Applied identically to the list, count, and
+  // summary so the cards/CSV reconcile with the visible rows under any active
+  // selection.
   const matchLevels = parseMatchLevels(req.query.matchLevel);
 
   // Sort key + direction. Defaults to corrected-revenue desc (the historical
@@ -272,17 +371,24 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const jobIds = jobs.map((j) => j.id);
   const leadIds = [...new Set(jobs.map((j) => j.leadId).filter((v): v is number => v != null))];
 
-  // Sold estimates carry the itemized rebate breakdown + salesperson name.
+  // Estimate rows carry two separate meanings:
+  // - sold/status-less rows support existing actual-revenue audit fields
+  // - every active row supports potential-revenue min/max options
   const estimates = jobIds.length > 0
     ? await db.select().from(soldEstimatesTable).where(inArray(soldEstimatesTable.jobId, jobIds))
     : [];
-  const estimateByJobId = new Map<number, typeof estimates[number]>();
+  const estimatesByJobId = new Map<number, typeof estimates>();
+  const actualEstimateByJobId = new Map<number, typeof estimates[number]>();
   for (const est of estimates) {
     if (est.jobId == null) continue;
-    const existing = estimateByJobId.get(est.jobId);
+    const list = estimatesByJobId.get(est.jobId) ?? [];
+    list.push(est);
+    estimatesByJobId.set(est.jobId, list);
+    if (!isSoldEstimate(est)) continue;
+    const existing = actualEstimateByJobId.get(est.jobId);
     // Prefer the estimate with the largest rebate breakdown (most informative).
     if (!existing || (est.rebateAmount ?? 0) > (existing.rebateAmount ?? 0)) {
-      estimateByJobId.set(est.jobId, est);
+      actualEstimateByJobId.set(est.jobId, est);
     }
   }
 
@@ -296,12 +402,23 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
         status: leadsTable.status,
         hubStatus: leadsTable.hubStatus,
         assignedTo: leadsTable.assignedTo,
+        phone: leadsTable.phone,
+        email: leadsTable.email,
+        address: leadsTable.address,
+        city: leadsTable.city,
+        state: leadsTable.state,
+        zip: leadsTable.zip,
       }).from(leadsTable).where(inArray(leadsTable.id, leadIds))
     : [];
   const leadById = new Map(leads.map((l) => [l.id, l]));
 
   const result = jobs.map((job) => {
-    const est = estimateByJobId.get(job.id);
+    const est = actualEstimateByJobId.get(job.id);
+    const estimateOptions = (estimatesByJobId.get(job.id) ?? [])
+      .map(toEstimateOption)
+      .filter((option) => option.totalAmount > 0)
+      .sort((a, b) => a.totalAmount - b.totalAmount || a.id - b.id);
+    const potential = estimatePotentialFromOptions(estimateOptions);
     const lead = job.leadId != null ? leadById.get(job.leadId) : undefined;
     const rebateBreakdown: RebateBreakdownItem[] = (est?.rebateBreakdown as RebateBreakdownItem[] | null) ?? [];
     const correctedRevenue = round2(
@@ -341,6 +458,11 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       funnel: funnelName,
       source: lead?.source ?? null,
       rebateBreakdown,
+      estimateOptions,
+      potentialRevenueLow: potential.low,
+      potentialRevenueAvg: potential.avg,
+      potentialRevenueHigh: potential.high,
+      potentialEstimateCount: potential.count,
       soldByName: est?.soldByName ?? lead?.assignedTo ?? null,
       lead: lead
         ? {
@@ -352,6 +474,12 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
             status: lead.status,
             hubStatus: lead.hubStatus,
             funnel: funnelName,
+            phone: lead.phone,
+            email: lead.email,
+            address: lead.address,
+            city: lead.city,
+            state: lead.state,
+            zip: lead.zip,
           }
         : null,
     };
@@ -433,6 +561,21 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
     .where(where)
     .groupBy(sql`1`);
 
+  const potentialJobs = await db
+    .select({ id: jobsTable.id })
+    .from(jobsTable)
+    .leftJoin(leadsTable, eq(jobsTable.leadId, leadsTable.id))
+    .leftJoin(funnelTypesTable, eq(leadsTable.funnelId, funnelTypesTable.id))
+    .where(where);
+  const potentialJobIds = potentialJobs.map((j) => j.id);
+  const potentialEstimates = potentialJobIds.length > 0
+    ? await db
+        .select({ jobId: soldEstimatesTable.jobId, totalAmount: soldEstimatesTable.totalAmount })
+        .from(soldEstimatesTable)
+        .where(inArray(soldEstimatesTable.jobId, potentialJobIds))
+    : [];
+  const potentialSummary = summarizePotentialByJob(potentialEstimates);
+
   // Strongest tier first (diamond → unmatched), matching the facets ordering.
   const byMatchLevel = tierRows
     .map((r) => ({ tier: String(r.tier), revenue: round2(Number(r.revenue ?? 0)), count: Number(r.count ?? 0) }))
@@ -443,6 +586,7 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
     rebates: round2(Number(agg?.rebates ?? 0)),
     attributed: round2(Number(agg?.attributed ?? 0)),
     count: Number(agg?.count ?? 0),
+    ...potentialSummary,
     byMatchLevel,
   });
 });

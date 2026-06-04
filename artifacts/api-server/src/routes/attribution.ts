@@ -515,13 +515,14 @@ router.post("/attribution/reconcile", requireRole("super_admin", "agency_user"),
         golden: result.golden,
         silver: result.silver,
         bronze: result.bronze,
+        leadFunnel: result.leadFunnel,
         unmatched: result.unmatched,
       },
       matchRate: result.matchRate,
       ociPayloadsGenerated: result.ociPayloads.length,
       enhancedConversionPayloads: result.enhancedConversionEligible,
       capiPayloads: result.capiEligible,
-      message: `Reconciled ${result.jobsProcessed} jobs: ${result.diamond} diamond, ${result.golden} golden, ${result.silver} silver, ${result.bronze} bronze, ${result.unmatched} unmatched`,
+      message: `Reconciled ${result.jobsProcessed} jobs: ${result.diamond} diamond, ${result.golden} golden, ${result.silver} silver, ${result.bronze} bronze, ${result.leadFunnel} lead-funnel, ${result.unmatched} unmatched`,
     });
   } catch (error) {
     console.error("[Reconciliation] Error:", error);

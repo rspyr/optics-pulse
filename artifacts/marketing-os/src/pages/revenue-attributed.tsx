@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
@@ -12,7 +13,7 @@ import { useAuth } from "@/components/auth-context";
 import { toast } from "sonner";
 import {
   DollarSign, Loader2, ChevronDown, ChevronRight, ChevronLeft, ExternalLink,
-  Tag, User, Link2, Pencil, Check, X, Download,
+  Tag, User, Link2, Pencil, Check, X, Download, Calculator,
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -24,6 +25,7 @@ const PULSE_PATH = `${API_BASE}/pulse`;
 const PAGE_SIZE = 200;
 
 type DateRange = "last30" | "thisMonth" | "lastMonth" | "last7";
+type PotentialMode = "low" | "avg" | "high";
 
 const VALID_RANGES: DateRange[] = ["last30", "thisMonth", "lastMonth", "last7"];
 
@@ -112,6 +114,10 @@ type RevenueSummary = {
   rebates: number;
   attributed: number;
   count: number;
+  potentialRevenueLow?: number;
+  potentialRevenueAvg?: number;
+  potentialRevenueHigh?: number;
+  potentialJobCount?: number;
   byMatchLevel?: MatchTierBreakdown[];
 };
 
@@ -119,6 +125,12 @@ type LeadSummary = {
   id: number;
   firstName: string | null;
   lastName: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
   source: string | null;
   originalSource: string | null;
   status: string | null;
@@ -135,6 +147,21 @@ type LeadSearchResult = {
   source: string | null;
   status: string | null;
   createdAt: string;
+};
+
+type EstimateOption = {
+  id: number;
+  stEstimateId: string;
+  stJobId: string | null;
+  name: string | null;
+  status: string | null;
+  summary: string | null;
+  subtotal: number;
+  rebateAmount: number;
+  totalAmount: number;
+  soldByName: string | null;
+  soldOn: string | null;
+  followUpOn: string | null;
 };
 
 export type RevenueJob = {
@@ -164,6 +191,11 @@ export type RevenueJob = {
   funnel?: string | null;
   source?: string | null;
   rebateBreakdown: RebateItem[];
+  estimateOptions?: EstimateOption[];
+  potentialRevenueLow?: number | null;
+  potentialRevenueAvg?: number | null;
+  potentialRevenueHigh?: number | null;
+  potentialEstimateCount?: number;
   soldByName: string | null;
   lead: LeadSummary | null;
 };
@@ -174,6 +206,22 @@ export type RevenueJob = {
 function leadFullName(lead: LeadSummary | null | undefined): string {
   if (!lead) return "";
   return [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
+}
+
+function formatLeadAddress(lead: LeadSummary | null | undefined): string {
+  if (!lead) return "";
+  return [lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ");
+}
+
+function displayMatchLevel(level: string | null | undefined): string {
+  const normalized = (level || "unmatched").trim().toLowerCase();
+  if (normalized === "lead_funnel") return "Lead funnel";
+  if (normalized === "gclid") return "GCLID";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export function resolveCustomerName(job: RevenueJob): string {
@@ -191,7 +239,7 @@ function csvCell(value: string): string {
 // reconcile their totals against the summary cards (Task #703).
 export const REVENUE_ATTRIBUTED_CSV_HEADER = [
   "Date", "Customer", "Funnel", "Job Type", "ST Job", "Match Tier",
-  "Rebate Amount", "Corrected Revenue", "Lead Source", "Sold By",
+  "Rebate Amount", "Corrected Revenue", "Potential Revenue Low", "Potential Revenue Avg", "Potential Revenue High", "Lead Source", "Sold By",
 ] as const;
 
 // Pure CSV builder for the Revenue Attributed export. Extracted from the
@@ -212,6 +260,9 @@ export function buildRevenueAttributedCsv(exportJobs: RevenueJob[]): string {
       job.matchLevel || "unmatched",
       String(job.invoiceRebateAmount ?? 0),
       String(job.correctedRevenue),
+      String(job.potentialRevenueLow ?? 0),
+      String(job.potentialRevenueAvg ?? 0),
+      String(job.potentialRevenueHigh ?? 0),
       job.lead?.source || job.source || "",
       job.soldByName || "",
     ];
@@ -225,6 +276,32 @@ function isUnknownSource(src: string | null | undefined): boolean {
   if (!src) return true;
   const s = src.trim().toLowerCase();
   return s === "" || s === "unknown";
+}
+
+function potentialRevenueFor(job: RevenueJob, mode: PotentialMode): number | null {
+  if (mode === "low") return job.potentialRevenueLow ?? null;
+  if (mode === "avg") return job.potentialRevenueAvg ?? null;
+  return job.potentialRevenueHigh ?? null;
+}
+
+function potentialSummaryValue(summary: RevenueSummary | null, mode: PotentialMode): number | null {
+  if (!summary) return null;
+  if (mode === "low") return summary.potentialRevenueLow ?? 0;
+  if (mode === "avg") return summary.potentialRevenueAvg ?? 0;
+  return summary.potentialRevenueHigh ?? 0;
+}
+
+function potentialModeLabel(mode: PotentialMode): string {
+  if (mode === "low") return "Low";
+  if (mode === "avg") return "Avg";
+  return "High";
+}
+
+function formatCompactDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function RevenueAttributed() {
@@ -246,6 +323,7 @@ export default function RevenueAttributed() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(initialPageFromUrl);
+  const [potentialMode, setPotentialMode] = useState<PotentialMode>("low");
 
   // Filters on the originating lead's funnel/source. "all" = no filter. Options
   // come from the facets endpoint (every value in the range), so the dropdowns
@@ -508,6 +586,25 @@ export default function RevenueAttributed() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Potential</span>
+            <ToggleGroup
+              type="single"
+              value={potentialMode}
+              onValueChange={(v) => { if (v) setPotentialMode(v as PotentialMode); }}
+              className="h-10 rounded-md border border-white/10 bg-white/[0.02] p-1"
+            >
+              <ToggleGroupItem value="low" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
+                Low
+              </ToggleGroupItem>
+              <ToggleGroupItem value="avg" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
+                Avg
+              </ToggleGroupItem>
+              <ToggleGroupItem value="high" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
+                High
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
           <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -529,9 +626,14 @@ export default function RevenueAttributed() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <SummaryCard label="Corrected Revenue" value={summary ? formatCurrency(summary.revenue) : "—"} icon={<DollarSign className="w-4 h-4" />} />
         <SummaryCard label="Attributed Revenue" value={summary ? formatCurrency(summary.attributed) : "—"} icon={<Link2 className="w-4 h-4" />} />
+        <SummaryCard
+          label={`Potential (${potentialModeLabel(potentialMode)})`}
+          value={summary ? formatCurrency(potentialSummaryValue(summary, potentialMode) ?? 0) : "—"}
+          icon={<Calculator className="w-4 h-4" />}
+        />
         <SummaryCard label="Rebate Add-Backs" value={summary ? formatCurrency(summary.rebates) : "—"} icon={<Tag className="w-4 h-4" />} />
         <SummaryCard label="Jobs" value={summary ? String(summary.count) : "—"} icon={<User className="w-4 h-4" />} />
       </div>
@@ -587,7 +689,7 @@ export default function RevenueAttributed() {
                       {matchLevelFilter.length === 0
                         ? "All match levels"
                         : matchLevelFilter.length === 1
-                          ? matchLevelFilter[0]
+                          ? displayMatchLevel(matchLevelFilter[0])
                           : `${matchLevelFilter.length} selected`}
                     </span>
                     <ChevronDown className="w-4 h-4 opacity-60 shrink-0" />
@@ -604,9 +706,8 @@ export default function RevenueAttributed() {
                         )
                       }
                       onSelect={(e) => e.preventDefault()}
-                      className="capitalize"
                     >
-                      {m}
+                      {displayMatchLevel(m)}
                     </DropdownMenuCheckboxItem>
                   ))}
                 </DropdownMenuContent>
@@ -651,6 +752,7 @@ export default function RevenueAttributed() {
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">ST Job</th>
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">Match</th>
                   <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Rebates</th>
+                  <th className="p-4 text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">Potential</th>
                   <SortableTh label="Revenue" sortKey="revenue" activeKey={sortKey} dir={sortDir} onSort={toggleSort} align="right" />
                 </tr>
               </thead>
@@ -659,6 +761,7 @@ export default function RevenueAttributed() {
                   const dateRaw = job.invoiceDate || job.completedAt || job.createdAt;
                   const dateStr = dateRaw ? new Date(dateRaw).toLocaleDateString() : "—";
                   const isExpanded = expandedId === job.id;
+                  const selectedPotential = potentialRevenueFor(job, potentialMode);
                   return (
                     <Fragment key={job.id}>
                       <tr
@@ -676,7 +779,7 @@ export default function RevenueAttributed() {
                         <td className="p-4 text-sm text-muted-foreground font-mono">{job.stJobNumber || `#${job.id}`}</td>
                         <td className="p-4 text-sm">
                           {job.matchLevel ? (
-                            <span className="text-xs text-ice/80 capitalize">{job.matchLevel}</span>
+                            <span className="text-xs text-ice/80">{displayMatchLevel(job.matchLevel)}</span>
                           ) : (
                             <span className="text-xs text-muted-foreground/50">unmatched</span>
                           )}
@@ -684,13 +787,17 @@ export default function RevenueAttributed() {
                         <td className="p-4 text-sm text-right text-amber-300/90 font-display">
                           {job.invoiceRebateAmount ? formatCurrency(job.invoiceRebateAmount) : "—"}
                         </td>
+                        <td className="p-4 text-sm text-cyan-300 text-right font-display">
+                          {selectedPotential != null ? formatCurrency(selectedPotential) : "—"}
+                        </td>
                         <td className="p-4 text-sm text-emerald-400 text-right font-display">{formatCurrency(job.correctedRevenue)}</td>
                       </tr>
                       {isExpanded && (
                         <tr key={`${job.id}-detail`} className="bg-white/[0.015]">
-                          <td colSpan={10} className="p-5">
+                          <td colSpan={11} className="p-5">
                             <JobDetail
                               job={job}
+                              potentialMode={potentialMode}
                               isClientReadOnly={isClientReadOnly}
                               currentUserRole={user?.role}
                               onChanged={reload}
@@ -762,11 +869,12 @@ const TIER_BAR_COLORS: Record<string, string> = {
   bronze: "bg-orange-400",
   gclid: "bg-cyan-300",
   manual: "bg-violet-300",
+  lead_funnel: "bg-emerald-300",
   unmatched: "bg-white/15",
 };
 
 function tierLabel(tier: string): string {
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
+  return displayMatchLevel(tier);
 }
 
 // "Revenue by match tier" breakdown: corrected revenue + job count per tier for
@@ -797,7 +905,7 @@ function MatchTierBreakdownCard({
           const color = TIER_BAR_COLORS[b.tier] ?? "bg-ice/40";
           return (
             <div key={b.tier} className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-xs capitalize text-white/90">{tierLabel(b.tier)}</span>
+              <span className="w-24 shrink-0 text-xs text-white/90">{tierLabel(b.tier)}</span>
               <div className="flex-1 h-2 rounded-full bg-white/[0.04] overflow-hidden">
                 <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
               </div>
@@ -871,10 +979,11 @@ function SortableTh({
 // matched to a marketing touchpoint, plus which ServiceTitan field bridged it.
 const MATCH_EXPLANATIONS: Record<string, { title: string; detail: string }> = {
   diamond: { title: "Matched by Google Click ID (GCLID)", detail: "Highest confidence — the click that drove this job was tracked end-to-end." },
-  golden: { title: "Matched by phone number", detail: "The customer's phone on the invoice matched a tracked lead's phone." },
-  silver: { title: "Matched by email address", detail: "The customer's email on the invoice matched a tracked lead's email." },
+  golden: { title: "Matched by phone number", detail: "The ServiceTitan phone matched a Pulse lead phone. The lead source can still be Unknown." },
+  silver: { title: "Matched by email address", detail: "The ServiceTitan email matched a Pulse lead email. The lead source can still be Unknown." },
   bronze: { title: "Matched by service address", detail: "The service address on the invoice matched a tracked lead's address." },
   manual: { title: "Manually matched", detail: "An operator linked this job to the lead by hand." },
+  lead_funnel: { title: "Attributed by linked Pulse lead", detail: "The job is linked to a Pulse lead with a known marketing funnel, but no stronger click, phone, email, or address proof was available." },
   unmatched: { title: "Not matched", detail: "No marketing touchpoint could be linked to this job yet." },
 };
 
@@ -896,6 +1005,10 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
   const explanation = MATCH_EXPLANATIONS[level] ?? MATCH_EXPLANATIONS.unmatched;
   const lead = job.lead;
   const leadName = lead ? [lead.firstName, lead.lastName].filter(Boolean).join(" ") || `Lead #${lead.id}` : null;
+  const leadAddress = formatLeadAddress(lead);
+  const comparedLeadPhone = lead?.phone || (lead ? job.customerPhone : undefined);
+  const comparedLeadEmail = lead?.email || (lead ? job.customerEmail : undefined);
+  const comparedLeadAddress = leadAddress || (lead ? job.serviceAddress : undefined);
 
   const stRows: [string, string | null | undefined][] = [
     ["Customer name", job.customerName],
@@ -909,6 +1022,9 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
   ];
   const opticsRows: [string, string | null | undefined][] = [
     ["Matched lead", leadName],
+    ["Lead phone", comparedLeadPhone],
+    ["Lead email", comparedLeadEmail],
+    ["Lead address", comparedLeadAddress],
     ["Lead source", job.source ?? lead?.source],
     ["Funnel", job.funnel],
     ["Matched GCLID", job.matchedGclid],
@@ -920,8 +1036,8 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
         <Link2 className="w-3.5 h-3.5" /> How This Was Matched
       </h4>
       <div className="flex items-center gap-2 mb-1">
-        <span className={`text-xs px-2 py-0.5 rounded-full border capitalize ${job.matchLevel ? "border-ice/30 text-ice/90" : "border-white/10 text-muted-foreground/60"}`}>
-          {level}
+        <span className={`text-xs px-2 py-0.5 rounded-full border ${job.matchLevel ? "border-ice/30 text-ice/90" : "border-white/10 text-muted-foreground/60"}`}>
+          {displayMatchLevel(level)}
         </span>
         <span className="text-sm text-white">{explanation.title}</span>
       </div>
@@ -967,9 +1083,10 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
 }
 
 function JobDetail({
-  job, isClientReadOnly, currentUserRole, onChanged,
+  job, potentialMode, isClientReadOnly, currentUserRole, onChanged,
 }: {
   job: RevenueJob;
+  potentialMode: PotentialMode;
   isClientReadOnly: boolean;
   currentUserRole?: string;
   onChanged: () => void;
@@ -1052,7 +1169,83 @@ function JobDetail({
       </div>
       </div>
 
+      <EstimateOptionsSection job={job} potentialMode={potentialMode} />
       <MatchExplanation job={job} />
+    </div>
+  );
+}
+
+function EstimateOptionsSection({ job, potentialMode }: { job: RevenueJob; potentialMode: PotentialMode }) {
+  const options = job.estimateOptions ?? [];
+  if (options.length === 0) return null;
+
+  const selectedPotential = potentialRevenueFor(job, potentialMode);
+  const low = job.potentialRevenueLow ?? null;
+  const avg = job.potentialRevenueAvg ?? null;
+  const high = job.potentialRevenueHigh ?? null;
+
+  return (
+    <div className="rounded-lg border border-white/5 bg-white/[0.015] p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+          <Calculator className="w-3.5 h-3.5" /> Estimate Options
+        </h4>
+        <div className="flex items-center gap-3 text-xs tabular-nums">
+          <span className="text-muted-foreground">Low <span className="text-cyan-300 font-display">{low != null ? formatCurrency(low) : "—"}</span></span>
+          <span className="text-muted-foreground">Avg <span className="text-cyan-300 font-display">{avg != null ? formatCurrency(avg) : "—"}</span></span>
+          <span className="text-muted-foreground">High <span className="text-cyan-300 font-display">{high != null ? formatCurrency(high) : "—"}</span></span>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="border-b border-white/5">
+              <th className="py-2 pr-4 text-[10px] uppercase tracking-wider text-muted-foreground/70">Status</th>
+              <th className="py-2 pr-4 text-[10px] uppercase tracking-wider text-muted-foreground/70">Estimate</th>
+              <th className="py-2 pr-4 text-[10px] uppercase tracking-wider text-muted-foreground/70 text-right">Total</th>
+              <th className="py-2 pr-4 text-[10px] uppercase tracking-wider text-muted-foreground/70 text-right">Rebate</th>
+              <th className="py-2 text-[10px] uppercase tracking-wider text-muted-foreground/70 text-right">Date</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {options.map((option) => {
+              const isSelected = selectedPotential != null && option.totalAmount === selectedPotential;
+              const label = option.summary || option.name || `Estimate #${option.stEstimateId}`;
+              const status = option.status || "Estimate";
+              const dateLabel = formatCompactDate(option.soldOn) || formatCompactDate(option.followUpOn);
+              return (
+                <tr key={option.id} className={isSelected ? "bg-cyan-300/[0.04]" : ""}>
+                  <td className="py-2.5 pr-4 align-top">
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${
+                      status.toLowerCase() === "sold"
+                        ? "border-emerald-300/30 text-emerald-300"
+                        : "border-cyan-300/25 text-cyan-200"
+                    }`}>
+                      {status}
+                    </span>
+                  </td>
+                  <td className="py-2.5 pr-4 align-top">
+                    <div className="text-sm text-white/90">{label}</div>
+                    {option.name && option.summary && option.name !== option.summary && (
+                      <div className="text-[11px] text-muted-foreground/60 mt-0.5">{option.name}</div>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-4 align-top text-right font-display text-cyan-300 tabular-nums">
+                    {formatCurrency(option.totalAmount)}
+                  </td>
+                  <td className="py-2.5 pr-4 align-top text-right text-amber-300/90 tabular-nums">
+                    {option.rebateAmount > 0 ? formatCurrency(option.rebateAmount) : "—"}
+                  </td>
+                  <td className="py-2.5 align-top text-right text-muted-foreground tabular-nums">
+                    {dateLabel || "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

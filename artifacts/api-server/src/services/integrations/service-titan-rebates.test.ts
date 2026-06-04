@@ -31,7 +31,8 @@ function estimate(items: STEstimateItem[], subtotal: number): STEstimate {
     jobId: 2002,
     name: "Test Estimate",
     status: { name: "Sold", value: 2 },
-    summary: "",
+    summary: "Install option",
+    followUpOn: "2026-01-20T00:00:00Z",
     soldBy: 42,
     soldOn: "2026-01-15T00:00:00Z",
     subtotal,
@@ -186,6 +187,10 @@ describe("parseEstimateData", () => {
     // The genuine discount stays subtracted: 575 + 375 = 950
     expect(result.totalAmount).toBe(950);
     expect(result.subtotal).toBe(575);
+    expect(result.estimateName).toBe("Test Estimate");
+    expect(result.estimateStatus).toBe("Sold");
+    expect(result.summary).toBe("Install option");
+    expect(result.followUpOn).toEqual(new Date("2026-01-20T00:00:00Z"));
   });
 
   it("prefers skuName as the breakdown label when present", () => {

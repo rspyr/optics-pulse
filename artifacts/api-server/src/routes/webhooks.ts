@@ -277,6 +277,77 @@ async function recordCallRailStatus(
   }
 }
 
+async function createOrLinkCallRailAttributionLead(args: {
+  tenantId: number;
+  eventId: number;
+  customerName: string;
+  customerPhone: string | null;
+  source: string;
+  sourceName: string | null;
+  gclid: string | null;
+  submittedAt: Date;
+}): Promise<number | null> {
+  const normalizedPhone = args.customerPhone ? normalizePhone(args.customerPhone) : "";
+  let leadId: number | null = null;
+
+  if (normalizedPhone) {
+    const [existingLead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+      .where(and(
+        eq(leadsTable.tenantId, args.tenantId),
+        phoneMatchesSql(leadsTable.phone, normalizedPhone),
+      ))
+      .limit(1);
+    leadId = existingLead?.id ?? null;
+  }
+
+  if (!leadId) {
+    const nameParts = args.customerName.trim().split(/\s+/).filter(Boolean);
+    const firstName = nameParts[0] || "Unknown";
+    const lastName = nameParts.slice(1).join(" ") || "";
+    const normalizedSource = await normalizeSource(args.tenantId, args.source);
+
+    const [lead] = await db.insert(leadsTable).values({
+      tenantId: args.tenantId,
+      firstName,
+      lastName,
+      phone: normalizedPhone || null,
+      source: normalizedSource,
+      originalSource: normalizedSource,
+      matchedGclid: args.gclid,
+      leadType: args.sourceName || "CallRail",
+      serviceType: "CallRail",
+      interestType: null,
+      hubStatus: "dead",
+      status: "lost",
+      deadReason: "callrail_attribution_only",
+      assignedAt: args.submittedAt,
+      createdAt: args.submittedAt,
+      updatedAt: args.submittedAt,
+    }).returning();
+    leadId = lead?.id ?? null;
+
+    if (leadId) {
+      const { recordLeadStatusChange } = await import("../services/lead-status-history");
+      await recordLeadStatusChange({
+        leadId,
+        tenantId: args.tenantId,
+        fromStatus: null,
+        toStatus: "dead",
+        changedAt: args.submittedAt,
+        reason: "callrail_attribution_only",
+      });
+    }
+  }
+
+  if (leadId) {
+    await db.update(attributionEventsTable)
+      .set({ createdLeadId: leadId })
+      .where(eq(attributionEventsTable.id, args.eventId));
+  }
+
+  return leadId;
+}
+
 router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => {
   const tenantId = Number(req.params.tenantId);
   try {
@@ -299,10 +370,12 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     let signingKey: string | undefined;
     let tenantDedupeWindowMinutes: number | undefined;
+    let createPulseLeadFromCallRail = false;
     if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
       try {
         const cfg = decryptConfig(tenant.apiConfig);
         signingKey = typeof cfg.callRailSigningKey === "string" ? cfg.callRailSigningKey : undefined;
+        createPulseLeadFromCallRail = cfg.callRailCreatePulseLeads === true;
         const rawWindow = cfg.callRailDedupeWindowMinutes;
         if (typeof rawWindow === "number" && Number.isFinite(rawWindow) && rawWindow >= 0) {
           tenantDedupeWindowMinutes = rawWindow;
@@ -334,6 +407,14 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const callRailSource = typeof body.source === "string" ? body.source : null;
     const callRailMedium = typeof body.medium === "string" ? body.medium : null;
     const callRailCampaign = typeof body.campaign === "string" ? body.campaign : null;
+    const callRailUtmSource = typeof body.utm_source === "string" ? body.utm_source : null;
+    const callRailUtmMedium = typeof body.utm_medium === "string" ? body.utm_medium : null;
+    const callRailUtmCampaign = typeof body.utm_campaign === "string" ? body.utm_campaign : null;
+    const callRailUtmTerm = typeof body.utm_term === "string" ? body.utm_term : null;
+    const callRailUtmContent = typeof body.utm_content === "string" ? body.utm_content : null;
+    const sourceName = typeof body.source_name === "string" ? body.source_name
+      : typeof body.formatted_tracking_source === "string" ? body.formatted_tracking_source
+      : null;
     const landingPage = typeof body.landing_page_url === "string" ? body.landing_page_url : null;
     const referrer = typeof body.referring_url === "string" ? body.referring_url
       : typeof body.referrer_domain === "string" ? body.referrer_domain
@@ -342,6 +423,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const customerState = typeof body.customer_state === "string" ? body.customer_state : null;
 
     const hashedPhone = customerPhone ? hashPhone(customerPhone) : null;
+    const callStartedAt = typeof body.start_time === "string" ? new Date(body.start_time) : null;
+    const submittedAt = callStartedAt && !Number.isNaN(callStartedAt.getTime()) ? callStartedAt : new Date();
+    const resolvedCallRailSource = callRailUtmSource || callRailSource || "callrail";
 
     const eventValues = {
       tenantId,
@@ -350,13 +434,29 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       fbclid,
       msclkid,
       hashedPhone,
-      utmSource: callRailSource || "callrail",
-      utmCampaign: callRailCampaign,
-      utmMedium: callRailMedium,
+      utmSource: resolvedCallRailSource,
+      utmCampaign: callRailUtmCampaign || callRailCampaign,
+      utmMedium: callRailUtmMedium || callRailMedium,
+      utmTerm: callRailUtmTerm,
+      utmContent: callRailUtmContent,
       landingPage,
+      pageUrl: typeof body.last_requested_url === "string" ? body.last_requested_url : landingPage,
       referrer,
-      matchLevel: (gclid ? "diamond" : hashedPhone ? "golden" : "unmatched") as "diamond" | "golden" | "unmatched",
-      matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : 0,
+      formType: "callrail_call" as const,
+      formId: callId || null,
+      formName: sourceName || "CallRail call",
+      formFields: {
+        provider: "callrail",
+        callId: callId || null,
+        customerName,
+        sourceName,
+        trackingPhoneNumber: typeof body.tracking_phone_number === "string" ? body.tracking_phone_number : null,
+        trackerId: typeof body.tracker_id === "string" ? body.tracker_id : null,
+        personId: typeof body.person_id === "string" ? body.person_id : null,
+      },
+      submittedAt,
+      matchLevel: (gclid || fbclid || msclkid ? "diamond" : hashedPhone ? "golden" : "unmatched") as "diamond" | "golden" | "unmatched",
+      matchConfidence: gclid || fbclid || msclkid ? 1.0 : hashedPhone ? 0.9 : 0,
       externalId,
     };
 
@@ -388,6 +488,31 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const nameLower = customerName.toLowerCase();
     const isTestLead = nameLower.includes("test");
 
+    if (!createPulseLeadFromCallRail) {
+      let attributionLeadId: number | null = null;
+      if (!isTestLead && (customerName || customerPhone)) {
+        attributionLeadId = await createOrLinkCallRailAttributionLead({
+          tenantId,
+          eventId: event.id,
+          customerName,
+          customerPhone,
+          source: resolvedCallRailSource,
+          sourceName,
+          gclid,
+          submittedAt,
+        });
+      }
+      await recordCallRailStatus(tenantId, { success: true, callId });
+      res.json({
+        success: true,
+        eventId: event.id,
+        message: "CallRail webhook processed for attribution only",
+        pulseLeadCreated: false,
+        attributionLeadId,
+      });
+      return;
+    }
+
     if (!isTestLead && (customerName || customerPhone)) {
       const defaultWindowMinutes = Number(process.env.CALLRAIL_DEDUPE_WINDOW_MINUTES) || 10;
       const dedupeWindowMinutes = tenantDedupeWindowMinutes ?? defaultWindowMinutes;
@@ -411,6 +536,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
           : [];
         if (dupLead) {
           console.log(`[CallRail Webhook] Resubmission detected for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
+          await db.update(attributionEventsTable)
+            .set({ createdLeadId: dupLead.id })
+            .where(eq(attributionEventsTable.id, event.id));
           const result = await handleResubmission(tenantId, dupLead.id, "CallRail");
           await recordCallRailStatus(tenantId, { success: true, callId });
           const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLead.id));
@@ -434,7 +562,7 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       const firstName = nameParts[0] || "Unknown";
       const lastName = nameParts.slice(1).join(" ") || "";
 
-      const normalizedIntakeSource = await normalizeSource(tenantId, callRailSource || "callrail");
+      const normalizedIntakeSource = await normalizeSource(tenantId, resolvedCallRailSource);
       // The leads table has no billingAddress column — that field lives on
       // attribution_events (populated by the GHL/CRM webhook path above; the
       // CallRail event insert in this handler does not carry one). Deliberately
@@ -448,7 +576,8 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
         source: normalizedIntakeSource,
         originalSource: normalizedIntakeSource,
         matchedGclid: gclid,
-        leadType: "CallRail",
+        leadType: sourceName || "CallRail",
+        serviceType: "CallRail",
         interestType: null,
         hubStatus: "day_1",
         dayInSequence: 1,
@@ -486,6 +615,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
         const finalLead = refreshed ?? newLead;
+        await db.update(attributionEventsTable)
+          .set({ createdLeadId: newLead.id })
+          .where(eq(attributionEventsTable.id, event.id));
         scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
       }
     }

@@ -2,7 +2,8 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncGoogleAdsCampaigns, syncMetaCampaigns, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
+import { syncGoogleAdsCampaigns, syncMetaCampaigns, syncCallRailAttribution, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
+import { DEFAULT_CALLRAIL_BACKFILL_DAYS, MAX_CALLRAIL_BACKFILL_DAYS } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
 import { parseBackfillProgress, classifyBackfillError, computeChunkPercent, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
@@ -19,7 +20,7 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
 
   let result: { synced: number; error?: string };
 
-  const unsupportedIntegrations = ["podium", "callrail", "ghl"];
+  const unsupportedIntegrations = ["podium", "ghl"];
   if (unsupportedIntegrations.includes(integration)) {
     res.json({ success: false, synced: 0, error: `${integration} integration is currently paused` });
     return;
@@ -40,6 +41,17 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
     case "meta":
       result = await syncMetaCampaigns(tenantId);
       break;
+    case "callrail": {
+      const callRailResult = await syncCallRailAttribution(tenantId, {
+        days: 30,
+        syncType: "calls",
+        createLeadMode: "attribution_only",
+      });
+      result = callRailResult.error
+        ? { synced: 0, error: callRailResult.error }
+        : { synced: callRailResult.synced };
+      break;
+    }
     case "service_titan":
       res.status(400).json({ success: false, error: "service_titan manual sync is not yet supported" });
       return;
@@ -89,6 +101,40 @@ router.post("/integrations/google_ads/backfill", requireRole("super_admin", "age
       res.json({ success: true, cancelled: true, ...result });
       return;
     }
+    const status = /not found/i.test(result.error) ? 404
+      : /not configured/i.test(result.error) ? 400
+      : /already running/i.test(result.error) ? 409
+      : 502;
+    res.status(status).json({ success: false, ...result });
+    return;
+  }
+  res.json({ success: true, ...result });
+});
+
+router.post("/integrations/callrail/backfill", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+  const daysRaw = req.query.days ?? req.body?.days ?? DEFAULT_CALLRAIL_BACKFILL_DAYS;
+  const days = Number(daysRaw);
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+  if (!Number.isFinite(days) || days < 1) {
+    res.status(400).json({ error: "days must be a positive number" });
+    return;
+  }
+  if (days > MAX_CALLRAIL_BACKFILL_DAYS) {
+    res.status(400).json({ error: `days cannot exceed ${MAX_CALLRAIL_BACKFILL_DAYS} (CallRail communication records are retained for about 25 months)` });
+    return;
+  }
+
+  const result = await syncCallRailAttribution(tenantId, {
+    days,
+    syncType: "backfill",
+    createLeadMode: "attribution_only",
+  });
+  if (result.error) {
     const status = /not found/i.test(result.error) ? 404
       : /not configured/i.test(result.error) ? 400
       : /already running/i.test(result.error) ? 409
@@ -319,12 +365,13 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     cumulativeByKey.set(`${row.integration}:${row.syncType}`, Number(row.totalRecords) || 0);
   }
 
-  const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
-  const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false };
+  const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false, callrail: false };
+  const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false, callrail: false };
   const reconnectMap: Record<string, { needs: boolean; reason: string | null }> = {
     service_titan: { needs: false, reason: null },
     google_ads: { needs: false, reason: null },
     meta: { needs: false, reason: null },
+    callrail: { needs: false, reason: null },
   };
   if (tenantId) {
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
@@ -342,6 +389,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
           // "configured" = credentials saved. "needs_reconnect" is reported as a
           // separate, distinct state below — never collapsed into no_credentials.
           configuredMap.meta = !!(config.metaAccessToken && config.metaAdAccountId);
+          configuredMap.callrail = !!(config.callRailApiKey && config.callRailAccountId);
         } catch { /* decryption failed */ }
       }
     }
@@ -349,7 +397,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
 
   type IntegrationState = "running" | "paused" | "healthy" | "error" | "no_credentials" | "needs_reconnect" | "never";
 
-  const integrations = ["service_titan", "google_ads", "meta"] as const;
+  const integrations = ["service_titan", "google_ads", "meta", "callrail"] as const;
   const statusByIntegration: Record<string, {
     lastSync: string | null;
     lastStatus: string;
@@ -707,7 +755,7 @@ router.get("/integrations/tenant-config/:tenantId", requireRole("super_admin", "
       configuredIntegrations.service_titan = !!(config.serviceTitanClientId && config.serviceTitanClientSecret);
       configuredIntegrations.google_ads = !!(config.googleAdsApiKey && config.googleAdsCustomerId && config.googleAdsDeveloperToken);
       configuredIntegrations.meta = !!(config.metaAccessToken && config.metaAdAccountId);
-      configuredIntegrations.callrail = !!config.callRailApiKey;
+      configuredIntegrations.callrail = !!(config.callRailApiKey && config.callRailAccountId);
     } catch {
       // decryption failed
     }

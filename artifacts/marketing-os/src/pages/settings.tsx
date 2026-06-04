@@ -4,6 +4,7 @@ import { useAuth } from "@/components/auth-context";
 import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff, Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useTenants } from "@/hooks/use-tenants";
 import { toast } from "@/hooks/use-toast";
@@ -245,6 +246,7 @@ export default function Settings() {
     callRailApiKey: "",
     callRailCompanyId: "",
     callRailTrackingNumber: "",
+    callRailCreatePulseLeads: false,
     ghlApiKey: "",
     podiumApiToken: "",
     podiumLocationId: "",
@@ -453,6 +455,7 @@ export default function Settings() {
           callRailApiKey: lc.callRailApiKey || "",
           callRailCompanyId: lc.callRailCompanyId || "",
           callRailTrackingNumber: lc.callRailTrackingNumber || "",
+          callRailCreatePulseLeads: lc.callRailCreatePulseLeads === true,
           ghlApiKey: lc.ghlApiKey || "",
           podiumApiToken: lc.podiumApiToken || "",
           podiumLocationId: lc.podiumLocationId || "",
@@ -491,13 +494,16 @@ export default function Settings() {
     setSaving(true);
     setSaveError(null);
     try {
-      const integrationConfig: Record<string, string | null> = {};
+      const integrationConfig: Record<string, string | boolean | null> = {};
       const configKeys = ["googleAdsCustomerId", "metaAdAccountId", "ghlApiKey", "callRailAccountId", "callRailApiKey", "callRailCompanyId", "callRailTrackingNumber", "podiumApiToken", "podiumLocationId"] as const;
       for (const key of configKeys) {
         const val = form[key];
         if (!val) continue;
         if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
         integrationConfig[key] = val;
+      }
+      if (dirtyFields.has("callRailCreatePulseLeads")) {
+        integrationConfig.callRailCreatePulseLeads = form.callRailCreatePulseLeads;
       }
 
       const res = await fetch(`${API}/api/tenants/${tenantId}`, {
@@ -1221,6 +1227,24 @@ export default function Settings() {
               placeholder="e.g. +18005551234"
             />
             <p className="text-xs text-gray-500">Reference field — outbound SMS via CallRail is not yet wired up.</p>
+          </div>
+          <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.03] p-3 md:col-span-2">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <label className="text-sm font-medium text-gray-300">Create new Pulse leads from CallRail</label>
+                <p className="text-xs text-gray-500 mt-1">
+                  Off by default. When off, CallRail calls are saved for attribution only and do not enter the active Pulse queue.
+                </p>
+              </div>
+              <Switch
+                checked={form.callRailCreatePulseLeads}
+                onCheckedChange={(checked) => {
+                  trackField("callRailCreatePulseLeads");
+                  setForm({ ...form, callRailCreatePulseLeads: checked });
+                }}
+                aria-label="Create new Pulse leads from CallRail"
+              />
+            </div>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>

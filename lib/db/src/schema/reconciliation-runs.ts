@@ -11,6 +11,7 @@ export const reconciliationRunsTable = pgTable("reconciliation_runs", {
   goldenMatches: integer("golden_matches").notNull().default(0),
   silverMatches: integer("silver_matches").notNull().default(0),
   bronzeMatches: integer("bronze_matches").notNull().default(0),
+  leadFunnelMatches: integer("lead_funnel_matches").notNull().default(0),
   unmatchedCount: integer("unmatched_count").notNull().default(0),
   matchRate: real("match_rate").notNull().default(0),
   triggerType: text("trigger_type").notNull().default("manual"),

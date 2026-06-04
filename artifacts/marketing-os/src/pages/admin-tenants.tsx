@@ -5,6 +5,7 @@ import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 interface TenantForm {
   name: string;
@@ -19,6 +20,7 @@ interface TenantForm {
   callRailAccountId: string;
   callRailCompanyId: string;
   callRailTrackingNumber: string;
+  callRailCreatePulseLeads: boolean;
   serviceTitanClientId: string;
   serviceTitanClientSecret: string;
   serviceTitanAppKey: string;
@@ -34,10 +36,10 @@ interface TenantForm {
   isDemo: boolean;
 }
 
-// Subset of TenantForm fields that are guaranteed to be strings (everything
-// except `isDemo`). Used by integration/secret helpers below so that
+// Subset of TenantForm fields that are guaranteed to be strings. Used by
+// integration/secret helpers below so that
 // `form[field]` narrows to `string` instead of `string | boolean`.
-type SecretField = Exclude<keyof TenantForm, "isDemo">;
+type SecretField = Exclude<keyof TenantForm, "isDemo" | "callRailCreatePulseLeads">;
 
 interface AlertConfig {
   enabled: boolean;
@@ -80,6 +82,7 @@ const emptyForm: TenantForm = {
   callRailAccountId: "",
   callRailCompanyId: "",
   callRailTrackingNumber: "",
+  callRailCreatePulseLeads: false,
   serviceTitanClientId: "",
   serviceTitanClientSecret: "",
   serviceTitanAppKey: "",
@@ -175,7 +178,7 @@ export default function AdminTenants() {
   const [googleAdsSyncMessage, setGoogleAdsSyncMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [metaConnecting, setMetaConnecting] = useState(false);
   const [metaOAuthMessage, setMetaOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [loadedConfig, setLoadedConfig] = useState<Record<string, string>>({});
+  const [loadedConfig, setLoadedConfig] = useState<Record<string, unknown>>({});
   const [togglingStSync, setTogglingStSync] = useState<number | null>(null);
 
   const handleToggleStSync = async (tenantId: number, currentlyPaused: boolean) => {
@@ -325,7 +328,7 @@ export default function AdminTenants() {
   };
 
   const buildIntegrationConfig = () => {
-    const config: Record<string, string> = {};
+    const config: Record<string, string | boolean> = {};
     const integrationKeys: SecretField[] = [
       "googleAdsApiKey", "googleAdsCustomerId", "googleAdsLoginCustomerId", "googleAdsDeveloperToken",
       "googleAdsRefreshToken", "googleAdsClientId", "googleAdsClientSecret",
@@ -343,6 +346,9 @@ export default function AdminTenants() {
       if (!val || typeof val !== "string") continue;
       if (!dirtyFields.has(key) && (val.startsWith("••••") || val.startsWith("****"))) continue;
       config[key] = val;
+    }
+    if (dirtyFields.has("callRailCreatePulseLeads")) {
+      config.callRailCreatePulseLeads = form.callRailCreatePulseLeads;
     }
     return Object.keys(config).length > 0 ? config : undefined;
   };
@@ -414,33 +420,34 @@ export default function AdminTenants() {
 
   const startEdit = (tenant: unknown) => {
     const t = tenant as Record<string, unknown>;
-    const lc = (t.loadableConfig || {}) as Record<string, string>;
+    const lc = (t.loadableConfig || {}) as Record<string, unknown>;
     setEditId(t.id as number);
     setEditTenantName(t.name as string);
     setForm({
       name: (t.name as string) || "",
       serviceTitanId: (t.serviceTitanId as string) || "",
       timezone: (t.timezone as string) || "America/New_York",
-      googleAdsApiKey: lc.googleAdsApiKey || "",
-      googleAdsRefreshToken: lc.googleAdsRefreshToken || "",
-      googleAdsClientId: lc.googleAdsClientId || "",
-      googleAdsClientSecret: lc.googleAdsClientSecret || "",
-      googleAdsCustomerId: lc.googleAdsCustomerId || "",
-      googleAdsLoginCustomerId: lc.googleAdsLoginCustomerId || "",
-      googleAdsDeveloperToken: lc.googleAdsDeveloperToken || "",
-      callRailApiKey: lc.callRailApiKey || "",
-      callRailSigningKey: lc.callRailSigningKey || "",
-      callRailAccountId: lc.callRailAccountId || "",
-      callRailCompanyId: lc.callRailCompanyId || "",
-      callRailTrackingNumber: lc.callRailTrackingNumber || "",
-      serviceTitanClientId: lc.serviceTitanClientId || "",
-      serviceTitanClientSecret: lc.serviceTitanClientSecret || "",
-      serviceTitanAppKey: lc.serviceTitanAppKey || "",
-      metaAccessToken: lc.metaAccessToken || "",
-      metaAdAccountId: lc.metaAdAccountId || "",
-      metaPixelId: lc.metaPixelId || "",
-      podiumApiToken: lc.podiumApiToken || "",
-      podiumLocationId: lc.podiumLocationId || "",
+      googleAdsApiKey: typeof lc.googleAdsApiKey === "string" ? lc.googleAdsApiKey : "",
+      googleAdsRefreshToken: typeof lc.googleAdsRefreshToken === "string" ? lc.googleAdsRefreshToken : "",
+      googleAdsClientId: typeof lc.googleAdsClientId === "string" ? lc.googleAdsClientId : "",
+      googleAdsClientSecret: typeof lc.googleAdsClientSecret === "string" ? lc.googleAdsClientSecret : "",
+      googleAdsCustomerId: typeof lc.googleAdsCustomerId === "string" ? lc.googleAdsCustomerId : "",
+      googleAdsLoginCustomerId: typeof lc.googleAdsLoginCustomerId === "string" ? lc.googleAdsLoginCustomerId : "",
+      googleAdsDeveloperToken: typeof lc.googleAdsDeveloperToken === "string" ? lc.googleAdsDeveloperToken : "",
+      callRailApiKey: typeof lc.callRailApiKey === "string" ? lc.callRailApiKey : "",
+      callRailSigningKey: typeof lc.callRailSigningKey === "string" ? lc.callRailSigningKey : "",
+      callRailAccountId: typeof lc.callRailAccountId === "string" ? lc.callRailAccountId : "",
+      callRailCompanyId: typeof lc.callRailCompanyId === "string" ? lc.callRailCompanyId : "",
+      callRailTrackingNumber: typeof lc.callRailTrackingNumber === "string" ? lc.callRailTrackingNumber : "",
+      callRailCreatePulseLeads: lc.callRailCreatePulseLeads === true,
+      serviceTitanClientId: typeof lc.serviceTitanClientId === "string" ? lc.serviceTitanClientId : "",
+      serviceTitanClientSecret: typeof lc.serviceTitanClientSecret === "string" ? lc.serviceTitanClientSecret : "",
+      serviceTitanAppKey: typeof lc.serviceTitanAppKey === "string" ? lc.serviceTitanAppKey : "",
+      metaAccessToken: typeof lc.metaAccessToken === "string" ? lc.metaAccessToken : "",
+      metaAdAccountId: typeof lc.metaAdAccountId === "string" ? lc.metaAdAccountId : "",
+      metaPixelId: typeof lc.metaPixelId === "string" ? lc.metaPixelId : "",
+      podiumApiToken: typeof lc.podiumApiToken === "string" ? lc.podiumApiToken : "",
+      podiumLocationId: typeof lc.podiumLocationId === "string" ? lc.podiumLocationId : "",
       monthlyBudget: t.monthlyBudget != null ? String(t.monthlyBudget) : "",
       isDemo: Boolean(t.isDemo),
     });
@@ -448,7 +455,7 @@ export default function AdminTenants() {
     setClearedFields(new Set());
     setShowIntegrationConfig(false);
     setEditTab("integrations");
-    setLoadedConfig(lc as Record<string, string>);
+    setLoadedConfig(lc);
   };
 
   // Server-truth: was this field non-empty when the tenant was loaded?
@@ -665,6 +672,24 @@ export default function AdminTenants() {
                 <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Tracking Number (optional)</label>
                 <input type="text" value={form.callRailTrackingNumber} onChange={(e) => { trackFieldChange("callRailTrackingNumber"); setForm(f => ({ ...f, callRailTrackingNumber: e.target.value })); }} placeholder="e.g. +18005551234" className={inputClass + " w-full"} />
                 <p className="text-[11px] text-muted-foreground mt-1">Reference field for the tracking number assigned to this tenant. Outbound SMS via CallRail is not yet wired up.</p>
+              </div>
+              <div className="md:col-span-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <label className="text-xs text-white/80 uppercase tracking-wider block">Create new Pulse leads from CallRail</label>
+                    <p className="text-[11px] text-muted-foreground mt-1 max-w-2xl">
+                      Off by default. When off, CallRail calls are kept for revenue attribution only and will not enter the active Pulse queue.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={form.callRailCreatePulseLeads}
+                    onCheckedChange={(checked) => {
+                      trackFieldChange("callRailCreatePulseLeads");
+                      setForm(f => ({ ...f, callRailCreatePulseLeads: checked }));
+                    }}
+                    aria-label="Create new Pulse leads from CallRail"
+                  />
+                </div>
               </div>
             </div>
             <SetupGuide title="CallRail Setup Instructions">

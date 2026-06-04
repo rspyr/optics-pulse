@@ -4,8 +4,8 @@
 // Task #809 gave the "Revenue by Match Tier" breakdown card a friendly
 // empty-state instead of vanishing. The follow-up audit (Task #814) confirmed
 // the only card on this page that previously hid entirely was the Match Tier
-// card; the four top-row summary cards (Corrected Revenue, Attributed Revenue,
-// Rebate Add-Backs, Jobs) and the Revenue-by-Job table already degrade
+// card; the top-row summary cards (Corrected Revenue, Attributed Revenue,
+// Potential, Rebate Add-Backs, Jobs) and the Revenue-by-Job table already degrade
 // gracefully and never disappear.
 //
 // This file locks in that page-wide consistency so a future change can't
@@ -131,9 +131,10 @@ describe("Revenue Attributed — summary cards stay present on an empty range (T
     // The Match Tier empty card resolving is our signal the summary has loaded.
     await screen.findByText("No attributed revenue in this range.");
 
-    // All four summary cards remain on the page with their empty (zero) values.
+    // All summary cards remain on the page with their empty (zero) values.
     expect(summaryCardValue("Corrected Revenue")).toBe("$0");
     expect(summaryCardValue("Attributed Revenue")).toBe("$0");
+    expect(summaryCardValue("Potential (Low)")).toBe("$0");
     expect(summaryCardValue("Rebate Add-Backs")).toBe("$0");
     expect(summaryCardValue("Jobs")).toBe("0");
 
@@ -167,9 +168,10 @@ describe("Revenue Attributed — summary cards stay present on an empty range (T
 
     // Each summary card shows the — placeholder while the summary is pending.
     await waitFor(() => {
-      expect(summaryCardValue("Corrected Revenue")).toBe("—");
+    expect(summaryCardValue("Corrected Revenue")).toBe("—");
     });
     expect(summaryCardValue("Attributed Revenue")).toBe("—");
+    expect(summaryCardValue("Potential (Low)")).toBe("—");
     expect(summaryCardValue("Rebate Add-Backs")).toBe("—");
     expect(summaryCardValue("Jobs")).toBe("—");
 

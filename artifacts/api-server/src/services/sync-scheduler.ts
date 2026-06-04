@@ -6,6 +6,7 @@ import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetc
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
+import { DEFAULT_CALLRAIL_SYNC_DAYS, syncCallRailCalls } from "./integrations/callrail";
 import { runReconciliation } from "./reconciliation";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
@@ -43,6 +44,10 @@ function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiCon
   } catch {
     return null;
   }
+}
+
+function isSoldEstimateStatus(status: string | null | undefined): boolean {
+  return status?.trim().toLowerCase() === "sold";
 }
 
 // `formatSTJobForSync` writes `Customer <id>` as the customer name when
@@ -365,6 +370,174 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
 
   console.log(`[LeadMatch] Linked ${matched}/${unmatchedJobs.length} jobs to leads for tenant ${tenantId}`);
   return { matched };
+}
+
+export async function matchJobsToCallRailAttribution(
+  tenantId: number,
+  options: { days?: number } = {},
+): Promise<{ matched: number; golden: number; silver: number }> {
+  const lookbackDays = Math.max(options.days ?? DEFAULT_CALLRAIL_SYNC_DAYS, 90);
+  const lookbackDate = new Date(Date.now() - lookbackDays * 86400000);
+
+  const result = await db.execute(sql`
+    WITH job_contacts AS (
+      SELECT
+        j.id AS job_id,
+        CASE
+          WHEN length(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g')) = 11
+            AND left(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g'), 1) = '1'
+            THEN substring(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g') from 2)
+          ELSE regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g')
+        END AS normalized_phone,
+        lower(trim(coalesce(j.customer_email, ''))) AS normalized_email
+      FROM jobs j
+      WHERE j.tenant_id = ${tenantId}
+        AND j.status = 'completed'
+        AND j.completed_at >= ${lookbackDate}
+        AND (j.match_level IS NULL OR j.match_level = 'unmatched')
+    ),
+    candidates AS (
+      SELECT DISTINCT ON (jc.job_id)
+        jc.job_id,
+        l.id AS lead_id,
+        e.id AS event_id,
+        e.gclid,
+        CASE
+          WHEN jc.normalized_phone <> '' AND l.phone = jc.normalized_phone THEN 'golden'
+          ELSE 'silver'
+        END AS match_level
+      FROM job_contacts jc
+      JOIN attribution_events e
+        ON e.tenant_id = ${tenantId}
+        AND e.event_type = 'call'
+        AND e.external_id IS NOT NULL
+        AND e.created_lead_id IS NOT NULL
+        AND e.created_at >= ${lookbackDate}
+      JOIN leads l
+        ON l.id = e.created_lead_id
+        AND l.tenant_id = e.tenant_id
+      WHERE (
+          jc.normalized_phone <> ''
+          AND l.phone IS NOT NULL
+          AND l.phone <> ''
+          AND l.phone = jc.normalized_phone
+        ) OR (
+          jc.normalized_email <> ''
+          AND l.email IS NOT NULL
+          AND l.email <> ''
+          AND lower(trim(l.email)) = jc.normalized_email
+        )
+      ORDER BY
+        jc.job_id,
+        CASE WHEN jc.normalized_phone <> '' AND l.phone = jc.normalized_phone THEN 1 ELSE 2 END,
+        e.created_at DESC
+    ),
+    updated_jobs AS (
+      UPDATE jobs j
+      SET
+        lead_id = coalesce(j.lead_id, c.lead_id),
+        match_level = c.match_level,
+        matched_gclid = c.gclid,
+        updated_at = now()
+      FROM candidates c
+      WHERE j.id = c.job_id
+      RETURNING c.event_id, c.match_level
+    ),
+    updated_events AS (
+      UPDATE attribution_events e
+      SET
+        match_level = CASE
+          WHEN uj.match_level = 'golden' THEN 'golden'::match_level
+          ELSE 'silver'::match_level
+        END,
+        match_confidence = CASE WHEN uj.match_level = 'golden' THEN 0.9 ELSE 0.8 END
+      FROM updated_jobs uj
+      WHERE e.id = uj.event_id
+      RETURNING e.id
+    )
+    SELECT
+      count(*)::int AS matched,
+      count(*) FILTER (WHERE match_level = 'golden')::int AS golden,
+      count(*) FILTER (WHERE match_level = 'silver')::int AS silver
+    FROM updated_jobs
+  `);
+
+  const row = result.rows[0] as { matched?: number | string; golden?: number | string; silver?: number | string } | undefined;
+  const matched = Number(row?.matched ?? 0);
+  const golden = Number(row?.golden ?? 0);
+  const silver = Number(row?.silver ?? 0);
+
+  if (matched > 0) {
+    console.log(`[CallRail] Matched ${matched} job(s) to CallRail attribution for tenant ${tenantId} (${golden} golden, ${silver} silver)`);
+  }
+
+  return { matched, golden, silver };
+}
+
+export async function syncCallRailAttribution(
+  tenantId: number,
+  options: {
+    days?: number;
+    syncType?: "calls" | "backfill";
+    createLeadMode?: "active" | "attribution_only" | "none";
+  } = {},
+): Promise<{ synced: number; newCalls: number; updatedCalls: number; error?: string }> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, newCalls: 0, updatedCalls: 0, error: "Tenant not found" };
+
+  const syncType = options.syncType ?? "calls";
+  const config = getTenantConfig(tenant);
+  if (!config?.callRailApiKey || !config.callRailAccountId) {
+    const missing = [
+      !config?.callRailApiKey && "API Key",
+      !config?.callRailAccountId && "Account ID",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `CallRail not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "callrail", syncType, new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: errorMessage };
+  }
+
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x43414c52}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another CallRail sync is already running for this tenant";
+    const lockLog = await logSync(tenantId, "callrail", syncType, new Date());
+    await completeSyncLog(lockLog.id, "error", 0, errorMessage);
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: errorMessage };
+  }
+
+  try {
+    const result = await syncCallRailCalls(tenantId, {
+      apiKey: config.callRailApiKey,
+      accountId: config.callRailAccountId,
+      companyId: config.callRailCompanyId,
+    }, {
+      days: options.days,
+      syncType,
+      createLeadMode: options.createLeadMode ?? "attribution_only",
+    });
+
+    if (result.synced > 0) {
+      try {
+        await matchJobsToCallRailAttribution(tenantId, { days: options.days });
+      } catch (err) {
+        console.error(`[CallRail] Post-sync attribution matching failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+    }
+
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    try { await emitSyncFailureNotification(tenantId, "callrail", message); } catch {}
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x43414c52}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[CallRail] Tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+  }
 }
 
 export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: number; error?: string }> {
@@ -2412,10 +2585,21 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       for (const [stJobId, jobInvoices] of jobInvoiceMap.entries()) {
         const jobIdHash = hashStJobId(stJobId);
 
-        const [existingJob] = await db.select({
+        const sorted = jobInvoices.sort((a, b) => {
+          const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+          const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+          return dateB - dateA;
+        });
+        const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
+
+        const [directExistingJob] = await db.select({
             id: jobsTable.id,
             stInvoiceId: jobsTable.stInvoiceId,
+            stJobId: jobsTable.stJobId,
+            stJobIdHash: jobsTable.stJobIdHash,
             stJobNumber: jobsTable.stJobNumber,
+            stCustomerId: jobsTable.stCustomerId,
+            stLocationId: jobsTable.stLocationId,
             customerName: jobsTable.customerName,
             serviceAddress: jobsTable.serviceAddress,
           })
@@ -2426,11 +2610,29 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
           ))
           .limit(1);
 
-        const sorted = jobInvoices.sort((a, b) => {
-          const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
-          const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
-          return dateB - dateA;
-        });
+        let existingJob = directExistingJob ?? null;
+        if (!existingJob && latestInvoice.stJobNumber) {
+          const byJobNumber = await db.select({
+              id: jobsTable.id,
+              stInvoiceId: jobsTable.stInvoiceId,
+              stJobId: jobsTable.stJobId,
+              stJobIdHash: jobsTable.stJobIdHash,
+              stJobNumber: jobsTable.stJobNumber,
+              stCustomerId: jobsTable.stCustomerId,
+              stLocationId: jobsTable.stLocationId,
+              customerName: jobsTable.customerName,
+              serviceAddress: jobsTable.serviceAddress,
+            })
+            .from(jobsTable)
+            .where(and(
+              eq(jobsTable.tenantId, tenantId),
+              eq(jobsTable.stJobNumber, latestInvoice.stJobNumber),
+            ))
+            .limit(2);
+          if (byJobNumber.length === 1) {
+            existingJob = byJobNumber[0];
+          }
+        }
 
         let totalInvoiceAmount = 0;
         let totalRebate = 0;
@@ -2448,8 +2650,6 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             latestPaidOn = parsed.invoicePaidOn;
           }
         }
-
-        const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
 
         if (!existingJob) {
           // Invoice-only job: the completed-jobs sync never created a row for it
@@ -2503,9 +2703,20 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             : existingJob.customerName;
         const resolvedServiceAddress =
           existingJob.serviceAddress || latestInvoice.serviceAddress || null;
+        const invoiceCustomerId = sorted[0].customer?.id ? String(sorted[0].customer.id) : null;
+        const invoiceLocationId = sorted[0].location?.id ? String(sorted[0].location.id) : null;
+        const refreshedInternalIds =
+          !existingJob.stJobId ||
+          !existingJob.stJobIdHash ||
+          (!existingJob.stCustomerId && !!invoiceCustomerId) ||
+          (!existingJob.stLocationId && !!invoiceLocationId);
 
         await db.update(jobsTable)
           .set({
+            stJobId: existingJob.stJobId || stJobId,
+            stJobIdHash: existingJob.stJobIdHash || jobIdHash,
+            stCustomerId: existingJob.stCustomerId || invoiceCustomerId,
+            stLocationId: existingJob.stLocationId || invoiceLocationId,
             hasInvoice: true,
             invoiceTotal: totalInvoiceAmount,
             invoiceRebateAmount: totalRebate,
@@ -2517,6 +2728,7 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             serviceAddress: resolvedServiceAddress,
             invoiceDate: latestInvoice.invoiceDate,
             invoicePaidOn: latestPaidOn,
+            ...(refreshedInternalIds ? { stDataExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } : {}),
             updatedAt: new Date(),
           })
           .where(eq(jobsTable.id, existingJob.id));
@@ -2678,6 +2890,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
           }
         }
 
+        const estimateIsSold = isSoldEstimateStatus(parsed.estimateStatus);
         const wasUnlinked = existing && !existing.leadId;
         const nowLinked = !!matchedLeadId;
 
@@ -2687,6 +2900,10 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
               jobId: matchedJobId,
               leadId: matchedLeadId,
               stJobId: parsed.stJobId,
+              estimateName: parsed.estimateName,
+              estimateStatus: parsed.estimateStatus,
+              summary: parsed.summary,
+              followUpOn: parsed.followUpOn,
               soldByName,
               soldByStEmployeeId: parsed.soldByEmployeeId,
               soldOn: parsed.soldOn,
@@ -2698,7 +2915,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             })
             .where(eq(soldEstimatesTable.id, existing.id));
 
-          if (wasUnlinked && nowLinked && matchedLeadId) {
+          if (estimateIsSold && wasUnlinked && nowLinked && matchedLeadId) {
             const dollarStr = `$${(parsed.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const salesperson = soldByName ? ` (Sold by: ${soldByName})` : "";
             const noteText = `Contract signed — ${dollarStr}${salesperson}`;
@@ -2724,6 +2941,10 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             jobId: matchedJobId,
             stEstimateId: parsed.stEstimateId,
             stJobId: parsed.stJobId,
+            estimateName: parsed.estimateName,
+            estimateStatus: parsed.estimateStatus,
+            summary: parsed.summary,
+            followUpOn: parsed.followUpOn,
             soldByName,
             soldByStEmployeeId: parsed.soldByEmployeeId,
             soldOn: parsed.soldOn,
@@ -2733,7 +2954,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             rebateBreakdown: parsed.rebateBreakdown,
           });
 
-          if (matchedLeadId) {
+          if (estimateIsSold && matchedLeadId) {
             const dollarStr = `$${(parsed.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const salesperson = soldByName ? ` (Sold by: ${soldByName})` : "";
             const noteText = `Contract signed — ${dollarStr}${salesperson}`;
@@ -2754,7 +2975,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
           }
         }
 
-        if (matchedLeadId) {
+        if (estimateIsSold && matchedLeadId) {
           await db.update(leadsTable)
             .set({ hasSoldEstimate: true, updatedAt: new Date() })
             .where(eq(leadsTable.id, matchedLeadId));
@@ -2783,19 +3004,19 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       ? (total: number) => { void updateSyncLogTotalRecords(syncLog.id, total); }
       : undefined;
     try {
-      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal);
+      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal, { status: null });
     } catch (innerErr) {
       if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
     }
 
     if (cancelled) {
       await completeSyncLog(syncLog.id, "cancelled", synced, `Cancelled by operator (${synced} estimates processed)`);
-      console.log(`[Sync] ServiceTitan estimates: cancelled after ${synced} sold estimates for tenant ${tenantId}`);
+      console.log(`[Sync] ServiceTitan estimates: cancelled after ${synced} estimates for tenant ${tenantId}`);
       return { synced, error: "cancelled" };
     }
 
     await completeSyncLog(syncLog.id, "completed", synced);
-    console.log(`[Sync] ServiceTitan estimates: synced ${synced} sold estimates for tenant ${tenantId}`);
+    console.log(`[Sync] ServiceTitan estimates: synced ${synced} estimates for tenant ${tenantId}`);
     return { synced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2979,13 +3200,30 @@ export function startSyncScheduler() {
     void runOrphanReaperSweep();
   }, orphanReaperIntervalMs);
 
-  // CallRail intake is webhook-only (POST /api/webhooks/callrail/:tenantId).
-  // The previous polling backstop was a permanent no-op timer; it has been
-  // removed. If CallRail webhooks ever need a polling safety net,
-  // re-enable syncCallRailCalls here on a real interval.
+  const callRailSyncIntervalMs = Number(process.env.CALLRAIL_SYNC_INTERVAL_MS || String(60 * 60 * 1000));
+  const callRailSyncWindowDays = Math.max(1, Math.min(
+    Number(process.env.CALLRAIL_SYNC_WINDOW_DAYS || String(DEFAULT_CALLRAIL_SYNC_DAYS)),
+    90,
+  ));
+  const runCallRailSweep = createGuardedRunner("SyncScheduler:callrail", async () => {
+    console.log(`[SyncScheduler] Starting CallRail sync for all configured tenants (${callRailSyncWindowDays}d window)`);
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      const config = getTenantConfig(tenant);
+      if (!config?.callRailApiKey || !config.callRailAccountId) continue;
+      await syncCallRailAttribution(tenant.id, {
+        days: callRailSyncWindowDays,
+        syncType: "calls",
+        createLeadMode: "attribution_only",
+      });
+    }
+  });
+  const callRailTimer = setInterval(() => {
+    void runCallRailSweep();
+  }, callRailSyncIntervalMs);
 
-  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer];
-  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail webhook-only, orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
+  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer, callRailTimer];
+  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail ${Math.round(callRailSyncIntervalMs / 60000)}min (${callRailSyncWindowDays}d attribution window), orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
 }
 
 export function stopSyncScheduler() {

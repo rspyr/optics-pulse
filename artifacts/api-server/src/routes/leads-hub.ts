@@ -2114,7 +2114,11 @@ router.get("/leads-hub/:leadId/contract", async (req, res) => {
   if (!contractAccess.ok) return;
 
   const estimates = await db.select().from(soldEstimatesTable)
-    .where(and(eq(soldEstimatesTable.leadId, leadId), eq(soldEstimatesTable.tenantId, lead.tenantId)))
+    .where(and(
+      eq(soldEstimatesTable.leadId, leadId),
+      eq(soldEstimatesTable.tenantId, lead.tenantId),
+      sql`(${soldEstimatesTable.estimateStatus} IS NULL OR lower(${soldEstimatesTable.estimateStatus}) = 'sold')`,
+    ))
     .orderBy(desc(soldEstimatesTable.soldOn));
 
   res.json({ estimates });

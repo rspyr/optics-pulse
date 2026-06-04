@@ -521,7 +521,7 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     mockDb.insertResults = [];
     mockDb.resetCounters();
     mockDecryptConfig.mockReset();
-    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY });
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY, callRailCreatePulseLeads: true });
     await setupApp();
   });
 
@@ -568,7 +568,37 @@ describe("POST /webhooks/callrail/:tenantId", () => {
     expect(res.status).toBe(400);
   });
 
-  it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead", async () => {
+  it("keeps CallRail webhooks attribution-only by default", async () => {
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY });
+    const fakeEvent = { id: 699, tenantId: 1 };
+    const fakeLead = { id: 69, tenantId: 1 };
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [],
+    ];
+    mockDb.insertResults = [[fakeEvent], [fakeLead]];
+
+    const payload = {
+      id: "CAL_attr_only",
+      customer_phone_number: "+15551234567",
+      customer_name: "Attribution Only",
+      source: "Google Organic",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+
+    expect(res.status).toBe(200);
+    expect(res.json().pulseLeadCreated).toBe(false);
+    expect(res.json().attributionLeadId).toBe(69);
+
+    const leadInsert = mockDb.insertCalls.find(c => c.table === leadsTable)?.values as Record<string, unknown>;
+    expect(leadInsert.hubStatus).toBe("dead");
+    expect(leadInsert.status).toBe("lost");
+    expect(leadInsert.deadReason).toBe("callrail_attribution_only");
+  });
+
+  it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead when enabled", async () => {
     const fakeEvent = { id: 700, tenantId: 1 };
     const fakeLead = { id: 70, tenantId: 1 };
     // selects in order: tenant lookup, recent-leads dedupe lookup, refreshed lead lookup
@@ -745,7 +775,7 @@ describe("POST /webhooks/callrail/:tenantId", () => {
   });
 
   it("respects per-tenant CALLRAIL_DEDUPE_WINDOW_MINUTES override of 0 (disabled)", async () => {
-    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY, callRailDedupeWindowMinutes: 0 });
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY, callRailDedupeWindowMinutes: 0, callRailCreatePulseLeads: true });
     const fakeEvent = { id: 705, tenantId: 1 };
     const fakeLead = { id: 93, tenantId: 1 };
     // selects: tenant, refreshed lead (no dedupe select since window=0)

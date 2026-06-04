@@ -17,7 +17,7 @@ import {
   History, UserPlus, Archive, RefreshCw,
   Filter, PhoneOff, Ban, Globe, AlertCircle, FileText, Users,
   Pencil, Timer, Send, ArrowDown, ExternalLink, Search,
-  Pause, Play, GitBranch, ArrowRight
+  Pause, Play, GitBranch, ArrowRight, Mail, MapPin
 } from "lucide-react";
 import { isUnknownSource } from "@workspace/api-zod";
 import { useGetPodiumTimeline, useGetPodiumConversation, useSendPodiumMessage, type TimelineEntry, type PodiumMessage } from "@workspace/api-client-react";
@@ -226,6 +226,107 @@ interface LeadData {
   hasSoldEstimate?: boolean;
   resubmittedAt?: string | null;
   resubmissionCount?: number | null;
+}
+
+interface LeadInvoiceSummary {
+  stJobNumber?: string | null;
+  customerPhone?: string | null;
+  customerEmail?: string | null;
+  serviceAddress?: string | null;
+}
+
+function cleanOptional(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function formatLeadAddress(lead: LeadData): string | null {
+  const address = [lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ");
+  return cleanOptional(address);
+}
+
+function FieldSourcePill({ source }: { source: "lead" | "invoice" }) {
+  if (source === "lead") return null;
+  return (
+    <span
+      className="text-[8px] px-1 py-0.5 rounded border border-white/10 bg-white/5 text-white/35 uppercase tracking-wide"
+      title="From ServiceTitan invoice"
+    >
+      ST
+    </span>
+  );
+}
+
+function LeadHeaderContactDetails({ lead, blocksCall }: { lead: LeadData; blocksCall: boolean }) {
+  const [invoice, setInvoice] = useState<LeadInvoiceSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInvoice(null);
+    fetch(`${API_BASE}/leads/${lead.id}/invoice`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: LeadInvoiceSummary | null) => {
+        if (!cancelled) setInvoice(data);
+      })
+      .catch(() => {
+        if (!cancelled) setInvoice(null);
+      });
+    return () => { cancelled = true; };
+  }, [lead.id]);
+
+  const leadPhone = cleanOptional(lead.phone);
+  const invoicePhone = cleanOptional(invoice?.customerPhone);
+  const phone = leadPhone ?? invoicePhone;
+  const phoneSource = leadPhone ? "lead" : invoicePhone ? "invoice" : null;
+
+  const leadEmail = cleanOptional(lead.email);
+  const invoiceEmail = cleanOptional(invoice?.customerEmail);
+  const email = leadEmail ?? invoiceEmail;
+  const emailSource = leadEmail ? "lead" : invoiceEmail ? "invoice" : null;
+
+  const leadAddress = formatLeadAddress(lead);
+  const invoiceAddress = cleanOptional(invoice?.serviceAddress);
+  const address = leadAddress ?? invoiceAddress;
+  const addressSource = leadAddress ? "lead" : invoiceAddress ? "invoice" : null;
+
+  if (!phone && !email && !address) return null;
+
+  return (
+    <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap min-w-0">
+      {phone && phoneSource && (
+        <span className="inline-flex items-center gap-1 min-w-0">
+          <Phone className="w-3.5 h-3.5 text-blue-400/80 shrink-0" />
+          {blocksCall ? (
+            <span className="text-sm text-white/40 font-mono">{formatPhone(phone)}</span>
+          ) : (
+            <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} className="text-sm text-blue-400 hover:text-blue-300 font-mono">
+              {formatPhone(phone)}
+            </a>
+          )}
+          <CopyBtn text={phone.replace(/[^0-9+]/g, "")} />
+          <FieldSourcePill source={phoneSource} />
+        </span>
+      )}
+      {email && emailSource && (
+        <span className="inline-flex items-center gap-1 min-w-0">
+          <Mail className="w-3.5 h-3.5 text-purple-400/80 shrink-0" />
+          <a href={`mailto:${email}`} className="text-sm text-purple-400 hover:text-purple-300 truncate max-w-[18rem]">
+            {email}
+          </a>
+          <CopyBtn text={email} />
+          <FieldSourcePill source={emailSource} />
+        </span>
+      )}
+      {address && addressSource && (
+        <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+          <MapPin className="w-3.5 h-3.5 text-emerald-400/80 shrink-0" />
+          <span className="text-sm text-white/55 truncate max-w-[32rem]" title={address}>{address}</span>
+          <CopyBtn text={address} />
+          <FieldSourcePill source={addressSource} />
+        </span>
+      )}
+    </div>
+  );
 }
 
 interface CsrOption {
@@ -1732,21 +1833,7 @@ function LeadDetailView({ lead, tenantId, onBack, onUpdate, onSpiffEarned, timez
               {lead.serviceType && (
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/5 text-white/50 border border-white/10">{lead.serviceType}</span>
               )}
-              {lead.phone && (
-                <span className="inline-flex items-center gap-0.5">
-                  {blocksCall
-                    ? <span className="text-sm text-white/40 font-mono">{formatPhone(lead.phone)}</span>
-                    : <a href={`tel:${lead.phone}`} className="text-sm text-blue-400 hover:text-blue-300 font-mono">{formatPhone(lead.phone)}</a>
-                  }
-                  <CopyBtn text={lead.phone.replace(/[^0-9+]/g, "")} />
-                </span>
-              )}
-              {lead.email && (
-                <span className="inline-flex items-center gap-0.5">
-                  <a href={`mailto:${lead.email}`} className="text-sm text-purple-400 hover:text-purple-300">{lead.email}</a>
-                  <CopyBtn text={lead.email} />
-                </span>
-              )}
+              <LeadHeaderContactDetails lead={lead} blocksCall={blocksCall} />
             </div>
             <ContactFlags preferences={lead.contactPreferences} />
             {lead.assignedTo && (
