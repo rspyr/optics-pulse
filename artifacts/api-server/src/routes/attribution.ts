@@ -107,6 +107,22 @@ router.get("/attribution/events", async (req, res) => {
 
   if (query.search) {
     const needle = `%${query.search}%`;
+    const phoneDigits = query.search.replace(/\D/g, "");
+    const phoneNeedle = phoneDigits ? `%${phoneDigits}%` : null;
+    const leadSearchParts: SQL[] = [
+      sql`l.first_name ILIKE ${needle}`,
+      sql`l.last_name ILIKE ${needle}`,
+      sql`(l.first_name || ' ' || l.last_name) ILIKE ${needle}`,
+      sql`l.email ILIKE ${needle}`,
+      sql`l.phone ILIKE ${needle}`,
+    ];
+    if (phoneNeedle) {
+      leadSearchParts.push(sql`regexp_replace(COALESCE(l.phone, ''), '[^0-9]', '', 'g') ILIKE ${phoneNeedle}`);
+    }
+    const leadSearchCond = or(...leadSearchParts);
+    const contactHashParts: SQL[] = [];
+    if (phoneDigits.length >= 7) contactHashParts.push(eq(attributionEventsTable.hashedPhone, hashPhone(query.search)));
+    if (query.search.includes("@")) contactHashParts.push(eq(attributionEventsTable.hashedEmail, hashValue(query.search)));
     const searchCond = or(
       ilike(attributionEventsTable.utmSource, needle),
       ilike(attributionEventsTable.utmCampaign, needle),
@@ -117,6 +133,19 @@ router.get("/attribution/events", async (req, res) => {
       ilike(attributionEventsTable.formName, needle),
       ilike(attributionEventsTable.resolvedLeadSource, needle),
       ilike(attributionEventsTable.resolvedFunnel, needle),
+      sql`${attributionEventsTable.formFields}::text ILIKE ${needle}`,
+      ...(leadSearchCond
+        ? [
+            sql`EXISTS (
+              SELECT 1
+              FROM leads l
+              WHERE l.id = ${attributionEventsTable.createdLeadId}
+                AND l.tenant_id = ${attributionEventsTable.tenantId}
+                AND (${leadSearchCond})
+            )`,
+          ]
+        : []),
+      ...contactHashParts,
     );
     if (searchCond) conditions.push(searchCond);
   }

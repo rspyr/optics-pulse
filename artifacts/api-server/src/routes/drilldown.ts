@@ -61,6 +61,39 @@ function matchLevelCondition(levels: string[]): SQL | undefined {
   return ors.length === 1 ? ors[0] : or(...ors);
 }
 
+function revenueAttributedSearchCondition(search: string): SQL | undefined {
+  const q = search.trim();
+  if (!q) return undefined;
+
+  const needle = `%${q}%`;
+  const phoneDigits = q.replace(/\D/g, "");
+  const phoneNeedle = phoneDigits ? `%${phoneDigits}%` : null;
+  const parts: SQL[] = [
+    ilike(jobsTable.customerName, needle),
+    ilike(jobsTable.customerPhone, needle),
+    ilike(jobsTable.customerEmail, needle),
+    ilike(jobsTable.stJobNumber, needle),
+    ilike(jobsTable.jobTypeName, needle),
+    ilike(leadsTable.firstName, needle),
+    ilike(leadsTable.lastName, needle),
+    ilike(leadsTable.email, needle),
+    ilike(leadsTable.phone, needle),
+    ilike(leadsTable.source, needle),
+    ilike(leadsTable.originalSource, needle),
+    sql`(${leadsTable.firstName} || ' ' || ${leadsTable.lastName}) ILIKE ${needle}`,
+    sql`${funnelNameExpr} ILIKE ${needle}`,
+  ];
+
+  if (phoneNeedle) {
+    parts.push(
+      sql`regexp_replace(COALESCE(${jobsTable.customerPhone}, ''), '[^0-9]', '', 'g') ILIKE ${phoneNeedle}`,
+      sql`regexp_replace(COALESCE(${leadsTable.phone}, ''), '[^0-9]', '', 'g') ILIKE ${phoneNeedle}`,
+    );
+  }
+
+  return or(...parts);
+}
+
 // Revenue columns (subtotal, rebateAmount, invoiceTotal, invoiceRebateAmount)
 // are stored as floating-point `real`, so summing them in JS can produce
 // values like 1050.1500000000001 (900.10 + 150.05). We round corrected
@@ -285,6 +318,7 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   // reconcile with the visible rows under any active filter.
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   // Optional multi-select match-tier filter (diamond/golden/silver/bronze/
   // manual/lead_funnel/unmatched). Applied identically to the list, count, and
   // summary so the cards/CSV reconcile with the visible rows under any active
@@ -331,6 +365,8 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   if (source) conditions.push(eq(leadsTable.source, source));
   const matchCond = matchLevelCondition(matchLevels);
   if (matchCond) conditions.push(matchCond);
+  const searchCond = revenueAttributedSearchCondition(search);
+  if (searchCond) conditions.push(searchCond);
 
   const where = and(...conditions);
   // Left-join the originating lead (+ its funnel type) so funnel/source filters
@@ -500,6 +536,7 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   // rows + CSV under any active funnel/source filter.
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   const matchLevels = parseMatchLevels(req.query.matchLevel);
 
   // requireTenant: same heavy jobs→leads→funnel_types join as the list, here
@@ -517,6 +554,8 @@ router.get("/drilldown/revenue-attributed/summary", async (req, res) => {
   if (source) conditions.push(eq(leadsTable.source, source));
   const matchCond = matchLevelCondition(matchLevels);
   if (matchCond) conditions.push(matchCond);
+  const searchCond = revenueAttributedSearchCondition(search);
+  if (searchCond) conditions.push(searchCond);
 
   const where = and(...conditions);
 

@@ -957,10 +957,10 @@ export default function Attribution() {
                 </SelectContent>
               </Select>
               <Input
-                placeholder="Search source, campaign, URL..."
+                placeholder="Search source, campaign, URL, name, phone, email..."
                 value={searchText}
                 onChange={e => setSearchText(e.target.value)}
-                className="max-w-[260px] bg-white/5 border-white/10 text-sm"
+                className="max-w-[360px] bg-white/5 border-white/10 text-sm"
               />
               <div className="flex items-center gap-3 ml-auto">
                 <span className="text-xs text-muted-foreground">
