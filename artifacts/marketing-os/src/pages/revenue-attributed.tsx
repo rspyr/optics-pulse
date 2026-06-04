@@ -119,6 +119,12 @@ type LeadSummary = {
   id: number;
   firstName: string | null;
   lastName: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
   source: string | null;
   originalSource: string | null;
   status: string | null;
@@ -174,6 +180,22 @@ export type RevenueJob = {
 function leadFullName(lead: LeadSummary | null | undefined): string {
   if (!lead) return "";
   return [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
+}
+
+function formatLeadAddress(lead: LeadSummary | null | undefined): string {
+  if (!lead) return "";
+  return [lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ");
+}
+
+function displayMatchLevel(level: string | null | undefined): string {
+  const normalized = (level || "unmatched").trim().toLowerCase();
+  if (normalized === "lead_funnel") return "Lead funnel";
+  if (normalized === "gclid") return "GCLID";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export function resolveCustomerName(job: RevenueJob): string {
@@ -587,7 +609,7 @@ export default function RevenueAttributed() {
                       {matchLevelFilter.length === 0
                         ? "All match levels"
                         : matchLevelFilter.length === 1
-                          ? matchLevelFilter[0]
+                          ? displayMatchLevel(matchLevelFilter[0])
                           : `${matchLevelFilter.length} selected`}
                     </span>
                     <ChevronDown className="w-4 h-4 opacity-60 shrink-0" />
@@ -604,9 +626,8 @@ export default function RevenueAttributed() {
                         )
                       }
                       onSelect={(e) => e.preventDefault()}
-                      className="capitalize"
                     >
-                      {m}
+                      {displayMatchLevel(m)}
                     </DropdownMenuCheckboxItem>
                   ))}
                 </DropdownMenuContent>
@@ -676,7 +697,7 @@ export default function RevenueAttributed() {
                         <td className="p-4 text-sm text-muted-foreground font-mono">{job.stJobNumber || `#${job.id}`}</td>
                         <td className="p-4 text-sm">
                           {job.matchLevel ? (
-                            <span className="text-xs text-ice/80 capitalize">{job.matchLevel}</span>
+                            <span className="text-xs text-ice/80">{displayMatchLevel(job.matchLevel)}</span>
                           ) : (
                             <span className="text-xs text-muted-foreground/50">unmatched</span>
                           )}
@@ -762,11 +783,12 @@ const TIER_BAR_COLORS: Record<string, string> = {
   bronze: "bg-orange-400",
   gclid: "bg-cyan-300",
   manual: "bg-violet-300",
+  lead_funnel: "bg-emerald-300",
   unmatched: "bg-white/15",
 };
 
 function tierLabel(tier: string): string {
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
+  return displayMatchLevel(tier);
 }
 
 // "Revenue by match tier" breakdown: corrected revenue + job count per tier for
@@ -797,7 +819,7 @@ function MatchTierBreakdownCard({
           const color = TIER_BAR_COLORS[b.tier] ?? "bg-ice/40";
           return (
             <div key={b.tier} className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-xs capitalize text-white/90">{tierLabel(b.tier)}</span>
+              <span className="w-24 shrink-0 text-xs text-white/90">{tierLabel(b.tier)}</span>
               <div className="flex-1 h-2 rounded-full bg-white/[0.04] overflow-hidden">
                 <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
               </div>
@@ -871,10 +893,11 @@ function SortableTh({
 // matched to a marketing touchpoint, plus which ServiceTitan field bridged it.
 const MATCH_EXPLANATIONS: Record<string, { title: string; detail: string }> = {
   diamond: { title: "Matched by Google Click ID (GCLID)", detail: "Highest confidence — the click that drove this job was tracked end-to-end." },
-  golden: { title: "Matched by phone number", detail: "The customer's phone on the invoice matched a tracked lead's phone." },
-  silver: { title: "Matched by email address", detail: "The customer's email on the invoice matched a tracked lead's email." },
+  golden: { title: "Matched by phone number", detail: "The ServiceTitan phone matched a Pulse lead phone. The lead source can still be Unknown." },
+  silver: { title: "Matched by email address", detail: "The ServiceTitan email matched a Pulse lead email. The lead source can still be Unknown." },
   bronze: { title: "Matched by service address", detail: "The service address on the invoice matched a tracked lead's address." },
   manual: { title: "Manually matched", detail: "An operator linked this job to the lead by hand." },
+  lead_funnel: { title: "Attributed by linked Pulse lead", detail: "The job is linked to a Pulse lead with a known marketing funnel, but no stronger click, phone, email, or address proof was available." },
   unmatched: { title: "Not matched", detail: "No marketing touchpoint could be linked to this job yet." },
 };
 
@@ -896,6 +919,10 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
   const explanation = MATCH_EXPLANATIONS[level] ?? MATCH_EXPLANATIONS.unmatched;
   const lead = job.lead;
   const leadName = lead ? [lead.firstName, lead.lastName].filter(Boolean).join(" ") || `Lead #${lead.id}` : null;
+  const leadAddress = formatLeadAddress(lead);
+  const comparedLeadPhone = lead?.phone || (lead ? job.customerPhone : undefined);
+  const comparedLeadEmail = lead?.email || (lead ? job.customerEmail : undefined);
+  const comparedLeadAddress = leadAddress || (lead ? job.serviceAddress : undefined);
 
   const stRows: [string, string | null | undefined][] = [
     ["Customer name", job.customerName],
@@ -909,6 +936,9 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
   ];
   const opticsRows: [string, string | null | undefined][] = [
     ["Matched lead", leadName],
+    ["Lead phone", comparedLeadPhone],
+    ["Lead email", comparedLeadEmail],
+    ["Lead address", comparedLeadAddress],
     ["Lead source", job.source ?? lead?.source],
     ["Funnel", job.funnel],
     ["Matched GCLID", job.matchedGclid],
@@ -920,8 +950,8 @@ function MatchExplanation({ job }: { job: RevenueJob }) {
         <Link2 className="w-3.5 h-3.5" /> How This Was Matched
       </h4>
       <div className="flex items-center gap-2 mb-1">
-        <span className={`text-xs px-2 py-0.5 rounded-full border capitalize ${job.matchLevel ? "border-ice/30 text-ice/90" : "border-white/10 text-muted-foreground/60"}`}>
-          {level}
+        <span className={`text-xs px-2 py-0.5 rounded-full border ${job.matchLevel ? "border-ice/30 text-ice/90" : "border-white/10 text-muted-foreground/60"}`}>
+          {displayMatchLevel(level)}
         </span>
         <span className="text-sm text-white">{explanation.title}</span>
       </div>

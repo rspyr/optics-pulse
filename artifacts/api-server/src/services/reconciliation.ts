@@ -7,6 +7,8 @@ import { patchJobCustomField } from "./integrations/service-titan";
 import { normalizePhone, hashValue, hashPhone, hashEmail, phoneMatchesSql, findLeadByPhone } from "../lib/phone-utils";
 
 const LOOKBACK_DAYS = 90;
+const UNMATCHED_TIER = "unmatched";
+const LEAD_FUNNEL_TIER = "lead_funnel";
 
 export function normalizeAddress(address: string): string {
   return address
@@ -25,6 +27,89 @@ export function normalizeAddress(address: string): string {
     .replace(/\s+/g, " ");
 }
 
+type LeadFunnelAttributionLevel = "golden" | "silver" | "bronze" | typeof LEAD_FUNNEL_TIER;
+
+type LeadFunnelAttributionJob = {
+  customerName: string | null;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  serviceAddress: string | null;
+};
+
+type LeadFunnelAttributionLead = {
+  id: number;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  matchedGclid: string | null;
+  funnelId: number | null;
+  leadType: string | null;
+};
+
+function normalizeEmail(value: string | null | undefined): string {
+  return (value || "").trim().toLowerCase();
+}
+
+function normalizeName(value: string | null | undefined): string {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function knownFunnel(lead: LeadFunnelAttributionLead): boolean {
+  if (lead.funnelId != null) return true;
+  const leadType = (lead.leadType || "").trim().toLowerCase();
+  return leadType !== "" && leadType !== "unknown";
+}
+
+function leadAddress(lead: LeadFunnelAttributionLead): string {
+  return [lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ");
+}
+
+export function resolveLeadFunnelAttribution(
+  job: LeadFunnelAttributionJob,
+  leads: LeadFunnelAttributionLead[],
+): { matchLevel: LeadFunnelAttributionLevel; matchedGclid: string | null; leadId: number } | null {
+  const jobPhone = job.customerPhone ? normalizePhone(job.customerPhone) : "";
+  for (const lead of leads) {
+    const leadPhone = lead.phone ? normalizePhone(lead.phone) : "";
+    if (jobPhone && leadPhone && jobPhone === leadPhone) {
+      return { matchLevel: "golden", matchedGclid: lead.matchedGclid ?? null, leadId: lead.id };
+    }
+  }
+
+  const jobEmail = normalizeEmail(job.customerEmail);
+  for (const lead of leads) {
+    const leadEmail = normalizeEmail(lead.email);
+    if (jobEmail && leadEmail && jobEmail === leadEmail) {
+      return { matchLevel: "silver", matchedGclid: lead.matchedGclid ?? null, leadId: lead.id };
+    }
+  }
+
+  for (const lead of leads) {
+    if (!knownFunnel(lead)) continue;
+    const jobName = normalizeName(job.customerName);
+    const leadName = normalizeName([lead.firstName, lead.lastName].filter(Boolean).join(" "));
+    const jobAddress = job.serviceAddress ? normalizeAddress(job.serviceAddress) : "";
+    const leadAddr = leadAddress(lead);
+    const normalizedLeadAddress = leadAddr ? normalizeAddress(leadAddr) : "";
+
+    if (jobName && leadName && jobName === leadName && jobAddress && normalizedLeadAddress && jobAddress === normalizedLeadAddress) {
+      return { matchLevel: "bronze", matchedGclid: lead.matchedGclid ?? null, leadId: lead.id };
+    }
+  }
+
+  const leadWithKnownFunnel = leads.find(knownFunnel);
+  if (leadWithKnownFunnel) {
+    return { matchLevel: LEAD_FUNNEL_TIER, matchedGclid: leadWithKnownFunnel.matchedGclid ?? null, leadId: leadWithKnownFunnel.id };
+  }
+
+  return null;
+}
+
 export interface ReconciliationResult {
   tenantId: number | null;
   jobsProcessed: number;
@@ -32,6 +117,7 @@ export interface ReconciliationResult {
   golden: number;
   silver: number;
   bronze: number;
+  leadFunnel: number;
   unmatched: number;
   matchRate: number;
   ociPayloads: OciPayload[];
@@ -51,18 +137,19 @@ export interface OciPayload {
 
 export async function runReconciliation(tenantId: number | null, triggerType: "manual" | "scheduled" = "manual"): Promise<ReconciliationResult> {
   const startedAt = new Date();
-  const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, unmatched: 0 };
+  const results = { diamond: 0, golden: 0, silver: 0, bronze: 0, leadFunnel: 0, unmatched: 0 };
   const ociPayloads: OciPayload[] = [];
   const allMatchedJobIds: number[] = [];
 
   const lookbackDate = new Date(Date.now() - LOOKBACK_DAYS * 86400000);
 
-  const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, "unmatched"));
+  const matchCondition = or(isNull(jobsTable.matchLevel), eq(jobsTable.matchLevel, UNMATCHED_TIER));
   const baseConditions = [matchCondition, eq(jobsTable.status, "completed"), isNotNull(jobsTable.customerName)];
   if (tenantId) baseConditions.push(eq(jobsTable.tenantId, tenantId));
   const unmatchedJobs = await db.select({
     id: jobsTable.id,
     tenantId: jobsTable.tenantId,
+    leadId: jobsTable.leadId,
     customerName: jobsTable.customerName,
     customerPhone: jobsTable.customerPhone,
     customerEmail: jobsTable.customerEmail,
@@ -179,8 +266,17 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
 
     const emailLeads = job.customerEmail
       ? await db.select().from(leadsTable)
-          .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.email, job.customerEmail)))
+          .where(and(
+            eq(leadsTable.tenantId, job.tenantId),
+            sql`LOWER(TRIM(COALESCE(${leadsTable.email}, ''))) = LOWER(TRIM(${job.customerEmail}))`,
+          ))
           .limit(10)
+      : [];
+
+    const linkedLeads = job.leadId
+      ? await db.select().from(leadsTable)
+          .where(and(eq(leadsTable.tenantId, job.tenantId), eq(leadsTable.id, job.leadId)))
+          .limit(1)
       : [];
 
     let nameLeads: typeof phoneLeads = [];
@@ -193,7 +289,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     }
 
     const seenLeadIds = new Set<number>();
-    const allLeads = [...phoneLeads, ...emailLeads, ...nameLeads].filter((l) => {
+    const allLeads = [...linkedLeads, ...phoneLeads, ...emailLeads, ...nameLeads].filter((l) => {
       if (seenLeadIds.has(l.id)) return false;
       seenLeadIds.add(l.id);
       return true;
@@ -295,6 +391,26 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
 
     if (matched) continue;
 
+    const leadFallback = resolveLeadFunnelAttribution(job, allLeads);
+    if (leadFallback) {
+      const matchLevel = leadFallback.matchLevel;
+      await db.update(jobsTable).set({
+        matchLevel,
+        matchedGclid: leadFallback.matchedGclid,
+        leadId: leadFallback.leadId,
+        updatedAt: new Date(),
+      }).where(eq(jobsTable.id, job.id));
+      if (matchLevel === "golden") results.golden++;
+      else if (matchLevel === "silver") results.silver++;
+      else if (matchLevel === "bronze") results.bronze++;
+      else results.leadFunnel++;
+      allMatchedJobIds.push(job.id);
+      if (leadFallback.matchedGclid && job.revenue > 0) {
+        ociPayloads.push(buildOciPayload(leadFallback.matchedGclid, job.id, job.tenantId, job.revenue, job.completedAt));
+      }
+      continue;
+    }
+
     let bronzeMatched = false;
     if (job.serviceAddress) {
       const normalizedJobAddr = normalizeAddress(job.serviceAddress);
@@ -332,11 +448,11 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     }
     if (bronzeMatched) continue;
 
-    await db.update(jobsTable).set({ matchLevel: "unmatched", updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
+    await db.update(jobsTable).set({ matchLevel: UNMATCHED_TIER, updatedAt: new Date() }).where(eq(jobsTable.id, job.id));
     results.unmatched++;
   }
 
-  const totalMatched = results.diamond + results.golden + results.silver + results.bronze;
+  const totalMatched = results.diamond + results.golden + results.silver + results.bronze + results.leadFunnel;
   const jobsProcessed = unmatchedJobs.length;
   const matchRate = jobsProcessed > 0 ? Math.round((totalMatched / jobsProcessed) * 100 * 10) / 10 : 0;
 
@@ -357,7 +473,8 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
       WHERE ${jobsTable.leadId} = ${leadsTable.id}
         AND ${jobsTable.tenantId} = ${leadsTable.tenantId}
         AND ${jobsTable.hasInvoice} = true
-        AND ${jobsTable.matchLevel} IN ('diamond','golden','silver','bronze')
+        AND ${jobsTable.matchLevel} IS NOT NULL
+        AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER}
     )`,
   ];
   if (tenantId) soldPromotionConditions.push(eq(leadsTable.tenantId, tenantId));
@@ -376,6 +493,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     goldenMatches: results.golden,
     silverMatches: results.silver,
     bronzeMatches: results.bronze,
+    leadFunnelMatches: results.leadFunnel,
     unmatchedCount: results.unmatched,
     matchRate,
     triggerType,
@@ -385,7 +503,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   });
 
   console.log(`[Reconciliation] ${triggerType} run complete: ${jobsProcessed} jobs processed, ${totalMatched} matched (${matchRate}% rate)`);
-  console.log(`[Reconciliation] Breakdown: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.unmatched} unmatched`);
+  console.log(`[Reconciliation] Breakdown: ${results.diamond} diamond, ${results.golden} golden, ${results.silver} silver, ${results.bronze} bronze, ${results.leadFunnel} lead_funnel, ${results.unmatched} unmatched`);
 
   let enhancedConversionEligible = 0;
   let capiEligible = 0;
@@ -402,7 +520,7 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
     }
   } else if (tenantId) {
     const allMatchedRows = await db.select().from(jobsTable).where(
-      and(eq(jobsTable.tenantId, tenantId), isNotNull(jobsTable.matchLevel)),
+      and(eq(jobsTable.tenantId, tenantId), isNotNull(jobsTable.matchLevel), sql`${jobsTable.matchLevel} <> ${UNMATCHED_TIER}`),
     );
     enhancedConversionEligible = allMatchedRows.filter((j: any) => !j.matchedGclid && j.revenue > 0 && !j.enhancedConversionUploadedAt).length;
     capiEligible = allMatchedRows.filter((j: any) => !j.capiUploadedAt).length;
@@ -774,6 +892,7 @@ export async function runScheduledReconciliation(): Promise<ReconciliationResult
         goldenMatches: 0,
         silverMatches: 0,
         bronzeMatches: 0,
+        leadFunnelMatches: 0,
         unmatchedCount: 0,
         matchRate: 0,
         triggerType: "scheduled",

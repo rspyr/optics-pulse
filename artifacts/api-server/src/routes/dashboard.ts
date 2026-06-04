@@ -9,6 +9,7 @@ const router: IRouter = Router();
 router.use("/dashboard", denyClientUser);
 
 const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
+const UNMATCHED_TIER = "unmatched";
 
 export type AttributionMode = "attributed" | "unattributed" | "all";
 
@@ -20,7 +21,7 @@ function parseAttributionMode(raw: unknown): AttributionMode {
 // Attributed = paid-touch leads/jobs.
 // - lead.source matches google / meta / facebook (case-insensitive), OR
 // - lead.matchedGclid is not null, OR
-// - job.matchLevel in (diamond, golden, silver, bronze).
+// - job.matchLevel is any real attribution tier (anything except NULL/unmatched).
 const leadAttributedExpr = sql`(
   ${leadsTable.source} ILIKE '%google%'
   OR ${leadsTable.source} ILIKE '%meta%'
@@ -30,10 +31,11 @@ const leadAttributedExpr = sql`(
     SELECT 1 FROM ${jobsTable} aj
     WHERE aj.lead_id = ${leadsTable.id}
       AND aj.tenant_id = ${leadsTable.tenantId}
-      AND aj.match_level IN ('diamond','golden','silver','bronze')
+      AND aj.match_level IS NOT NULL
+      AND aj.match_level <> ${UNMATCHED_TIER}
   )
 )`;
-const jobAttributedExpr = sql`(${jobsTable.matchLevel} IN ('diamond','golden','silver','bronze'))`;
+const jobAttributedExpr = sql`(${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER})`;
 
 async function computeMetrics(
   tenantId: number | null,
@@ -50,7 +52,7 @@ async function computeMetrics(
     jobConditions.push(jobAttributedExpr);
   } else if (attribution === "unattributed") {
     leadConditions.push(sql`NOT ${leadAttributedExpr}`);
-    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = 'unmatched')`);
+    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = ${UNMATCHED_TIER})`);
   }
 
   if (tenantId) {
@@ -97,7 +99,7 @@ async function computeMetrics(
       totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' THEN COALESCE(${jobsTable.invoiceTotal} + COALESCE(${jobsTable.invoiceRebateAmount}, 0), ${jobsTable.revenue}) ELSE 0 END), 0)`,
       paidRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${jobsTable.status} = 'completed' AND ${jobsTable.hasInvoice} = true AND (${jobsTable.invoiceBalance} = 0 OR ${jobsTable.invoicePaidOn} IS NOT NULL) THEN COALESCE(${jobsTable.invoicePaidAmount}, 0) + COALESCE(${jobsTable.invoiceRebateAmount}, 0) ELSE 0 END), 0)`,
       invoicedJobCount: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.hasInvoice} = true)`,
-      matchedEvents: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} != 'unmatched')`,
+      matchedEvents: sql<number>`COUNT(*) FILTER (WHERE ${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} != ${UNMATCHED_TIER})`,
     }).from(jobsTable).where(jobWhere),
     skipSpendQuery
       ? Promise.resolve([] as Array<{ platform: string | null; total: number }>)
@@ -208,7 +210,7 @@ router.get("/dashboard/spend-revenue", async (req, res) => {
   if (attribution === "attributed") {
     jobConditions.push(jobAttributedExpr);
   } else if (attribution === "unattributed") {
-    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = 'unmatched')`);
+    jobConditions.push(sql`(${jobsTable.matchLevel} IS NULL OR ${jobsTable.matchLevel} = ${UNMATCHED_TIER})`);
   }
   const skipSpend = attribution === "unattributed";
 

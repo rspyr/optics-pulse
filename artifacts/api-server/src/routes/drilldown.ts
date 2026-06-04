@@ -23,9 +23,11 @@ const UNMATCHED_TIER = "unmatched";
 // and not the "unmatched" sentinel.
 const isAttributedExpr = sql`${jobsTable.matchLevel} IS NOT NULL AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER}`;
 // Display/sort order for match tiers, strongest first. "gclid" is an exact
-// click-id match; "manual" is a human-assigned match; "unmatched" sorts last.
+// click-id match; "manual" is a human-assigned match; "lead_funnel" is a
+// linked lead with a known funnel but no stronger click/contact proof yet.
+// "unmatched" sorts last.
 // Any tier not listed here sorts after the known ones (then alphabetically).
-const MATCH_LEVEL_ORDER = ["diamond", "golden", "silver", "bronze", "gclid", "manual", UNMATCHED_TIER];
+const MATCH_LEVEL_ORDER = ["diamond", "golden", "silver", "bronze", "gclid", "manual", "lead_funnel", UNMATCHED_TIER];
 function matchLevelRank(level: string): number {
   const i = MATCH_LEVEL_ORDER.indexOf(level);
   return i === -1 ? MATCH_LEVEL_ORDER.length : i;
@@ -188,8 +190,9 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
   const funnel = typeof req.query.funnel === "string" && req.query.funnel ? req.query.funnel : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
   // Optional multi-select match-tier filter (diamond/golden/silver/bronze/
-  // manual/unmatched). Applied identically to the list, count, and summary so
-  // the cards/CSV reconcile with the visible rows under any active selection.
+  // manual/lead_funnel/unmatched). Applied identically to the list, count, and
+  // summary so the cards/CSV reconcile with the visible rows under any active
+  // selection.
   const matchLevels = parseMatchLevels(req.query.matchLevel);
 
   // Sort key + direction. Defaults to corrected-revenue desc (the historical
@@ -296,6 +299,12 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
         status: leadsTable.status,
         hubStatus: leadsTable.hubStatus,
         assignedTo: leadsTable.assignedTo,
+        phone: leadsTable.phone,
+        email: leadsTable.email,
+        address: leadsTable.address,
+        city: leadsTable.city,
+        state: leadsTable.state,
+        zip: leadsTable.zip,
       }).from(leadsTable).where(inArray(leadsTable.id, leadIds))
     : [];
   const leadById = new Map(leads.map((l) => [l.id, l]));
@@ -352,6 +361,12 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
             status: lead.status,
             hubStatus: lead.hubStatus,
             funnel: funnelName,
+            phone: lead.phone,
+            email: lead.email,
+            address: lead.address,
+            city: lead.city,
+            state: lead.state,
+            zip: lead.zip,
           }
         : null,
     };

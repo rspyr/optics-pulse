@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 /**
  * Tags of migrations known to NOT have been applied when this runner is
  * introduced. Every other migration file present in `lib/db/drizzle/` is
- * baselined as already-applied on first run. These three use `IF NOT EXISTS`
+ * baselined as already-applied on first run. These migrations use `IF NOT EXISTS`
  * / idempotent guards so re-running them is a safe no-op.
  */
 const BOOTSTRAP_PENDING = new Set([
@@ -14,6 +14,9 @@ const BOOTSTRAP_PENDING = new Set([
   "0031_outbound_push_dedup",
   "0033_lead_original_source",
   "0047_meta_integration_rebuild",
+  "0079_lead_funnel_attribution",
+  "0080_exact_linked_contact_attribution",
+  "0081_preserve_exact_linked_contact_matches",
 ]);
 
 function resolveMigrationsDir(): string {

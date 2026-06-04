@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hashValue, normalizePhone } from "../lib/phone-utils";
-import { normalizeAddress } from "./reconciliation";
+import { normalizeAddress, resolveLeadFunnelAttribution } from "./reconciliation";
 
 describe("hashValue", () => {
   it("returns a sha256 hex digest", () => {
@@ -106,5 +106,78 @@ describe("normalizeAddress", () => {
     const a = normalizeAddress("123 Main Street, Apartment 4B");
     const b = normalizeAddress("123 main st apt 4b");
     expect(a).toBe(b);
+  });
+});
+
+describe("resolveLeadFunnelAttribution", () => {
+  const baseLead = {
+    id: 344,
+    firstName: "Mark",
+    lastName: "Lobbestael",
+    phone: null,
+    email: null,
+    address: null,
+    city: null,
+    state: null,
+    zip: null,
+    matchedGclid: null,
+    funnelId: null,
+    leadType: null,
+  };
+
+  it("treats an exact phone match as golden even when source details are unknown", () => {
+    const result = resolveLeadFunnelAttribution(
+      {
+        customerName: "Mark Lobbessteal",
+        customerPhone: "623-256-2278",
+        customerEmail: "mlobbessteal@example.com",
+        serviceAddress: "7058 North Wellesley Avenue, Portland, OR 97203",
+      },
+      [{ ...baseLead, phone: "(623) 256-2278" }],
+    );
+
+    expect(result).toEqual({ matchLevel: "golden", matchedGclid: null, leadId: 344 });
+  });
+
+  it("treats an exact email match as silver even when there is no known funnel", () => {
+    const result = resolveLeadFunnelAttribution(
+      {
+        customerName: "Pat Customer",
+        customerPhone: null,
+        customerEmail: " PAT@EXAMPLE.COM ",
+        serviceAddress: null,
+      },
+      [{ ...baseLead, id: 45, firstName: "Pat", lastName: "Customer", email: "pat@example.com" }],
+    );
+
+    expect(result).toEqual({ matchLevel: "silver", matchedGclid: null, leadId: 45 });
+  });
+
+  it("uses the lead-funnel tier only when the linked lead has a known funnel but no stronger contact proof", () => {
+    const result = resolveLeadFunnelAttribution(
+      {
+        customerName: "Mark Lobbessteal",
+        customerPhone: "111-111-1111",
+        customerEmail: "other@example.com",
+        serviceAddress: null,
+      },
+      [{ ...baseLead, funnelId: 1, leadType: "Daikin Fit Funnel" }],
+    );
+
+    expect(result).toEqual({ matchLevel: "lead_funnel", matchedGclid: null, leadId: 344 });
+  });
+
+  it("does not attribute a linked lead with no phone, email, address, or known funnel signal", () => {
+    const result = resolveLeadFunnelAttribution(
+      {
+        customerName: "Mark Lobbessteal",
+        customerPhone: "111-111-1111",
+        customerEmail: "other@example.com",
+        serviceAddress: null,
+      },
+      [baseLead],
+    );
+
+    expect(result).toBeNull();
   });
 });
