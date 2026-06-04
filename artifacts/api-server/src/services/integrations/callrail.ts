@@ -413,7 +413,7 @@ export async function syncCallRailCalls(
               .limit(1)
           : [];
 
-        let leadId = existingLead[0]?.id ?? null;
+        let leadId = existing[0]?.createdLeadId ?? existingLead[0]?.id ?? null;
 
         if (!leadId && createLeadMode !== "none") {
           const attributionOnly = createLeadMode === "attribution_only";

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { db, attributionEventsTable, integrationSyncLogsTable, leadsTable } from "@workspace/db";
 
 vi.mock("@workspace/db", () => ({
-  db: {},
+  db: {
+    insert: vi.fn(),
+    select: vi.fn(),
+    update: vi.fn(),
+  },
   attributionEventsTable: {
     id: "attribution_events.id",
     tenantId: "attribution_events.tenant_id",
@@ -16,6 +21,11 @@ vi.mock("@workspace/db", () => ({
   integrationSyncLogsTable: {
     id: "integration_sync_logs.id",
   },
+}));
+
+vi.mock("drizzle-orm", () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((...args: unknown[]) => args),
 }));
 
 vi.mock("../lead-notify-scheduler", () => ({
@@ -82,5 +92,68 @@ describe("fetchCallRailCalls", () => {
     expect(calls[0].campaign).toBe("Daikin Fit");
     expect(calls[0].utmSource).toBe("facebook");
     expect(calls[0].fbclid).toBe("fb_abc");
+  });
+});
+
+describe("syncCallRailCalls", () => {
+  it("reuses an event's existing linked lead before creating an attribution-only lead", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        total_pages: 1,
+        calls: [{
+          id: "CAL_existing",
+          customer_name: "Anonymous Caller",
+          start_time: "2026-06-01T10:30:00.000-07:00",
+          source_name: "Website pool",
+          source: "Google Organic",
+          campaign: "Website pool",
+        }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const insertCalls: unknown[] = [];
+    const updateCalls: unknown[] = [];
+
+    vi.mocked(db.insert).mockImplementation((table: unknown) => ({
+      values: vi.fn().mockImplementation((values: unknown) => {
+        insertCalls.push({ table, values });
+        return {
+          returning: vi.fn().mockResolvedValue(table === integrationSyncLogsTable ? [{ id: 10 }] : []),
+        };
+      }),
+    }) as never);
+
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ id: 700, createdLeadId: 70 }]),
+        }),
+      }),
+    } as never);
+
+    vi.mocked(db.update).mockImplementation((table: unknown) => ({
+      set: vi.fn().mockImplementation((values: unknown) => {
+        updateCalls.push({ table, values });
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      }),
+    }) as never);
+
+    const { syncCallRailCalls } = await import("./callrail");
+    const result = await syncCallRailCalls(1, {
+      apiKey: "test-key",
+      accountId: "ACC123",
+    }, {
+      days: 30,
+      createLeadMode: "attribution_only",
+    });
+
+    expect(result).toEqual({ synced: 1, newCalls: 0, updatedCalls: 1 });
+    expect(insertCalls.filter((call) => (call as { table: unknown }).table === leadsTable)).toHaveLength(0);
+    expect(updateCalls.some((call) => {
+      const update = call as { table: unknown; values: Record<string, unknown> };
+      return update.table === attributionEventsTable && update.values.createdLeadId === 70;
+    })).toBe(true);
   });
 });
