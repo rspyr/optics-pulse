@@ -41,6 +41,11 @@ function initialFilterFromUrl(key: string): string {
   return new URLSearchParams(window.location.search).get(key) || "all";
 }
 
+function initialSearchFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("search") || "";
+}
+
 // Match-level filter is multi-select, persisted as repeated `matchLevel` params.
 function initialMatchLevelsFromUrl(): string[] {
   if (typeof window === "undefined") return [];
@@ -330,6 +335,7 @@ export default function RevenueAttributed() {
   // stay complete even though the list itself is paged.
   const [funnelFilter, setFunnelFilter] = useState<string>(() => initialFilterFromUrl("funnel"));
   const [sourceFilter, setSourceFilter] = useState<string>(() => initialFilterFromUrl("source"));
+  const [searchText, setSearchText] = useState<string>(initialSearchFromUrl);
   // Multi-select match-tier filter. Empty = no filter (show all tiers), mirroring
   // the "all" sentinel the funnel/source single-selects use.
   const [matchLevelFilter, setMatchLevelFilter] = useState<string[]>(initialMatchLevelsFromUrl);
@@ -355,7 +361,7 @@ export default function RevenueAttributed() {
       return;
     }
     setPage(0);
-  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, searchText, matchLevelFilter, sortKey, sortDir]);
 
   const loadJobs = useCallback(() => {
     let cancelled = false;
@@ -378,6 +384,7 @@ export default function RevenueAttributed() {
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (searchText.trim() !== "") params.set("search", searchText.trim());
     matchLevelFilter.forEach((m) => params.append("matchLevel", m));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`, { credentials: "include" })
       .then((r) => {
@@ -391,7 +398,7 @@ export default function RevenueAttributed() {
       })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir, needsClientSelection]);
+  }, [startDate, endDate, effectiveTenantId, page, funnelFilter, sourceFilter, searchText, matchLevelFilter, sortKey, sortDir, needsClientSelection]);
 
   useEffect(() => loadJobs(), [loadJobs]);
 
@@ -406,13 +413,14 @@ export default function RevenueAttributed() {
     if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (searchText.trim() !== "") params.set("search", searchText.trim());
     matchLevelFilter.forEach((m) => params.append("matchLevel", m));
     fetch(`${API_BASE}/api/drilldown/revenue-attributed/summary?${params.toString()}`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: RevenueSummary) => { if (!cancelled) setSummary(data); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, matchLevelFilter, needsClientSelection]);
+  }, [startDate, endDate, effectiveTenantId, funnelFilter, sourceFilter, searchText, matchLevelFilter, needsClientSelection]);
 
   // Filter facets (distinct funnels + sources in the range) for the dropdowns.
   // Scoped only by tenant/date — NOT by the active funnel/source filters — so the
@@ -463,6 +471,7 @@ export default function RevenueAttributed() {
     params.delete("range");
     params.delete("funnel");
     params.delete("source");
+    params.delete("search");
     params.delete("matchLevel");
     params.delete("sort");
     params.delete("dir");
@@ -470,6 +479,7 @@ export default function RevenueAttributed() {
     if (dateRange !== "last30") params.set("range", dateRange);
     if (funnelFilter !== "all") params.set("funnel", funnelFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (searchText.trim() !== "") params.set("search", searchText.trim());
     matchLevelFilter.forEach((m) => params.append("matchLevel", m));
     if (sortKey !== "revenue") params.set("sort", sortKey);
     if (sortDir !== "desc") params.set("dir", sortDir);
@@ -478,7 +488,7 @@ export default function RevenueAttributed() {
     const qs = params.toString();
     const next = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", next);
-  }, [dateRange, funnelFilter, sourceFilter, matchLevelFilter, sortKey, sortDir, page]);
+  }, [dateRange, funnelFilter, sourceFilter, searchText, matchLevelFilter, sortKey, sortDir, page]);
 
   // Make the browser Back/Forward buttons restore the previous view. The
   // URL-writer above only uses replaceState, so the page itself never re-reads
@@ -493,6 +503,7 @@ export default function RevenueAttributed() {
       setDateRange(initialRangeFromUrl());
       setFunnelFilter(initialFilterFromUrl("funnel"));
       setSourceFilter(initialFilterFromUrl("source"));
+      setSearchText(initialSearchFromUrl());
       setMatchLevelFilter(initialMatchLevelsFromUrl());
       setSortKey(initialSortKeyFromUrl());
       setSortDir(initialSortDirFromUrl());
@@ -545,6 +556,7 @@ export default function RevenueAttributed() {
       if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
       if (funnelFilter !== "all") params.set("funnel", funnelFilter);
       if (sourceFilter !== "all") params.set("source", sourceFilter);
+      if (searchText.trim() !== "") params.set("search", searchText.trim());
       matchLevelFilter.forEach((m) => params.append("matchLevel", m));
       const res = await fetch(
         `${API_BASE}/api/drilldown/revenue-attributed?${params.toString()}`,
@@ -677,6 +689,15 @@ export default function RevenueAttributed() {
               </Select>
             </div>
             <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Search</span>
+              <Input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Customer, phone, email..."
+                className="h-9 w-56"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">Match Level</span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -713,12 +734,12 @@ export default function RevenueAttributed() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-            {(funnelFilter !== "all" || sourceFilter !== "all" || matchLevelFilter.length > 0) && (
+            {(funnelFilter !== "all" || sourceFilter !== "all" || searchText.trim() !== "" || matchLevelFilter.length > 0) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-9 self-end text-muted-foreground hover:text-white"
-                onClick={() => { setFunnelFilter("all"); setSourceFilter("all"); setMatchLevelFilter([]); }}
+                onClick={() => { setFunnelFilter("all"); setSourceFilter("all"); setSearchText(""); setMatchLevelFilter([]); }}
               >
                 Clear filters
               </Button>
