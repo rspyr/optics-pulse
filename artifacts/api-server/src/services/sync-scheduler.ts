@@ -368,6 +368,108 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
   return { matched };
 }
 
+export async function matchJobsToCallRailAttribution(
+  tenantId: number,
+  options: { days?: number } = {},
+): Promise<{ matched: number; golden: number; silver: number }> {
+  const lookbackDays = Math.max(options.days ?? DEFAULT_CALLRAIL_SYNC_DAYS, 90);
+  const lookbackDate = new Date(Date.now() - lookbackDays * 86400000);
+
+  const result = await db.execute(sql`
+    WITH job_contacts AS (
+      SELECT
+        j.id AS job_id,
+        CASE
+          WHEN length(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g')) = 11
+            AND left(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g'), 1) = '1'
+            THEN substring(regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g') from 2)
+          ELSE regexp_replace(coalesce(j.customer_phone, ''), '[^0-9]', '', 'g')
+        END AS normalized_phone,
+        lower(trim(coalesce(j.customer_email, ''))) AS normalized_email
+      FROM jobs j
+      WHERE j.tenant_id = ${tenantId}
+        AND j.status = 'completed'
+        AND j.completed_at >= ${lookbackDate}
+        AND (j.match_level IS NULL OR j.match_level = 'unmatched')
+    ),
+    candidates AS (
+      SELECT DISTINCT ON (jc.job_id)
+        jc.job_id,
+        l.id AS lead_id,
+        e.id AS event_id,
+        e.gclid,
+        CASE
+          WHEN jc.normalized_phone <> '' AND l.phone = jc.normalized_phone THEN 'golden'
+          ELSE 'silver'
+        END AS match_level
+      FROM job_contacts jc
+      JOIN attribution_events e
+        ON e.tenant_id = ${tenantId}
+        AND e.event_type = 'call'
+        AND e.external_id IS NOT NULL
+        AND e.created_lead_id IS NOT NULL
+        AND e.created_at >= ${lookbackDate}
+      JOIN leads l
+        ON l.id = e.created_lead_id
+        AND l.tenant_id = e.tenant_id
+      WHERE (
+          jc.normalized_phone <> ''
+          AND l.phone IS NOT NULL
+          AND l.phone <> ''
+          AND l.phone = jc.normalized_phone
+        ) OR (
+          jc.normalized_email <> ''
+          AND l.email IS NOT NULL
+          AND l.email <> ''
+          AND lower(trim(l.email)) = jc.normalized_email
+        )
+      ORDER BY
+        jc.job_id,
+        CASE WHEN jc.normalized_phone <> '' AND l.phone = jc.normalized_phone THEN 1 ELSE 2 END,
+        e.created_at DESC
+    ),
+    updated_jobs AS (
+      UPDATE jobs j
+      SET
+        lead_id = coalesce(j.lead_id, c.lead_id),
+        match_level = c.match_level,
+        matched_gclid = c.gclid,
+        updated_at = now()
+      FROM candidates c
+      WHERE j.id = c.job_id
+      RETURNING c.event_id, c.match_level
+    ),
+    updated_events AS (
+      UPDATE attribution_events e
+      SET
+        match_level = CASE
+          WHEN uj.match_level = 'golden' THEN 'golden'::match_level
+          ELSE 'silver'::match_level
+        END,
+        match_confidence = CASE WHEN uj.match_level = 'golden' THEN 0.9 ELSE 0.8 END
+      FROM updated_jobs uj
+      WHERE e.id = uj.event_id
+      RETURNING e.id
+    )
+    SELECT
+      count(*)::int AS matched,
+      count(*) FILTER (WHERE match_level = 'golden')::int AS golden,
+      count(*) FILTER (WHERE match_level = 'silver')::int AS silver
+    FROM updated_jobs
+  `);
+
+  const row = result.rows[0] as { matched?: number | string; golden?: number | string; silver?: number | string } | undefined;
+  const matched = Number(row?.matched ?? 0);
+  const golden = Number(row?.golden ?? 0);
+  const silver = Number(row?.silver ?? 0);
+
+  if (matched > 0) {
+    console.log(`[CallRail] Matched ${matched} job(s) to CallRail attribution for tenant ${tenantId} (${golden} golden, ${silver} silver)`);
+  }
+
+  return { matched, golden, silver };
+}
+
 export async function syncCallRailAttribution(
   tenantId: number,
   options: {
@@ -414,15 +516,9 @@ export async function syncCallRailAttribution(
 
     if (result.synced > 0) {
       try {
-        await matchJobsToLeads(tenantId);
+        await matchJobsToCallRailAttribution(tenantId, { days: options.days });
       } catch (err) {
-        console.error(`[CallRail] Post-sync lead matching failed for tenant ${tenantId}:`, (err as Error).message);
-      }
-
-      try {
-        await runReconciliation(tenantId, "scheduled");
-      } catch (err) {
-        console.error(`[CallRail] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
+        console.error(`[CallRail] Post-sync attribution matching failed for tenant ${tenantId}:`, (err as Error).message);
       }
     }
 
