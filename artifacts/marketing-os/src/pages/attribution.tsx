@@ -128,6 +128,41 @@ export default function Attribution() {
   }, [effectiveTenantId]);
 
   const queryClient = useQueryClient();
+  const reconciledRouteTenantIdsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!effectiveTenantId || routeRules.size === 0) return;
+    if (reconciledRouteTenantIdsRef.current.has(effectiveTenantId)) return;
+    reconciledRouteTenantIdsRef.current.add(effectiveTenantId);
+
+    let cancelled = false;
+    fetch(`${API_BASE}/api/route-funnel-rules/reconcile?tenantId=${effectiveTenantId}`, {
+      method: "POST",
+      credentials: "include",
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(async (d) => {
+        if (cancelled || !d) return;
+        const changed =
+          Number(d.updatedEventCount ?? 0) > 0 ||
+          Number(d.updatedLeadCount ?? 0) > 0 ||
+          Number(d.manualMatchedEventCount ?? 0) > 0;
+        if (!changed) return;
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: getListAttributionEventsQueryKey() as readonly unknown[], exact: false }),
+          queryClient.invalidateQueries({ queryKey: getGetAttributionEventFacetsQueryKey() as readonly unknown[], exact: false }),
+          ...(selectedEventId
+            ? [
+                queryClient.invalidateQueries({ queryKey: getGetAttributionEventQueryKey(selectedEventId) as readonly unknown[], exact: false }),
+                queryClient.invalidateQueries({ queryKey: ["attribution-event", selectedEventId] }),
+              ]
+            : []),
+        ]);
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [effectiveTenantId, queryClient, routeRules.size, selectedEventId]);
 
   // Don't issue the cross-tenant "give me everything" fetch when the operator
   // hasn't picked a tenant — agency users get a "select a tenant" prompt
@@ -1025,6 +1060,11 @@ export default function Attribution() {
                       const matchingRule = evSubdomain ? subdomainRules.get(evSubdomain) : undefined;
                       const evRoutePath = extractRoutePath(ev.pageUrl);
                       const matchingRouteRule = evRoutePath ? routeRules.get(evRoutePath) : undefined;
+                      const routeRuleMatchesFunnel = !!(
+                        matchingRouteRule &&
+                        resolvedFunnel &&
+                        matchingRouteRule.funnelName.toLowerCase() === resolvedFunnel.toLowerCase()
+                      );
 
                       return (
                         <tr
@@ -1049,15 +1089,26 @@ export default function Attribution() {
                                   <span>via {matchingRule.subdomain} rule</span>
                                 </button>
                               )}
-                              {matchingRouteRule && (
+                              {matchingRouteRule && routeRuleMatchesFunnel && (
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); jumpToRouteRule(matchingRouteRule.routePath); }}
                                   className="self-start inline-flex items-center gap-1 text-[10px] font-sans text-purple-300/80 hover:text-purple-200 bg-purple-400/10 hover:bg-purple-400/15 border border-purple-400/20 rounded-full px-2 py-0.5 transition-colors"
-                                  title={`Matches route rule: ${matchingRouteRule.routePath} → ${matchingRouteRule.funnelName}`}
+                                  title={`Resolved by route rule: ${matchingRouteRule.routePath} → ${matchingRouteRule.funnelName}`}
                                 >
                                   <Route className="w-2.5 h-2.5" />
                                   <span>via {matchingRouteRule.routePath} rule</span>
+                                </button>
+                              )}
+                              {matchingRouteRule && !routeRuleMatchesFunnel && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); jumpToRouteRule(matchingRouteRule.routePath); }}
+                                  className="self-start inline-flex items-center gap-1 text-[10px] font-sans text-amber-300/90 hover:text-amber-200 bg-amber-400/10 hover:bg-amber-400/15 border border-amber-400/20 rounded-full px-2 py-0.5 transition-colors"
+                                  title={`Route rule expects ${matchingRouteRule.funnelName}. This row is currently ${resolvedFunnel || "unassigned"}.`}
+                                >
+                                  <AlertTriangle className="w-2.5 h-2.5" />
+                                  <span>route wants {matchingRouteRule.funnelName}</span>
                                 </button>
                               )}
                             </div>
@@ -2080,7 +2131,7 @@ export function InlineIdentityCorrection({ tenantId, event, matchedLead, onJumpT
               })()}
             </p>
           )}
-          {rawFunnel && funnelTypeId && (() => {
+          {funnelChanged && rawFunnel && funnelTypeId && (() => {
             const selected = funnelTypes.find(ft => String(ft.id) === funnelTypeId);
             return selected && selected.name !== rawFunnel ? (
               <p className="text-[10px] text-muted-foreground pl-0.5">Maps &quot;{rawFunnel}&quot; → {selected.name}</p>
@@ -2565,7 +2616,7 @@ export function EditableAutoDetectedFields({ tenantId, event }: { tenantId: numb
  * Inline "Resolved by …" line that renders next to the MANUAL badge on the
  * attribution event sheet. Parses the `manualSource` stamp written by every
  * operator-action flip site (`field_mapping_rule:<id>` /
- * `funnel_override:lead/<leadId>`) and turns it into a human-readable label
+ * `funnel_override:lead/<leadId>` / `route_funnel_rule:<path>`) and turns it into a human-readable label
  * + deep-link back to the action that produced the manual match, so the
  * operator can revisit the rule/override without digging through audit logs
  * (task #584).
@@ -2623,6 +2674,15 @@ function ManualSourceLine({ manualSource }: { manualSource: string | null }) {
           lead #{leadId}
         </a>
         .
+      </p>
+    );
+  }
+  const routeRuleMatch = /^route_funnel_rule:(.+)$/.exec(manualSource);
+  if (routeRuleMatch) {
+    const routePath = routeRuleMatch[1];
+    return (
+      <p className="text-[11px] text-muted-foreground mb-2" data-testid="manual-source-route-rule">
+        Resolved by route rule <span className="font-mono">{routePath}</span>.
       </p>
     );
   }
@@ -4667,8 +4727,8 @@ function RouteRulesPanel({
         <div className="mb-4">
           <h3 className="text-lg font-medium text-white mb-1">Route → Funnel Rules</h3>
           <p className="text-sm text-muted-foreground">
-            When form field, alias, and subdomain matching can't resolve a funnel, fall back to the page's URL path.
-            Route rules take precedence over subdomain rules. For example,{" "}
+            Exact URL paths assign the funnel for matching form fills and their connected leads.
+            Route rules take precedence over form fields, aliases, and subdomain rules. For example,{" "}
             <span className="font-mono text-white/70">/repair</span> routes to your Repair funnel.
           </p>
         </div>
@@ -4747,13 +4807,13 @@ function RouteRulesPanel({
             {addPreview.conflictingEventCount > 0 && !addForceOverride && (
               <div className="text-amber-300/90">
                 ⚠ {addPreview.conflictingEventCount.toLocaleString()} matching{" "}
-                {addPreview.conflictingEventCount === 1 ? "event is" : "events are"} already attributed to a different funnel and will be left alone.
+                {addPreview.conflictingEventCount === 1 ? "event is" : "events are"} currently on a different funnel and will be re-tagged by this route rule.
               </div>
             )}
             {addPreview.conflictingEventCount > 0 && addForceOverride && (
               <div className="text-amber-300/90">
-                Force-override on: those {addPreview.conflictingEventCount.toLocaleString()}{" "}
-                {addPreview.conflictingEventCount === 1 ? "event" : "events"} will be re-tagged too.
+                Undo enabled: those {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                {addPreview.conflictingEventCount === 1 ? "event" : "events"} will be re-tagged and can be restored briefly.
               </div>
             )}
             {(addPreview.conflictingEventCount > 0 || addForceOverride) && (
@@ -4765,7 +4825,7 @@ function RouteRulesPanel({
                   className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
                 />
                 <span className="text-white/70">
-                  Also re-tag the {addPreview.conflictingEventCount.toLocaleString()}{" "}
+                  Enable a brief undo window for the {addPreview.conflictingEventCount.toLocaleString()}{" "}
                   {addPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
                 </span>
               </label>
@@ -4783,7 +4843,7 @@ function RouteRulesPanel({
               onOpenEvent={onOpenEvent}
             />
             <PreviewSampleList
-              title="Sample events left alone (conflicting funnel)"
+              title="Sample events currently on another funnel"
               tone="conflict"
               events={addPreview.conflictingSample}
               totalCount={addPreview.conflictingEventCount}
@@ -4893,13 +4953,13 @@ function RouteRulesPanel({
                                 </div>
                                 {editPreview.conflictingEventCount > 0 && !editForceOverride && (
                                   <div className="text-amber-300/90">
-                                    ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event" : "events"} already on a different funnel — left alone.
+                                    ⚠ {editPreview.conflictingEventCount.toLocaleString()} {editPreview.conflictingEventCount === 1 ? "event is" : "events are"} currently on a different funnel and will be re-tagged by this route rule.
                                   </div>
                                 )}
                                 {editPreview.conflictingEventCount > 0 && editForceOverride && (
                                   <div className="text-amber-300/90">
-                                    Force-override on: {editPreview.conflictingEventCount.toLocaleString()}{" "}
-                                    {editPreview.conflictingEventCount === 1 ? "event" : "events"} on a different funnel will also be re-tagged.
+                                    Undo enabled: {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                    {editPreview.conflictingEventCount === 1 ? "event" : "events"} on a different funnel will be re-tagged and can be restored briefly.
                                   </div>
                                 )}
                                 {(editPreview.conflictingEventCount > 0 || editForceOverride) && (
@@ -4911,7 +4971,7 @@ function RouteRulesPanel({
                                       className="mt-0.5 border-white/30 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
                                     />
                                     <span className="text-white/70">
-                                      Also re-tag the {editPreview.conflictingEventCount.toLocaleString()}{" "}
+                                      Enable a brief undo window for the {editPreview.conflictingEventCount.toLocaleString()}{" "}
                                       {editPreview.conflictingEventCount === 1 ? "event" : "events"} currently on a different funnel
                                     </span>
                                   </label>
@@ -4924,7 +4984,7 @@ function RouteRulesPanel({
                                   onOpenEvent={onOpenEvent}
                                 />
                                 <PreviewSampleList
-                                  title="Sample events left alone (conflicting funnel)"
+                                  title="Sample events currently on another funnel"
                                   tone="conflict"
                                   events={editPreview.conflictingSample}
                                   totalCount={editPreview.conflictingEventCount}

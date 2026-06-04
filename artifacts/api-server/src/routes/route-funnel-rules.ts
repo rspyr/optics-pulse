@@ -49,14 +49,64 @@ const ROUTE_PATH_EXPR = sql`CASE
 END`;
 
 // Backfill: re-resolve historical attribution events whose page_url's
-// normalized pathname matches `routePath` and whose resolved_funnel is
-// currently null/empty OR equals the tenant's default funnel (fell through to
-// the fallback). Events that already carry a distinct resolved funnel from an
-// explicit field/alias/subdomain match are left alone unless forceOverride.
+// normalized pathname matches `routePath`. Unlike subdomain rules, route rules
+// are exact-path operator rules, so they are authoritative for every matching
+// route event/lead except leads that were explicitly pinned with a per-lead
+// override.
 //
 // Returns counts so the UI can show "Saved · Updated N past events".
-type PriorEventValue = { id: number; resolvedFunnel: string | null };
+type EventMatchLevel = "diamond" | "golden" | "silver" | "bronze" | "manual" | "unmatched";
+type PriorEventValue = {
+  id: number;
+  resolvedFunnel: string | null;
+  matchLevel: EventMatchLevel | null;
+  matchConfidence: number | null;
+  unmatchedReason: string | null;
+  manualSource: string | null;
+};
 type PriorLeadValue = { id: number; leadType: string | null; funnelId: number | null };
+
+function priorEventValue(row: {
+  id: number;
+  resolved_funnel: string | null;
+  match_level?: EventMatchLevel | null;
+  match_confidence?: number | null;
+  unmatched_reason?: string | null;
+  manual_source?: string | null;
+}): PriorEventValue {
+  return {
+    id: row.id,
+    resolvedFunnel: row.resolved_funnel ?? null,
+    matchLevel: row.match_level ?? null,
+    matchConfidence: row.match_confidence ?? null,
+    unmatchedReason: row.unmatched_reason ?? null,
+    manualSource: row.manual_source ?? null,
+  };
+}
+
+async function markClaimedEventsManuallyMatched(
+  tenantId: number,
+  eventIds: number[],
+  manualSource: string,
+): Promise<number[]> {
+  const ids = Array.from(new Set(eventIds));
+  if (ids.length === 0) return [];
+  const rows = await db
+    .update(attributionEventsTable)
+    .set({
+      matchLevel: "manual",
+      matchConfidence: 1.0,
+      unmatchedReason: null,
+      manualSource,
+    })
+    .where(and(
+      eq(attributionEventsTable.tenantId, tenantId),
+      inArray(attributionEventsTable.id, ids),
+      eq(attributionEventsTable.matchLevel, "unmatched"),
+    ))
+    .returning({ id: attributionEventsTable.id });
+  return rows.map((r) => r.id);
+}
 
 // Given a list of (possibly null/duplicate) candidate lead ids, return the
 // subset whose `funnel_overridden_at` is set, so a coarser route rule can
@@ -85,29 +135,19 @@ async function backfillEventsForRouteRule(
   routePath: string,
   funnelTypeId: number,
   canonicalFunnelName: string,
-  priorFunnelName: string | null = null,
+  _priorFunnelName: string | null = null,
   options: { dryRun?: boolean; forceOverride?: boolean } = {},
 ): Promise<{
   updatedEventCount: number;
+  manualMatchedEventCount: number;
   updatedLeadIds: number[];
   eligibleEventIds: number[];
   priorEventValues: PriorEventValue[];
   priorLeadValues: PriorLeadValue[];
 }> {
   const dryRun = options.dryRun === true;
-  const forceOverride = options.forceOverride === true;
   const normPath = normalizeRoutePath(routePath);
-  if (!normPath) return { updatedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [], priorEventValues: [], priorLeadValues: [] };
-  const priorLc = priorFunnelName?.toLowerCase() ?? null;
-
-  const [defaultAssoc] = await db
-    .select({ funnelName: funnelTypesTable.name })
-    .from(tenantFunnelTypesTable)
-    .innerJoin(funnelTypesTable, eq(tenantFunnelTypesTable.funnelTypeId, funnelTypesTable.id))
-    .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
-    .orderBy(tenantFunnelTypesTable.funnelTypeId)
-    .limit(1);
-  const defaultFunnelName = defaultAssoc?.funnelName ?? null;
+  if (!normPath) return { updatedEventCount: 0, manualMatchedEventCount: 0, updatedLeadIds: [], eligibleEventIds: [], priorEventValues: [], priorLeadValues: [] };
 
   const candidates = await db.execute(sql`
     WITH parsed AS (
@@ -115,12 +155,16 @@ async function backfillEventsForRouteRule(
         ae.id,
         ae.created_lead_id,
         ae.resolved_funnel,
+        ae.match_level,
+        ae.match_confidence,
+        ae.unmatched_reason,
+        ae.manual_source,
         ${ROUTE_PATH_EXPR} AS route_path
       FROM attribution_events ae
       WHERE ae.tenant_id = ${tenantId}
         AND ae.page_url IS NOT NULL
     )
-    SELECT id, created_lead_id, resolved_funnel
+    SELECT id, created_lead_id, resolved_funnel, match_level, match_confidence, unmatched_reason, manual_source
     FROM parsed
     WHERE route_path = ${normPath}
   `);
@@ -129,6 +173,10 @@ async function backfillEventsForRouteRule(
     id: number;
     created_lead_id: number | null;
     resolved_funnel: string | null;
+    match_level: EventMatchLevel | null;
+    match_confidence: number | null;
+    unmatched_reason: string | null;
+    manual_source: string | null;
   }>;
 
   // Never let a (coarser) route rule clobber a lead an operator has explicitly
@@ -141,21 +189,23 @@ async function backfillEventsForRouteRule(
   );
 
   const eligibleIds: number[] = [];
-  const priorEventValues: PriorEventValue[] = [];
+  const claimedEventIds: number[] = [];
+  const priorEventValuesById = new Map<number, PriorEventValue>();
   const leadIdSet = new Set<number>();
   const newLc = canonicalFunnelName.toLowerCase();
   for (const r of rows) {
     if (r.created_lead_id && overriddenLeadIds.has(r.created_lead_id)) continue;
     const cur = (r.resolved_funnel ?? "").trim();
     const curLc = cur.toLowerCase();
-    const isFellThrough =
-      !cur ||
-      (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
-    const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
-    if (curLc === newLc) continue;
-    if (!isFellThrough && !isPriorRuleMatch && !forceOverride) continue;
-    eligibleIds.push(r.id);
-    priorEventValues.push({ id: r.id, resolvedFunnel: r.resolved_funnel });
+    const isCanonical = curLc === newLc;
+    claimedEventIds.push(r.id);
+    if (r.match_level === "unmatched") {
+      priorEventValuesById.set(r.id, priorEventValue(r));
+    }
+    if (!isCanonical) {
+      eligibleIds.push(r.id);
+      priorEventValuesById.set(r.id, priorEventValue(r));
+    }
     if (r.created_lead_id) leadIdSet.add(r.created_lead_id);
   }
 
@@ -168,6 +218,17 @@ async function backfillEventsForRouteRule(
         inArray(attributionEventsTable.id, eligibleIds),
       ));
   }
+
+  const manualMatchedEventIds = dryRun
+    ? claimedEventIds.filter((id) => rows.find((r) => r.id === id)?.match_level === "unmatched")
+    : await markClaimedEventsManuallyMatched(
+        tenantId,
+        claimedEventIds,
+        `route_funnel_rule:${normPath}`,
+      ).catch((err) => {
+        console.error("[route-funnel-rules] markClaimedEventsManuallyMatched failed:", err);
+        return [];
+      });
 
   const updatedLeadIds: number[] = [];
   const priorLeadValues: PriorLeadValue[] = [];
@@ -184,13 +245,8 @@ async function backfillEventsForRouteRule(
     for (const l of leads) {
       const cur = (l.leadType ?? "").trim();
       const curLc = cur.toLowerCase();
-      const isFellThrough =
-        !cur ||
-        (defaultFunnelName !== null && curLc === defaultFunnelName.toLowerCase());
-      const isPriorRuleMatch = priorLc !== null && priorLc !== newLc && curLc === priorLc;
       const isCanonical = curLc === newLc;
       if (isCanonical && l.funnelId === funnelTypeId) continue;
-      if (!isFellThrough && !isPriorRuleMatch && !isCanonical && !forceOverride) continue;
       toUpdate.push(l.id);
       priorLeadValues.push({ id: l.id, leadType: l.leadType ?? null, funnelId: l.funnelId ?? null });
     }
@@ -209,11 +265,52 @@ async function backfillEventsForRouteRule(
   }
 
   return {
-    updatedEventCount: eligibleIds.length,
+    updatedEventCount: new Set([...eligibleIds, ...manualMatchedEventIds]).size,
+    manualMatchedEventCount: manualMatchedEventIds.length,
     updatedLeadIds,
-    eligibleEventIds: eligibleIds,
-    priorEventValues,
+    eligibleEventIds: Array.from(new Set([...eligibleIds, ...manualMatchedEventIds])),
+    priorEventValues: [...priorEventValuesById.values()],
     priorLeadValues,
+  };
+}
+
+async function reconcileAllRouteRules(tenantId: number): Promise<{
+  updatedEventCount: number;
+  manualMatchedEventCount: number;
+  updatedLeadCount: number;
+  ruleCount: number;
+}> {
+  const rules = await db
+    .select({
+      routePath: routeFunnelRulesTable.routePath,
+      funnelTypeId: routeFunnelRulesTable.funnelTypeId,
+      funnelName: funnelTypesTable.name,
+    })
+    .from(routeFunnelRulesTable)
+    .innerJoin(funnelTypesTable, eq(routeFunnelRulesTable.funnelTypeId, funnelTypesTable.id))
+    .where(eq(routeFunnelRulesTable.tenantId, tenantId));
+
+  let updatedEventCount = 0;
+  let manualMatchedEventCount = 0;
+  const updatedLeadIds = new Set<number>();
+
+  for (const rule of rules) {
+    const result = await backfillEventsForRouteRule(
+      tenantId,
+      rule.routePath,
+      rule.funnelTypeId,
+      rule.funnelName,
+    );
+    updatedEventCount += result.updatedEventCount;
+    manualMatchedEventCount += result.manualMatchedEventCount;
+    for (const id of result.updatedLeadIds) updatedLeadIds.add(id);
+  }
+
+  return {
+    updatedEventCount,
+    manualMatchedEventCount,
+    updatedLeadCount: updatedLeadIds.size,
+    ruleCount: rules.length,
   };
 }
 
@@ -631,7 +728,7 @@ router.post("/route-funnel-rules/preview", async (req, res) => {
     conflictingIds.push(r.id);
   }
 
-  const { updatedEventCount, updatedLeadIds, eligibleEventIds } = await backfillEventsForRouteRule(
+  const { updatedEventCount, manualMatchedEventCount, updatedLeadIds, eligibleEventIds } = await backfillEventsForRouteRule(
     tenantId,
     normPath,
     numericFunnelTypeId,
@@ -697,6 +794,7 @@ router.post("/route-funnel-rules/preview", async (req, res) => {
     funnelTypeId: numericFunnelTypeId,
     funnelName: canonicalName,
     updatedEventCount,
+    manualMatchedEventCount,
     updatedLeadCount: updatedLeadIds.length,
     conflictingEventCount: conflictingIds.length,
     matchedEventCount: allRows.length,
@@ -704,6 +802,17 @@ router.post("/route-funnel-rules/preview", async (req, res) => {
     conflictingSample,
     forceOverride: forceOverride === true,
   });
+});
+
+router.post("/route-funnel-rules/reconcile", async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) {
+    res.status(400).json({ error: "No tenant context" });
+    return;
+  }
+
+  const result = await reconcileAllRouteRules(tenantId);
+  res.json({ success: true, ...result });
 });
 
 router.post("/route-funnel-rules", async (req, res) => {
@@ -798,7 +907,7 @@ router.post("/route-funnel-rules", async (req, res) => {
       eq(routeSuggestionDismissalsTable.routePath, normPath),
     ));
 
-  const { updatedEventCount, updatedLeadIds, priorEventValues, priorLeadValues } = await backfillEventsForRouteRule(
+  const { updatedEventCount, manualMatchedEventCount, updatedLeadIds, priorEventValues, priorLeadValues } = await backfillEventsForRouteRule(
     tenantId,
     normPath,
     numericFunnelTypeId,
@@ -830,6 +939,7 @@ router.post("/route-funnel-rules", async (req, res) => {
     },
     created,
     updatedEventCount,
+    manualMatchedEventCount,
     updatedLeadCount: updatedLeadIds.length,
     forceOverride: forceOverride === true,
     undoBatchId,
@@ -853,16 +963,28 @@ router.post("/route-funnel-rules/undo/:batchId", async (req, res) => {
 
   const eventsByPrior = new Map<string, number[]>();
   for (const e of batch.events) {
-    const key = e.resolvedFunnel === null ? "\0null" : `v:${e.resolvedFunnel}`;
+    const key = JSON.stringify([
+      e.resolvedFunnel,
+      e.matchLevel,
+      e.matchConfidence,
+      e.unmatchedReason,
+      e.manualSource,
+    ]);
     const arr = eventsByPrior.get(key) ?? [];
     arr.push(e.id);
     eventsByPrior.set(key, arr);
   }
-  for (const [key, ids] of eventsByPrior.entries()) {
-    const value = key === "\0null" ? null : key.slice(2);
+  for (const [, ids] of eventsByPrior.entries()) {
+    const sample = batch.events.find((e) => ids.includes(e.id))!;
     await db
       .update(attributionEventsTable)
-      .set({ resolvedFunnel: value })
+      .set({
+        resolvedFunnel: sample.resolvedFunnel,
+        matchLevel: sample.matchLevel,
+        matchConfidence: sample.matchConfidence,
+        unmatchedReason: sample.unmatchedReason,
+        manualSource: sample.manualSource,
+      })
       .where(and(
         eq(attributionEventsTable.tenantId, tenantId),
         inArray(attributionEventsTable.id, ids),

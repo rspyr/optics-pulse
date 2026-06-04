@@ -2,6 +2,7 @@ import { db, leadsTable, attributionEventsTable, fieldMappingRulesTable } from "
 import { eq, and, desc, gte, lt, inArray } from "drizzle-orm";
 import { detectFields, extractPagePath, getFormIdentifier } from "./field-detection";
 import { normalizeFunnel } from "./funnel-normalizer";
+import { resolveRouteFunnel } from "./route-funnel-resolver";
 import { emitAttributionEventUpdated } from "../socket";
 
 /**
@@ -142,6 +143,7 @@ export async function redetectAndPersistEvent(
 
   let nextDetectedMappings: Record<string, unknown> | null = null;
   let nextResolvedFunnel: string | null = event.resolvedFunnel;
+  let detectedFunnelRawValue: string | null = null;
 
   if (event.formFields && typeof event.formFields === "object") {
     const detection = await detectFields(
@@ -158,18 +160,20 @@ export async function redetectAndPersistEvent(
         ]))
       : null;
 
-    if (detection.funnelRawValue) {
-      const match = await normalizeFunnel(tenantId, detection.funnelRawValue);
-      // Whether or not an alias matched, the resolved_funnel should reflect
-      // the canonical name when one was found, or fall back to the raw value
-      // so the dropdown / list still surfaces what came in. Only blank out
-      // when nothing was detected at all.
-      nextResolvedFunnel = match ? match.funnelName : detection.funnelRawValue;
-    } else {
-      // No funnel field detected on this event. Leave the existing
-      // resolved_funnel alone — it may have been set by a subdomain rule
-      // or another upstream signal we don't want to clobber here.
-    }
+    detectedFunnelRawValue = detection.funnelRawValue;
+  }
+
+  const routeMatch = event.pageUrl
+    ? await resolveRouteFunnel(tenantId, event.pageUrl)
+    : null;
+  if (routeMatch) {
+    nextResolvedFunnel = routeMatch.funnelName;
+  } else if (detectedFunnelRawValue) {
+    const match = await normalizeFunnel(tenantId, detectedFunnelRawValue);
+    // Whether or not an alias matched, the resolved_funnel should reflect
+    // the canonical name when one was found, or fall back to the raw value
+    // so the dropdown / list still surfaces what came in.
+    nextResolvedFunnel = match ? match.funnelName : detectedFunnelRawValue;
   }
 
   const detectedMappingsChanged =
@@ -243,17 +247,30 @@ export async function reDeriveLeadFunnel(
   let nextLeadType: string | null = lead.leadType;
   let nextServiceType: string | null = lead.serviceType;
 
-  if (latestEvent && latestEvent.formFields && typeof latestEvent.formFields === "object") {
-    const detection = await detectFields(
-      tenantId,
-      latestEvent.formFields as Record<string, unknown>,
-      latestEvent.pageUrl ?? null,
-      latestEvent.formId ?? null,
-      latestEvent.formName ?? null,
-    );
-    if (detection.funnelRawValue) {
-      nextServiceType = detection.funnelRawValue;
-      const match = await normalizeFunnel(tenantId, detection.funnelRawValue);
+  if (latestEvent) {
+    let latestDetectedFunnelRawValue: string | null = null;
+    if (latestEvent.formFields && typeof latestEvent.formFields === "object") {
+      const detection = await detectFields(
+        tenantId,
+        latestEvent.formFields as Record<string, unknown>,
+        latestEvent.pageUrl ?? null,
+        latestEvent.formId ?? null,
+        latestEvent.formName ?? null,
+      );
+      latestDetectedFunnelRawValue = detection.funnelRawValue;
+      if (latestDetectedFunnelRawValue) {
+        nextServiceType = latestDetectedFunnelRawValue;
+      }
+    }
+
+    const routeMatch = latestEvent.pageUrl
+      ? await resolveRouteFunnel(tenantId, latestEvent.pageUrl)
+      : null;
+    if (routeMatch) {
+      nextFunnelId = routeMatch.funnelTypeId;
+      nextLeadType = routeMatch.funnelName;
+    } else if (latestDetectedFunnelRawValue) {
+      const match = await normalizeFunnel(tenantId, latestDetectedFunnelRawValue);
       if (match) {
         nextFunnelId = match.funnelTypeId;
         nextLeadType = match.funnelName;

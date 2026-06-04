@@ -203,6 +203,25 @@ async function leadRow(id: number): Promise<{
   return row ?? null;
 }
 
+async function eventStatus(id: number): Promise<{
+  matchLevel: string | null;
+  matchConfidence: number | null;
+  unmatchedReason: string | null;
+  manualSource: string | null;
+} | null> {
+  const [row] = await db
+    .select({
+      matchLevel: attributionEventsTable.matchLevel,
+      matchConfidence: attributionEventsTable.matchConfidence,
+      unmatchedReason: attributionEventsTable.unmatchedReason,
+      manualSource: attributionEventsTable.manualSource,
+    })
+    .from(attributionEventsTable)
+    .where(eq(attributionEventsTable.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
 async function seedTenant(kind: string): Promise<TenantFx> {
   const stamp = `rpa-${kind}`;
   const [tenant] = await db.insert(tenantsTable).values({
@@ -275,6 +294,160 @@ afterAll(async () => {
 });
 
 describe("re-point an existing funnel rule (real Postgres)", () => {
+  it("route create syncs already-route-resolved events onto leads and flips unmatched status", async () => {
+    const routePath = `/already-route-resolved`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+
+    const [lead] = await db.insert(leadsTable).values({
+      tenantId: routeFx.tenantId,
+      firstName: "Already",
+      lastName: "Resolved",
+      source: "test",
+      leadType: routeFx.defaultFunnelName,
+      funnelId: routeFx.defaultFunnelId,
+    }).returning();
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId: routeFx.tenantId,
+      eventType: "form_fill",
+      pageUrl,
+      resolvedFunnel: routeFx.funnelBName,
+      createdLeadId: lead.id,
+      matchLevel: "unmatched",
+      matchConfidence: 0,
+      unmatchedReason: "No match before route rule backfill",
+    }).returning();
+
+    const res = await request(routeApp, "/route-funnel-rules", {
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(true);
+    expect(res.json.updatedEventCount).toBe(1);
+    expect(res.json.updatedLeadCount).toBe(1);
+    expect(res.json.manualMatchedEventCount).toBe(1);
+
+    expect(await eventFunnel(event.id)).toBe(routeFx.funnelBName);
+    const syncedLead = await leadRow(lead.id);
+    expect(syncedLead?.leadType).toBe(routeFx.funnelBName);
+    expect(syncedLead?.funnelId).toBe(routeFx.funnelBId);
+
+    const status = await eventStatus(event.id);
+    expect(status?.matchLevel).toBe("manual");
+    expect(status?.matchConfidence).toBe(1);
+    expect(status?.unmatchedReason).toBeNull();
+    expect(status?.manualSource).toBe(`route_funnel_rule:${routePath}`);
+  });
+
+  it("route create fixes stale different-funnel events and leads without force override", async () => {
+    const routePath = `/stale-route-funnel`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+
+    const stale = await seedTagged(routeFx.tenantId, pageUrl, routeFx.funnelAName, routeFx.funnelAId, false);
+
+    const res = await request(routeApp, "/route-funnel-rules", {
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(true);
+    expect(res.json.forceOverride).toBe(false);
+    expect(res.json.updatedEventCount).toBe(1);
+    expect(res.json.updatedLeadCount).toBe(1);
+
+    expect(await eventFunnel(stale.eventId)).toBe(routeFx.funnelBName);
+    const lead = await leadRow(stale.leadId);
+    expect(lead?.leadType).toBe(routeFx.funnelBName);
+    expect(lead?.funnelId).toBe(routeFx.funnelBId);
+  });
+
+  it("route reconcile fixes stale assignments for existing saved rules", async () => {
+    const routePath = `/reconcile-route-funnel`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+
+    const stale = await seedTagged(routeFx.tenantId, pageUrl, routeFx.funnelAName, routeFx.funnelAId, false);
+    await db.insert(routeFunnelRulesTable).values({
+      tenantId: routeFx.tenantId,
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+    });
+
+    const res = await request(routeApp, "/route-funnel-rules/reconcile", {});
+    expect(res.status).toBe(200);
+    expect(res.json.success).toBe(true);
+    expect(res.json.updatedEventCount).toBeGreaterThanOrEqual(1);
+    expect(res.json.updatedLeadCount).toBeGreaterThanOrEqual(1);
+
+    expect(await eventFunnel(stale.eventId)).toBe(routeFx.funnelBName);
+    const lead = await leadRow(stale.leadId);
+    expect(lead?.leadType).toBe(routeFx.funnelBName);
+    expect(lead?.funnelId).toBe(routeFx.funnelBId);
+  });
+
+  it("route force-override undo restores prior event match fields", async () => {
+    const routePath = `/force-undo-status-route`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+    const priorReason = "No match before route force override";
+    const priorManualSource = "legacy-prior-source";
+
+    const [lead] = await db.insert(leadsTable).values({
+      tenantId: routeFx.tenantId,
+      firstName: "Force",
+      lastName: "Undo",
+      source: "test",
+      leadType: routeFx.funnelAName,
+      funnelId: routeFx.funnelAId,
+    }).returning();
+    const [event] = await db.insert(attributionEventsTable).values({
+      tenantId: routeFx.tenantId,
+      eventType: "form_fill",
+      pageUrl,
+      resolvedFunnel: routeFx.funnelAName,
+      createdLeadId: lead.id,
+      matchLevel: "unmatched",
+      matchConfidence: 0.37,
+      unmatchedReason: priorReason,
+      manualSource: priorManualSource,
+    }).returning();
+
+    const saveRes = await request(routeApp, "/route-funnel-rules", {
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+      forceOverride: true,
+    });
+    expect(saveRes.status).toBe(200);
+    expect(saveRes.json.updatedEventCount).toBe(1);
+    expect(saveRes.json.manualMatchedEventCount).toBe(1);
+    const batchId = saveRes.json.undoBatchId as string;
+    expect(typeof batchId).toBe("string");
+    expect(batchId.length).toBeGreaterThan(0);
+
+    const movedStatus = await eventStatus(event.id);
+    expect(await eventFunnel(event.id)).toBe(routeFx.funnelBName);
+    expect(movedStatus?.matchLevel).toBe("manual");
+    expect(movedStatus?.manualSource).toBe(`route_funnel_rule:${routePath}`);
+
+    const undoRes = await request(
+      routeApp,
+      `/route-funnel-rules/undo/${encodeURIComponent(batchId)}`,
+      null,
+    );
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.json.revertedEventCount).toBe(1);
+    expect(undoRes.json.revertedLeadCount).toBe(1);
+
+    expect(await eventFunnel(event.id)).toBe(routeFx.funnelAName);
+    const restoredStatus = await eventStatus(event.id);
+    expect(restoredStatus?.matchLevel).toBe("unmatched");
+    expect(Number(restoredStatus?.matchConfidence)).toBeCloseTo(0.37, 5);
+    expect(restoredStatus?.unmatchedReason).toBe(priorReason);
+    expect(restoredStatus?.manualSource).toBe(priorManualSource);
+
+    const restoredLead = await leadRow(lead.id);
+    expect(restoredLead?.leadType).toBe(routeFx.funnelAName);
+    expect(restoredLead?.funnelId).toBe(routeFx.funnelAId);
+  });
+
   it("subdomain re-point moves the control off the prior funnel but leaves the override", async () => {
     const subdomain = `repoint-sub`;
     const pageUrl = `https://${subdomain}.example-int-test.com/r`;
