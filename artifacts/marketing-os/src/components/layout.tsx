@@ -24,6 +24,7 @@ import {
   BarChart3,
   Activity,
   DollarSign,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-context";
@@ -35,6 +36,7 @@ const PulseIcon = ({ className }: { className?: string }) => (
 
 const AGENCY_NAV = [
   { href: "/", label: "Command Center", icon: LayoutDashboard },
+  { href: "/challenge", label: "The Challenge", icon: Target },
   { href: "/internal", label: "God View", icon: Shield },
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },
@@ -56,6 +58,7 @@ const AGENCY_NAV = [
 
 const CLIENT_NAV_ADMIN_BASE = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/challenge", label: "The Challenge", icon: Target },
   { href: "/pulse", label: "Pulse", icon: PulseIcon },
   { href: "/revenue-attributed", label: "Revenue Attributed", icon: DollarSign },
   { href: "/sales-manager", label: "Sales Manager", icon: BarChart3 },

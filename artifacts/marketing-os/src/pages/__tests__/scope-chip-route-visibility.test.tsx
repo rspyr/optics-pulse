@@ -99,6 +99,7 @@ const HIDDEN_ROUTES = [
 
 const VISIBLE_ROUTES = [
   "/",
+  "/challenge",
   "/internal",
   "/pulse",
   "/sales-manager",

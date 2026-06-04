@@ -10,6 +10,7 @@ import { LeadNotificationProvider } from "@/contexts/lead-notification-context";
 import { AppLayout } from "@/components/layout";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
+import Challenge from "@/pages/challenge";
 import Leads from "@/pages/pulse";
 import Clients from "@/pages/clients";
 import Internal from "@/pages/internal";
@@ -112,6 +113,7 @@ function AuthenticatedRoutes() {
     <AppLayout>
       <Switch>
         <Route path="/">{() => isAgency ? <Dashboard key="dashboard" /> : <Clients key="clients" />}</Route>
+        <Route path="/challenge" component={Challenge} />
         <Route path="/pulse" component={Leads} />
         <Route path="/leads">{() => <ImmediateRedirect to="/pulse" />}</Route>
         <Route path="/attribution" component={Attribution} />
