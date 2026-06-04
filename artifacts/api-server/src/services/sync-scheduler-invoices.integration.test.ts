@@ -140,7 +140,11 @@ async function getJobByStJobId(tenantId: number, stJobId: string) {
 
 async function getJobById(jobId: number) {
   const [row] = await db.select({
+    stJobId: jobsTable.stJobId,
+    stJobIdHash: jobsTable.stJobIdHash,
     stJobNumber: jobsTable.stJobNumber,
+    stCustomerId: jobsTable.stCustomerId,
+    stLocationId: jobsTable.stLocationId,
     customerName: jobsTable.customerName,
     serviceAddress: jobsTable.serviceAddress,
     hasInvoice: jobsTable.hasInvoice,
@@ -199,6 +203,40 @@ describe("syncServiceTitanInvoices — invoice-only row creation (task #826)", (
 });
 
 describe("syncServiceTitanInvoices — placeholder / missing name override (task #826)", () => {
+  it("matches an existing invoice-only job by public job number and backfills internal ids", async () => {
+    const tenantId = await createTestTenant("jobnumber");
+    const jobId = await seedJob({
+      tenantId,
+      stJobId: null,
+      stJobIdHash: null,
+      stJobNumber: "75072",
+      customerName: "Bill Larson",
+      serviceAddress: "2698 Nautilus Avenue Northwest, Salem, OR 97304",
+    });
+    stMocks.invoices = [
+      makeInvoice(810005, {
+        jobNumber: "75072",
+        customerName: "Bill Larson",
+        customerId: 5151,
+        locationId: 6161,
+      }),
+    ];
+
+    const result = await syncServiceTitanInvoices(tenantId);
+    expect(result.synced).toBe(1);
+
+    const row = await getJobById(jobId);
+    expect(row.stJobId).toBe("810005");
+    expect(row.stJobIdHash).toBe(hashStJobId("810005"));
+    expect(row.stCustomerId).toBe("5151");
+    expect(row.stLocationId).toBe("6161");
+    expect(row.stJobNumber).toBe("75072");
+    expect(row.hasInvoice).toBe(true);
+
+    const tenantRows = await db.select({ id: jobsTable.id }).from(jobsTable).where(eq(jobsTable.tenantId, tenantId));
+    expect(tenantRows).toHaveLength(1);
+  });
+
   it("overrides a `Customer <id>` placeholder name with the invoice's real customer name", async () => {
     const tenantId = await createTestTenant("placeholder");
     const jobId = await seedJob({

@@ -2585,10 +2585,21 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       for (const [stJobId, jobInvoices] of jobInvoiceMap.entries()) {
         const jobIdHash = hashStJobId(stJobId);
 
-        const [existingJob] = await db.select({
+        const sorted = jobInvoices.sort((a, b) => {
+          const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+          const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+          return dateB - dateA;
+        });
+        const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
+
+        const [directExistingJob] = await db.select({
             id: jobsTable.id,
             stInvoiceId: jobsTable.stInvoiceId,
+            stJobId: jobsTable.stJobId,
+            stJobIdHash: jobsTable.stJobIdHash,
             stJobNumber: jobsTable.stJobNumber,
+            stCustomerId: jobsTable.stCustomerId,
+            stLocationId: jobsTable.stLocationId,
             customerName: jobsTable.customerName,
             serviceAddress: jobsTable.serviceAddress,
           })
@@ -2599,11 +2610,29 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
           ))
           .limit(1);
 
-        const sorted = jobInvoices.sort((a, b) => {
-          const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
-          const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
-          return dateB - dateA;
-        });
+        let existingJob = directExistingJob ?? null;
+        if (!existingJob && latestInvoice.stJobNumber) {
+          const byJobNumber = await db.select({
+              id: jobsTable.id,
+              stInvoiceId: jobsTable.stInvoiceId,
+              stJobId: jobsTable.stJobId,
+              stJobIdHash: jobsTable.stJobIdHash,
+              stJobNumber: jobsTable.stJobNumber,
+              stCustomerId: jobsTable.stCustomerId,
+              stLocationId: jobsTable.stLocationId,
+              customerName: jobsTable.customerName,
+              serviceAddress: jobsTable.serviceAddress,
+            })
+            .from(jobsTable)
+            .where(and(
+              eq(jobsTable.tenantId, tenantId),
+              eq(jobsTable.stJobNumber, latestInvoice.stJobNumber),
+            ))
+            .limit(2);
+          if (byJobNumber.length === 1) {
+            existingJob = byJobNumber[0];
+          }
+        }
 
         let totalInvoiceAmount = 0;
         let totalRebate = 0;
@@ -2621,8 +2650,6 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             latestPaidOn = parsed.invoicePaidOn;
           }
         }
-
-        const latestInvoice = parseInvoiceData(sorted[0], rebatePatterns);
 
         if (!existingJob) {
           // Invoice-only job: the completed-jobs sync never created a row for it
@@ -2676,9 +2703,20 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             : existingJob.customerName;
         const resolvedServiceAddress =
           existingJob.serviceAddress || latestInvoice.serviceAddress || null;
+        const invoiceCustomerId = sorted[0].customer?.id ? String(sorted[0].customer.id) : null;
+        const invoiceLocationId = sorted[0].location?.id ? String(sorted[0].location.id) : null;
+        const refreshedInternalIds =
+          !existingJob.stJobId ||
+          !existingJob.stJobIdHash ||
+          (!existingJob.stCustomerId && !!invoiceCustomerId) ||
+          (!existingJob.stLocationId && !!invoiceLocationId);
 
         await db.update(jobsTable)
           .set({
+            stJobId: existingJob.stJobId || stJobId,
+            stJobIdHash: existingJob.stJobIdHash || jobIdHash,
+            stCustomerId: existingJob.stCustomerId || invoiceCustomerId,
+            stLocationId: existingJob.stLocationId || invoiceLocationId,
             hasInvoice: true,
             invoiceTotal: totalInvoiceAmount,
             invoiceRebateAmount: totalRebate,
@@ -2690,6 +2728,7 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
             serviceAddress: resolvedServiceAddress,
             invoiceDate: latestInvoice.invoiceDate,
             invoicePaidOn: latestPaidOn,
+            ...(refreshedInternalIds ? { stDataExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } : {}),
             updatedAt: new Date(),
           })
           .where(eq(jobsTable.id, existingJob.id));
