@@ -6,6 +6,7 @@ import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetc
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
+import { DEFAULT_CALLRAIL_SYNC_DAYS, syncCallRailCalls } from "./integrations/callrail";
 import { runReconciliation } from "./reconciliation";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
@@ -365,6 +366,78 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
 
   console.log(`[LeadMatch] Linked ${matched}/${unmatchedJobs.length} jobs to leads for tenant ${tenantId}`);
   return { matched };
+}
+
+export async function syncCallRailAttribution(
+  tenantId: number,
+  options: {
+    days?: number;
+    syncType?: "calls" | "backfill";
+    createLeadMode?: "active" | "attribution_only" | "none";
+  } = {},
+): Promise<{ synced: number; newCalls: number; updatedCalls: number; error?: string }> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  if (!tenant) return { synced: 0, newCalls: 0, updatedCalls: 0, error: "Tenant not found" };
+
+  const syncType = options.syncType ?? "calls";
+  const config = getTenantConfig(tenant);
+  if (!config?.callRailApiKey || !config.callRailAccountId) {
+    const missing = [
+      !config?.callRailApiKey && "API Key",
+      !config?.callRailAccountId && "Account ID",
+    ].filter(Boolean).join(", ");
+    const errorMessage = `CallRail not configured (missing: ${missing})`;
+    const missingLog = await logSync(tenantId, "callrail", syncType, new Date());
+    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: errorMessage };
+  }
+
+  const lockResult = await db.execute(sql`SELECT pg_try_advisory_lock(${0x43414c52}, ${tenantId}) AS got`);
+  const gotLock = (lockResult.rows[0] as { got: boolean } | undefined)?.got === true;
+  if (!gotLock) {
+    const errorMessage = "Another CallRail sync is already running for this tenant";
+    const lockLog = await logSync(tenantId, "callrail", syncType, new Date());
+    await completeSyncLog(lockLog.id, "error", 0, errorMessage);
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: errorMessage };
+  }
+
+  try {
+    const result = await syncCallRailCalls(tenantId, {
+      apiKey: config.callRailApiKey,
+      accountId: config.callRailAccountId,
+      companyId: config.callRailCompanyId,
+    }, {
+      days: options.days,
+      syncType,
+      createLeadMode: options.createLeadMode ?? "attribution_only",
+    });
+
+    if (result.synced > 0) {
+      try {
+        await matchJobsToLeads(tenantId);
+      } catch (err) {
+        console.error(`[CallRail] Post-sync lead matching failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+
+      try {
+        await runReconciliation(tenantId, "scheduled");
+      } catch (err) {
+        console.error(`[CallRail] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
+      }
+    }
+
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    try { await emitSyncFailureNotification(tenantId, "callrail", message); } catch {}
+    return { synced: 0, newCalls: 0, updatedCalls: 0, error: message };
+  } finally {
+    try {
+      await db.execute(sql`SELECT pg_advisory_unlock(${0x43414c52}, ${tenantId})`);
+    } catch (unlockErr) {
+      console.error(`[CallRail] Tenant ${tenantId}: failed to release advisory lock`, unlockErr);
+    }
+  }
 }
 
 export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: number; error?: string }> {
@@ -2979,13 +3052,30 @@ export function startSyncScheduler() {
     void runOrphanReaperSweep();
   }, orphanReaperIntervalMs);
 
-  // CallRail intake is webhook-only (POST /api/webhooks/callrail/:tenantId).
-  // The previous polling backstop was a permanent no-op timer; it has been
-  // removed. If CallRail webhooks ever need a polling safety net,
-  // re-enable syncCallRailCalls here on a real interval.
+  const callRailSyncIntervalMs = Number(process.env.CALLRAIL_SYNC_INTERVAL_MS || String(60 * 60 * 1000));
+  const callRailSyncWindowDays = Math.max(1, Math.min(
+    Number(process.env.CALLRAIL_SYNC_WINDOW_DAYS || String(DEFAULT_CALLRAIL_SYNC_DAYS)),
+    90,
+  ));
+  const runCallRailSweep = createGuardedRunner("SyncScheduler:callrail", async () => {
+    console.log(`[SyncScheduler] Starting CallRail sync for all configured tenants (${callRailSyncWindowDays}d window)`);
+    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+    for (const tenant of tenants) {
+      const config = getTenantConfig(tenant);
+      if (!config?.callRailApiKey || !config.callRailAccountId) continue;
+      await syncCallRailAttribution(tenant.id, {
+        days: callRailSyncWindowDays,
+        syncType: "calls",
+        createLeadMode: "attribution_only",
+      });
+    }
+  });
+  const callRailTimer = setInterval(() => {
+    void runCallRailSweep();
+  }, callRailSyncIntervalMs);
 
-  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer];
-  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail webhook-only, orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
+  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer, callRailTimer];
+  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail ${Math.round(callRailSyncIntervalMs / 60000)}min (${callRailSyncWindowDays}d attribution window), orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
 }
 
 export function stopSyncScheduler() {

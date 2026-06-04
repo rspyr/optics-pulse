@@ -334,6 +334,14 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const callRailSource = typeof body.source === "string" ? body.source : null;
     const callRailMedium = typeof body.medium === "string" ? body.medium : null;
     const callRailCampaign = typeof body.campaign === "string" ? body.campaign : null;
+    const callRailUtmSource = typeof body.utm_source === "string" ? body.utm_source : null;
+    const callRailUtmMedium = typeof body.utm_medium === "string" ? body.utm_medium : null;
+    const callRailUtmCampaign = typeof body.utm_campaign === "string" ? body.utm_campaign : null;
+    const callRailUtmTerm = typeof body.utm_term === "string" ? body.utm_term : null;
+    const callRailUtmContent = typeof body.utm_content === "string" ? body.utm_content : null;
+    const sourceName = typeof body.source_name === "string" ? body.source_name
+      : typeof body.formatted_tracking_source === "string" ? body.formatted_tracking_source
+      : null;
     const landingPage = typeof body.landing_page_url === "string" ? body.landing_page_url : null;
     const referrer = typeof body.referring_url === "string" ? body.referring_url
       : typeof body.referrer_domain === "string" ? body.referrer_domain
@@ -342,6 +350,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
     const customerState = typeof body.customer_state === "string" ? body.customer_state : null;
 
     const hashedPhone = customerPhone ? hashPhone(customerPhone) : null;
+    const callStartedAt = typeof body.start_time === "string" ? new Date(body.start_time) : null;
+    const submittedAt = callStartedAt && !Number.isNaN(callStartedAt.getTime()) ? callStartedAt : new Date();
+    const resolvedCallRailSource = callRailUtmSource || callRailSource || "callrail";
 
     const eventValues = {
       tenantId,
@@ -350,13 +361,29 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       fbclid,
       msclkid,
       hashedPhone,
-      utmSource: callRailSource || "callrail",
-      utmCampaign: callRailCampaign,
-      utmMedium: callRailMedium,
+      utmSource: resolvedCallRailSource,
+      utmCampaign: callRailUtmCampaign || callRailCampaign,
+      utmMedium: callRailUtmMedium || callRailMedium,
+      utmTerm: callRailUtmTerm,
+      utmContent: callRailUtmContent,
       landingPage,
+      pageUrl: typeof body.last_requested_url === "string" ? body.last_requested_url : landingPage,
       referrer,
-      matchLevel: (gclid ? "diamond" : hashedPhone ? "golden" : "unmatched") as "diamond" | "golden" | "unmatched",
-      matchConfidence: gclid ? 1.0 : hashedPhone ? 0.9 : 0,
+      formType: "callrail_call" as const,
+      formId: callId || null,
+      formName: sourceName || "CallRail call",
+      formFields: {
+        provider: "callrail",
+        callId: callId || null,
+        customerName,
+        sourceName,
+        trackingPhoneNumber: typeof body.tracking_phone_number === "string" ? body.tracking_phone_number : null,
+        trackerId: typeof body.tracker_id === "string" ? body.tracker_id : null,
+        personId: typeof body.person_id === "string" ? body.person_id : null,
+      },
+      submittedAt,
+      matchLevel: (gclid || fbclid || msclkid ? "diamond" : hashedPhone ? "golden" : "unmatched") as "diamond" | "golden" | "unmatched",
+      matchConfidence: gclid || fbclid || msclkid ? 1.0 : hashedPhone ? 0.9 : 0,
       externalId,
     };
 
@@ -411,6 +438,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
           : [];
         if (dupLead) {
           console.log(`[CallRail Webhook] Resubmission detected for tenant ${tenantId} phone within ${dedupeWindowMinutes}m window (existing lead ${dupLead.id})`);
+          await db.update(attributionEventsTable)
+            .set({ createdLeadId: dupLead.id })
+            .where(eq(attributionEventsTable.id, event.id));
           const result = await handleResubmission(tenantId, dupLead.id, "CallRail");
           await recordCallRailStatus(tenantId, { success: true, callId });
           const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLead.id));
@@ -434,7 +464,7 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
       const firstName = nameParts[0] || "Unknown";
       const lastName = nameParts.slice(1).join(" ") || "";
 
-      const normalizedIntakeSource = await normalizeSource(tenantId, callRailSource || "callrail");
+      const normalizedIntakeSource = await normalizeSource(tenantId, resolvedCallRailSource);
       // The leads table has no billingAddress column — that field lives on
       // attribution_events (populated by the GHL/CRM webhook path above; the
       // CallRail event insert in this handler does not carry one). Deliberately
@@ -448,7 +478,8 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
         source: normalizedIntakeSource,
         originalSource: normalizedIntakeSource,
         matchedGclid: gclid,
-        leadType: "CallRail",
+        leadType: sourceName || "CallRail",
+        serviceType: "CallRail",
         interestType: null,
         hubStatus: "day_1",
         dayInSequence: 1,
@@ -486,6 +517,9 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
         }
         const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, newLead.id));
         const finalLead = refreshed ?? newLead;
+        await db.update(attributionEventsTable)
+          .set({ createdLeadId: newLead.id })
+          .where(eq(attributionEventsTable.id, event.id));
         scheduleOrEmitNewLead(finalLead.id, (finalLead.visibleAfter as Date | null) ?? null);
       }
     }
