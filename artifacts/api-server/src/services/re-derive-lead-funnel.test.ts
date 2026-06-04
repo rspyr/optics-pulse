@@ -102,6 +102,10 @@ vi.mock("./funnel-normalizer", () => ({
   normalizeFunnel: vi.fn(),
 }));
 
+vi.mock("./route-funnel-resolver", () => ({
+  resolveRouteFunnel: vi.fn().mockResolvedValue(null),
+}));
+
 describe("countPendingRederiveLeadsForRuleScope", () => {
   beforeEach(() => {
     selectQueue = [];

@@ -342,7 +342,7 @@ describe("funnel-rule preview / dry-run (real Postgres)", () => {
     });
     expect(res.status).toBe(200);
     expect(res.json.funnelName).toBe(routeFx.funnelAName);
-    expect(res.json.updatedEventCount).toBe(1);
+    expect(res.json.updatedEventCount).toBe(2);
     expect(res.json.conflictingEventCount).toBe(1);
     expect(res.json.matchedEventCount).toBe(2);
 

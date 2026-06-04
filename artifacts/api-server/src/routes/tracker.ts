@@ -406,7 +406,20 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
     if (funnelResolved) {
       resolvedFunnelStr = funnelResolved.name;
       resolvedFunnelId = funnelResolved.id;
-    } else if (detection.funnelRawValue) {
+    }
+
+    // Exact route/page rules are operator-authored and more specific than a
+    // generic form-field funnel value or URL-path alias. If `/summer-relief`
+    // is mapped to "Summer Relief Plan", that route assignment must win.
+    if (!resolvedFunnelId && pageUrl) {
+      const routeMatch = await resolveRouteFunnel(tenantId, pageUrl);
+      if (routeMatch) {
+        resolvedFunnelId = routeMatch.funnelTypeId;
+        resolvedFunnelStr = routeMatch.funnelName;
+      }
+    }
+
+    if (!resolvedFunnelId && detection.funnelRawValue) {
       const aliasMatch = await normalizeFunnel(tenantId, detection.funnelRawValue);
       if (aliasMatch) {
         resolvedFunnelStr = aliasMatch.funnelName;
@@ -425,16 +438,6 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
           resolvedFunnelStr = urlAliasMatch.funnelName;
         }
       } catch {}
-    }
-
-    // Route/page rule beats subdomain (more specific): an exact pathname match
-    // (e.g. `/summer-relief`) wins over a coarser subdomain rule.
-    if (!resolvedFunnelId && pageUrl) {
-      const routeMatch = await resolveRouteFunnel(tenantId, pageUrl);
-      if (routeMatch) {
-        resolvedFunnelId = routeMatch.funnelTypeId;
-        resolvedFunnelStr = routeMatch.funnelName;
-      }
     }
 
     if (!resolvedFunnelId && pageUrl) {

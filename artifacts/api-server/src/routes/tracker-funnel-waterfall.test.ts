@@ -3,9 +3,10 @@
 // The /collect/submit handler resolves an event's funnel from several
 // sources in a specific precedence order:
 //   1. Explicit `custom.funnel` slug from the page (highest)
-//   2. detection.funnelRawValue → funnel-alias match
-//   3. URL **path** → funnel-alias match
-//   4. URL **subdomain** → subdomain-funnel rule
+//   2. URL **route rule** → route-funnel rule
+//   3. detection.funnelRawValue → funnel-alias match
+//   4. URL **path** → funnel-alias match
+//   5. URL **subdomain** → subdomain-funnel rule
 //
 // If none of those fire, the event is persisted with `resolved_funnel =
 // NULL` (task #575 removed the prior "tenant's first active funnel"
@@ -133,18 +134,23 @@ vi.mock("../services/source-normalizer", () => ({
   normalizeSource: vi.fn().mockImplementation((_tid: number, src: string) => Promise.resolve(src)),
 }));
 
+const detectFieldsMock = vi.fn();
 vi.mock("../services/field-detection", () => ({
-  detectFields: vi.fn().mockResolvedValue({
+  detectFields: (...args: unknown[]) => detectFieldsMock(...args),
+}));
+
+function defaultDetection() {
+  return {
     pii: { firstName: null, lastName: null, email: null, phone: null },
     source: null,
     funnel: null,
-    funnelRawValue: null, // never produce a detection match — keeps the
-    serviceType: null,    //  spotlight on the URL-based stages.
+    funnelRawValue: null,
+    serviceType: null,
     addressParts: { street: null, city: null, state: null, zip: null },
     formFields: null,
     fields: [],
-  }),
-}));
+  };
+}
 
 const normalizeFunnelMock = vi.fn();
 vi.mock("../services/funnel-normalizer", () => ({
@@ -233,6 +239,8 @@ describe("/collect/submit funnel resolution waterfall", () => {
     normalizeFunnelMock.mockReset();
     resolveSubdomainFunnelMock.mockReset();
     resolveRouteFunnelMock.mockReset();
+    detectFieldsMock.mockReset();
+    detectFieldsMock.mockResolvedValue(defaultDetection());
     // Route stage falls through by default so existing subdomain-stage tests
     // behave as before; tests that care set their own value.
     resolveRouteFunnelMock.mockResolvedValue(null);
@@ -292,6 +300,39 @@ describe("/collect/submit funnel resolution waterfall", () => {
     // stage must be skipped entirely.
     expect(resolveRouteFunnelMock).toHaveBeenCalledTimes(1);
     expect(resolveSubdomainFunnelMock).not.toHaveBeenCalled();
+  });
+
+  it("route/page rule wins over a detected funnel field alias", async () => {
+    mockDb.selectResults = [
+      [{ id: 1, name: "Tenant", leadIngestionMode: "sheets" }],
+    ];
+    detectFieldsMock.mockResolvedValue({
+      ...defaultDetection(),
+      funnelRawValue: "Summer Relief Plan",
+      fields: [
+        { fieldName: "Service they need", mapsTo: "funnel", value: "Summer Relief Plan", method: "saved_rule", confidence: 1 },
+      ],
+    });
+    resolveRouteFunnelMock.mockResolvedValue({
+      funnelTypeId: 42,
+      funnelName: "Summer Relief Plan",
+    });
+    normalizeFunnelMock.mockResolvedValue({
+      funnelTypeId: 9,
+      funnelName: "40% off install 12 months",
+    });
+
+    const res = await sendRequest("/collect/submit", {
+      client_id: "tenant-1",
+      page_url: "https://protect.example.com/summer-relief-plan",
+      fields: { "Service they need": "Summer Relief Plan" },
+    });
+
+    expect(res.status).toBe(200);
+    const ev = findEventInsert();
+    expect(ev.resolvedFunnel).toBe("Summer Relief Plan");
+    expect(resolveRouteFunnelMock).toHaveBeenCalledTimes(1);
+    expect(normalizeFunnelMock).not.toHaveBeenCalledWith(1, "Summer Relief Plan");
   });
 
   it("path alias wins over the subdomain rule (alias short-circuits)", async () => {

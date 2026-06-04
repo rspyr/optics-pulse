@@ -339,6 +339,51 @@ describe("re-point an existing funnel rule (real Postgres)", () => {
     expect(status?.manualSource).toBe(`route_funnel_rule:${routePath}`);
   });
 
+  it("route create fixes stale different-funnel events and leads without force override", async () => {
+    const routePath = `/stale-route-funnel`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+
+    const stale = await seedTagged(routeFx.tenantId, pageUrl, routeFx.funnelAName, routeFx.funnelAId, false);
+
+    const res = await request(routeApp, "/route-funnel-rules", {
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.created).toBe(true);
+    expect(res.json.forceOverride).toBe(false);
+    expect(res.json.updatedEventCount).toBe(1);
+    expect(res.json.updatedLeadCount).toBe(1);
+
+    expect(await eventFunnel(stale.eventId)).toBe(routeFx.funnelBName);
+    const lead = await leadRow(stale.leadId);
+    expect(lead?.leadType).toBe(routeFx.funnelBName);
+    expect(lead?.funnelId).toBe(routeFx.funnelBId);
+  });
+
+  it("route reconcile fixes stale assignments for existing saved rules", async () => {
+    const routePath = `/reconcile-route-funnel`;
+    const pageUrl = `https://www.example-int-test.com${routePath}`;
+
+    const stale = await seedTagged(routeFx.tenantId, pageUrl, routeFx.funnelAName, routeFx.funnelAId, false);
+    await db.insert(routeFunnelRulesTable).values({
+      tenantId: routeFx.tenantId,
+      routePath,
+      funnelTypeId: routeFx.funnelBId,
+    });
+
+    const res = await request(routeApp, "/route-funnel-rules/reconcile", {});
+    expect(res.status).toBe(200);
+    expect(res.json.success).toBe(true);
+    expect(res.json.updatedEventCount).toBeGreaterThanOrEqual(1);
+    expect(res.json.updatedLeadCount).toBeGreaterThanOrEqual(1);
+
+    expect(await eventFunnel(stale.eventId)).toBe(routeFx.funnelBName);
+    const lead = await leadRow(stale.leadId);
+    expect(lead?.leadType).toBe(routeFx.funnelBName);
+    expect(lead?.funnelId).toBe(routeFx.funnelBId);
+  });
+
   it("route force-override undo restores prior event match fields", async () => {
     const routePath = `/force-undo-status-route`;
     const pageUrl = `https://www.example-int-test.com${routePath}`;
