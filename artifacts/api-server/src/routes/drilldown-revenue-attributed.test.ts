@@ -1053,6 +1053,9 @@ describe("GET /drilldown/revenue-attributed/summary", () => {
       rebates: 150, //  150 + 0 + 0
       attributed: 1800, // (900+150 gclid) + 750 (manual); id 2 excluded
       count: 3,
+      potentialRevenueLow: 0,
+      potentialRevenueHigh: 0,
+      potentialJobCount: 0,
       // Per-tier rollup, strongest tier first. The non-"unmatched" tiers
       // (1050 + 750) sum to the attributed total above.
       byMatchLevel: [
@@ -1133,7 +1136,35 @@ describe("GET /drilldown/revenue-attributed/summary", () => {
       rebates: 0.3,
       attributed: 12.01,
       count: 4,
+      potentialRevenueLow: 0,
+      potentialRevenueHigh: 0,
+      potentialJobCount: 0,
       byMatchLevel: [{ tier: "gclid", revenue: 12.01, count: 1 }],
+    });
+  });
+
+  it("sums one potential estimate per job for low and high modes", async () => {
+    const app = await setupApp("super_admin", null);
+    mockDb.selectResults = [
+      [aggregateOf(rangeJobs)],
+      [],
+      [{ id: 1 }, { id: 2 }, { id: 3 }],
+      [
+        { jobId: 1, totalAmount: 7875.73 },
+        { jobId: 1, totalAmount: 18559.99 },
+        { jobId: 2, totalAmount: 4200 },
+        { jobId: 2, totalAmount: 0 },
+        { jobId: 3, totalAmount: null },
+      ],
+    ];
+
+    const res = await request(app, "GET", "/drilldown/revenue-attributed/summary?tenantId=7");
+
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({
+      potentialRevenueLow: 12075.73,
+      potentialRevenueHigh: 22759.99,
+      potentialJobCount: 2,
     });
   });
 

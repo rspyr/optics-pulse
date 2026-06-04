@@ -17,6 +17,7 @@ const BOOTSTRAP_PENDING = new Set([
   "0079_lead_funnel_attribution",
   "0080_exact_linked_contact_attribution",
   "0081_preserve_exact_linked_contact_matches",
+  "0082_estimate_option_metadata",
 ]);
 
 function resolveMigrationsDir(): string {

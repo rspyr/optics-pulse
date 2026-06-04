@@ -46,6 +46,10 @@ function getTenantConfig(tenant: typeof tenantsTable.$inferSelect): TenantApiCon
   }
 }
 
+function isSoldEstimateStatus(status: string | null | undefined): boolean {
+  return status?.trim().toLowerCase() === "sold";
+}
+
 // `formatSTJobForSync` writes `Customer <id>` as the customer name when
 // ServiceTitan returned no customer object for a job. That placeholder is not a
 // real name, so the invoice merge treats it as missing and lets the invoice's
@@ -2847,6 +2851,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
           }
         }
 
+        const estimateIsSold = isSoldEstimateStatus(parsed.estimateStatus);
         const wasUnlinked = existing && !existing.leadId;
         const nowLinked = !!matchedLeadId;
 
@@ -2856,6 +2861,10 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
               jobId: matchedJobId,
               leadId: matchedLeadId,
               stJobId: parsed.stJobId,
+              estimateName: parsed.estimateName,
+              estimateStatus: parsed.estimateStatus,
+              summary: parsed.summary,
+              followUpOn: parsed.followUpOn,
               soldByName,
               soldByStEmployeeId: parsed.soldByEmployeeId,
               soldOn: parsed.soldOn,
@@ -2867,7 +2876,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             })
             .where(eq(soldEstimatesTable.id, existing.id));
 
-          if (wasUnlinked && nowLinked && matchedLeadId) {
+          if (estimateIsSold && wasUnlinked && nowLinked && matchedLeadId) {
             const dollarStr = `$${(parsed.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const salesperson = soldByName ? ` (Sold by: ${soldByName})` : "";
             const noteText = `Contract signed — ${dollarStr}${salesperson}`;
@@ -2893,6 +2902,10 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             jobId: matchedJobId,
             stEstimateId: parsed.stEstimateId,
             stJobId: parsed.stJobId,
+            estimateName: parsed.estimateName,
+            estimateStatus: parsed.estimateStatus,
+            summary: parsed.summary,
+            followUpOn: parsed.followUpOn,
             soldByName,
             soldByStEmployeeId: parsed.soldByEmployeeId,
             soldOn: parsed.soldOn,
@@ -2902,7 +2915,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
             rebateBreakdown: parsed.rebateBreakdown,
           });
 
-          if (matchedLeadId) {
+          if (estimateIsSold && matchedLeadId) {
             const dollarStr = `$${(parsed.totalAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const salesperson = soldByName ? ` (Sold by: ${soldByName})` : "";
             const noteText = `Contract signed — ${dollarStr}${salesperson}`;
@@ -2923,7 +2936,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
           }
         }
 
-        if (matchedLeadId) {
+        if (estimateIsSold && matchedLeadId) {
           await db.update(leadsTable)
             .set({ hasSoldEstimate: true, updatedAt: new Date() })
             .where(eq(leadsTable.id, matchedLeadId));
@@ -2952,19 +2965,19 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       ? (total: number) => { void updateSyncLogTotalRecords(syncLog.id, total); }
       : undefined;
     try {
-      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal);
+      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal, { status: null });
     } catch (innerErr) {
       if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
     }
 
     if (cancelled) {
       await completeSyncLog(syncLog.id, "cancelled", synced, `Cancelled by operator (${synced} estimates processed)`);
-      console.log(`[Sync] ServiceTitan estimates: cancelled after ${synced} sold estimates for tenant ${tenantId}`);
+      console.log(`[Sync] ServiceTitan estimates: cancelled after ${synced} estimates for tenant ${tenantId}`);
       return { synced, error: "cancelled" };
     }
 
     await completeSyncLog(syncLog.id, "completed", synced);
-    console.log(`[Sync] ServiceTitan estimates: synced ${synced} sold estimates for tenant ${tenantId}`);
+    console.log(`[Sync] ServiceTitan estimates: synced ${synced} estimates for tenant ${tenantId}`);
     return { synced };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

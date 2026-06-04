@@ -719,6 +719,7 @@ export interface STEstimate {
   name: string;
   status: { name: string; value: number };
   summary: string;
+  followUpOn?: string | null;
   soldBy: number | null;
   soldOn: string | null;
   subtotal: number;
@@ -747,6 +748,7 @@ export async function fetchSoldEstimates(
   modifiedAfter?: string,
   processBatch?: (estimates: STEstimate[]) => Promise<void>,
   onTotalCount?: (totalCount: number) => void,
+  options?: { status?: string | null },
 ): Promise<STEstimate[]> {
   let page = 1;
   const pageSize = 50;
@@ -759,8 +761,9 @@ export async function fetchSoldEstimates(
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
-      status: "Sold",
     });
+    const status = options?.status === undefined ? "Sold" : options.status;
+    if (status) params.set("status", status);
     if (modifiedAfter) {
       params.set("modifiedOnOrAfter", modifiedAfter);
     }
@@ -876,6 +879,10 @@ export function parseEstimateData(estimate: STEstimate, patterns: RegExp[] = REB
   return {
     stEstimateId: String(estimate.id),
     stJobId: estimate.jobId ? String(estimate.jobId) : null,
+    estimateName: estimate.name || null,
+    estimateStatus: estimate.status?.name || null,
+    summary: estimate.summary || null,
+    followUpOn: estimate.followUpOn ? new Date(estimate.followUpOn) : null,
     subtotal,
     rebateAmount,
     totalAmount,
