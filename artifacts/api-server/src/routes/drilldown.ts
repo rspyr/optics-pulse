@@ -122,19 +122,21 @@ function toEstimateOption(est: SoldEstimate): EstimateOption {
 function estimatePotentialFromOptions(options: EstimateOption[]) {
   const amounts = options.map((o) => o.totalAmount).filter((n) => Number.isFinite(n) && n > 0);
   if (amounts.length === 0) {
-    return { low: null as number | null, high: null as number | null, count: 0 };
+    return { low: null as number | null, avg: null as number | null, high: null as number | null, count: 0 };
   }
   let low = amounts[0];
   let high = amounts[0];
+  let total = 0;
   for (const amount of amounts) {
+    total += amount;
     if (amount < low) low = amount;
     if (amount > high) high = amount;
   }
-  return { low: round2(low), high: round2(high), count: amounts.length };
+  return { low: round2(low), avg: round2(total / amounts.length), high: round2(high), count: amounts.length };
 }
 
 function summarizePotentialByJob(estimates: PotentialEstimateInput[]) {
-  const byJob = new Map<number, { low: number; high: number }>();
+  const byJob = new Map<number, { low: number; high: number; total: number; count: number }>();
   for (const est of estimates) {
     if (est.jobId == null) continue;
     const amount = Number(est.totalAmount ?? 0);
@@ -142,21 +144,26 @@ function summarizePotentialByJob(estimates: PotentialEstimateInput[]) {
     const rounded = round2(amount);
     const current = byJob.get(est.jobId);
     if (!current) {
-      byJob.set(est.jobId, { low: rounded, high: rounded });
+      byJob.set(est.jobId, { low: rounded, high: rounded, total: rounded, count: 1 });
     } else {
       if (rounded < current.low) current.low = rounded;
       if (rounded > current.high) current.high = rounded;
+      current.total += rounded;
+      current.count += 1;
     }
   }
 
   let lowTotal = 0;
+  let avgTotal = 0;
   let highTotal = 0;
   for (const job of byJob.values()) {
     lowTotal += job.low;
+    avgTotal += job.total / job.count;
     highTotal += job.high;
   }
   return {
     potentialRevenueLow: round2(lowTotal),
+    potentialRevenueAvg: round2(avgTotal),
     potentialRevenueHigh: round2(highTotal),
     potentialJobCount: byJob.size,
   };
@@ -453,6 +460,7 @@ router.get("/drilldown/revenue-attributed", async (req, res) => {
       rebateBreakdown,
       estimateOptions,
       potentialRevenueLow: potential.low,
+      potentialRevenueAvg: potential.avg,
       potentialRevenueHigh: potential.high,
       potentialEstimateCount: potential.count,
       soldByName: est?.soldByName ?? lead?.assignedTo ?? null,

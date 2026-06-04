@@ -25,7 +25,7 @@ const PULSE_PATH = `${API_BASE}/pulse`;
 const PAGE_SIZE = 200;
 
 type DateRange = "last30" | "thisMonth" | "lastMonth" | "last7";
-type PotentialMode = "low" | "high";
+type PotentialMode = "low" | "avg" | "high";
 
 const VALID_RANGES: DateRange[] = ["last30", "thisMonth", "lastMonth", "last7"];
 
@@ -115,6 +115,7 @@ type RevenueSummary = {
   attributed: number;
   count: number;
   potentialRevenueLow?: number;
+  potentialRevenueAvg?: number;
   potentialRevenueHigh?: number;
   potentialJobCount?: number;
   byMatchLevel?: MatchTierBreakdown[];
@@ -192,6 +193,7 @@ export type RevenueJob = {
   rebateBreakdown: RebateItem[];
   estimateOptions?: EstimateOption[];
   potentialRevenueLow?: number | null;
+  potentialRevenueAvg?: number | null;
   potentialRevenueHigh?: number | null;
   potentialEstimateCount?: number;
   soldByName: string | null;
@@ -237,7 +239,7 @@ function csvCell(value: string): string {
 // reconcile their totals against the summary cards (Task #703).
 export const REVENUE_ATTRIBUTED_CSV_HEADER = [
   "Date", "Customer", "Funnel", "Job Type", "ST Job", "Match Tier",
-  "Rebate Amount", "Corrected Revenue", "Potential Revenue Low", "Potential Revenue High", "Lead Source", "Sold By",
+  "Rebate Amount", "Corrected Revenue", "Potential Revenue Low", "Potential Revenue Avg", "Potential Revenue High", "Lead Source", "Sold By",
 ] as const;
 
 // Pure CSV builder for the Revenue Attributed export. Extracted from the
@@ -259,6 +261,7 @@ export function buildRevenueAttributedCsv(exportJobs: RevenueJob[]): string {
       String(job.invoiceRebateAmount ?? 0),
       String(job.correctedRevenue),
       String(job.potentialRevenueLow ?? 0),
+      String(job.potentialRevenueAvg ?? 0),
       String(job.potentialRevenueHigh ?? 0),
       job.lead?.source || job.source || "",
       job.soldByName || "",
@@ -276,12 +279,22 @@ function isUnknownSource(src: string | null | undefined): boolean {
 }
 
 function potentialRevenueFor(job: RevenueJob, mode: PotentialMode): number | null {
-  return mode === "low" ? job.potentialRevenueLow ?? null : job.potentialRevenueHigh ?? null;
+  if (mode === "low") return job.potentialRevenueLow ?? null;
+  if (mode === "avg") return job.potentialRevenueAvg ?? null;
+  return job.potentialRevenueHigh ?? null;
 }
 
 function potentialSummaryValue(summary: RevenueSummary | null, mode: PotentialMode): number | null {
   if (!summary) return null;
-  return mode === "low" ? summary.potentialRevenueLow ?? 0 : summary.potentialRevenueHigh ?? 0;
+  if (mode === "low") return summary.potentialRevenueLow ?? 0;
+  if (mode === "avg") return summary.potentialRevenueAvg ?? 0;
+  return summary.potentialRevenueHigh ?? 0;
+}
+
+function potentialModeLabel(mode: PotentialMode): string {
+  if (mode === "low") return "Low";
+  if (mode === "avg") return "Avg";
+  return "High";
 }
 
 function formatCompactDate(value: string | null | undefined): string | null {
@@ -584,6 +597,9 @@ export default function RevenueAttributed() {
               <ToggleGroupItem value="low" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
                 Low
               </ToggleGroupItem>
+              <ToggleGroupItem value="avg" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
+                Avg
+              </ToggleGroupItem>
               <ToggleGroupItem value="high" className="h-8 px-3 text-xs data-[state=on]:bg-ice/15 data-[state=on]:text-ice">
                 High
               </ToggleGroupItem>
@@ -614,7 +630,7 @@ export default function RevenueAttributed() {
         <SummaryCard label="Corrected Revenue" value={summary ? formatCurrency(summary.revenue) : "—"} icon={<DollarSign className="w-4 h-4" />} />
         <SummaryCard label="Attributed Revenue" value={summary ? formatCurrency(summary.attributed) : "—"} icon={<Link2 className="w-4 h-4" />} />
         <SummaryCard
-          label={`Potential (${potentialMode === "low" ? "Low" : "High"})`}
+          label={`Potential (${potentialModeLabel(potentialMode)})`}
           value={summary ? formatCurrency(potentialSummaryValue(summary, potentialMode) ?? 0) : "—"}
           icon={<Calculator className="w-4 h-4" />}
         />
@@ -1165,6 +1181,7 @@ function EstimateOptionsSection({ job, potentialMode }: { job: RevenueJob; poten
 
   const selectedPotential = potentialRevenueFor(job, potentialMode);
   const low = job.potentialRevenueLow ?? null;
+  const avg = job.potentialRevenueAvg ?? null;
   const high = job.potentialRevenueHigh ?? null;
 
   return (
@@ -1175,6 +1192,7 @@ function EstimateOptionsSection({ job, potentialMode }: { job: RevenueJob; poten
         </h4>
         <div className="flex items-center gap-3 text-xs tabular-nums">
           <span className="text-muted-foreground">Low <span className="text-cyan-300 font-display">{low != null ? formatCurrency(low) : "—"}</span></span>
+          <span className="text-muted-foreground">Avg <span className="text-cyan-300 font-display">{avg != null ? formatCurrency(avg) : "—"}</span></span>
           <span className="text-muted-foreground">High <span className="text-cyan-300 font-display">{high != null ? formatCurrency(high) : "—"}</span></span>
         </div>
       </div>
