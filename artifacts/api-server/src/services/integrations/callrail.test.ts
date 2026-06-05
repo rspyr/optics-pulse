@@ -6,6 +6,7 @@ vi.mock("@workspace/db", () => ({
     insert: vi.fn(),
     select: vi.fn(),
     update: vi.fn(),
+    execute: vi.fn(),
   },
   attributionEventsTable: {
     id: "attribution_events.id",
@@ -26,6 +27,10 @@ vi.mock("@workspace/db", () => ({
 vi.mock("drizzle-orm", () => ({
   and: vi.fn((...args: unknown[]) => args),
   eq: vi.fn((...args: unknown[]) => args),
+  sql: Object.assign(
+    (_strings: TemplateStringsArray, ..._values: unknown[]) => ({ __sql: "mock-sql" }),
+    {},
+  ),
 }));
 
 vi.mock("../lead-notify-scheduler", () => ({
@@ -96,7 +101,7 @@ describe("fetchCallRailCalls", () => {
 });
 
 describe("syncCallRailCalls", () => {
-  it("reuses an event's existing linked lead before creating an attribution-only lead", async () => {
+  it("reuses an event's existing linked lead without creating a new Pulse lead", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -155,5 +160,100 @@ describe("syncCallRailCalls", () => {
       const update = call as { table: unknown; values: Record<string, unknown> };
       return update.table === attributionEventsTable && update.values.createdLeadId === 70;
     })).toBe(true);
+  });
+
+  it("does not create hidden dead Pulse leads when asked to sync attribution-only", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        total_pages: 1,
+        calls: [{
+          id: "CAL_no_lead",
+          customer_phone_number: "+15035550199",
+          customer_name: "Attribution Caller",
+          start_time: "2026-06-01T10:30:00.000-07:00",
+          source: "Google Organic",
+        }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const insertCalls: unknown[] = [];
+    let selectCount = 0;
+
+    vi.mocked(db.insert).mockImplementation((table: unknown) => ({
+      values: vi.fn().mockImplementation((values: unknown) => {
+        insertCalls.push({ table, values });
+        return {
+          returning: vi.fn().mockResolvedValue(
+            table === integrationSyncLogsTable
+              ? [{ id: 10 }]
+              : table === attributionEventsTable
+                ? [{ id: 700 }]
+                : [],
+          ),
+        };
+      }),
+    }) as never);
+
+    vi.mocked(db.select).mockImplementation(() => ({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockImplementation(async () => {
+            selectCount++;
+            return [];
+          }),
+        }),
+      }),
+    }) as never);
+
+    vi.mocked(db.update).mockImplementation((table: unknown) => ({
+      set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
+    }) as never);
+
+    const { syncCallRailCalls } = await import("./callrail");
+    const result = await syncCallRailCalls(1, {
+      apiKey: "test-key",
+      accountId: "ACC123",
+    }, {
+      days: 30,
+      createLeadMode: "attribution_only",
+    });
+
+    expect(result).toEqual({ synced: 1, newCalls: 1, updatedCalls: 0 });
+    expect(selectCount).toBeGreaterThan(0);
+    expect(insertCalls.filter((call) => (call as { table: unknown }).table === leadsTable)).toHaveLength(0);
+  });
+
+  it("previews CallRail-created Pulse lead cleanup counts without applying deletes", async () => {
+    vi.mocked(db.execute).mockResolvedValue({
+      rows: [{
+        candidates: 2,
+        deleted_leads: 0,
+        attribution_events_unlinked: 0,
+        jobs_unlinked: 0,
+        sold_estimates_unlinked: 0,
+        podium_messages_unlinked: 0,
+        scheduled_followups_deleted: 0,
+        call_attempts_deleted: 0,
+        lead_status_history_deleted: 0,
+        lead_assignments_deleted: 0,
+        lead_attribution_corrections_deleted: 0,
+        lead_merge_rows_deleted: 0,
+        unrouted_rows_unlinked: 0,
+        by_hub_status: { appt_booked: 1, dead: 1 },
+        by_status: { new: 1, lost: 1 },
+        samples: [{ id: 42, name: "Wireless Caller", source: "Google Organic", serviceType: "CallRail", hubStatus: "appt_booked", createdAt: "2026-06-01T10:30:00.000Z" }],
+      }],
+    } as never);
+
+    const { cleanupCallRailPulseLeads } = await import("./callrail");
+    const result = await cleanupCallRailPulseLeads(1, { dryRun: true });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.candidates).toBe(2);
+    expect(result.deletedLeads).toBe(0);
+    expect(result.byHubStatus.appt_booked).toBe(1);
+    expect(result.samples[0]).toMatchObject({ id: 42, serviceType: "CallRail" });
   });
 });

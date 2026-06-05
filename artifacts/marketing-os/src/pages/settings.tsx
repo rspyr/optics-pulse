@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { useAuth } from "@/components/auth-context";
-import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff, Clock, AlertTriangle } from "lucide-react";
+import { Copy, Check, Save, Loader2, Phone, MessageSquare, Wifi, WifiOff, Lock, ChevronDown, CheckCircle, XCircle, Key, Unplug, Users, Link2, Unlink, Bell, BellOff, Clock, AlertTriangle, Search, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -26,6 +26,22 @@ interface TeamMemberEntry {
   name: string | null;
   email: string | null;
   podiumUserUid: string | null;
+}
+
+interface CallRailCleanupResult {
+  candidates: number;
+  deletedLeads: number;
+  attributionEventsUnlinked: number;
+  jobsUnlinked: number;
+  callAttemptsDeleted: number;
+  byHubStatus?: Record<string, number>;
+  samples?: Array<{
+    id: number;
+    name: string;
+    source: string | null;
+    serviceType: string | null;
+    hubStatus: string | null;
+  }>;
 }
 
 function PushNotificationCard() {
@@ -251,6 +267,10 @@ export default function Settings() {
     podiumApiToken: "",
     podiumLocationId: "",
   });
+  const [callRailCleanup, setCallRailCleanup] = useState<CallRailCleanupResult | null>(null);
+  const [callRailCleanupLoading, setCallRailCleanupLoading] = useState(false);
+  const [callRailCleanupApplying, setCallRailCleanupApplying] = useState(false);
+  const [callRailCleanupError, setCallRailCleanupError] = useState<string | null>(null);
   const [rebateLabels, setRebateLabels] = useState<string[]>([]);
   const [rebateInitial, setRebateInitial] = useState<string[]>([]);
   const [rebateUsingDefaults, setRebateUsingDefaults] = useState(true);
@@ -437,6 +457,8 @@ export default function Settings() {
 
   useEffect(() => {
     if (!tenantId || isClientUser) return;
+    setCallRailCleanup(null);
+    setCallRailCleanupError(null);
     fetch(`${API}/api/tenants/${tenantId}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
@@ -539,6 +561,53 @@ export default function Settings() {
       setSaveError("Couldn't reach the server. Check your connection and try again.");
     }
     setSaving(false);
+  }
+
+  async function runCallRailCleanupPreview() {
+    if (!tenantId) return;
+    setCallRailCleanupLoading(true);
+    setCallRailCleanupError(null);
+    try {
+      const res = await fetch(`${API}/api/integrations/callrail/pulse-leads/cleanup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId, dryRun: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not preview CallRail cleanup.");
+      setCallRailCleanup(data);
+    } catch (err) {
+      setCallRailCleanupError(err instanceof Error ? err.message : "Could not preview CallRail cleanup.");
+    } finally {
+      setCallRailCleanupLoading(false);
+    }
+  }
+
+  async function applyCallRailCleanup() {
+    if (!tenantId || !callRailCleanup) return;
+    const count = callRailCleanup.candidates || 0;
+    if (count <= 0) return;
+    const ok = window.confirm(`Delete ${count.toLocaleString()} CallRail-created Pulse lead${count === 1 ? "" : "s"} for this tenant? Attribution events and revenue/job records will be kept.`);
+    if (!ok) return;
+
+    setCallRailCleanupApplying(true);
+    setCallRailCleanupError(null);
+    try {
+      const res = await fetch(`${API}/api/integrations/callrail/pulse-leads/cleanup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId, dryRun: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete CallRail-created Pulse leads.");
+      setCallRailCleanup(data);
+    } catch (err) {
+      setCallRailCleanupError(err instanceof Error ? err.message : "Could not delete CallRail-created Pulse leads.");
+    } finally {
+      setCallRailCleanupApplying(false);
+    }
   }
 
   function addRebateLabel() {
@@ -1233,7 +1302,7 @@ export default function Settings() {
               <div>
                 <label className="text-sm font-medium text-gray-300">Create new Pulse leads from CallRail</label>
                 <p className="text-xs text-gray-500 mt-1">
-                  Off by default. When off, CallRail calls are saved for attribution only and do not enter the active Pulse queue.
+                  Off by default. When off, CallRail calls are saved as attribution events only and do not create Pulse leads.
                 </p>
               </div>
               <Switch
@@ -1245,6 +1314,75 @@ export default function Settings() {
                 aria-label="Create new Pulse leads from CallRail"
               />
             </div>
+          </div>
+          <div className="space-y-3 rounded-lg border border-red-500/20 bg-red-500/[0.04] p-3 md:col-span-2">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <label className="text-sm font-medium text-red-100">Remove CallRail-created Pulse leads</label>
+                <p className="text-xs text-red-100/55 mt-1">
+                  One-time cleanup for leads that were created from CallRail webhooks or syncs. Attribution events and matched revenue stay in place.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={runCallRailCleanupPreview}
+                  disabled={callRailCleanupLoading || callRailCleanupApplying}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs font-medium text-white hover:bg-white/15 disabled:opacity-50"
+                >
+                  {callRailCleanupLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={applyCallRailCleanup}
+                  disabled={callRailCleanupApplying || callRailCleanupLoading || !callRailCleanup || callRailCleanup.candidates <= 0 || callRailCleanup.deletedLeads > 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-500/20 px-3 py-2 text-xs font-medium text-red-100 hover:bg-red-500/30 disabled:opacity-50"
+                >
+                  {callRailCleanupApplying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  Delete
+                </button>
+              </div>
+            </div>
+            {callRailCleanupError && (
+              <div className="flex items-start gap-2 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{callRailCleanupError}</span>
+              </div>
+            )}
+            {callRailCleanup && (
+              <div className="space-y-2 rounded-lg border border-white/10 bg-black/15 p-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded border border-white/10 bg-white/5 px-2 py-1 text-white/70">
+                    Found {callRailCleanup.candidates.toLocaleString()}
+                  </span>
+                  {callRailCleanup.deletedLeads > 0 && (
+                    <span className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-emerald-300">
+                      Deleted {callRailCleanup.deletedLeads.toLocaleString()}
+                    </span>
+                  )}
+                  {Object.entries(callRailCleanup.byHubStatus || {}).map(([status, count]) => (
+                    <span key={status} className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-white/45">
+                      {status}: {count.toLocaleString()}
+                    </span>
+                  ))}
+                </div>
+                {callRailCleanup.deletedLeads > 0 && (
+                  <p className="text-xs text-emerald-300/80">
+                    Unlinked {callRailCleanup.attributionEventsUnlinked.toLocaleString()} attribution events and {callRailCleanup.jobsUnlinked.toLocaleString()} jobs from deleted Pulse leads.
+                  </p>
+                )}
+                {callRailCleanup.samples && callRailCleanup.samples.length > 0 && callRailCleanup.deletedLeads === 0 && (
+                  <div className="grid gap-1 text-xs text-white/45 md:grid-cols-2">
+                    {callRailCleanup.samples.slice(0, 6).map((lead) => (
+                      <div key={lead.id} className="truncate rounded border border-white/5 bg-white/[0.03] px-2 py-1">
+                        #{lead.id} {lead.name || "Unnamed"} · {lead.source || "No source"} · {lead.hubStatus || "no status"}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-300">GoHighLevel API Key</label>
