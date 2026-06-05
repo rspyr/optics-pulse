@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { db, attributionEventsTable, leadsTable, integrationSyncLogsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { scheduleOrEmitNewLead } from "../lead-notify-scheduler";
 import { hashPhone, normalizePhone, phoneMatchesSql } from "../../lib/phone-utils";
 import { withRetry } from "./rate-limiter";
@@ -104,11 +104,42 @@ interface CallRailCall {
   milestones: Record<string, unknown> | null;
 }
 
+export type CallRailCreateLeadMode = "active" | "attribution_only" | "none";
+
 interface CallRailSyncOptions {
   days?: number;
   syncType?: "calls" | "backfill";
-  createLeadMode?: "active" | "attribution_only" | "none";
+  createLeadMode?: CallRailCreateLeadMode;
   triggeredBySyncLogId?: number | null;
+}
+
+export interface CallRailPulseLeadCleanupResult {
+  tenantId: number;
+  dryRun: boolean;
+  candidates: number;
+  deletedLeads: number;
+  attributionEventsUnlinked: number;
+  jobsUnlinked: number;
+  soldEstimatesUnlinked: number;
+  podiumMessagesUnlinked: number;
+  scheduledFollowupsDeleted: number;
+  callAttemptsDeleted: number;
+  leadStatusHistoryDeleted: number;
+  leadAssignmentsDeleted: number;
+  leadAttributionCorrectionsDeleted: number;
+  leadMergeRowsDeleted: number;
+  unroutedRowsUnlinked: number;
+  samples: Array<{
+    id: number;
+    name: string;
+    source: string | null;
+    leadType: string | null;
+    serviceType: string | null;
+    hubStatus: string | null;
+    createdAt: string | null;
+  }>;
+  byHubStatus: Record<string, number>;
+  byStatus: Record<string, number>;
 }
 
 function stringValue(value: unknown): string | null {
@@ -304,7 +335,9 @@ export async function syncCallRailCalls(
 ): Promise<{ synced: number; newCalls: number; updatedCalls: number }> {
   const days = Math.max(1, Math.min(options.days ?? DEFAULT_CALLRAIL_SYNC_DAYS, MAX_CALLRAIL_BACKFILL_DAYS));
   const syncType = options.syncType ?? "calls";
-  const createLeadMode = options.createLeadMode ?? "attribution_only";
+  const createLeadMode = options.createLeadMode === "attribution_only"
+    ? "none"
+    : options.createLeadMode ?? "none";
   const sinceDate = new Date(Date.now() - days * 86400000).toISOString().split("T")[0];
 
   const syncLog = await db.insert(integrationSyncLogsTable).values({
@@ -415,8 +448,7 @@ export async function syncCallRailCalls(
 
         let leadId = existing[0]?.createdLeadId ?? existingLead[0]?.id ?? null;
 
-        if (!leadId && createLeadMode !== "none") {
-          const attributionOnly = createLeadMode === "attribution_only";
+        if (!leadId && createLeadMode === "active") {
           const [newLead] = await db.insert(leadsTable).values({
             tenantId,
             firstName,
@@ -427,9 +459,9 @@ export async function syncCallRailCalls(
             leadType,
             interestType: null,
             serviceType: "CallRail",
-            hubStatus: attributionOnly ? "dead" : "day_1",
-            status: attributionOnly ? "lost" : "new",
-            deadReason: attributionOnly ? "callrail_attribution_import" : null,
+            hubStatus: "day_1",
+            status: "new",
+            deadReason: null,
             assignedAt: callTime,
             createdAt: callTime,
             updatedAt: callTime,
@@ -446,9 +478,7 @@ export async function syncCallRailCalls(
               changedAt: newLead.createdAt ?? undefined,
               reason: "callrail_sync_create",
             });
-            if (!attributionOnly) {
-              scheduleOrEmitNewLead(newLead.id, (newLead.visibleAfter as Date | null) ?? null);
-            }
+            scheduleOrEmitNewLead(newLead.id, (newLead.visibleAfter as Date | null) ?? null);
           }
         }
 
@@ -478,4 +508,318 @@ export async function syncCallRailCalls(
     console.error(`[CallRail] Sync error for tenant ${tenantId}:`, message);
     throw err;
   }
+}
+
+function intValue(value: unknown): number {
+  return Number(value ?? 0) || 0;
+}
+
+function recordValue(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = intValue(raw);
+  }
+  return out;
+}
+
+function sampleValue(value: unknown): CallRailPulseLeadCleanupResult["samples"] {
+  if (!Array.isArray(value)) return [];
+  return value.map((row) => {
+    const r = row && typeof row === "object" ? row as Record<string, unknown> : {};
+    return {
+      id: intValue(r.id),
+      name: typeof r.name === "string" ? r.name : "",
+      source: typeof r.source === "string" ? r.source : null,
+      leadType: typeof r.leadType === "string" ? r.leadType : null,
+      serviceType: typeof r.serviceType === "string" ? r.serviceType : null,
+      hubStatus: typeof r.hubStatus === "string" ? r.hubStatus : null,
+      createdAt: typeof r.createdAt === "string" ? r.createdAt : null,
+    };
+  });
+}
+
+function cleanupResult(
+  tenantId: number,
+  dryRun: boolean,
+  row: Record<string, unknown> | undefined,
+): CallRailPulseLeadCleanupResult {
+  return {
+    tenantId,
+    dryRun,
+    candidates: intValue(row?.candidates),
+    deletedLeads: intValue(row?.deleted_leads),
+    attributionEventsUnlinked: intValue(row?.attribution_events_unlinked),
+    jobsUnlinked: intValue(row?.jobs_unlinked),
+    soldEstimatesUnlinked: intValue(row?.sold_estimates_unlinked),
+    podiumMessagesUnlinked: intValue(row?.podium_messages_unlinked),
+    scheduledFollowupsDeleted: intValue(row?.scheduled_followups_deleted),
+    callAttemptsDeleted: intValue(row?.call_attempts_deleted),
+    leadStatusHistoryDeleted: intValue(row?.lead_status_history_deleted),
+    leadAssignmentsDeleted: intValue(row?.lead_assignments_deleted),
+    leadAttributionCorrectionsDeleted: intValue(row?.lead_attribution_corrections_deleted),
+    leadMergeRowsDeleted: intValue(row?.lead_merge_rows_deleted),
+    unroutedRowsUnlinked: intValue(row?.unrouted_rows_unlinked),
+    samples: sampleValue(row?.samples),
+    byHubStatus: recordValue(row?.by_hub_status),
+    byStatus: recordValue(row?.by_status),
+  };
+}
+
+export async function cleanupCallRailPulseLeads(
+  tenantId: number,
+  options: { dryRun?: boolean } = {},
+): Promise<CallRailPulseLeadCleanupResult> {
+  const dryRun = options.dryRun !== false;
+
+  if (dryRun) {
+    const result = await db.execute(sql`
+      WITH candidates AS (
+        SELECT DISTINCT
+          l.id,
+          trim(concat_ws(' ', l.first_name, l.last_name)) AS name,
+          l.source,
+          l.lead_type,
+          l.service_type,
+          l.hub_status,
+          l.status,
+          l.created_at
+        FROM leads l
+        WHERE l.tenant_id = ${tenantId}
+          AND (
+            lower(coalesce(l.service_type, '')) LIKE '%callrail%'
+            OR lower(coalesce(l.lead_type, '')) LIKE '%callrail%'
+            OR lower(coalesce(l.source, '')) LIKE '%callrail%'
+            OR lower(coalesce(l.original_source, '')) LIKE '%callrail%'
+            OR lower(coalesce(l.dead_reason, '')) LIKE 'callrail_%'
+            OR EXISTS (
+              SELECT 1
+              FROM attribution_events ae
+              WHERE ae.tenant_id = l.tenant_id
+                AND ae.created_lead_id = l.id
+                AND (
+                  ae.external_id LIKE 'callrail:%'
+                  OR ae.form_type = 'callrail_call'
+                  OR ae.form_fields->>'provider' = 'callrail'
+                )
+                AND abs(extract(epoch FROM (l.created_at - coalesce(ae.submitted_at, ae.created_at)))) <= 600
+            )
+          )
+      ),
+      hub_counts AS (
+        SELECT hub_status, count(*)::int AS count
+        FROM candidates
+        GROUP BY hub_status
+      ),
+      status_counts AS (
+        SELECT status, count(*)::int AS count
+        FROM candidates
+        GROUP BY status
+      ),
+      sample_rows AS (
+        SELECT
+          id,
+          name,
+          source,
+          lead_type AS "leadType",
+          service_type AS "serviceType",
+          hub_status AS "hubStatus",
+          created_at AS "createdAt"
+        FROM candidates
+        ORDER BY created_at DESC, id DESC
+        LIMIT 10
+      )
+      SELECT
+        (SELECT count(*)::int FROM candidates) AS candidates,
+        0::int AS deleted_leads,
+        0::int AS attribution_events_unlinked,
+        0::int AS jobs_unlinked,
+        0::int AS sold_estimates_unlinked,
+        0::int AS podium_messages_unlinked,
+        0::int AS scheduled_followups_deleted,
+        0::int AS call_attempts_deleted,
+        0::int AS lead_status_history_deleted,
+        0::int AS lead_assignments_deleted,
+        0::int AS lead_attribution_corrections_deleted,
+        0::int AS lead_merge_rows_deleted,
+        0::int AS unrouted_rows_unlinked,
+        coalesce((SELECT json_object_agg(coalesce(hub_status::text, 'none'), count) FROM hub_counts), '{}'::json) AS by_hub_status,
+        coalesce((SELECT json_object_agg(coalesce(status::text, 'none'), count) FROM status_counts), '{}'::json) AS by_status,
+        coalesce((SELECT json_agg(sample_rows) FROM sample_rows), '[]'::json) AS samples
+    `);
+    return cleanupResult(tenantId, true, result.rows[0] as Record<string, unknown> | undefined);
+  }
+
+  const result = await db.execute(sql`
+    WITH candidates AS (
+      SELECT DISTINCT
+        l.id,
+        trim(concat_ws(' ', l.first_name, l.last_name)) AS name,
+        l.source,
+        l.lead_type,
+        l.service_type,
+        l.hub_status,
+        l.status,
+        l.created_at
+      FROM leads l
+      WHERE l.tenant_id = ${tenantId}
+        AND (
+          lower(coalesce(l.service_type, '')) LIKE '%callrail%'
+          OR lower(coalesce(l.lead_type, '')) LIKE '%callrail%'
+          OR lower(coalesce(l.source, '')) LIKE '%callrail%'
+          OR lower(coalesce(l.original_source, '')) LIKE '%callrail%'
+          OR lower(coalesce(l.dead_reason, '')) LIKE 'callrail_%'
+          OR EXISTS (
+            SELECT 1
+            FROM attribution_events ae
+            WHERE ae.tenant_id = l.tenant_id
+              AND ae.created_lead_id = l.id
+              AND (
+                ae.external_id LIKE 'callrail:%'
+                OR ae.form_type = 'callrail_call'
+                OR ae.form_fields->>'provider' = 'callrail'
+              )
+              AND abs(extract(epoch FROM (l.created_at - coalesce(ae.submitted_at, ae.created_at)))) <= 600
+          )
+        )
+    ),
+    hub_counts AS (
+      SELECT hub_status, count(*)::int AS count
+      FROM candidates
+      GROUP BY hub_status
+    ),
+    status_counts AS (
+      SELECT status, count(*)::int AS count
+      FROM candidates
+      GROUP BY status
+    ),
+    sample_rows AS (
+      SELECT
+        id,
+        name,
+        source,
+        lead_type AS "leadType",
+        service_type AS "serviceType",
+        hub_status AS "hubStatus",
+        created_at AS "createdAt"
+      FROM candidates
+      ORDER BY created_at DESC, id DESC
+      LIMIT 10
+    ),
+    sync_log AS (
+      INSERT INTO integration_sync_logs (
+        tenant_id,
+        integration,
+        sync_type,
+        status,
+        started_at,
+        records_processed
+      )
+      VALUES (
+        ${tenantId},
+        'callrail',
+        'pulse_lead_cleanup',
+        'running',
+        now(),
+        (SELECT count(*)::int FROM candidates)
+      )
+      RETURNING id
+    ),
+    attribution_events_unlinked AS (
+      UPDATE attribution_events
+      SET created_lead_id = NULL
+      WHERE created_lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    jobs_unlinked AS (
+      UPDATE jobs
+      SET lead_id = NULL, updated_at = now()
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    sold_estimates_unlinked AS (
+      UPDATE sold_estimates
+      SET lead_id = NULL, updated_at = now()
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    podium_messages_unlinked AS (
+      UPDATE podium_messages
+      SET lead_id = NULL
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    unrouted_rows_unlinked AS (
+      UPDATE unrouted_sheet_rows
+      SET resolved_lead_id = NULL, resolved_via = NULL
+      WHERE resolved_lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    scheduled_followups_deleted AS (
+      DELETE FROM scheduled_followups
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    call_attempts_deleted AS (
+      DELETE FROM call_attempts
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    lead_attribution_corrections_deleted AS (
+      DELETE FROM lead_attribution_corrections
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    lead_status_history_deleted AS (
+      DELETE FROM lead_status_history
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    lead_assignments_deleted AS (
+      DELETE FROM lead_assignments
+      WHERE lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    lead_merge_rows_deleted AS (
+      DELETE FROM lead_merges
+      WHERE duplicate_lead_id IN (SELECT id FROM candidates)
+         OR canonical_lead_id IN (SELECT id FROM candidates)
+      RETURNING 1
+    ),
+    deleted_leads AS (
+      DELETE FROM leads
+      WHERE id IN (SELECT id FROM candidates)
+      RETURNING id
+    ),
+    completed_log AS (
+      UPDATE integration_sync_logs
+      SET
+        status = 'completed',
+        records_processed = (SELECT count(*)::int FROM deleted_leads),
+        completed_at = now(),
+        error_message = NULL,
+        error_code = NULL
+      WHERE id = (SELECT id FROM sync_log)
+      RETURNING id
+    )
+    SELECT
+      (SELECT count(*)::int FROM candidates) AS candidates,
+      (SELECT count(*)::int FROM deleted_leads) AS deleted_leads,
+      (SELECT count(*)::int FROM attribution_events_unlinked) AS attribution_events_unlinked,
+      (SELECT count(*)::int FROM jobs_unlinked) AS jobs_unlinked,
+      (SELECT count(*)::int FROM sold_estimates_unlinked) AS sold_estimates_unlinked,
+      (SELECT count(*)::int FROM podium_messages_unlinked) AS podium_messages_unlinked,
+      (SELECT count(*)::int FROM scheduled_followups_deleted) AS scheduled_followups_deleted,
+      (SELECT count(*)::int FROM call_attempts_deleted) AS call_attempts_deleted,
+      (SELECT count(*)::int FROM lead_status_history_deleted) AS lead_status_history_deleted,
+      (SELECT count(*)::int FROM lead_assignments_deleted) AS lead_assignments_deleted,
+      (SELECT count(*)::int FROM lead_attribution_corrections_deleted) AS lead_attribution_corrections_deleted,
+      (SELECT count(*)::int FROM lead_merge_rows_deleted) AS lead_merge_rows_deleted,
+      (SELECT count(*)::int FROM unrouted_rows_unlinked) AS unrouted_rows_unlinked,
+      coalesce((SELECT json_object_agg(coalesce(hub_status::text, 'none'), count) FROM hub_counts), '{}'::json) AS by_hub_status,
+      coalesce((SELECT json_object_agg(coalesce(status::text, 'none'), count) FROM status_counts), '{}'::json) AS by_status,
+      coalesce((SELECT json_agg(sample_rows) FROM sample_rows), '[]'::json) AS samples
+  `);
+
+  return cleanupResult(tenantId, false, result.rows[0] as Record<string, unknown> | undefined);
 }

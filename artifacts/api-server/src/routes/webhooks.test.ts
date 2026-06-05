@@ -571,12 +571,11 @@ describe("POST /webhooks/callrail/:tenantId", () => {
   it("keeps CallRail webhooks attribution-only by default", async () => {
     mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY });
     const fakeEvent = { id: 699, tenantId: 1 };
-    const fakeLead = { id: 69, tenantId: 1 };
     mockDb.selectResults = [
       [{ id: 1, apiConfig: "encrypted" }],
       [],
     ];
-    mockDb.insertResults = [[fakeEvent], [fakeLead]];
+    mockDb.insertResults = [[fakeEvent]];
 
     const payload = {
       id: "CAL_attr_only",
@@ -590,12 +589,34 @@ describe("POST /webhooks/callrail/:tenantId", () => {
 
     expect(res.status).toBe(200);
     expect(res.json().pulseLeadCreated).toBe(false);
-    expect(res.json().attributionLeadId).toBe(69);
+    expect(res.json().attributionLeadId).toBeNull();
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
+  });
 
-    const leadInsert = mockDb.insertCalls.find(c => c.table === leadsTable)?.values as Record<string, unknown>;
-    expect(leadInsert.hubStatus).toBe("dead");
-    expect(leadInsert.status).toBe("lost");
-    expect(leadInsert.deadReason).toBe("callrail_attribution_only");
+  it("links an attribution-only CallRail webhook to an existing Pulse lead without creating a new one", async () => {
+    mockDecryptConfig.mockReturnValue({ callRailSigningKey: SIGNING_KEY });
+    const fakeEvent = { id: 699, tenantId: 1 };
+    const existingLead = { id: 69, tenantId: 1 };
+    mockDb.selectResults = [
+      [{ id: 1, apiConfig: "encrypted" }],
+      [existingLead],
+    ];
+    mockDb.insertResults = [[fakeEvent]];
+
+    const payload = {
+      id: "CAL_existing_attr",
+      customer_phone_number: "+15551234567",
+      customer_name: "Existing Lead",
+      source: "Google Organic",
+    };
+    const sig = signCallRail(JSON.stringify(payload));
+
+    const res = await sendRequest(app, "/webhooks/callrail/1", payload, { signature: sig });
+
+    expect(res.status).toBe(200);
+    expect(res.json().pulseLeadCreated).toBe(false);
+    expect(res.json().attributionLeadId).toBe(69);
+    expect(mockDb.insertCalls.filter(c => c.table === leadsTable).length).toBe(0);
   });
 
   it("accepts a valid CallRail Post-Call payload, maps fields, and creates event + lead when enabled", async () => {

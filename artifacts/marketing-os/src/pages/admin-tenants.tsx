@@ -679,7 +679,7 @@ export default function AdminTenants() {
                   <div>
                     <label className="text-xs text-white/80 uppercase tracking-wider block">Create new Pulse leads from CallRail</label>
                     <p className="text-[11px] text-muted-foreground mt-1 max-w-2xl">
-                      Off by default. When off, CallRail calls are kept for revenue attribution only and will not enter the active Pulse queue.
+                      Off by default. When off, CallRail calls are saved as attribution events only and do not create Pulse leads.
                     </p>
                   </div>
                   <Switch

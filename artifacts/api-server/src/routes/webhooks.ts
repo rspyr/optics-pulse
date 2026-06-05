@@ -277,67 +277,21 @@ async function recordCallRailStatus(
   }
 }
 
-async function createOrLinkCallRailAttributionLead(args: {
+async function linkExistingCallRailAttributionLead(args: {
   tenantId: number;
   eventId: number;
-  customerName: string;
   customerPhone: string | null;
-  source: string;
-  sourceName: string | null;
-  gclid: string | null;
-  submittedAt: Date;
 }): Promise<number | null> {
   const normalizedPhone = args.customerPhone ? normalizePhone(args.customerPhone) : "";
-  let leadId: number | null = null;
+  if (!normalizedPhone) return null;
 
-  if (normalizedPhone) {
-    const [existingLead] = await db.select({ id: leadsTable.id }).from(leadsTable)
-      .where(and(
-        eq(leadsTable.tenantId, args.tenantId),
-        phoneMatchesSql(leadsTable.phone, normalizedPhone),
-      ))
-      .limit(1);
-    leadId = existingLead?.id ?? null;
-  }
-
-  if (!leadId) {
-    const nameParts = args.customerName.trim().split(/\s+/).filter(Boolean);
-    const firstName = nameParts[0] || "Unknown";
-    const lastName = nameParts.slice(1).join(" ") || "";
-    const normalizedSource = await normalizeSource(args.tenantId, args.source);
-
-    const [lead] = await db.insert(leadsTable).values({
-      tenantId: args.tenantId,
-      firstName,
-      lastName,
-      phone: normalizedPhone || null,
-      source: normalizedSource,
-      originalSource: normalizedSource,
-      matchedGclid: args.gclid,
-      leadType: args.sourceName || "CallRail",
-      serviceType: "CallRail",
-      interestType: null,
-      hubStatus: "dead",
-      status: "lost",
-      deadReason: "callrail_attribution_only",
-      assignedAt: args.submittedAt,
-      createdAt: args.submittedAt,
-      updatedAt: args.submittedAt,
-    }).returning();
-    leadId = lead?.id ?? null;
-
-    if (leadId) {
-      const { recordLeadStatusChange } = await import("../services/lead-status-history");
-      await recordLeadStatusChange({
-        leadId,
-        tenantId: args.tenantId,
-        fromStatus: null,
-        toStatus: "dead",
-        changedAt: args.submittedAt,
-        reason: "callrail_attribution_only",
-      });
-    }
-  }
+  const [existingLead] = await db.select({ id: leadsTable.id }).from(leadsTable)
+    .where(and(
+      eq(leadsTable.tenantId, args.tenantId),
+      phoneMatchesSql(leadsTable.phone, normalizedPhone),
+    ))
+    .limit(1);
+  const leadId = existingLead?.id ?? null;
 
   if (leadId) {
     await db.update(attributionEventsTable)
@@ -490,16 +444,11 @@ router.post("/webhooks/callrail/:tenantId", webhookLimiter, async (req, res) => 
 
     if (!createPulseLeadFromCallRail) {
       let attributionLeadId: number | null = null;
-      if (!isTestLead && (customerName || customerPhone)) {
-        attributionLeadId = await createOrLinkCallRailAttributionLead({
+      if (!isTestLead && customerPhone) {
+        attributionLeadId = await linkExistingCallRailAttributionLead({
           tenantId,
           eventId: event.id,
-          customerName,
           customerPhone,
-          source: resolvedCallRailSource,
-          sourceName,
-          gclid,
-          submittedAt,
         });
       }
       await recordCallRailStatus(tenantId, { success: true, callId });

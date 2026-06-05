@@ -3,7 +3,7 @@ import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspac
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
 import { syncGoogleAdsCampaigns, syncMetaCampaigns, syncCallRailAttribution, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
-import { DEFAULT_CALLRAIL_BACKFILL_DAYS, MAX_CALLRAIL_BACKFILL_DAYS } from "../services/integrations/callrail";
+import { cleanupCallRailPulseLeads, DEFAULT_CALLRAIL_BACKFILL_DAYS, MAX_CALLRAIL_BACKFILL_DAYS } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
 import { parseBackfillProgress, classifyBackfillError, computeChunkPercent, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
 
@@ -45,7 +45,6 @@ router.post("/integrations/sync/:integration", requireRole("super_admin", "agenc
       const callRailResult = await syncCallRailAttribution(tenantId, {
         days: 30,
         syncType: "calls",
-        createLeadMode: "attribution_only",
       });
       result = callRailResult.error
         ? { synced: 0, error: callRailResult.error }
@@ -132,7 +131,7 @@ router.post("/integrations/callrail/backfill", requireRole("super_admin", "agenc
   const result = await syncCallRailAttribution(tenantId, {
     days,
     syncType: "backfill",
-    createLeadMode: "attribution_only",
+    createLeadMode: "none",
   });
   if (result.error) {
     const status = /not found/i.test(result.error) ? 404
@@ -143,6 +142,24 @@ router.post("/integrations/callrail/backfill", requireRole("super_admin", "agenc
     return;
   }
   res.json({ success: true, ...result });
+});
+
+router.post("/integrations/callrail/pulse-leads/cleanup", requireRole("super_admin", "agency_user"), async (req, res) => {
+  const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
+  const dryRun = req.body?.dryRun !== false && req.query.apply !== "true";
+
+  if (!tenantId || isNaN(tenantId)) {
+    res.status(400).json({ error: "tenantId required" });
+    return;
+  }
+
+  try {
+    const result = await cleanupCallRailPulseLeads(tenantId, { dryRun });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ success: false, error: message });
+  }
 });
 
 /**
