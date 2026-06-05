@@ -20,6 +20,10 @@ const challengeResponse = {
   allocation: {
     method: "pulse_lead_share",
     allUniquePulseLeads: 10,
+    mappedSpend: 0,
+    mappedMetaLeads: 0,
+    unmappedSpend: 0,
+    unmappedMetaLeads: 0,
     note: "Allocation note",
   },
   summary: {

@@ -147,4 +147,78 @@ describe("buildChallengeDashboardResponse", () => {
     expect(response.summary.costPerLead).toBe(20);
     expect(response.byFunnel.map((row) => row.costPerLead)).toEqual([20, 40]);
   });
+
+  it("uses saved Meta campaign mappings for per-funnel spend and Meta leads", () => {
+    const response = buildChallengeDashboardResponse({
+      startDate: "2026-06-01",
+      endDate: "2026-06-30",
+      selectedFunnels: ["Install"],
+      funnels: ["Install", "Heat Pump"],
+      totalSpend: 1000,
+      metaLeads: 100,
+      adRows: [
+        { funnel: "Install", mapped: true, spend: 300, meta_leads: 30 },
+        { funnel: "Heat Pump", mapped: true, spend: 200, meta_leads: 5 },
+        { funnel: null, mapped: false, spend: 500, meta_leads: 65 },
+      ],
+      rows: [
+        {
+          row_type: "summary",
+          funnel: "All funnels",
+          meta_leads: 80,
+          unique_pulse_leads: 25,
+          appointments_booked: 0,
+          total_jobs: 0,
+          cancelled_jobs: 0,
+          completed_estimate_jobs: 0,
+          total_estimate_value: 30000,
+          sold_closed_value: 0,
+          sold_jobs: 0,
+          all_unique_pulse_leads: 25,
+        },
+        {
+          row_type: "funnel",
+          funnel: "Install",
+          meta_leads: 50,
+          unique_pulse_leads: 20,
+          appointments_booked: 0,
+          total_jobs: 0,
+          cancelled_jobs: 0,
+          completed_estimate_jobs: 0,
+          total_estimate_value: 20000,
+          sold_closed_value: 0,
+          sold_jobs: 0,
+          all_unique_pulse_leads: 25,
+        },
+        {
+          row_type: "funnel",
+          funnel: "Heat Pump",
+          meta_leads: 30,
+          unique_pulse_leads: 5,
+          appointments_booked: 0,
+          total_jobs: 0,
+          cancelled_jobs: 0,
+          completed_estimate_jobs: 0,
+          total_estimate_value: 10000,
+          sold_closed_value: 0,
+          sold_jobs: 0,
+          all_unique_pulse_leads: 25,
+        },
+      ],
+    });
+
+    expect(response.allocation.method).toBe("meta_campaign_funnel_mapping");
+    expect(response.allocation.mappedSpend).toBe(500);
+    expect(response.allocation.unmappedSpend).toBe(500);
+    expect(response.summary.totalSpend).toBe(300);
+    expect(response.summary.metaLeads).toBe(30);
+    expect(response.summary.costPerLead).toBe(10);
+
+    const install = response.byFunnel.find((row) => row.funnel === "Install");
+    const heatPump = response.byFunnel.find((row) => row.funnel === "Heat Pump");
+    expect(install?.totalSpend).toBe(300);
+    expect(install?.costPerLead).toBe(10);
+    expect(heatPump?.totalSpend).toBe(200);
+    expect(heatPump?.costPerLead).toBe(40);
+  });
 });

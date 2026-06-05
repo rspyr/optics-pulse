@@ -56,6 +56,13 @@ type ChallengeRollupRow = {
   all_unique_pulse_leads: string | number | null;
 };
 
+type ChallengeAdRow = {
+  funnel: string | null;
+  mapped: boolean | string | number | null;
+  spend: string | number | null;
+  meta_leads: string | number | null;
+};
+
 type ChallengeMetricRow = {
   funnel: string | null;
   costPerLead: number;
@@ -86,9 +93,9 @@ function toNumber(value: unknown): number {
 function buildChallengeMetricRow(
   row: ChallengeRollupRow,
   allocatedSpend: number,
-  allocatedMetaLeads: number,
+  allocatedMetaLeads: number | null,
 ): ChallengeMetricRow {
-  const metaLeads = row.meta_leads == null ? allocatedMetaLeads : toNumber(row.meta_leads);
+  const metaLeads = allocatedMetaLeads == null ? toNumber(row.meta_leads) : allocatedMetaLeads;
   const uniquePulseLeads = toNumber(row.unique_pulse_leads);
   const appointmentsBooked = toNumber(row.appointments_booked);
   const totalJobs = toNumber(row.total_jobs);
@@ -123,6 +130,7 @@ function buildChallengeMetricRow(
 
 export function buildChallengeDashboardResponse(input: {
   rows: ChallengeRollupRow[];
+  adRows?: ChallengeAdRow[];
   totalSpend: number;
   metaLeads: number;
   funnels: string[];
@@ -150,18 +158,61 @@ export function buildChallengeDashboardResponse(input: {
   const selectedShare = input.selectedFunnels.length > 0
     ? (allUniquePulseLeads > 0 ? selectedUniquePulseLeads / allUniquePulseLeads : 0)
     : 1;
+  const adRows = input.adRows ?? [];
+  const mappedByFunnel = new Map<string, { spend: number; metaLeads: number }>();
+  let mappedSpend = 0;
+  let mappedMetaLeads = 0;
+  let unmappedSpend = 0;
+  let unmappedMetaLeads = 0;
+
+  for (const row of adRows) {
+    const spend = toNumber(row.spend);
+    const metaLeads = toNumber(row.meta_leads);
+    const mapped = row.mapped === true || row.mapped === "true" || row.mapped === 1;
+    if (mapped && row.funnel) {
+      const existing = mappedByFunnel.get(row.funnel) ?? { spend: 0, metaLeads: 0 };
+      existing.spend += spend;
+      existing.metaLeads += metaLeads;
+      mappedByFunnel.set(row.funnel, existing);
+      mappedSpend += spend;
+      mappedMetaLeads += metaLeads;
+    } else {
+      unmappedSpend += spend;
+      unmappedMetaLeads += metaLeads;
+    }
+  }
+
+  const hasCampaignMappings = mappedByFunnel.size > 0;
+  const selectedMappedTotals = input.selectedFunnels.reduce((totals, funnel) => {
+    const row = mappedByFunnel.get(funnel);
+    if (!row) return totals;
+    totals.spend += row.spend;
+    totals.metaLeads += row.metaLeads;
+    return totals;
+  }, { spend: 0, metaLeads: 0 });
+  const selectedSpend = hasCampaignMappings
+    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.spend : input.totalSpend)
+    : input.totalSpend * selectedShare;
+  const selectedMetaLeads = hasCampaignMappings
+    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.metaLeads : input.metaLeads)
+    : null;
 
   const summary = buildChallengeMetricRow(
     summaryRow,
-    input.totalSpend * selectedShare,
-    input.metaLeads * selectedShare,
+    selectedSpend,
+    selectedMetaLeads,
   );
 
   const byFunnel = input.rows
     .filter((row) => row.row_type === "funnel")
     .map((row) => {
       const share = allUniquePulseLeads > 0 ? toNumber(row.unique_pulse_leads) / allUniquePulseLeads : 0;
-      return buildChallengeMetricRow(row, input.totalSpend * share, input.metaLeads * share);
+      const mapped = row.funnel ? mappedByFunnel.get(row.funnel) : null;
+      return buildChallengeMetricRow(
+        row,
+        hasCampaignMappings ? (mapped?.spend ?? 0) : input.totalSpend * share,
+        hasCampaignMappings ? (mapped?.metaLeads ?? 0) : null,
+      );
     })
     .sort((a, b) => b.totalEstimateValue - a.totalEstimateValue || (a.funnel ?? "").localeCompare(b.funnel ?? ""));
 
@@ -172,9 +223,15 @@ export function buildChallengeDashboardResponse(input: {
     summary,
     byFunnel,
     allocation: {
-      method: "pulse_lead_share",
+      method: hasCampaignMappings ? "meta_campaign_funnel_mapping" : "pulse_lead_share",
       allUniquePulseLeads,
-      note: "Campaign spend is stored by campaign/date, so selected and per-funnel views allocate spend by each funnel's share of unique Pulse leads in the same lead-received window. Meta Leads count raw Meta-sourced lead submissions received in that window, while Pulse Leads are deduped.",
+      mappedSpend: round2(mappedSpend),
+      mappedMetaLeads: round1(mappedMetaLeads),
+      unmappedSpend: round2(unmappedSpend),
+      unmappedMetaLeads: round1(unmappedMetaLeads),
+      note: hasCampaignMappings
+        ? "Per-funnel spend and Meta Leads use the saved Meta campaign-to-funnel map. Any unmapped Meta spend is excluded from individual funnel rows until it is assigned."
+        : "No Meta campaign-to-funnel map exists yet, so selected and per-funnel views allocate spend by each funnel's share of unique Pulse leads in the same lead-received window. Meta Leads count raw Meta-sourced lead submissions received in that window, while Pulse Leads are deduped.",
     },
   };
 }
@@ -415,12 +472,40 @@ router.get("/dashboard/challenge", async (req, res) => {
   const adResult = await db.execute(sql`
     SELECT
       COALESCE(SUM(cds.spend), 0)::numeric AS total_spend,
-      COALESCE(SUM(cds.conversions) FILTER (WHERE c.platform = 'meta'), 0)::numeric AS meta_leads
+      COALESCE(SUM(cds.conversions), 0)::numeric AS meta_leads
     FROM campaign_daily_stats cds
     JOIN campaigns c ON c.id = cds.campaign_id
     WHERE cds.date >= ${startDate}
       AND cds.date <= ${endDate}
+      AND c.platform = 'meta'
       ${tenantCampaignFilter}
+  `);
+
+  const adMappingResult = await db.execute(sql`
+    SELECT
+      CASE
+        WHEN cfm.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL THEN ft.name
+        ELSE NULL
+      END AS funnel,
+      (cfm.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL) AS mapped,
+      COALESCE(SUM(cds.spend), 0)::numeric AS spend,
+      COALESCE(SUM(cds.conversions), 0)::numeric AS meta_leads
+    FROM campaigns c
+    LEFT JOIN campaign_daily_stats cds
+      ON cds.campaign_id = c.id
+      AND cds.date >= ${startDate}
+      AND cds.date <= ${endDate}
+    LEFT JOIN campaign_funnel_mappings cfm
+      ON cfm.campaign_id = c.id
+      AND cfm.tenant_id = c.tenant_id
+    LEFT JOIN tenant_funnel_types tft
+      ON tft.tenant_id = c.tenant_id
+      AND tft.funnel_type_id = cfm.funnel_type_id
+    LEFT JOIN funnel_types ft
+      ON ft.id = tft.funnel_type_id
+    WHERE c.platform = 'meta'
+      ${tenantCampaignFilter}
+    GROUP BY cfm.funnel_type_id, ft.id, ft.name
   `);
 
   const funnelResult = await db.execute(sql`
@@ -436,12 +521,14 @@ router.get("/dashboard/challenge", async (req, res) => {
 
   const rows = ((rollupResult as unknown as { rows?: ChallengeRollupRow[] }).rows ?? []);
   const adRow = ((adResult as unknown as { rows?: Array<{ total_spend: string | number; meta_leads: string | number }> }).rows ?? [])[0];
+  const adRows = ((adMappingResult as unknown as { rows?: ChallengeAdRow[] }).rows ?? []);
   const funnels = (((funnelResult as unknown as { rows?: Array<{ funnel: string }> }).rows ?? [])
     .map(row => row.funnel)
     .filter((f): f is string => typeof f === "string" && f.trim().length > 0));
 
   res.json(buildChallengeDashboardResponse({
     rows,
+    adRows,
     totalSpend: toNumber(adRow?.total_spend),
     metaLeads: toNumber(adRow?.meta_leads),
     funnels,

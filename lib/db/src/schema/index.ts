@@ -4,6 +4,7 @@ export * from "./attribution-events";
 export * from "./leads";
 export * from "./jobs";
 export * from "./campaigns";
+export * from "./campaign-funnel-mappings";
 export * from "./sessions";
 export * from "./change-logs";
 export * from "./reconciliation-runs";
