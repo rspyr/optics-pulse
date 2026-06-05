@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Challenge from "../challenge";
 
@@ -13,21 +13,25 @@ vi.mock("@/components/auth-context", () => ({
   }),
 }));
 
-const challengeResponse = {
-  dateRange: { startDate: "2026-06-01", endDate: "2026-06-30" },
-  selectedFunnels: [],
-  funnels: ["Install"],
+const challengeResponse: any = {
+  compareMode: "client_funnels",
+  dayRange: { startDay: 1, endDay: 30, label: "Days 1-30" },
+  runRule: "newest",
+  bestBy: "roasSold",
+  selectedTenantIds: [],
+  selectedFunnelTypeIds: [],
+  availableClients: [{ id: 1, name: "Client A", runCount: 2 }],
+  availableFunnels: [{ id: 10, name: "Install", runCount: 1 }, { id: 11, name: "Repair", runCount: 1 }],
+  selectedRuns: [],
   allocation: {
-    method: "pulse_lead_share",
-    allUniquePulseLeads: 10,
-    mappedSpend: 0,
-    mappedMetaLeads: 0,
-    unmappedSpend: 0,
-    unmappedMetaLeads: 0,
+    method: "meta_campaign_funnel_mapping",
     note: "Allocation note",
   },
   summary: {
     funnel: null,
+    rowKey: "summary",
+    rowLabel: "Selected comparison",
+    activeDays: 14,
     costPerLead: 100,
     metaLeads: 10,
     uniquePulseLeads: 10,
@@ -50,6 +54,13 @@ const challengeResponse = {
   byFunnel: [
     {
       funnel: "Install",
+      rowKey: "funnel:10",
+      rowLabel: "Install",
+      funnelTypeId: 10,
+      funnelName: "Install",
+      runName: "Newest run",
+      runCount: 1,
+      activeDays: 14,
       costPerLead: 100,
       metaLeads: 10,
       uniquePulseLeads: 10,
@@ -69,8 +80,36 @@ const challengeResponse = {
       costToAcquireCustomer: 500,
       averageClosedJobValue: 2500,
     },
+    {
+      funnel: "Repair",
+      rowKey: "funnel:11",
+      rowLabel: "Repair",
+      funnelTypeId: 11,
+      funnelName: "Repair",
+      runName: "Newest run",
+      runCount: 1,
+      activeDays: 10,
+      costPerLead: 200,
+      metaLeads: 4,
+      uniquePulseLeads: 6,
+      appointmentsBooked: 3,
+      bookingRate: 50,
+      cancellationRate: 0,
+      cancelledJobs: 0,
+      totalJobs: 6,
+      totalEstimateValue: 6000,
+      totalSoldClosedValue: 3000,
+      roasPotential: 3,
+      roasSold: 1.5,
+      totalSpend: 800,
+      completedEstimateJobs: 2,
+      soldJobs: 1,
+      costToAcquireCustomer: 800,
+      averageClosedJobValue: 3000,
+    },
   ],
 };
+challengeResponse.rows = challengeResponse.byFunnel;
 
 function installLocalStorageShim() {
   const values = new Map<string, string>();
@@ -127,17 +166,74 @@ describe("Challenge metric preferences", () => {
     const user = userEvent.setup();
     const { container } = render(<Challenge />);
 
-    await screen.findByText("Per-Funnel Breakdown");
+    await screen.findByText("Comparison Breakdown");
     await waitFor(() => expect(screen.queryByText("CPL")).not.toBeInTheDocument());
 
     const headerCells = Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
     expect(headerCells.slice(0, 3)).toEqual(["Funnel", "ROAS Sold", "Meta Leads"]);
 
-    const visibleButton = screen.getByRole("button", { name: /13 visible/i });
+    const visibleButton = screen.getByRole("button", { name: /14 visible/i });
     await user.click(visibleButton);
 
     const menu = await screen.findByText("Column metrics");
     expect(menu).toBeInTheDocument();
     expect(within(document.body).getByText("Cost Per Lead")).toBeInTheDocument();
+  });
+
+  it("coordinates presentation hover across a funnel cell, funnel label, and metric label", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    const metaLeadCell = screen.getByLabelText("Install Leads From Meta: 10");
+
+    fireEvent.mouseEnter(metaLeadCell);
+
+    expect(metaLeadCell).toHaveAttribute("data-challenge-hover", "active");
+    expect(container.querySelectorAll('[data-challenge-hover="active"]')).toHaveLength(3);
+  });
+
+  it("nests run selection inside the funnel dropdown", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    await user.click(screen.getByRole("button", { name: /all funnels/i }));
+
+    expect(screen.getByText("Run selection")).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: "Newest run" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("menuitemradio", { name: "Avg all runs" }));
+    expect(screen.getByRole("menuitemradio", { name: "Avg all runs" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keeps shared row and metric hover state while moving on one table axis", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    const activeLabels = () =>
+      Array.from(container.querySelectorAll('[data-challenge-hover="active"]')).map((element) => element.textContent?.trim());
+
+    const installMetaCell = screen.getByLabelText("Install Leads From Meta: 10");
+    const installPulseCell = screen.getByLabelText("Install Unique Pulse Leads: 10");
+    const repairPulseCell = screen.getByLabelText("Repair Unique Pulse Leads: 6");
+    const breakdownGrid = container.querySelector("[data-challenge-breakdown-grid]");
+    const hasActiveLabel = (label: string) => activeLabels().some((text) => text?.includes(label));
+
+    fireEvent.mouseEnter(installMetaCell);
+    expect(hasActiveLabel("Install")).toBe(true);
+    expect(activeLabels()).toContain("Meta Leads");
+
+    fireEvent.mouseOut(installMetaCell, { relatedTarget: installPulseCell });
+    expect(hasActiveLabel("Install")).toBe(true);
+    expect(activeLabels()).toContain("Pulse Leads");
+    expect(activeLabels()).not.toContain("Meta Leads");
+
+    fireEvent.mouseOut(installPulseCell, { relatedTarget: repairPulseCell });
+    expect(hasActiveLabel("Repair")).toBe(true);
+    expect(activeLabels()).toContain("Pulse Leads");
+    expect(hasActiveLabel("Install")).toBe(false);
+
+    expect(breakdownGrid).not.toBeNull();
+    fireEvent.mouseLeave(breakdownGrid!);
+    expect(activeLabels()).toHaveLength(0);
   });
 });

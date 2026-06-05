@@ -18,6 +18,9 @@ const BOOTSTRAP_PENDING = new Set([
   "0080_exact_linked_contact_attribution",
   "0081_preserve_exact_linked_contact_matches",
   "0082_estimate_option_metadata",
+  "0084_funnel_runs",
+  "0085_challenge_run_performance_indexes",
+  "0086_funnel_runs_backfill",
 ]);
 
 function resolveMigrationsDir(): string {
@@ -156,30 +159,65 @@ export async function runSchemaMigrations(): Promise<void> {
       if (applied.has(tag)) continue;
 
       const contents = fs.readFileSync(path.join(dir, file), "utf8");
+
+      // A migration whose first non-empty line is `-- migration:no-transaction`
+      // runs OUTSIDE an explicit transaction so it can use statements Postgres
+      // forbids inside a transaction block — chiefly `CREATE INDEX CONCURRENTLY`,
+      // which builds indexes without holding a write-blocking lock. Such a
+      // migration MUST be idempotent (use IF NOT EXISTS / DROP ... IF EXISTS):
+      // because there is no surrounding transaction, a mid-way failure leaves
+      // partial work that is NOT recorded as applied and will be retried on the
+      // next deploy. Each statement must also be its own breakpoint-separated
+      // chunk, since multiple statements in one query form an implicit
+      // transaction that CONCURRENTLY would reject.
+      const firstLine =
+        contents
+          .split("\n")
+          .map((l) => l.trim())
+          .find((l) => l.length > 0) ?? "";
+      const noTransaction = /^--\s*migration:no-transaction\b/.test(firstLine);
+
       const chunks = contents
         .split(/-->\s*statement-breakpoint/)
         .map((s) => s.trim())
         .filter(Boolean);
 
       console.log(
-        `[SchemaMigrations] Applying ${tag} (${chunks.length} statement group(s))`,
+        `[SchemaMigrations] Applying ${tag} (${chunks.length} statement group(s))${noTransaction ? " [no-transaction]" : ""}`,
       );
-      try {
-        await client.query("BEGIN");
-        for (const chunk of chunks) {
-          await client.query(chunk);
+      if (noTransaction) {
+        try {
+          for (const chunk of chunks) {
+            await client.query(chunk);
+          }
+          await client.query(
+            `INSERT INTO _applied_migrations (tag) VALUES ($1) ON CONFLICT DO NOTHING`,
+            [tag],
+          );
+          appliedCount++;
+          console.log(`[SchemaMigrations] Applied ${tag}`);
+        } catch (err) {
+          console.error(`[SchemaMigrations] Failed to apply ${tag}:`, err);
+          throw err;
         }
-        await client.query(
-          `INSERT INTO _applied_migrations (tag) VALUES ($1)`,
-          [tag],
-        );
-        await client.query("COMMIT");
-        appliedCount++;
-        console.log(`[SchemaMigrations] Applied ${tag}`);
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        console.error(`[SchemaMigrations] Failed to apply ${tag}:`, err);
-        throw err;
+      } else {
+        try {
+          await client.query("BEGIN");
+          for (const chunk of chunks) {
+            await client.query(chunk);
+          }
+          await client.query(
+            `INSERT INTO _applied_migrations (tag) VALUES ($1)`,
+            [tag],
+          );
+          await client.query("COMMIT");
+          appliedCount++;
+          console.log(`[SchemaMigrations] Applied ${tag}`);
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          console.error(`[SchemaMigrations] Failed to apply ${tag}:`, err);
+          throw err;
+        }
       }
     }
 
