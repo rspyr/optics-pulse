@@ -219,7 +219,8 @@ router.get("/dashboard/challenge", async (req, res) => {
           OR l.has_sold_estimate = true
         ) AS booked
       FROM leads l
-      LEFT JOIN funnel_types ft ON ft.id = l.funnel_id AND ft.tenant_id = l.tenant_id
+      LEFT JOIN tenant_funnel_types tft ON tft.funnel_type_id = l.funnel_id AND tft.tenant_id = l.tenant_id
+      LEFT JOIN funnel_types ft ON ft.id = tft.funnel_type_id
       WHERE l.created_at >= ${startBound}
         AND l.created_at <= ${endBound}
         ${tenantLeadFilter}
@@ -412,7 +413,8 @@ router.get("/dashboard/challenge", async (req, res) => {
   const funnelResult = await db.execute(sql`
     SELECT DISTINCT COALESCE(ft.name, l.lead_type, ${CHALLENGE_UNASSIGNED_FUNNEL}) AS funnel
     FROM leads l
-    LEFT JOIN funnel_types ft ON ft.id = l.funnel_id AND ft.tenant_id = l.tenant_id
+    LEFT JOIN tenant_funnel_types tft ON tft.funnel_type_id = l.funnel_id AND tft.tenant_id = l.tenant_id
+    LEFT JOIN funnel_types ft ON ft.id = tft.funnel_type_id
     WHERE l.created_at >= ${startBound}
       AND l.created_at <= ${endBound}
       ${tenantLeadFilter}
