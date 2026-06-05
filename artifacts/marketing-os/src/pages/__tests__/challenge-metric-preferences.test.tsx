@@ -16,7 +16,7 @@ vi.mock("@/components/auth-context", () => ({
 const challengeResponse = {
   dateRange: { startDate: "2026-06-01", endDate: "2026-06-30" },
   selectedFunnels: [],
-  funnels: ["Install"],
+  funnels: ["Install", "Repair"],
   allocation: {
     method: "pulse_lead_share",
     allUniquePulseLeads: 10,
@@ -68,6 +68,26 @@ const challengeResponse = {
       soldJobs: 2,
       costToAcquireCustomer: 500,
       averageClosedJobValue: 2500,
+    },
+    {
+      funnel: "Repair",
+      costPerLead: 200,
+      metaLeads: 4,
+      uniquePulseLeads: 6,
+      appointmentsBooked: 3,
+      bookingRate: 50,
+      cancellationRate: 0,
+      cancelledJobs: 0,
+      totalJobs: 6,
+      totalEstimateValue: 6000,
+      totalSoldClosedValue: 3000,
+      roasPotential: 3,
+      roasSold: 1.5,
+      totalSpend: 800,
+      completedEstimateJobs: 2,
+      soldJobs: 1,
+      costToAcquireCustomer: 800,
+      averageClosedJobValue: 3000,
     },
   ],
 };
@@ -151,5 +171,36 @@ describe("Challenge metric preferences", () => {
 
     expect(metaLeadCell).toHaveAttribute("data-challenge-hover", "active");
     expect(container.querySelectorAll('[data-challenge-hover="active"]')).toHaveLength(3);
+  });
+
+  it("keeps shared row and metric hover state while moving on one table axis", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Per-Funnel Breakdown");
+    const activeLabels = () =>
+      Array.from(container.querySelectorAll('[data-challenge-hover="active"]')).map((element) => element.textContent?.trim());
+
+    const installMetaCell = screen.getByLabelText("Install Leads From Meta: 10");
+    const installPulseCell = screen.getByLabelText("Install Unique Pulse Leads: 10");
+    const repairPulseCell = screen.getByLabelText("Repair Unique Pulse Leads: 6");
+    const breakdownGrid = container.querySelector("[data-challenge-breakdown-grid]");
+
+    fireEvent.mouseEnter(installMetaCell);
+    expect(activeLabels()).toContain("Install");
+    expect(activeLabels()).toContain("Meta Leads");
+
+    fireEvent.mouseOut(installMetaCell, { relatedTarget: installPulseCell });
+    expect(activeLabels()).toContain("Install");
+    expect(activeLabels()).toContain("Pulse Leads");
+    expect(activeLabels()).not.toContain("Meta Leads");
+
+    fireEvent.mouseOut(installPulseCell, { relatedTarget: repairPulseCell });
+    expect(activeLabels()).toContain("Repair");
+    expect(activeLabels()).toContain("Pulse Leads");
+    expect(activeLabels()).not.toContain("Install");
+
+    expect(breakdownGrid).not.toBeNull();
+    fireEvent.mouseLeave(breakdownGrid!);
+    expect(activeLabels()).toHaveLength(0);
   });
 });
