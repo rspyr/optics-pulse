@@ -18,6 +18,8 @@ const BOOTSTRAP_PENDING = new Set([
   "0080_exact_linked_contact_attribution",
   "0081_preserve_exact_linked_contact_matches",
   "0082_estimate_option_metadata",
+  "0084_funnel_runs",
+  "0085_challenge_run_performance_indexes",
 ]);
 
 function resolveMigrationsDir(): string {

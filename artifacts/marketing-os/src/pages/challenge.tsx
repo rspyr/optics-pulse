@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FocusEvent, type WheelEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { LayoutGroup, motion } from "framer-motion";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -37,35 +43,40 @@ const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 const LEGACY_VISIBILITY_STORAGE_KEY = "challengeDashboard.visibleMetrics.v1";
 const METRIC_PREFS_STORAGE_KEY = "challengeDashboard.metricPreferences.v2";
 const USER_PREF_KEY = "challengeDashboardMetrics";
+const CHALLENGE_QUERY_CACHE_TTL_MS = 90_000;
+const CHALLENGE_PREFETCH_DELAY_MS = 500;
+const CHALLENGE_PREFETCH_LIMIT = 4;
 
-type DateRange = "last7" | "last30" | "thisMonth" | "lastMonth";
+type CompareMode = "client_funnels" | "funnel_clients";
+type RunRule = "newest" | "oldest" | "best" | "average";
+type DayWindow = "days30" | "days60" | "days70" | "custom";
 
-function getDateRange(range: DateRange): { startDate: string; endDate: string; label: string } {
-  const now = new Date();
-  const end = now.toISOString().split("T")[0];
-  switch (range) {
-    case "last7": {
-      const s = new Date(now.getTime() - 7 * 86400000);
-      return { startDate: s.toISOString().split("T")[0], endDate: end, label: "Last 7 Days" };
-    }
-    case "thisMonth": {
-      const s = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { startDate: s.toISOString().split("T")[0], endDate: end, label: "This Month" };
-    }
-    case "lastMonth": {
-      const s = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const e = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { startDate: s.toISOString().split("T")[0], endDate: e.toISOString().split("T")[0], label: "Last Month" };
-    }
-    default: {
-      const s = new Date(now.getTime() - 30 * 86400000);
-      return { startDate: s.toISOString().split("T")[0], endDate: end, label: "Last 30 Days" };
-    }
+function getDayWindow(window: DayWindow, customStart: number, customEnd: number): { startDay: number; endDay: number; label: string } {
+  if (window === "days60") return { startDay: 1, endDay: 60, label: "Days 1-60" };
+  if (window === "days70") return { startDay: 1, endDay: 70, label: "Days 1-70" };
+  if (window === "custom") {
+    const startDay = Math.max(1, Math.floor(customStart || 1));
+    const endDay = Math.max(startDay, Math.floor(customEnd || startDay));
+    return { startDay, endDay, label: `Days ${startDay}-${endDay}` };
   }
+  return { startDay: 1, endDay: 30, label: "Days 1-30" };
 }
 
 type ChallengeMetric = {
   funnel: string | null;
+  rowKey?: string;
+  rowLabel?: string;
+  tenantId?: number;
+  tenantName?: string;
+  funnelTypeId?: number;
+  funnelName?: string;
+  runId?: number | null;
+  runName?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  runCount?: number;
+  selectedRunIds?: number[];
+  activeDays: number;
   costPerLead: number;
   metaLeads: number;
   uniquePulseLeads: number;
@@ -87,23 +98,37 @@ type ChallengeMetric = {
 };
 
 type ChallengeResponse = {
-  dateRange: { startDate: string; endDate: string };
-  selectedFunnels: string[];
-  funnels: string[];
+  compareMode: CompareMode;
+  dayRange: { startDay: number; endDay: number; label: string };
+  runRule: RunRule;
+  bestBy: MetricKey;
+  selectedTenantIds: number[];
+  selectedFunnelTypeIds: number[];
+  availableClients: Array<{ id: number; name: string; runCount: number }>;
+  availableFunnels: Array<{ id: number; name: string; runCount: number }>;
+  selectedRuns: Array<{
+    id: number;
+    tenantId: number;
+    tenantName: string;
+    funnelTypeId: number;
+    funnelName: string;
+    name: string;
+    startDate: string;
+    endDate: string | null;
+    status: string;
+    activeDays: number;
+  }>;
   summary: ChallengeMetric;
   byFunnel: ChallengeMetric[];
+  rows: ChallengeMetric[];
   allocation: {
-    method: "pulse_lead_share" | "meta_campaign_funnel_mapping";
-    allUniquePulseLeads: number;
-    mappedSpend: number;
-    mappedMetaLeads: number;
-    unmappedSpend: number;
-    unmappedMetaLeads: number;
+    method: "meta_campaign_funnel_mapping";
     note: string;
   };
 };
 
 type MetricKey =
+  | "activeDays"
   | "costPerLead"
   | "metaLeads"
   | "uniquePulseLeads"
@@ -128,6 +153,15 @@ const METRICS: Array<{
   format: (value: number) => string;
   sub?: (metric: ChallengeMetric) => string;
 }> = [
+  {
+    key: "activeDays",
+    label: "Active Days",
+    shortLabel: "Active Days",
+    icon: CalendarCheck,
+    tone: "text-sky-300",
+    format: formatNumber,
+    sub: (m) => m.runCount && m.runCount > 1 ? `${formatNumber(m.runCount)} runs represented` : "days with lead or spend activity",
+  },
   { key: "costPerLead", label: "Cost Per Lead", shortLabel: "CPL", icon: DollarSign, tone: "text-sky-300", format: formatCurrency },
   { key: "metaLeads", label: "Leads From Meta", shortLabel: "Meta Leads", icon: Target, tone: "text-blue-300", format: formatNumber },
   { key: "uniquePulseLeads", label: "Unique Pulse Leads", shortLabel: "Pulse Leads", icon: Users, tone: "text-ice", format: formatNumber },
@@ -184,10 +218,120 @@ const METRIC_KEYS = METRICS.map((metric) => metric.key);
 const METRIC_KEY_SET = new Set<MetricKey>(METRIC_KEYS);
 const METRIC_BY_KEY = Object.fromEntries(METRICS.map((metric) => [metric.key, metric])) as Record<MetricKey, typeof METRICS[number]>;
 const DEFAULT_VISIBILITY = Object.fromEntries(METRICS.map((metric) => [metric.key, true])) as Record<MetricKey, boolean>;
+const PRESENTATION_HOVER_BASE =
+  "transform-gpu transition-[scale,transform,background-color,color,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[scale,transform,background-color,color]";
+const PRESENTATION_ACTIVE_SURFACE = "text-[#C0D4E6]";
+const PRESENTATION_HOVER_OVERLAY =
+  "pointer-events-none absolute inset-0 z-0 rounded-lg border border-primary bg-primary shadow-[0_22px_60px_rgba(242,5,5,0.38)]";
+const PRESENTATION_CARD_MOTION =
+  "transform-gpu transition-[scale,transform,filter] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[scale,transform]";
+const PRESENTATION_CARD_SYNC =
+  "transition-[background-color,border-color,box-shadow,color] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]";
 const DEFAULT_METRIC_PREFERENCES: MetricPreferences = {
   order: METRIC_KEYS,
   visibility: DEFAULT_VISIBILITY,
 };
+
+type ChallengeQueryOptions = {
+  compareMode: CompareMode;
+  dayRange: { startDay: number; endDay: number };
+  runRule: RunRule;
+  bestBy: MetricKey;
+  effectiveTenantId: number | null | undefined;
+  selectedFunnelTypeIds: number[];
+  selectedClientTenantIds: number[];
+};
+
+type ChallengeQueryDescriptor = {
+  cacheKey: string;
+  url: string;
+};
+
+const challengeResponseCache = new Map<string, { data: ChallengeResponse; fetchedAt: number }>();
+const challengeResponseInflight = new Map<string, Promise<ChallengeResponse>>();
+
+function sortedIds(ids: number[]): number[] {
+  return [...new Set(ids.filter((id) => Number.isFinite(id) && id > 0))].sort((a, b) => a - b);
+}
+
+function idsKey(ids: number[]): string {
+  return sortedIds(ids).join(",");
+}
+
+function sameIds(a: number[], b: number[]): boolean {
+  return idsKey(a) === idsKey(b);
+}
+
+function buildChallengeQueryDescriptor(options: ChallengeQueryOptions): ChallengeQueryDescriptor {
+  const params = new URLSearchParams({
+    mode: options.compareMode,
+    dayStart: String(options.dayRange.startDay),
+    dayEnd: String(options.dayRange.endDay),
+    runRule: options.runRule,
+    bestBy: options.bestBy,
+  });
+  if (options.compareMode === "client_funnels" && options.effectiveTenantId != null) {
+    params.set("tenantId", String(options.effectiveTenantId));
+  }
+  sortedIds(options.selectedFunnelTypeIds).forEach((id) => params.append("funnelTypeId", String(id)));
+  sortedIds(options.selectedClientTenantIds).forEach((id) => params.append("clientTenantId", String(id)));
+
+  const cacheKey = params.toString();
+  return {
+    cacheKey,
+    url: `${API_BASE}/api/dashboard/challenge/runs?${cacheKey}`,
+  };
+}
+
+function getCachedChallengeResponse(cacheKey: string): ChallengeResponse | null {
+  const cached = challengeResponseCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.fetchedAt > CHALLENGE_QUERY_CACHE_TTL_MS) {
+    challengeResponseCache.delete(cacheKey);
+    return null;
+  }
+  return cached.data;
+}
+
+function storeChallengeResponse(cacheKey: string, data: ChallengeResponse) {
+  challengeResponseCache.set(cacheKey, { data, fetchedAt: Date.now() });
+  if (challengeResponseCache.size > 40) {
+    const oldestKey = [...challengeResponseCache.entries()]
+      .sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0]?.[0];
+    if (oldestKey) challengeResponseCache.delete(oldestKey);
+  }
+}
+
+function fetchChallengeResponse(descriptor: ChallengeQueryDescriptor): Promise<ChallengeResponse> {
+  const cached = getCachedChallengeResponse(descriptor.cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  const existing = challengeResponseInflight.get(descriptor.cacheKey);
+  if (existing) return existing;
+
+  const request = fetch(descriptor.url, { credentials: "include" })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<ChallengeResponse>;
+    })
+    .then((next) => {
+      storeChallengeResponse(descriptor.cacheKey, next);
+      return next;
+    })
+    .finally(() => {
+      challengeResponseInflight.delete(descriptor.cacheKey);
+    });
+
+  challengeResponseInflight.set(descriptor.cacheKey, request);
+  return request;
+}
+
+type BreakdownHoverTarget = {
+  rowKey?: string;
+  metricKey?: MetricKey;
+};
+
+type BreakdownHover = BreakdownHoverTarget | null;
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -272,16 +416,45 @@ function writeMetricPreferences(preferences: MetricPreferences) {
 export default function Challenge() {
   const { effectiveTenantId } = useTenantFilter();
   const { user } = useAuth();
-  const [dateRange, setDateRange] = useState<DateRange>("last30");
-  const [selectedFunnels, setSelectedFunnels] = useState<string[]>([]);
+  const [compareMode, setCompareMode] = useState<CompareMode>("client_funnels");
+  const [dayWindow, setDayWindow] = useState<DayWindow>("days30");
+  const [customStartDay, setCustomStartDay] = useState(1);
+  const [customEndDay, setCustomEndDay] = useState(30);
+  const [runRule, setRunRule] = useState<RunRule>("newest");
+  const [bestBy, setBestBy] = useState<MetricKey>("roasSold");
+  const [selectedFunnelTypeIds, setSelectedFunnelTypeIds] = useState<number[]>([]);
+  const [selectedClientTenantIds, setSelectedClientTenantIds] = useState<number[]>([]);
   const [metricPreferences, setMetricPreferences] = useState<MetricPreferences>(readMetricPreferences);
   const [metricPreferencesLoaded, setMetricPreferencesLoaded] = useState(false);
   const [data, setData] = useState<ChallengeResponse | null>(null);
+  const [dataCacheKey, setDataCacheKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [breakdownHover, setBreakdownHover] = useState<BreakdownHover>(null);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "agency_user" || user?.role === "client_admin";
-  const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
+  const dayRange = useMemo(() => getDayWindow(dayWindow, customStartDay, customEndDay), [dayWindow, customStartDay, customEndDay]);
+  const challengeQuery = useMemo(
+    () => buildChallengeQueryDescriptor({
+      compareMode,
+      dayRange,
+      runRule,
+      bestBy,
+      effectiveTenantId,
+      selectedFunnelTypeIds,
+      selectedClientTenantIds,
+    }),
+    [
+      compareMode,
+      dayRange.startDay,
+      dayRange.endDay,
+      runRule,
+      bestBy,
+      effectiveTenantId,
+      idsKey(selectedFunnelTypeIds),
+      idsKey(selectedClientTenantIds),
+    ],
+  );
   const orderedMetrics = useMemo(
     () => metricPreferences.order.map((key) => METRIC_BY_KEY[key]).filter(Boolean),
     [metricPreferences.order],
@@ -290,6 +463,8 @@ export default function Challenge() {
     () => orderedMetrics.filter((metric) => metricPreferences.visibility[metric.key]),
     [orderedMetrics, metricPreferences.visibility],
   );
+  const dataIsCurrent = Boolean(data && dataCacheKey === challengeQuery.cacheKey);
+  const displayData = dataIsCurrent ? data : null;
 
   useEffect(() => {
     if (!user) return;
@@ -334,21 +509,32 @@ export default function Challenge() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     setError(null);
-    const params = new URLSearchParams({ startDate, endDate });
-    if (effectiveTenantId != null) params.set("tenantId", String(effectiveTenantId));
-    selectedFunnels.forEach((funnel) => params.append("funnel", funnel));
 
-    fetch(`${API_BASE}/api/dashboard/challenge?${params.toString()}`, { credentials: "include" })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ChallengeResponse>;
-      })
+    const cached = getCachedChallengeResponse(challengeQuery.cacheKey);
+    if (cached) {
+      setData(cached);
+      setDataCacheKey(challengeQuery.cacheKey);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    fetchChallengeResponse(challengeQuery)
       .then((next) => {
         if (cancelled) return;
         setData(next);
-        setSelectedFunnels((current) => current.filter((funnel) => next.funnels.includes(funnel)));
+        setDataCacheKey(challengeQuery.cacheKey);
+        const availableFunnelIds = new Set(next.availableFunnels.map((funnel) => funnel.id));
+        const availableTenantIds = new Set(next.availableClients.map((client) => client.id));
+        setSelectedFunnelTypeIds((current) => {
+          const filtered = current.filter((id) => availableFunnelIds.has(id));
+          if (compareMode === "funnel_clients" && filtered.length === 0 && next.availableFunnels[0]) {
+            return [next.availableFunnels[0].id];
+          }
+          return filtered;
+        });
+        setSelectedClientTenantIds((current) => current.filter((id) => availableTenantIds.has(id)));
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message || "Failed to load Challenge metrics");
@@ -360,19 +546,123 @@ export default function Challenge() {
     return () => {
       cancelled = true;
     };
-  }, [startDate, endDate, effectiveTenantId, selectedFunnels.join("\u0000")]);
+  }, [
+    challengeQuery.cacheKey,
+    challengeQuery.url,
+    compareMode,
+  ]);
 
-  const funnelButtonLabel = selectedFunnels.length === 0
+  useEffect(() => {
+    if (!displayData) return;
+
+    const timer = window.setTimeout(() => {
+      const descriptors = new Map<string, ChallengeQueryDescriptor>();
+      const baseOptions: ChallengeQueryOptions = {
+        compareMode,
+        dayRange,
+        runRule,
+        bestBy,
+        effectiveTenantId,
+        selectedFunnelTypeIds,
+        selectedClientTenantIds,
+      };
+      const enqueue = (options: ChallengeQueryOptions) => {
+        if (descriptors.size >= CHALLENGE_PREFETCH_LIMIT) return;
+        const descriptor = buildChallengeQueryDescriptor(options);
+        if (descriptor.cacheKey === challengeQuery.cacheKey) return;
+        if (getCachedChallengeResponse(descriptor.cacheKey)) return;
+        descriptors.set(descriptor.cacheKey, descriptor);
+      };
+
+      (["newest", "oldest", "average"] as RunRule[]).forEach((nextRunRule) => {
+        enqueue({ ...baseOptions, runRule: nextRunRule });
+      });
+
+      [
+        { startDay: 1, endDay: 30 },
+        { startDay: 1, endDay: 60 },
+        { startDay: 1, endDay: 70 },
+      ].forEach((nextDayRange) => {
+        enqueue({ ...baseOptions, dayRange: nextDayRange });
+      });
+
+      if (compareMode === "client_funnels") {
+        const firstFunnelId = selectedFunnelTypeIds[0] ?? displayData.availableFunnels[0]?.id;
+        if (firstFunnelId) {
+          enqueue({
+            ...baseOptions,
+            compareMode: "funnel_clients",
+            selectedFunnelTypeIds: [firstFunnelId],
+            selectedClientTenantIds: [],
+            effectiveTenantId: null,
+          });
+        }
+      }
+
+      descriptors.forEach((descriptor) => {
+        void fetchChallengeResponse(descriptor).catch(() => {
+          // Prefetch is opportunistic; the active view still owns error display.
+        });
+      });
+    }, CHALLENGE_PREFETCH_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    displayData,
+    challengeQuery.cacheKey,
+    compareMode,
+    dayRange.startDay,
+    dayRange.endDay,
+    runRule,
+    bestBy,
+    effectiveTenantId,
+    idsKey(selectedFunnelTypeIds),
+    idsKey(selectedClientTenantIds),
+  ]);
+
+  const availableFunnels = (displayData ?? data)?.availableFunnels ?? [];
+  const availableClients = (displayData ?? data)?.availableClients ?? [];
+  const selectedFunnelNames = selectedFunnelTypeIds
+    .map((id) => availableFunnels.find((funnel) => funnel.id === id)?.name)
+    .filter((name): name is string => !!name);
+  const selectedClientNames = selectedClientTenantIds
+    .map((id) => availableClients.find((client) => client.id === id)?.name)
+    .filter((name): name is string => !!name);
+  const funnelButtonLabel = selectedFunnelTypeIds.length === 0
     ? "All funnels"
-    : selectedFunnels.length === 1
-      ? selectedFunnels[0]
-      : `${selectedFunnels.length} funnels`;
+    : selectedFunnelTypeIds.length === 1
+      ? selectedFunnelNames[0] || "1 funnel"
+      : `${selectedFunnelTypeIds.length} funnels`;
+  const clientButtonLabel = selectedClientTenantIds.length === 0
+    ? "All clients"
+    : selectedClientTenantIds.length === 1
+      ? selectedClientNames[0] || "1 client"
+      : `${selectedClientTenantIds.length} clients`;
+  const runRuleLabel = runRule === "oldest"
+    ? "Oldest run"
+    : runRule === "best"
+      ? `Best by ${METRIC_BY_KEY[bestBy].shortLabel}`
+      : runRule === "average"
+        ? "Avg all runs"
+        : "Newest run";
+  const visibleRows = displayData?.rows ?? displayData?.byFunnel ?? [];
+  const primaryColumnLabel = compareMode === "funnel_clients" ? "Client" : "Funnel";
 
-  function toggleFunnel(funnel: string) {
-    setSelectedFunnels((current) =>
-      current.includes(funnel)
-        ? current.filter((item) => item !== funnel)
-        : [...current, funnel],
+  function toggleFunnelType(id: number) {
+    setSelectedFunnelTypeIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : compareMode === "funnel_clients"
+          ? [id]
+          : [...current, id],
+    );
+  }
+
+  function toggleClientTenant(id: number) {
+    setSelectedClientTenantIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
     );
   }
 
@@ -405,59 +695,207 @@ export default function Challenge() {
     });
   }
 
+  function updateBreakdownHover(next: BreakdownHoverTarget) {
+    setBreakdownHover((current) =>
+      current?.rowKey === next.rowKey && current?.metricKey === next.metricKey ? current : next,
+    );
+  }
+
+  function clearBreakdownHoverWhenFocusLeaves(event: FocusEvent<HTMLDivElement>) {
+    const nextTarget = event.relatedTarget;
+    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+      setBreakdownHover(null);
+    }
+  }
+
+  function handOffBreakdownScroll(event: WheelEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = Math.ceil(el.scrollTop + el.clientHeight) >= el.scrollHeight;
+    if ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
+      event.preventDefault();
+      window.scrollBy({ top: event.deltaY, left: 0, behavior: "auto" });
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <GradientHeading className="mb-2 text-3xl md:text-4xl">The Challenge</GradientHeading>
           <p className="font-sub text-sm tracking-wide text-muted-foreground">
-            ADS PERFORMANCE BY LEAD COHORT - {label.toUpperCase()}
+            ADS PERFORMANCE BY FUNNEL DAY COHORT - {dayRange.label.toUpperCase()}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-white/10 bg-card/60 p-1">
+            {([
+              ["client_funnels", "Client Funnels"],
+              ["funnel_clients", "Funnel Across Clients"],
+            ] as Array<[CompareMode, string]>).map(([mode, text]) => (
+              <button
+                key={mode}
+                onClick={() => {
+                  setCompareMode(mode);
+                  setBreakdownHover(null);
+                  if (mode === "client_funnels") {
+                    setSelectedClientTenantIds([]);
+                  } else {
+                    setSelectedFunnelTypeIds((current) => {
+                      if (current.length > 0) return [current[0]];
+                      const firstAvailable = availableFunnels[0]?.id;
+                      return firstAvailable ? [firstAvailable] : current;
+                    });
+                  }
+                }}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm font-medium transition-all",
+                  compareMode === mode ? "bg-primary text-[#C0D4E6]" : "text-muted-foreground hover:text-white",
+                )}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="min-w-44 justify-between bg-card/60 text-white">
+              <Button variant="outline" className="min-w-56 justify-between bg-card/60 text-white">
                 <span className="inline-flex min-w-0 items-center gap-2">
                   <Layers3 className="h-4 w-4 text-muted-foreground" />
-                  <span className="truncate">{funnelButtonLabel}</span>
+                  <span className="truncate">{funnelButtonLabel} · {runRuleLabel}</span>
                 </span>
                 <ChevronDown className="h-4 w-4 opacity-70" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
-              <DropdownMenuLabel>Funnels</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => setSelectedFunnels([])}>
-                All funnels
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-80">
+              <DropdownMenuLabel>Run selection</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={runRule} onValueChange={(value) => setRunRule(value as RunRule)}>
+                <DropdownMenuRadioItem value="newest" onSelect={(event) => event.preventDefault()}>
+                  Newest run
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="oldest" onSelect={(event) => event.preventDefault()}>
+                  Oldest run
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="average" onSelect={(event) => event.preventDefault()}>
+                  Avg all runs
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="best" onSelect={(event) => event.preventDefault()}>
+                  Best run
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              {runRule === "best" && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="text-sm">
+                    Best by <span className="ml-1 text-muted-foreground">{METRIC_BY_KEY[bestBy].shortLabel}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="max-h-80 w-64 overflow-y-auto">
+                    <DropdownMenuRadioGroup value={bestBy} onValueChange={(value) => setBestBy(value as MetricKey)}>
+                      {METRICS.map((metric) => (
+                        <DropdownMenuRadioItem
+                          key={metric.key}
+                          value={metric.key}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          {metric.shortLabel}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
               <DropdownMenuSeparator />
-              {data?.funnels.length ? data.funnels.map((funnel) => (
+              <DropdownMenuLabel>{compareMode === "funnel_clients" ? "Compare this funnel" : "Funnels"}</DropdownMenuLabel>
+              {compareMode === "client_funnels" && (
+                <DropdownMenuItem onSelect={() => setSelectedFunnelTypeIds([])}>
+                  All funnels
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              {availableFunnels.length ? availableFunnels.map((funnel) => (
                 <DropdownMenuCheckboxItem
-                  key={funnel}
-                  checked={selectedFunnels.includes(funnel)}
+                  key={funnel.id}
+                  checked={selectedFunnelTypeIds.includes(funnel.id)}
                   onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={() => toggleFunnel(funnel)}
+                  onCheckedChange={() => toggleFunnelType(funnel.id)}
                 >
-                  <span className="truncate">{funnel}</span>
+                  <span className="min-w-0 flex-1 truncate">{funnel.name}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">{funnel.runCount}</span>
                 </DropdownMenuCheckboxItem>
               )) : (
-                <div className="px-2 py-3 text-sm text-muted-foreground">No funnels in this range.</div>
+                <div className="px-2 py-3 text-sm text-muted-foreground">No funnel runs yet.</div>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Select value={dateRange} onValueChange={(value) => setDateRange(value as DateRange)}>
-            <SelectTrigger className="w-44">
+          {compareMode === "funnel_clients" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="min-w-44 justify-between bg-card/60 text-white">
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span className="truncate">{clientButtonLabel}</span>
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel>Clients</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => setSelectedClientTenantIds([])}>
+                  All clients
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {availableClients.length ? availableClients.map((client) => (
+                  <DropdownMenuCheckboxItem
+                    key={client.id}
+                    checked={selectedClientTenantIds.includes(client.id)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={() => toggleClientTenant(client.id)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{client.name}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{client.runCount}</span>
+                  </DropdownMenuCheckboxItem>
+                )) : (
+                  <div className="px-2 py-3 text-sm text-muted-foreground">No clients have runs yet.</div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          <Select value={dayWindow} onValueChange={(value) => setDayWindow(value as DayWindow)}>
+            <SelectTrigger className="w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="last7">Last 7 Days</SelectItem>
-              <SelectItem value="last30">Last 30 Days</SelectItem>
-              <SelectItem value="thisMonth">This Month</SelectItem>
-              <SelectItem value="lastMonth">Last Month</SelectItem>
+              <SelectItem value="days30">Days 1-30</SelectItem>
+              <SelectItem value="days60">Days 1-60</SelectItem>
+              <SelectItem value="days70">Days 1-70</SelectItem>
+              <SelectItem value="custom">Custom days</SelectItem>
             </SelectContent>
           </Select>
+
+          {dayWindow === "custom" && (
+            <div className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-card/60 px-2 py-1.5">
+              <input
+                type="number"
+                min={1}
+                value={customStartDay}
+                onChange={event => setCustomStartDay(Number(event.target.value))}
+                className="w-16 rounded-md border border-white/10 bg-background px-2 py-1 text-sm text-white"
+                aria-label="Start day"
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input
+                type="number"
+                min={1}
+                value={customEndDay}
+                onChange={event => setCustomEndDay(Number(event.target.value))}
+                className="w-16 rounded-md border border-white/10 bg-background px-2 py-1 text-sm text-white"
+                aria-label="End day"
+              />
+            </div>
+          )}
 
           {isAdmin && (
             <MetricSettingsDropdown
@@ -474,7 +912,7 @@ export default function Challenge() {
         </div>
       </header>
 
-      {loading && !data ? (
+      {loading && !displayData ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, index) => (
             <div key={index} className="h-36 animate-pulse rounded-xl border border-white/5 bg-white/5" />
@@ -485,7 +923,7 @@ export default function Challenge() {
           <p className="text-sm font-medium text-red-300">The Challenge metrics could not load.</p>
           <p className="mt-1 text-sm text-muted-foreground">{error}</p>
         </PremiumCard>
-      ) : data ? (
+      ) : displayData ? (
         <>
           {visibleMetrics.length === 0 ? (
             <PremiumCard className="p-8 text-center">
@@ -493,9 +931,9 @@ export default function Challenge() {
               <p className="text-sm text-muted-foreground">All metrics are hidden.</p>
             </PremiumCard>
           ) : (
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {visibleMetrics.map((metric, index) => (
-                <MetricCard key={metric.key} metric={metric} row={data.summary} index={index} />
+            <section className="relative grid grid-cols-1 gap-4 overflow-visible sm:grid-cols-2 xl:grid-cols-4">
+              {visibleMetrics.map((metric) => (
+                <MetricCard key={metric.key} metric={metric} row={displayData.summary} />
               ))}
             </section>
           )}
@@ -503,9 +941,11 @@ export default function Challenge() {
           <PremiumCard className="overflow-hidden p-0">
             <div className="flex flex-col gap-2 border-b border-white/5 p-5 md:flex-row md:items-center md:justify-between">
               <div>
-                <h3 className="font-display text-xl text-white">Per-Funnel Breakdown</h3>
+                <h3 className="font-display text-xl text-white">Comparison Breakdown</h3>
                 <p className="text-sm text-muted-foreground">
-                  {selectedFunnels.length > 0 ? "Top cards stack the selected funnels; this table shows each selected funnel." : "Showing every funnel in the lead window."}
+                  {compareMode === "funnel_clients"
+                    ? `Comparing clients on the same funnel days for ${selectedFunnelNames[0] || "the selected funnel"}.`
+                    : `Comparing funnel runs for the selected client scope using ${runRule === "average" ? "average run performance" : `${runRule} run performance`}.`}
                 </p>
               </div>
               {isAdmin ? (
@@ -527,44 +967,126 @@ export default function Challenge() {
               )}
             </div>
 
-            {data.byFunnel.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">No funnel activity in this range.</div>
+            {visibleRows.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No funnel-run activity in this run-day window.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] border-collapse text-left">
-                  <thead>
-                    <tr className="border-b border-white/5 bg-background/50">
-                      <th className="sticky left-0 z-10 bg-background/95 p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        Funnel
+              <LayoutGroup id="challenge-breakdown-hover">
+                <div
+                  className="max-h-[72vh] overflow-auto"
+                  data-challenge-breakdown-grid
+                  onMouseLeave={() => setBreakdownHover(null)}
+                  onBlur={clearBreakdownHoverWhenFocusLeaves}
+                  onWheel={handOffBreakdownScroll}
+                >
+                  <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left">
+                    <thead>
+                    <tr className="bg-background/50">
+                      <th className="sticky left-0 top-0 z-40 min-w-56 border-b border-white/5 bg-background p-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        <span className="inline-flex min-h-14 w-full items-center px-3 py-2">
+                          {primaryColumnLabel}
+                        </span>
                       </th>
-                      {visibleMetrics.map((metric) => (
-                        <th key={metric.key} className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          {metric.shortLabel}
-                        </th>
-                      ))}
+                      {visibleMetrics.map((metric) => {
+                        const isActive = breakdownHover?.metricKey === metric.key;
+                        return (
+                          <th
+                            key={metric.key}
+                            className={cn(
+                              "sticky top-0 min-w-28 border-b border-white/5 bg-background p-0 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground",
+                              isActive ? "z-50" : "z-30",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "relative z-10 isolate inline-flex min-h-14 w-full origin-top-right items-center justify-end overflow-visible px-3 py-2 text-muted-foreground",
+                                PRESENTATION_HOVER_BASE,
+                                isActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                              )}
+                              data-challenge-hover={isActive ? "active" : undefined}
+                              onMouseEnter={() => updateBreakdownHover({ metricKey: metric.key })}
+                            >
+                              {isActive && <PresentationHoverOverlay layoutId="challenge-metric-label-hover" />}
+                              <span className="relative z-10">{metric.shortLabel}</span>
+                            </span>
+                          </th>
+                        );
+                      })}
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {data.byFunnel.map((row) => (
-                      <tr key={row.funnel ?? "unknown"} className="hover:bg-white/[0.02]">
-                        <td className="sticky left-0 z-10 max-w-64 bg-card/95 p-4 text-sm font-medium text-white">
-                          <span className="line-clamp-2">{row.funnel || "Unassigned"}</span>
-                        </td>
-                        {visibleMetrics.map((metric) => (
-                          <td key={metric.key} className="whitespace-nowrap p-4 text-right text-sm text-white">
-                            {metric.format(row[metric.key])}
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                    {visibleRows.map((row, rowIndex) => {
+                      const rowKey = row.rowKey ?? `${row.funnel ?? "unassigned"}-${rowIndex}`;
+                      const isRowActive = breakdownHover?.rowKey === rowKey;
+                      const rowLabel = row.rowLabel || row.funnel || "Unassigned";
+                      const runDetail = row.runName
+                        ? `${row.runName}${row.runCount && row.runCount > 1 && runRule !== "average" ? ` of ${row.runCount}` : ""}`
+                        : row.runCount && row.runCount > 1
+                          ? `${row.runCount} runs`
+                          : null;
+                      return (
+                        <tr key={rowKey} className="transition-colors duration-300 hover:bg-white/[0.015]">
+                          <td
+                            className={cn(
+                              "sticky left-0 max-w-64 border-b border-white/5 bg-card p-0 text-sm font-medium text-white",
+                              isRowActive ? "z-50" : "z-20",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "relative z-10 isolate flex min-h-16 w-full origin-left items-center overflow-visible px-3 py-3 text-white",
+                                PRESENTATION_HOVER_BASE,
+                                isRowActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                              )}
+                              data-challenge-hover={isRowActive ? "active" : undefined}
+                              onMouseEnter={() => updateBreakdownHover({ rowKey })}
+                            >
+                              {isRowActive && <PresentationHoverOverlay layoutId="challenge-funnel-label-hover" />}
+                              <span className="relative z-10 min-w-0">
+                                <span className="block line-clamp-2">{rowLabel}</span>
+                                {runDetail && <span className="mt-0.5 block truncate text-[10px] font-medium opacity-70">{runDetail}</span>}
+                              </span>
+                            </span>
                           </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          {visibleMetrics.map((metric) => {
+                            const isActive = breakdownHover?.rowKey === rowKey && breakdownHover.metricKey === metric.key;
+                            return (
+                              <td
+                                key={metric.key}
+                                className={cn(
+                                  "border-b border-white/5 p-0 text-right text-sm text-white",
+                                  isActive && "relative z-40",
+                                )}
+                              >
+                                <div
+                                  tabIndex={0}
+                                  aria-label={`${rowLabel} ${metric.label}: ${metric.format(row[metric.key])}`}
+                                  className={cn(
+                                    "relative z-10 isolate flex min-h-16 w-full origin-center items-center justify-end overflow-visible whitespace-nowrap px-3 py-3 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
+                                    PRESENTATION_HOVER_BASE,
+                                    isActive && `z-40 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                                  )}
+                                  data-challenge-hover={isActive ? "active" : undefined}
+                                  onMouseEnter={() => updateBreakdownHover({ rowKey, metricKey: metric.key })}
+                                  onFocus={() => updateBreakdownHover({ rowKey, metricKey: metric.key })}
+                                >
+                                  {isActive && <PresentationHoverOverlay layoutId="challenge-metric-value-hover" />}
+                                  <span className="relative z-10">{metric.format(row[metric.key])}</span>
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                    </tbody>
+                  </table>
+                </div>
+              </LayoutGroup>
             )}
           </PremiumCard>
 
           <p className="text-xs leading-relaxed text-muted-foreground/70">
-            {data.allocation.note}
+            {displayData.allocation.note}
           </p>
         </>
       ) : null}
@@ -572,33 +1094,59 @@ export default function Challenge() {
   );
 }
 
+function PresentationHoverOverlay({ layoutId }: { layoutId: string }) {
+  return (
+    <motion.span
+      layoutId={layoutId}
+      layout="position"
+      className={PRESENTATION_HOVER_OVERLAY}
+      transition={{ type: "spring", stiffness: 520, damping: 42, mass: 0.7 }}
+      data-challenge-hover-overlay={layoutId}
+    />
+  );
+}
+
 function MetricCard({
   metric,
   row,
-  index,
 }: {
   metric: (typeof METRICS)[number];
   row: ChallengeMetric;
-  index: number;
 }) {
   const Icon = metric.icon;
   const value = row[metric.key];
   return (
-    <PremiumCard className="flex min-h-36 flex-col justify-between p-5" transition={{ delay: Math.min(index * 0.03, 0.24) }}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]">
-          <Icon className={`h-5 w-5 ${metric.tone}`} />
+    <div
+      className={cn(
+        "group relative z-0 origin-center",
+        PRESENTATION_CARD_MOTION,
+        "hover:z-30 hover:scale-[1.2]",
+      )}
+      data-challenge-card={metric.key}
+    >
+      <PremiumCard
+        className={cn(
+          "flex min-h-36 flex-col justify-between overflow-visible p-5 text-white",
+          PRESENTATION_CARD_SYNC,
+          "group-hover:border-primary group-hover:bg-primary group-hover:text-[#C0D4E6] group-hover:shadow-[0_28px_80px_rgba(242,5,5,0.38)]",
+        )}
+        data-challenge-card-surface={metric.key}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10")}>
+            <Icon className={cn("h-5 w-5", PRESENTATION_CARD_SYNC, metric.tone, "group-hover:text-[#C0D4E6]")} />
+          </div>
+          <span className={cn("rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]")}>
+            {metric.shortLabel}
+          </span>
         </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {metric.shortLabel}
-        </span>
-      </div>
-      <div className="mt-5">
-        <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">{metric.label}</p>
-        <p className="font-display text-3xl text-white">{metric.format(value)}</p>
-        {metric.sub && <p className="mt-1 text-[11px] text-muted-foreground">{metric.sub(row)}</p>}
-      </div>
-    </PremiumCard>
+        <div className="mt-5">
+          <p className={cn("mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.label}</p>
+          <p className={cn("font-display text-3xl text-white", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.format(value)}</p>
+          {metric.sub && <p className={cn("mt-1 text-[11px] text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]/80")}>{metric.sub(row)}</p>}
+        </div>
+      </PremiumCard>
+    </div>
   );
 }
 

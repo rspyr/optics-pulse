@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
-import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Save, Copy, Check, Wifi, WifiOff, Link, Unlink, CalendarDays, Archive, RefreshCw } from "lucide-react";
 import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -12,6 +12,20 @@ interface FunnelType {
   description: string | null;
   isActive: boolean;
   createdAt: string;
+}
+
+interface FunnelRun {
+  id: number;
+  tenantId: number;
+  tenantName: string;
+  funnelTypeId: number;
+  funnelName: string;
+  name: string;
+  startDate: string;
+  endDate: string | null;
+  status: "active" | "ended" | "archived";
+  notes: string | null;
+  activeDays: number;
 }
 
 type Tenant = TenantOption;
@@ -44,7 +58,7 @@ export default function AdminFunnels() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: "", slug: "", description: "" });
   const [formError, setFormError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"funnels" | "assignments" | "health" | "tracking">("funnels");
+  const [tab, setTab] = useState<"funnels" | "runs" | "assignments" | "health" | "tracking">("funnels");
 
   useEffect(() => {
     fetch(`${API}/api/collect/health`, { credentials: "include" }).then(r => r.json()).then(setHealth).catch(() => {});
@@ -104,9 +118,9 @@ export default function AdminFunnels() {
       </header>
 
       <div className="flex gap-2">
-        {(["funnels", "assignments", "health", "tracking"] as const).map(t => (
+        {(["funnels", "runs", "assignments", "health", "tracking"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-white/10 text-white" : "text-muted-foreground hover:text-white"}`}>
-            {t === "funnels" ? "Funnel Types" : t === "assignments" ? "Tenant Assignments" : t === "health" ? "Tracker Health" : "GTM Tracking"}
+            {t === "funnels" ? "Funnel Types" : t === "runs" ? "Funnel Runs" : t === "assignments" ? "Tenant Assignments" : t === "health" ? "Tracker Health" : "GTM Tracking"}
           </button>
         ))}
       </div>
@@ -189,6 +203,10 @@ export default function AdminFunnels() {
         tenantsLoading ? <TenantsSkeleton /> : <TenantAssignmentsTab tenants={tenants} funnels={funnels} />
       )}
 
+      {tab === "runs" && (
+        tenantsLoading ? <TenantsSkeleton /> : <FunnelRunsTab tenants={tenants} funnels={funnels} />
+      )}
+
       {tab === "health" && (
         <TrackerHealthTab health={health} onRefresh={async () => {
           const r = await fetch(`${API}/api/collect/health`, { credentials: "include" });
@@ -200,6 +218,367 @@ export default function AdminFunnels() {
       {tab === "tracking" && (
         tenantsLoading ? <TenantsSkeleton /> : <AdminTrackingPanel tenants={tenants} />
       )}
+    </div>
+  );
+}
+
+function formatRunDate(value: string | null) {
+  if (!value) return "Open";
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function todayDate() {
+  return new Date().toISOString().split("T")[0];
+}
+
+function FunnelRunsTab({ tenants, funnels }: { tenants: Tenant[]; funnels: FunnelType[] }) {
+  const [runs, setRuns] = useState<FunnelRun[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedTenantId, setSelectedTenantId] = useState<number | "">("");
+  const [selectedFunnelTypeId, setSelectedFunnelTypeId] = useState<number | "">("");
+  const [statusFilter, setStatusFilter] = useState<"active" | "ended" | "all" | "archived">("all");
+  const [showForm, setShowForm] = useState(false);
+  const [editingRunId, setEditingRunId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    tenantId: tenants[0]?.id ?? 0,
+    funnelTypeId: funnels.find(f => f.isActive)?.id ?? funnels[0]?.id ?? 0,
+    name: "",
+    startDate: todayDate(),
+    endDate: "",
+    status: "active" as "active" | "ended" | "archived",
+    notes: "",
+  });
+
+  const loadRuns = async () => {
+    setLoading(true);
+    const params = new URLSearchParams();
+    if (selectedTenantId) params.set("tenantId", String(selectedTenantId));
+    if (selectedFunnelTypeId) params.set("funnelTypeId", String(selectedFunnelTypeId));
+    if (statusFilter) params.set("status", statusFilter);
+    try {
+      const res = await fetch(`${API}/api/funnel-runs?${params.toString()}`, { credentials: "include" });
+      const data = await res.json();
+      setRuns(Array.isArray(data) ? data : []);
+    } catch {
+      setRuns([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRuns();
+  }, [selectedTenantId, selectedFunnelTypeId, statusFilter]);
+
+  function openNewRun() {
+    setEditingRunId(null);
+    setFormError(null);
+    setForm({
+      tenantId: (selectedTenantId || tenants[0]?.id || 0) as number,
+      funnelTypeId: (selectedFunnelTypeId || funnels.find(f => f.isActive)?.id || funnels[0]?.id || 0) as number,
+      name: "",
+      startDate: todayDate(),
+      endDate: "",
+      status: "active",
+      notes: "",
+    });
+    setShowForm(true);
+  }
+
+  function openEditRun(run: FunnelRun) {
+    setEditingRunId(run.id);
+    setFormError(null);
+    setForm({
+      tenantId: run.tenantId,
+      funnelTypeId: run.funnelTypeId,
+      name: run.name,
+      startDate: run.startDate,
+      endDate: run.endDate || "",
+      status: run.status,
+      notes: run.notes || "",
+    });
+    setShowForm(true);
+  }
+
+  async function saveRun() {
+    setFormError(null);
+    if (!form.tenantId || !form.funnelTypeId || !form.startDate) {
+      setFormError("Client, funnel, and start date are required.");
+      return;
+    }
+    setSaving(true);
+    const method = editingRunId ? "PUT" : "POST";
+    const url = editingRunId ? `${API}/api/funnel-runs/${editingRunId}` : `${API}/api/funnel-runs`;
+    const body = editingRunId
+      ? {
+          name: form.name,
+          startDate: form.startDate,
+          endDate: form.endDate || null,
+          status: form.status,
+          notes: form.notes,
+        }
+      : {
+          tenantId: form.tenantId,
+          funnelTypeId: form.funnelTypeId,
+          name: form.name,
+          startDate: form.startDate,
+          endDate: form.endDate || null,
+          status: form.status,
+          notes: form.notes,
+        };
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Save failed" }));
+        setFormError(err.error || "Save failed");
+        return;
+      }
+      setShowForm(false);
+      await loadRuns();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function archiveRun(run: FunnelRun) {
+    if (!confirm(`Archive "${run.name}"? It will be hidden from Challenge comparisons.`)) return;
+    await fetch(`${API}/api/funnel-runs/${run.id}`, { method: "DELETE", credentials: "include" });
+    await loadRuns();
+  }
+
+  const activeFunnels = funnels.filter(f => f.isActive);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <p className="text-sm text-muted-foreground">
+          Define each client campaign run so The Challenge compares the same funnel days, not calendar dates.
+        </p>
+        <button
+          onClick={openNewRun}
+          disabled={tenants.length === 0 || funnels.length === 0}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-[0_0_15px_rgba(242,5,5,0.3)] transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" /> Add Run
+        </button>
+      </div>
+
+      <PremiumCard className="p-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <label className="space-y-1">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Client</span>
+            <select
+              value={selectedTenantId}
+              onChange={e => setSelectedTenantId(e.target.value ? Number(e.target.value) : "")}
+              className="w-full rounded-lg border border-white/10 bg-background px-3 py-2 text-sm text-white"
+            >
+              <option value="">All clients</option>
+              {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Funnel</span>
+            <select
+              value={selectedFunnelTypeId}
+              onChange={e => setSelectedFunnelTypeId(e.target.value ? Number(e.target.value) : "")}
+              className="w-full rounded-lg border border-white/10 bg-background px-3 py-2 text-sm text-white"
+            >
+              <option value="">All funnels</option>
+              {funnels.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Status</span>
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value as "active" | "ended" | "all" | "archived")}
+              className="w-full rounded-lg border border-white/10 bg-background px-3 py-2 text-sm text-white"
+            >
+              <option value="all">Active + ended</option>
+              <option value="active">Active only</option>
+              <option value="ended">Ended only</option>
+              <option value="archived">Archived</option>
+            </select>
+          </label>
+          <div className="flex items-end">
+            <button
+              onClick={loadRuns}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white transition-all hover:bg-white/[0.06]"
+            >
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </button>
+          </div>
+        </div>
+      </PremiumCard>
+
+      {showForm && (
+        <PremiumCard className="p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-display text-lg text-white">{editingRunId ? "Edit" : "New"} Funnel Run</h3>
+              <p className="text-xs text-muted-foreground">A run is one campaign flight for one client and one funnel.</p>
+            </div>
+            <button onClick={() => setShowForm(false)} className="text-muted-foreground hover:text-white"><X className="h-5 w-5" /></button>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-sm text-gray-300">Client</span>
+              <select
+                value={form.tenantId}
+                disabled={!!editingRunId}
+                onChange={e => setForm({ ...form, tenantId: Number(e.target.value) })}
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm text-gray-300">Funnel</span>
+              <select
+                value={form.funnelTypeId}
+                disabled={!!editingRunId}
+                onChange={e => setForm({ ...form, funnelTypeId: Number(e.target.value) })}
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {(activeFunnels.length ? activeFunnels : funnels).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1 md:col-span-2">
+              <span className="text-sm text-gray-300">Run Name</span>
+              <input
+                value={form.name}
+                onChange={e => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g., Spring 2026 - 40% Off Install"
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm text-gray-300">Start Date</span>
+              <input
+                type="date"
+                value={form.startDate}
+                onChange={e => setForm({ ...form, startDate: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm text-gray-300">End Date</span>
+              <input
+                type="date"
+                value={form.endDate}
+                onChange={e => setForm({ ...form, endDate: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white"
+              />
+              <p className="text-xs text-muted-foreground">Leave empty while the campaign is still running.</p>
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm text-gray-300">Status</span>
+              <select
+                value={form.status}
+                onChange={e => setForm({ ...form, status: e.target.value as "active" | "ended" | "archived" })}
+                className="w-full rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white"
+              >
+                <option value="active">Active</option>
+                <option value="ended">Ended</option>
+                <option value="archived">Archived</option>
+              </select>
+            </label>
+            <label className="space-y-1 md:col-span-2">
+              <span className="text-sm text-gray-300">Notes</span>
+              <textarea
+                value={form.notes}
+                onChange={e => setForm({ ...form, notes: e.target.value })}
+                rows={2}
+                placeholder="Optional internal context..."
+                className="w-full resize-none rounded-lg border border-white/10 bg-background px-4 py-2.5 text-white"
+              />
+            </label>
+          </div>
+
+          {formError && <p className="mt-3 text-sm text-red-400">{formError}</p>}
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={saveRun}
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-wait disabled:opacity-60"
+            >
+              <Save className="h-4 w-4" /> {saving ? "Saving..." : editingRunId ? "Update Run" : "Create Run"}
+            </button>
+          </div>
+        </PremiumCard>
+      )}
+
+      <PremiumCard>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-white/10 text-left">
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Run</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Client</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Funnel</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Dates</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Active Days</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</th>
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} className="py-12 text-center text-muted-foreground">Loading runs...</td></tr>
+              ) : runs.length === 0 ? (
+                <tr><td colSpan={7} className="py-12 text-center text-muted-foreground">No funnel runs yet. Add one or run the production migration backfill.</td></tr>
+              ) : runs.map(run => (
+                <tr key={run.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  <td className="px-4 py-3">
+                    <p className="text-sm font-medium text-white">{run.name}</p>
+                    {run.notes && <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground">{run.notes}</p>}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{run.tenantName}</td>
+                  <td className="px-4 py-3 text-sm text-white">{run.funnelName}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                      <CalendarDays className="h-3.5 w-3.5" />
+                      {formatRunDate(run.startDate)} - {formatRunDate(run.endDate)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-white">{run.activeDays}</td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-full px-2 py-1 text-xs ${
+                      run.status === "active"
+                        ? "bg-emerald-500/10 text-emerald-400"
+                        : run.status === "ended"
+                          ? "bg-white/10 text-muted-foreground"
+                          : "bg-red-500/10 text-red-400"
+                    }`}>
+                      {run.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openEditRun(run)} className="rounded-lg p-1.5 text-muted-foreground hover:bg-white/10 hover:text-white"><Pencil className="h-4 w-4" /></button>
+                      {run.status !== "archived" && (
+                        <button onClick={() => archiveRun(run)} className="rounded-lg p-1.5 text-muted-foreground hover:bg-red-500/10 hover:text-red-400"><Archive className="h-4 w-4" /></button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </PremiumCard>
     </div>
   );
 }

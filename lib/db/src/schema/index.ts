@@ -14,6 +14,7 @@ export * from "./training";
 export * from "./automation";
 export * from "./funnel-types";
 export * from "./tenant-funnel-types";
+export * from "./funnel-runs";
 export * from "./call-attempts";
 export * from "./scheduled-followups";
 export * from "./coordinator-daily-stats";

@@ -27,6 +27,18 @@ function parseRepeatedStrings(raw: unknown): string[] {
   ];
 }
 
+function parseRepeatedNumbers(raw: unknown): number[] {
+  return parseRepeatedStrings(raw)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function parsePositiveInt(raw: unknown, fallback: number, max = 365): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1) return fallback;
+  return Math.min(Math.floor(value), max);
+}
+
 function parseChallengeDateRange(rawStart: unknown, rawEnd: unknown) {
   const now = new Date();
   const defaultEnd = now.toISOString().split("T")[0];
@@ -65,6 +77,7 @@ type ChallengeAdRow = {
 
 type ChallengeMetricRow = {
   funnel: string | null;
+  activeDays: number;
   costPerLead: number;
   metaLeads: number;
   uniquePulseLeads: number;
@@ -107,6 +120,7 @@ function buildChallengeMetricRow(
 
   return {
     funnel: row.row_type === "summary" ? null : row.funnel,
+    activeDays: 0,
     costPerLead: metaLeads > 0 ? round2(allocatedSpend / metaLeads) : 0,
     metaLeads: round1(metaLeads),
     uniquePulseLeads,
@@ -235,6 +249,736 @@ export function buildChallengeDashboardResponse(input: {
     },
   };
 }
+
+type ChallengeRunRule = "newest" | "oldest" | "best" | "average";
+type ChallengeCompareMode = "client_funnels" | "funnel_clients";
+type ChallengeBestBy =
+  | "activeDays"
+  | "costPerLead"
+  | "metaLeads"
+  | "uniquePulseLeads"
+  | "appointmentsBooked"
+  | "bookingRate"
+  | "cancellationRate"
+  | "totalEstimateValue"
+  | "totalSoldClosedValue"
+  | "roasPotential"
+  | "roasSold"
+  | "totalSpend"
+  | "averageCostPerInHomeAppointment"
+  | "costToAcquireCustomer"
+  | "averageClosedJobValue";
+
+const CHALLENGE_BEST_BY_KEYS = new Set<ChallengeBestBy>([
+  "activeDays",
+  "costPerLead",
+  "metaLeads",
+  "uniquePulseLeads",
+  "appointmentsBooked",
+  "bookingRate",
+  "cancellationRate",
+  "totalEstimateValue",
+  "totalSoldClosedValue",
+  "roasPotential",
+  "roasSold",
+  "totalSpend",
+  "averageCostPerInHomeAppointment",
+  "costToAcquireCustomer",
+  "averageClosedJobValue",
+]);
+const LOWER_IS_BETTER = new Set<ChallengeBestBy>([
+  "costPerLead",
+  "cancellationRate",
+  "averageCostPerInHomeAppointment",
+  "costToAcquireCustomer",
+]);
+const CHALLENGE_RUNS_CACHE_TTL_MS = 45_000;
+const CHALLENGE_RUNS_CACHE_MAX = 80;
+
+const challengeRunsResponseCache = new Map<string, { body: unknown; expiresAt: number }>();
+const challengeRunsInflight = new Map<string, Promise<unknown>>();
+
+function getChallengeRunsCachedResponse(cacheKey: string): unknown | null {
+  const cached = challengeRunsResponseCache.get(cacheKey);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    challengeRunsResponseCache.delete(cacheKey);
+    return null;
+  }
+  return cached.body;
+}
+
+function setChallengeRunsCachedResponse(cacheKey: string, body: unknown) {
+  challengeRunsResponseCache.set(cacheKey, {
+    body,
+    expiresAt: Date.now() + CHALLENGE_RUNS_CACHE_TTL_MS,
+  });
+  if (challengeRunsResponseCache.size <= CHALLENGE_RUNS_CACHE_MAX) return;
+  const oldestKey = [...challengeRunsResponseCache.entries()]
+    .sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0]?.[0];
+  if (oldestKey) challengeRunsResponseCache.delete(oldestKey);
+}
+
+type ChallengeRunRawRow = {
+  run_id: string | number;
+  group_run_count: string | number | null;
+  tenant_id: string | number;
+  tenant_name: string;
+  funnel_type_id: string | number;
+  funnel_name: string;
+  run_name: string;
+  start_date: string;
+  end_date: string | null;
+  status: string;
+  active_days: string | number | null;
+  meta_leads: string | number | null;
+  unique_pulse_leads: string | number | null;
+  appointments_booked: string | number | null;
+  total_jobs: string | number | null;
+  cancelled_jobs: string | number | null;
+  completed_estimate_jobs: string | number | null;
+  total_estimate_value: string | number | null;
+  sold_closed_value: string | number | null;
+  sold_jobs: string | number | null;
+  total_spend: string | number | null;
+};
+
+type ChallengeRunMetricRow = ChallengeMetricRow & {
+  rowKey: string;
+  rowLabel: string;
+  tenantId: number;
+  tenantName: string;
+  funnelTypeId: number;
+  funnelName: string;
+  runId: number | null;
+  runName: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: string | null;
+  runCount: number;
+  selectedRunIds: number[];
+};
+
+function parseChallengeRunRule(raw: unknown): ChallengeRunRule {
+  if (raw === "oldest" || raw === "best" || raw === "average") return raw;
+  return "newest";
+}
+
+function parseChallengeCompareMode(raw: unknown): ChallengeCompareMode {
+  return raw === "funnel_clients" ? "funnel_clients" : "client_funnels";
+}
+
+function parseChallengeBestBy(raw: unknown): ChallengeBestBy {
+  return typeof raw === "string" && CHALLENGE_BEST_BY_KEYS.has(raw as ChallengeBestBy)
+    ? raw as ChallengeBestBy
+    : "roasSold";
+}
+
+function buildChallengeRunMetricRow(row: ChallengeRunRawRow): ChallengeRunMetricRow {
+  const metaLeads = toNumber(row.meta_leads);
+  const uniquePulseLeads = toNumber(row.unique_pulse_leads);
+  const appointmentsBooked = toNumber(row.appointments_booked);
+  const totalJobs = toNumber(row.total_jobs);
+  const cancelledJobs = toNumber(row.cancelled_jobs);
+  const completedEstimateJobs = toNumber(row.completed_estimate_jobs);
+  const totalEstimateValue = toNumber(row.total_estimate_value);
+  const totalSoldClosedValue = toNumber(row.sold_closed_value);
+  const soldJobs = toNumber(row.sold_jobs);
+  const totalSpend = toNumber(row.total_spend);
+  const runId = Number(row.run_id);
+  const tenantId = Number(row.tenant_id);
+  const funnelTypeId = Number(row.funnel_type_id);
+
+  return {
+    rowKey: `run:${runId}`,
+    rowLabel: row.funnel_name,
+    funnel: row.funnel_name,
+    tenantId,
+    tenantName: row.tenant_name,
+    funnelTypeId,
+    funnelName: row.funnel_name,
+    runId,
+    runName: row.run_name,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    status: row.status,
+    runCount: Math.max(1, toNumber(row.group_run_count)),
+    selectedRunIds: [runId],
+    activeDays: toNumber(row.active_days),
+    costPerLead: metaLeads > 0 ? round2(totalSpend / metaLeads) : 0,
+    metaLeads: round1(metaLeads),
+    uniquePulseLeads,
+    appointmentsBooked,
+    bookingRate: uniquePulseLeads > 0 ? round1((appointmentsBooked / uniquePulseLeads) * 100) : 0,
+    cancellationRate: totalJobs > 0 ? round1((cancelledJobs / totalJobs) * 100) : 0,
+    cancelledJobs,
+    totalJobs,
+    totalEstimateValue: round2(totalEstimateValue),
+    totalSoldClosedValue: round2(totalSoldClosedValue),
+    roasPotential: totalSpend > 0 ? round2(totalEstimateValue / totalSpend) : 0,
+    roasSold: totalSpend > 0 ? round2(totalSoldClosedValue / totalSpend) : 0,
+    totalSpend: round2(totalSpend),
+    completedEstimateJobs,
+    averageCostPerInHomeAppointment: completedEstimateJobs > 0 ? round2(totalSpend / completedEstimateJobs) : 0,
+    soldJobs,
+    costToAcquireCustomer: soldJobs > 0 ? round2(totalSpend / soldJobs) : 0,
+    averageClosedJobValue: soldJobs > 0 ? round2(totalSoldClosedValue / soldJobs) : 0,
+  };
+}
+
+function averageChallengeRunRows(rows: ChallengeRunMetricRow[], mode: ChallengeCompareMode): ChallengeRunMetricRow {
+  const first = rows[0];
+  const divisor = Math.max(rows.length, 1);
+  const avg = (key: keyof ChallengeMetricRow) => round2(rows.reduce((sum, row) => sum + toNumber(row[key]), 0) / divisor);
+  return {
+    ...first,
+    rowKey: mode === "funnel_clients" ? `tenant:${first.tenantId}` : `funnel:${first.funnelTypeId}`,
+    rowLabel: mode === "funnel_clients" ? first.tenantName : first.funnelName,
+    funnel: mode === "funnel_clients" ? first.tenantName : first.funnelName,
+    runId: null,
+    runName: "Average run",
+    startDate: null,
+    endDate: null,
+    status: null,
+    runCount: rows.length,
+    selectedRunIds: rows.flatMap((row) => row.selectedRunIds),
+    activeDays: avg("activeDays"),
+    costPerLead: avg("costPerLead"),
+    metaLeads: avg("metaLeads"),
+    uniquePulseLeads: avg("uniquePulseLeads"),
+    appointmentsBooked: avg("appointmentsBooked"),
+    bookingRate: avg("bookingRate"),
+    cancellationRate: avg("cancellationRate"),
+    cancelledJobs: avg("cancelledJobs"),
+    totalJobs: avg("totalJobs"),
+    totalEstimateValue: avg("totalEstimateValue"),
+    totalSoldClosedValue: avg("totalSoldClosedValue"),
+    roasPotential: avg("roasPotential"),
+    roasSold: avg("roasSold"),
+    totalSpend: avg("totalSpend"),
+    completedEstimateJobs: avg("completedEstimateJobs"),
+    averageCostPerInHomeAppointment: avg("averageCostPerInHomeAppointment"),
+    soldJobs: avg("soldJobs"),
+    costToAcquireCustomer: avg("costToAcquireCustomer"),
+    averageClosedJobValue: avg("averageClosedJobValue"),
+  };
+}
+
+function summarizeChallengeRunRows(rows: ChallengeRunMetricRow[]): ChallengeRunMetricRow {
+  const base = rows[0] ?? {
+    rowKey: "summary",
+    rowLabel: "Selected comparison",
+    funnel: null,
+    tenantId: 0,
+    tenantName: "Selected comparison",
+    funnelTypeId: 0,
+    funnelName: "Selected comparison",
+    runId: null,
+    runName: null,
+    startDate: null,
+    endDate: null,
+    status: null,
+    runCount: 0,
+    selectedRunIds: [],
+  };
+  const metaLeads = rows.reduce((sum, row) => sum + row.metaLeads, 0);
+  const uniquePulseLeads = rows.reduce((sum, row) => sum + row.uniquePulseLeads, 0);
+  const appointmentsBooked = rows.reduce((sum, row) => sum + row.appointmentsBooked, 0);
+  const totalJobs = rows.reduce((sum, row) => sum + row.totalJobs, 0);
+  const cancelledJobs = rows.reduce((sum, row) => sum + row.cancelledJobs, 0);
+  const completedEstimateJobs = rows.reduce((sum, row) => sum + row.completedEstimateJobs, 0);
+  const totalEstimateValue = rows.reduce((sum, row) => sum + row.totalEstimateValue, 0);
+  const totalSoldClosedValue = rows.reduce((sum, row) => sum + row.totalSoldClosedValue, 0);
+  const totalSpend = rows.reduce((sum, row) => sum + row.totalSpend, 0);
+  const soldJobs = rows.reduce((sum, row) => sum + row.soldJobs, 0);
+  const activeDays = rows.length > 0
+    ? round1(rows.reduce((sum, row) => sum + row.activeDays, 0) / rows.length)
+    : 0;
+
+  return {
+    ...base,
+    rowKey: "summary",
+    rowLabel: "Selected comparison",
+    funnel: null,
+    tenantId: 0,
+    tenantName: "Selected comparison",
+    funnelTypeId: 0,
+    funnelName: "Selected comparison",
+    runId: null,
+    runName: null,
+    startDate: null,
+    endDate: null,
+    status: null,
+    runCount: rows.reduce((sum, row) => sum + row.runCount, 0),
+    selectedRunIds: rows.flatMap((row) => row.selectedRunIds),
+    activeDays,
+    costPerLead: metaLeads > 0 ? round2(totalSpend / metaLeads) : 0,
+    metaLeads: round1(metaLeads),
+    uniquePulseLeads,
+    appointmentsBooked,
+    bookingRate: uniquePulseLeads > 0 ? round1((appointmentsBooked / uniquePulseLeads) * 100) : 0,
+    cancellationRate: totalJobs > 0 ? round1((cancelledJobs / totalJobs) * 100) : 0,
+    cancelledJobs,
+    totalJobs,
+    totalEstimateValue: round2(totalEstimateValue),
+    totalSoldClosedValue: round2(totalSoldClosedValue),
+    roasPotential: totalSpend > 0 ? round2(totalEstimateValue / totalSpend) : 0,
+    roasSold: totalSpend > 0 ? round2(totalSoldClosedValue / totalSpend) : 0,
+    totalSpend: round2(totalSpend),
+    completedEstimateJobs,
+    averageCostPerInHomeAppointment: completedEstimateJobs > 0 ? round2(totalSpend / completedEstimateJobs) : 0,
+    soldJobs,
+    costToAcquireCustomer: soldJobs > 0 ? round2(totalSpend / soldJobs) : 0,
+    averageClosedJobValue: soldJobs > 0 ? round2(totalSoldClosedValue / soldJobs) : 0,
+  };
+}
+
+function selectChallengeRowsForComparison(
+  runRows: ChallengeRunMetricRow[],
+  mode: ChallengeCompareMode,
+  runRule: ChallengeRunRule,
+  bestBy: ChallengeBestBy,
+): ChallengeRunMetricRow[] {
+  const groups = new Map<string, ChallengeRunMetricRow[]>();
+  for (const row of runRows) {
+    const key = mode === "funnel_clients" ? String(row.tenantId) : String(row.funnelTypeId);
+    const existing = groups.get(key) ?? [];
+    existing.push(row);
+    groups.set(key, existing);
+  }
+
+  const selected: ChallengeRunMetricRow[] = [];
+  for (const rows of groups.values()) {
+    const sorted = [...rows].sort((a, b) => {
+      const aStart = a.startDate ?? "";
+      const bStart = b.startDate ?? "";
+      return bStart.localeCompare(aStart) || (b.runId ?? 0) - (a.runId ?? 0);
+    });
+    const groupRunCount = Math.max(...sorted.map((item) => item.runCount), sorted.length);
+    let row: ChallengeRunMetricRow;
+    if (runRule === "average") {
+      row = averageChallengeRunRows(sorted, mode);
+    } else if (runRule === "oldest") {
+      row = sorted[sorted.length - 1];
+    } else if (runRule === "best") {
+      row = [...sorted].sort((a, b) => {
+        const av = toNumber(a[bestBy]);
+        const bv = toNumber(b[bestBy]);
+        if (LOWER_IS_BETTER.has(bestBy)) {
+          const aScore = bestBy === "cancellationRate" ? (a.totalJobs > 0 ? av : Number.POSITIVE_INFINITY) : (av > 0 ? av : Number.POSITIVE_INFINITY);
+          const bScore = bestBy === "cancellationRate" ? (b.totalJobs > 0 ? bv : Number.POSITIVE_INFINITY) : (bv > 0 ? bv : Number.POSITIVE_INFINITY);
+          return aScore - bScore || (b.startDate ?? "").localeCompare(a.startDate ?? "");
+        }
+        return bv - av || (b.startDate ?? "").localeCompare(a.startDate ?? "");
+      })[0];
+    } else {
+      row = sorted[0];
+    }
+
+    selected.push({
+      ...row,
+      rowKey: mode === "funnel_clients" ? `tenant:${row.tenantId}` : `funnel:${row.funnelTypeId}`,
+      rowLabel: mode === "funnel_clients" ? row.tenantName : row.funnelName,
+      funnel: mode === "funnel_clients" ? row.tenantName : row.funnelName,
+      runCount: runRule === "average" ? row.runCount : groupRunCount,
+    });
+  }
+
+  return selected.sort((a, b) =>
+    b.totalEstimateValue - a.totalEstimateValue
+    || b.totalSoldClosedValue - a.totalSoldClosedValue
+    || a.rowLabel.localeCompare(b.rowLabel)
+  );
+}
+
+function numberInSql(columnSql: SQL, values: number[]): SQL | null {
+  if (values.length === 0) return null;
+  return sql`${columnSql} IN (${sql.join(values.map((value) => sql`${value}`), sql`, `)})`;
+}
+
+router.get("/dashboard/challenge/runs", async (req, res) => {
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const selectedClientTenantIds = parseRepeatedNumbers(req.query.clientTenantId);
+  const selectedFunnelTypeIds = parseRepeatedNumbers(req.query.funnelTypeId);
+  const selectedRunIds = parseRepeatedNumbers(req.query.runId);
+  const mode = parseChallengeCompareMode(req.query.mode);
+  const runRule = parseChallengeRunRule(req.query.runRule);
+  const bestBy = parseChallengeBestBy(req.query.bestBy);
+  const dayStart = parsePositiveInt(req.query.dayStart, 1);
+  const dayEnd = Math.max(dayStart, parsePositiveInt(req.query.dayEnd, 30));
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
+  const cacheKey = JSON.stringify({
+    role: req.session.userRole ?? null,
+    sessionTenantId: req.session.tenantId ?? null,
+    scopedTenantId: tenantId ?? null,
+    mode,
+    runRule,
+    bestBy,
+    dayStart,
+    dayEnd,
+    selectedClientTenantIds: [...selectedClientTenantIds].sort((a, b) => a - b),
+    selectedFunnelTypeIds: [...selectedFunnelTypeIds].sort((a, b) => a - b),
+    selectedRunIds: [...selectedRunIds].sort((a, b) => a - b),
+  });
+  const cached = getChallengeRunsCachedResponse(cacheKey);
+  if (cached) {
+    res.setHeader("X-Optics-Cache", "hit");
+    res.json(cached);
+    return;
+  }
+
+  const existingRequest = challengeRunsInflight.get(cacheKey);
+  if (existingRequest) {
+    const body = await existingRequest;
+    res.setHeader("X-Optics-Cache", "deduped");
+    res.json(body);
+    return;
+  }
+
+  const responsePromise = (async () => {
+    const scopeConditions: SQL[] = [sql`fr.status <> 'archived'`];
+    if (tenantId) scopeConditions.push(sql`fr.tenant_id = ${tenantId}`);
+    const scopedWhereClause = sql`WHERE ${sql.join(scopeConditions, sql` AND `)}`;
+
+    const runConditions: SQL[] = [...scopeConditions];
+    const clientFilter = numberInSql(sql`fr.tenant_id`, selectedClientTenantIds);
+    const funnelFilter = numberInSql(sql`fr.funnel_type_id`, selectedFunnelTypeIds);
+    const runFilter = numberInSql(sql`fr.id`, selectedRunIds);
+    if (clientFilter) runConditions.push(clientFilter);
+    if (funnelFilter) runConditions.push(funnelFilter);
+    if (runFilter) runConditions.push(runFilter);
+    const runWhereClause = sql`WHERE ${sql.join(runConditions, sql` AND `)}`;
+    const startOffset = dayStart - 1;
+    const endOffset = dayEnd - 1;
+    const groupPartition = mode === "funnel_clients" ? sql`fr.tenant_id` : sql`fr.funnel_type_id`;
+    const runRankOrder = runRule === "oldest"
+      ? sql`start_date ASC, run_id ASC`
+      : sql`start_date DESC, run_id DESC`;
+    const runRankFilter = runRule === "newest" || runRule === "oldest"
+      ? sql`AND run_rank = 1`
+      : sql``;
+
+    const [clientsResult, funnelsResult, metricsResult] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        t.id,
+        t.name,
+        COUNT(fr.id)::int AS "runCount"
+      FROM funnel_runs fr
+      JOIN tenants t ON t.id = fr.tenant_id
+      ${scopedWhereClause}
+      GROUP BY t.id, t.name
+      ORDER BY t.name ASC
+    `),
+    db.execute(sql`
+      SELECT
+        ft.id,
+        ft.name,
+        COUNT(fr.id)::int AS "runCount"
+      FROM funnel_runs fr
+      JOIN funnel_types ft ON ft.id = fr.funnel_type_id
+      ${scopedWhereClause}
+      GROUP BY ft.id, ft.name
+      ORDER BY ft.name ASC
+    `),
+    db.execute(sql`
+      WITH candidate_runs AS (
+        SELECT
+          fr.id AS run_id,
+          ${groupPartition} AS comparison_group_key,
+          fr.tenant_id,
+          t.name AS tenant_name,
+          fr.funnel_type_id,
+          ft.name AS funnel_name,
+          fr.name AS run_name,
+          fr.start_date,
+          fr.end_date,
+          fr.status,
+          (fr.start_date + (${startOffset}::int * INTERVAL '1 day'))::date AS window_start,
+          LEAST(
+            (fr.start_date + (${endOffset}::int * INTERVAL '1 day'))::date,
+            COALESCE(fr.end_date, CURRENT_DATE)
+          ) AS window_end
+        FROM funnel_runs fr
+        JOIN tenants t ON t.id = fr.tenant_id
+        JOIN funnel_types ft ON ft.id = fr.funnel_type_id
+        ${runWhereClause}
+      ),
+      valid_candidates AS (
+        SELECT *
+        FROM candidate_runs
+        WHERE window_start <= window_end
+      ),
+      ranked_runs AS (
+        SELECT
+          valid_candidates.*,
+          COUNT(*) OVER (PARTITION BY comparison_group_key)::int AS group_run_count,
+          ROW_NUMBER() OVER (PARTITION BY comparison_group_key ORDER BY ${runRankOrder})::int AS run_rank
+        FROM valid_candidates
+      ),
+      valid_runs AS (
+        SELECT *
+        FROM ranked_runs
+        WHERE TRUE
+        ${runRankFilter}
+      ),
+      lead_cohort AS (
+        SELECT
+          vr.run_id,
+          l.id,
+          l.tenant_id,
+          (
+            l.tenant_id::text || ':' ||
+            COALESCE(
+              NULLIF(REGEXP_REPLACE(COALESCE(l.phone, ''), '[^0-9]', '', 'g'), ''),
+              NULLIF(LOWER(TRIM(COALESCE(l.email, ''))), ''),
+              l.id::text
+            )
+          ) AS unique_key,
+          (
+            l.status IN ('booked', 'sold')
+            OR l.hub_status IN ('appt_set', 'appt_booked')
+            OR l.booked_at IS NOT NULL
+            OR l.has_sold_estimate = true
+          ) AS booked
+        FROM valid_runs vr
+        JOIN leads l
+          ON l.tenant_id = vr.tenant_id
+          AND (
+            l.funnel_id = vr.funnel_type_id
+            OR (
+              l.funnel_id IS NULL
+              AND l.lead_type IS NOT NULL
+              AND LOWER(TRIM(l.lead_type)) = LOWER(TRIM(vr.funnel_name))
+            )
+          )
+          AND l.created_at >= vr.window_start::timestamp
+          AND l.created_at < (vr.window_end + INTERVAL '1 day')::timestamp
+      ),
+      lead_by_run AS (
+        SELECT
+          run_id,
+          COUNT(DISTINCT unique_key)::int AS unique_pulse_leads,
+          COUNT(DISTINCT unique_key) FILTER (WHERE booked)::int AS appointments_booked
+        FROM lead_cohort
+        GROUP BY run_id
+      ),
+      jobs_by_run AS (
+        SELECT
+          lc.run_id,
+          COUNT(DISTINCT j.id)::int AS total_jobs,
+          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_jobs,
+          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+        GROUP BY lc.run_id
+      ),
+      estimate_options AS (
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+
+        UNION ALL
+
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+        WHERE se.lead_id IS NULL
+          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+      ),
+      estimate_per_lead AS (
+        SELECT run_id, unique_key, AVG(amount) AS avg_estimate
+        FROM estimate_options
+        GROUP BY run_id, unique_key
+      ),
+      estimates_by_run AS (
+        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+        FROM estimate_per_lead
+        GROUP BY run_id
+      ),
+      sold_options AS (
+        SELECT
+          lc.run_id,
+          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+
+        UNION ALL
+
+        SELECT
+          lc.run_id,
+          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+        WHERE se.lead_id IS NULL
+          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+      ),
+      sold_per_job AS (
+        SELECT run_id, sold_key, SUM(amount) AS sold_value
+        FROM sold_options
+        GROUP BY run_id, sold_key
+      ),
+      sold_by_run AS (
+        SELECT
+          run_id,
+          COALESCE(SUM(sold_value), 0)::numeric AS sold_closed_value,
+          COUNT(DISTINCT sold_key)::int AS sold_jobs
+        FROM sold_per_job
+        GROUP BY run_id
+      ),
+      spend_by_run AS (
+        SELECT
+          vr.run_id,
+          COALESCE(SUM(cds.spend), 0)::numeric AS total_spend,
+          COALESCE(SUM(cds.conversions), 0)::numeric AS meta_leads
+        FROM valid_runs vr
+        JOIN campaign_funnel_mappings cfm
+          ON cfm.tenant_id = vr.tenant_id
+          AND cfm.funnel_type_id = vr.funnel_type_id
+        JOIN campaigns c
+          ON c.id = cfm.campaign_id
+          AND c.tenant_id = cfm.tenant_id
+          AND c.platform = 'meta'
+        JOIN campaign_daily_stats cds
+          ON cds.campaign_id = c.id
+          AND cds.date >= vr.window_start
+          AND cds.date <= vr.window_end
+        GROUP BY vr.run_id
+      ),
+      activity_days AS (
+        SELECT lc.run_id, l.created_at::date AS activity_day
+        FROM lead_cohort lc
+        JOIN leads l ON l.id = lc.id AND l.tenant_id = lc.tenant_id
+
+        UNION
+
+        SELECT vr.run_id, cds.date AS activity_day
+        FROM valid_runs vr
+        JOIN campaign_funnel_mappings cfm
+          ON cfm.tenant_id = vr.tenant_id
+          AND cfm.funnel_type_id = vr.funnel_type_id
+        JOIN campaigns c
+          ON c.id = cfm.campaign_id
+          AND c.tenant_id = cfm.tenant_id
+          AND c.platform = 'meta'
+        JOIN campaign_daily_stats cds
+          ON cds.campaign_id = c.id
+          AND cds.date >= vr.window_start
+          AND cds.date <= vr.window_end
+        WHERE COALESCE(cds.spend, 0) > 0
+          OR COALESCE(cds.conversions, 0) > 0
+      ),
+      active_days AS (
+        SELECT run_id, COUNT(DISTINCT activity_day)::int AS active_days
+        FROM activity_days
+        GROUP BY run_id
+      )
+      SELECT
+        vr.run_id,
+        vr.group_run_count,
+        vr.tenant_id,
+        vr.tenant_name,
+        vr.funnel_type_id,
+        vr.funnel_name,
+        vr.run_name,
+        vr.start_date,
+        vr.end_date,
+        vr.status,
+        COALESCE(ad.active_days, 0)::int AS active_days,
+        COALESCE(spr.meta_leads, 0)::numeric AS meta_leads,
+        COALESCE(lbr.unique_pulse_leads, 0)::int AS unique_pulse_leads,
+        COALESCE(lbr.appointments_booked, 0)::int AS appointments_booked,
+        COALESCE(jbr.total_jobs, 0)::int AS total_jobs,
+        COALESCE(jbr.cancelled_jobs, 0)::int AS cancelled_jobs,
+        COALESCE(jbr.completed_estimate_jobs, 0)::int AS completed_estimate_jobs,
+        COALESCE(ebr.total_estimate_value, 0)::numeric AS total_estimate_value,
+        COALESCE(sbr.sold_closed_value, 0)::numeric AS sold_closed_value,
+        COALESCE(sbr.sold_jobs, 0)::int AS sold_jobs,
+        COALESCE(spr.total_spend, 0)::numeric AS total_spend
+      FROM valid_runs vr
+      LEFT JOIN lead_by_run lbr ON lbr.run_id = vr.run_id
+      LEFT JOIN jobs_by_run jbr ON jbr.run_id = vr.run_id
+      LEFT JOIN estimates_by_run ebr ON ebr.run_id = vr.run_id
+      LEFT JOIN sold_by_run sbr ON sbr.run_id = vr.run_id
+      LEFT JOIN spend_by_run spr ON spr.run_id = vr.run_id
+      LEFT JOIN active_days ad ON ad.run_id = vr.run_id
+      ORDER BY vr.start_date DESC, vr.run_id DESC
+    `),
+  ]);
+
+  const availableClients = ((clientsResult as unknown as { rows?: Array<{ id: number; name: string; runCount: number }> }).rows ?? [])
+    .map((row) => ({ id: Number(row.id), name: row.name, runCount: Number(row.runCount ?? 0) }));
+  const availableFunnels = ((funnelsResult as unknown as { rows?: Array<{ id: number; name: string; runCount: number }> }).rows ?? [])
+    .map((row) => ({ id: Number(row.id), name: row.name, runCount: Number(row.runCount ?? 0) }));
+  const runRawRows = ((metricsResult as unknown as { rows?: ChallengeRunRawRow[] }).rows ?? []);
+  const runMetrics = runRawRows.map(buildChallengeRunMetricRow);
+  const rows = selectChallengeRowsForComparison(runMetrics, mode, runRule, bestBy);
+  const summary = summarizeChallengeRunRows(rows);
+
+    return {
+      compareMode: mode,
+      dayRange: {
+        startDay: dayStart,
+        endDay: dayEnd,
+        label: `Days ${dayStart}-${dayEnd}`,
+      },
+      runRule,
+      bestBy,
+      selectedTenantIds: selectedClientTenantIds,
+      selectedFunnelTypeIds,
+      selectedRunIds,
+      availableClients,
+      availableFunnels,
+      selectedRuns: runMetrics.map((row) => ({
+        id: row.runId,
+        tenantId: row.tenantId,
+        tenantName: row.tenantName,
+        funnelTypeId: row.funnelTypeId,
+        funnelName: row.funnelName,
+        name: row.runName,
+        startDate: row.startDate,
+        endDate: row.endDate,
+        status: row.status,
+        activeDays: row.activeDays,
+      })),
+      summary,
+      byFunnel: rows,
+      rows,
+      allocation: {
+        method: "meta_campaign_funnel_mapping",
+        note: "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign-to-funnel mappings for the same run days.",
+      },
+    };
+  })();
+
+  challengeRunsInflight.set(cacheKey, responsePromise);
+  try {
+    const body = await responsePromise;
+    setChallengeRunsCachedResponse(cacheKey, body);
+    res.setHeader("X-Optics-Cache", "miss");
+    res.json(body);
+  } finally {
+    challengeRunsInflight.delete(cacheKey);
+  }
+});
 
 export type AttributionMode = "attributed" | "unattributed" | "all";
 
