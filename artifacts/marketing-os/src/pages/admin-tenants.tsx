@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useCreateTenant, useUpdateTenant, useDeleteTenant } from "@workspace/api-client-react";
 import { useAuth } from "@/components/auth-context";
 import { useTenants, type TenantOption } from "@/hooks/use-tenants";
+import { MetaCampaignFunnelMapping } from "@/components/MetaCampaignFunnelMapping";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info, Megaphone } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
@@ -100,7 +101,7 @@ const emptyForm: TenantForm = {
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
-type EditTab = "integrations" | "alerts" | "scripts" | "leaderboard" | "maintenance";
+type EditTab = "integrations" | "campaignMapping" | "alerts" | "scripts" | "leaderboard" | "maintenance";
 
 function SetupGuide({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -1034,6 +1035,9 @@ export default function AdminTenants() {
               <button onClick={() => setEditTab("integrations")} className={tabClass("integrations")}>
                 <Key className="w-3.5 h-3.5 inline mr-1.5" />Integrations
               </button>
+              <button onClick={() => setEditTab("campaignMapping")} className={tabClass("campaignMapping")}>
+                <Megaphone className="w-3.5 h-3.5 inline mr-1.5" />Campaign Map
+              </button>
               <button onClick={() => setEditTab("alerts")} className={tabClass("alerts")}>
                 <Bell className="w-3.5 h-3.5 inline mr-1.5" />Client Alerts
               </button>
@@ -1062,6 +1066,9 @@ export default function AdminTenants() {
             )}
             {editTab === "alerts" && (
               <TenantAlertConfig tenantId={editId} apiBase={API_BASE} />
+            )}
+            {editTab === "campaignMapping" && (
+              <MetaCampaignFunnelMapping tenantId={editId} tenantName={editTenantName} apiBase={API_BASE} />
             )}
             {editTab === "scripts" && (
               <TenantCaptureScripts tenantId={editId} tenantName={editTenantName} apiBase={API_BASE} />
