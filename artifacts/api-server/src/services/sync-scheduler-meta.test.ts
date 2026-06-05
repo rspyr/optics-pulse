@@ -124,7 +124,8 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("./notifications", () => ({ emitSyncFailureNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("./reconciliation", () => ({ runReconciliation: vi.fn() }));
 vi.mock("./integrations/service-titan", () => ({
-  fetchCompletedJobs: vi.fn(), formatSTJobForSync: vi.fn(),
+  SERVICE_TITAN_JOB_STATUSES: ["Scheduled", "Dispatched", "InProgress", "Hold", "Completed", "Canceled"],
+  fetchJobsByStatuses: vi.fn(), fetchCompletedJobs: vi.fn(), formatSTJobForSync: vi.fn(),
   fetchCustomerContactsById: vi.fn(), fetchLocationsByIds: vi.fn(),
   formatLocationAddress: vi.fn(), fetchInvoices: vi.fn(),
   parseInvoiceData: vi.fn(), fetchSoldEstimates: vi.fn(),

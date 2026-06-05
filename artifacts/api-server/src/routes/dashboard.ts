@@ -44,6 +44,7 @@ function parseChallengeDateRange(rawStart: unknown, rawEnd: unknown) {
 type ChallengeRollupRow = {
   row_type: "summary" | "funnel";
   funnel: string;
+  meta_leads: string | number | null;
   unique_pulse_leads: string | number | null;
   appointments_booked: string | number | null;
   total_jobs: string | number | null;
@@ -87,6 +88,7 @@ function buildChallengeMetricRow(
   allocatedSpend: number,
   allocatedMetaLeads: number,
 ): ChallengeMetricRow {
+  const metaLeads = row.meta_leads == null ? allocatedMetaLeads : toNumber(row.meta_leads);
   const uniquePulseLeads = toNumber(row.unique_pulse_leads);
   const appointmentsBooked = toNumber(row.appointments_booked);
   const totalJobs = toNumber(row.total_jobs);
@@ -98,8 +100,8 @@ function buildChallengeMetricRow(
 
   return {
     funnel: row.row_type === "summary" ? null : row.funnel,
-    costPerLead: allocatedMetaLeads > 0 ? round2(allocatedSpend / allocatedMetaLeads) : 0,
-    metaLeads: round1(allocatedMetaLeads),
+    costPerLead: metaLeads > 0 ? round2(allocatedSpend / metaLeads) : 0,
+    metaLeads: round1(metaLeads),
     uniquePulseLeads,
     appointmentsBooked,
     bookingRate: uniquePulseLeads > 0 ? round1((appointmentsBooked / uniquePulseLeads) * 100) : 0,
@@ -131,6 +133,7 @@ export function buildChallengeDashboardResponse(input: {
   const summaryRow = input.rows.find((row) => row.row_type === "summary") ?? {
     row_type: "summary" as const,
     funnel: "All funnels",
+    meta_leads: 0,
     unique_pulse_leads: 0,
     appointments_booked: 0,
     total_jobs: 0,
@@ -171,7 +174,7 @@ export function buildChallengeDashboardResponse(input: {
     allocation: {
       method: "pulse_lead_share",
       allUniquePulseLeads,
-      note: "Campaign spend and Meta-reported leads are stored by campaign/date, so selected and per-funnel views allocate them by each funnel's share of unique Pulse leads in the same lead-received window.",
+      note: "Campaign spend is stored by campaign/date, so selected and per-funnel views allocate spend by each funnel's share of unique Pulse leads in the same lead-received window. Meta Leads count raw Meta-sourced lead submissions received in that window, while Pulse Leads are deduped.",
     },
   };
 }
@@ -217,7 +220,13 @@ router.get("/dashboard/challenge", async (req, res) => {
           OR l.hub_status IN ('appt_set', 'appt_booked')
           OR l.booked_at IS NOT NULL
           OR l.has_sold_estimate = true
-        ) AS booked
+        ) AS booked,
+        (
+          LOWER(COALESCE(NULLIF(l.original_source, ''), l.source, '')) LIKE '%meta%'
+          OR LOWER(COALESCE(NULLIF(l.original_source, ''), l.source, '')) LIKE '%facebook%'
+          OR LOWER(COALESCE(NULLIF(l.original_source, ''), l.source, '')) LIKE '%instagram%'
+          OR LOWER(COALESCE(NULLIF(l.original_source, ''), l.source, '')) IN ('fb', 'ig')
+        ) AS is_meta_lead
       FROM leads l
       LEFT JOIN tenant_funnel_types tft ON tft.funnel_type_id = l.funnel_id AND tft.tenant_id = l.tenant_id
       LEFT JOIN funnel_types ft ON ft.id = tft.funnel_type_id
@@ -238,6 +247,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     lead_by_funnel AS (
       SELECT
         funnel,
+        COUNT(*) FILTER (WHERE is_meta_lead)::int AS meta_leads,
         COUNT(DISTINCT unique_key)::int AS unique_pulse_leads,
         COUNT(DISTINCT unique_key) FILTER (WHERE booked)::int AS appointments_booked
       FROM lead_cohort
@@ -245,6 +255,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     ),
     lead_total AS (
       SELECT
+        COUNT(*) FILTER (WHERE is_meta_lead)::int AS meta_leads,
         COUNT(DISTINCT unique_key)::int AS unique_pulse_leads,
         COUNT(DISTINCT unique_key) FILTER (WHERE booked)::int AS appointments_booked
       FROM lead_cohort
@@ -361,6 +372,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     SELECT
       'summary'::text AS row_type,
       'All funnels'::text AS funnel,
+      lt.meta_leads,
       lt.unique_pulse_leads,
       lt.appointments_booked,
       COALESCE(jt.total_jobs, 0)::int AS total_jobs,
@@ -381,6 +393,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     SELECT
       'funnel'::text AS row_type,
       fn.funnel,
+      COALESCE(lbf.meta_leads, 0)::int AS meta_leads,
       COALESCE(lbf.unique_pulse_leads, 0)::int AS unique_pulse_leads,
       COALESCE(lbf.appointments_booked, 0)::int AS appointments_booked,
       COALESCE(jbf.total_jobs, 0)::int AS total_jobs,

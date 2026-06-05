@@ -4,8 +4,22 @@ import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isChallengeMetricPreference(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const order = value.order;
+  const visibility = value.visibility;
+  if (!Array.isArray(order) || !order.every((item) => typeof item === "string")) return false;
+  if (!isRecord(visibility)) return false;
+  return Object.values(visibility).every((item) => typeof item === "boolean");
+}
+
 const ALLOWED_PREF_KEYS: Record<string, (v: unknown) => boolean> = {
   soundEnabled: (v) => typeof v === "boolean",
+  challengeDashboardMetrics: isChallengeMetricPreference,
 };
 
 router.get("/users/me/preferences", async (req, res) => {

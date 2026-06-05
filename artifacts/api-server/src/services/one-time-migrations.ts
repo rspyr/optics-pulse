@@ -1474,6 +1474,34 @@ const migrations: Migration[] = [
       console.log(`[Migration] Resubmission backfill created ${entriesCreated} entr(ies) across ${leadsUpdated} lead(s)`);
     },
   },
+  {
+    id: "2026-06-04_backfill-st-all-job-statuses-for-challenge",
+    description: "Backfill all ServiceTitan job statuses so The Challenge cancellation rate can count canceled jobs against the full job denominator",
+    run: async () => {
+      const { backfillServiceTitanJobs } = await import("./sync-scheduler");
+      const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+      let attempted = 0;
+      let synced = 0;
+
+      for (const tenant of tenants) {
+        try {
+          const stConfig = resolveStAuthConfigForTenant(tenant);
+          if (!stConfig || tenant.stSyncPaused) continue;
+
+          attempted++;
+          const result = await backfillServiceTitanJobs(tenant.id, 1095);
+          synced += result.synced;
+          if (result.error) {
+            console.warn(`[Migration] Challenge ST status backfill returned an error for tenant ${tenant.id}: ${result.error}`);
+          }
+        } catch (err) {
+          console.warn(`[Migration] Challenge ST status backfill failed for tenant ${tenant.id}:`, (err as Error).message);
+        }
+      }
+
+      console.log(`[Migration] Challenge ST status backfill synced ${synced} job row(s) across ${attempted} configured tenant(s)`);
+    },
+  },
 ];
 
 export const BACKFILL_MANUAL_SOURCE_MIGRATION_ID =

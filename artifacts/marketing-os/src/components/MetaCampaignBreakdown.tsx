@@ -9,22 +9,28 @@ type Props = {
   endDate: string;
 };
 
-function formatMoney(amount: number, currency: string | null | undefined): string {
+function toFiniteNumber(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatMoney(amount: unknown, currency: string | null | undefined): string {
   const code = currency || "USD";
+  const value = toFiniteNumber(amount);
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: code,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(amount);
+    }).format(value);
   } catch {
-    return `${code} ${amount.toFixed(2)}`;
+    return `${code} ${value.toFixed(2)}`;
   }
 }
 
-function formatInt(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
+function formatInt(n: unknown): string {
+  return new Intl.NumberFormat("en-US").format(toFiniteNumber(n));
 }
 
 type SortKey = "spend" | "clicks" | "conversions" | "cpl";
@@ -38,6 +44,7 @@ function isActiveStatus(status: string | null | undefined): boolean {
 
 export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   const { data: campaigns, isLoading } = useGetMetaCampaignSummary({ startDate, endDate });
+  const campaignRows = Array.isArray(campaigns) ? campaigns : [];
   const [expanded, setExpanded] = useState<Record<number, boolean>>(() => loadExpandedCampaigns());
   const initialTablePrefs = useMemo(() => loadTablePrefs(), []);
   const [sortKey, setSortKey] = useState<SortKey>(initialTablePrefs.sortKey);
@@ -91,16 +98,16 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
   };
 
   const sortedCampaigns = useMemo(() => {
-    if (!campaigns) return [];
-    let filtered = hideInactive ? campaigns.filter(c => isActiveStatus(c.status)) : campaigns;
+    const rows = Array.isArray(campaigns) ? campaigns : [];
+    let filtered = hideInactive ? rows.filter(c => isActiveStatus(c.status)) : rows;
     const q = search.trim().toLowerCase();
     if (q) {
       filtered = filtered.filter(c => (c.name || "").toLowerCase().includes(q));
     }
     const sign = sortDir === "asc" ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      const av = (a[sortKey] as number) ?? 0;
-      const bv = (b[sortKey] as number) ?? 0;
+      const av = toFiniteNumber(a[sortKey]);
+      const bv = toFiniteNumber(b[sortKey]);
       return (av - bv) * sign;
     });
   }, [campaigns, sortKey, sortDir, hideInactive, search]);
@@ -114,7 +121,7 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
             Click a campaign to expand its ad sets, then expand an ad set to see individual ads.
           </p>
         </div>
-        {campaigns && campaigns.length > 0 && (
+        {campaignRows.length > 0 && (
           <div className="flex items-center gap-4 flex-wrap">
             <input
               type="search"
@@ -138,11 +145,11 @@ export function MetaCampaignBreakdown({ startDate, endDate }: Props) {
         )}
       </div>
 
-      {isLoading && !campaigns ? (
+      {isLoading && campaignRows.length === 0 ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading Meta campaigns...
         </div>
-      ) : !campaigns || campaigns.length === 0 ? (
+      ) : campaignRows.length === 0 ? (
         <div className="py-10 text-center text-muted-foreground text-sm">
           No Meta campaigns in this range.
         </div>
@@ -230,7 +237,7 @@ function CampaignRow({ campaign, expanded, onToggle, startDate, endDate }: Campa
         <td className="py-3 pr-4 text-right text-white">{formatInt(campaign.clicks)}</td>
         <td className="py-3 pr-4 text-right text-white">{formatInt(campaign.conversions)}</td>
         <td className="py-3 pr-4 text-right text-white">
-          {campaign.conversions > 0 ? formatMoney(campaign.cpl, campaign.currency) : "—"}
+          {toFiniteNumber(campaign.conversions) > 0 ? formatMoney(campaign.cpl, campaign.currency) : "—"}
         </td>
       </tr>
       {expanded && (
@@ -453,6 +460,7 @@ function clearAllCampaignPrefs(): void {
 
 function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: number; startDate: string; endDate: string }) {
   const { data, isLoading } = useGetMetaCampaignBreakdown(campaignId, { startDate, endDate });
+  const adSetRows = Array.isArray(data?.adSets) ? data.adSets : [];
   const [expandedSets, setExpandedSets] = useState<Record<string, boolean>>(() => loadExpandedSets(campaignId));
   const initialPrefs = useMemo(() => loadCampaignPrefs(campaignId), [campaignId]);
   const [sortKey, setSortKey] = useState<SortKey>(initialPrefs.sortKey);
@@ -496,20 +504,21 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
   };
 
   const sortedSets = useMemo(() => {
-    if (!data) return [];
-    const filtered = hideInactive ? data.adSets.filter(s => isActiveStatus(s.status)) : data.adSets;
+    const rows = Array.isArray(data?.adSets) ? data.adSets : [];
+    const filtered = hideInactive ? rows.filter(s => isActiveStatus(s.status)) : rows;
     const sign = sortDir === "asc" ? 1 : -1;
     const sorted = [...filtered].sort((a, b) => {
-      const av = (a[sortKey] as number) ?? 0;
-      const bv = (b[sortKey] as number) ?? 0;
+      const av = toFiniteNumber(a[sortKey]);
+      const bv = toFiniteNumber(b[sortKey]);
       return (av - bv) * sign;
     });
-    const adAccountId = data.adAccountId ?? null;
+    const adAccountId = data?.adAccountId ?? null;
     return sorted.map(set => {
-      const ads = (hideInactive ? set.ads.filter(ad => isActiveStatus(ad.status)) : set.ads).map(ad => ({ ...ad, adAccountId }));
+      const adRows = Array.isArray(set.ads) ? set.ads : [];
+      const ads = (hideInactive ? adRows.filter(ad => isActiveStatus(ad.status)) : adRows).map(ad => ({ ...ad, adAccountId }));
       const sortedAds = [...ads].sort((a, b) => {
-        const av = (a[sortKey] as number) ?? 0;
-        const bv = (b[sortKey] as number) ?? 0;
+        const av = toFiniteNumber(a[sortKey]);
+        const bv = toFiniteNumber(b[sortKey]);
         return (av - bv) * sign;
       });
       return { ...set, ads: sortedAds };
@@ -525,7 +534,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
       </tr>
     );
   }
-  if (!data || data.adSets.length === 0) {
+  if (!data || adSetRows.length === 0) {
     return (
       <tr>
         <td colSpan={6} className="py-4 pl-12 text-muted-foreground italic text-xs">
@@ -594,7 +603,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
               <td className="py-2 pr-4 text-right text-white/80">{formatInt(set.clicks)}</td>
               <td className="py-2 pr-4 text-right text-white/80">{formatInt(set.conversions)}</td>
               <td className="py-2 pr-4 text-right text-white/80">
-                {set.conversions > 0 ? formatMoney(set.cpl, currency) : "—"}
+                {toFiniteNumber(set.conversions) > 0 ? formatMoney(set.cpl, currency) : "—"}
               </td>
             </tr>
             {open && set.ads.length === 0 && (
@@ -626,7 +635,7 @@ function CampaignBreakdown({ campaignId, startDate, endDate }: { campaignId: num
                 <td className="py-2 pr-4 text-right text-white/70 text-xs">{formatInt(ad.clicks)}</td>
                 <td className="py-2 pr-4 text-right text-white/70 text-xs">{formatInt(ad.conversions)}</td>
                 <td className="py-2 pr-4 text-right text-white/70 text-xs">
-                  {ad.conversions > 0 ? formatMoney(ad.cpl, currency) : "—"}
+                  {toFiniteNumber(ad.conversions) > 0 ? formatMoney(ad.cpl, currency) : "—"}
                 </td>
               </tr>
             ))}

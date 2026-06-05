@@ -74,6 +74,17 @@ interface STJobsResponse {
   hasMore: boolean;
 }
 
+export const SERVICE_TITAN_JOB_STATUSES = [
+  "Scheduled",
+  "Dispatched",
+  "InProgress",
+  "Hold",
+  "Completed",
+  "Canceled",
+] as const;
+
+export type ServiceTitanJobStatus = typeof SERVICE_TITAN_JOB_STATUSES[number];
+
 interface STCustomersResponse {
   data: STCustomer[];
   page: number;
@@ -256,24 +267,22 @@ export function hashStJobId(stJobId: string): string {
   return crypto.createHash("sha256").update(stJobId).digest("hex");
 }
 
-export async function fetchCompletedJobs(
+export async function fetchJobsByStatuses(
   config: STAuthConfig,
+  statuses: readonly ServiceTitanJobStatus[],
   modifiedAfter?: string,
   onBatch?: (jobs: STJob[]) => Promise<void>,
   modifiedBefore?: string,
 ): Promise<STJob[]> {
   const PAGES_PER_BATCH = 5;
-  let page = 1;
   const pageSize = 100;
-  let hasMore = true;
-  let batchJobs: STJob[] = [];
   let totalFetched = 0;
   let totalRevenue = 0;
   const collectedJobs: STJob[] = [];
 
   async function enrichBatch(jobs: STJob[]): Promise<STJob[]> {
     if (jobs.length === 0) return jobs;
-    // Enrich EVERY completed job, not just those carrying revenue at sync time.
+    // Enrich EVERY synced job, not just those carrying revenue at sync time.
     // Most jobs are $0 when first synced (they are invoiced/closed out later),
     // so gating enrichment on total>0 left ~70% of jobs with no customer name
     // or service address — which blanked the revenue-attribution panel and
@@ -319,50 +328,62 @@ export async function fetchCompletedJobs(
     }
   }
 
-  while (hasMore) {
-    const params = new URLSearchParams({
-      page: String(page),
-      pageSize: String(pageSize),
-      jobStatus: "Completed",
-    });
-    if (modifiedAfter) {
-      params.set("modifiedOnOrAfter", modifiedAfter);
-    }
-    if (modifiedBefore) {
-      params.set("modifiedBefore", modifiedBefore);
+  for (const status of statuses) {
+    let page = 1;
+    let hasMore = true;
+    let batchJobs: STJob[] = [];
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+        jobStatus: status,
+      });
+      if (modifiedAfter) {
+        params.set("modifiedOnOrAfter", modifiedAfter);
+      }
+      if (modifiedBefore) {
+        params.set("modifiedBefore", modifiedBefore);
+      }
+
+      const response = await stFetch<STJobsResponse>(config, `/jobs?${params.toString()}`);
+      batchJobs.push(...response.data);
+      hasMore = response.hasMore;
+
+      if (page % PAGES_PER_BATCH === 0 || !hasMore) {
+        console.log(`[ServiceTitan] Fetched ${status} page ${page}, processing batch of ${batchJobs.length} jobs`);
+        await processBatch(batchJobs);
+        batchJobs = [];
+      }
+      page++;
+
+      // Safety cap: 500 pages × 100 = 50,000 jobs per status per call.
+      // Initial backfills with wide windows can still exceed the cap silently,
+      // so log loudly when a bounded window needs to be narrowed.
+      if (page > 500) {
+        console.warn(
+          `[ServiceTitan] fetchJobsByStatuses hit 500-page safety cap for status=${status} (modifiedAfter=${modifiedAfter ?? "none"}, modifiedBefore=${modifiedBefore ?? "none"}); ${totalFetched} jobs fetched so far, more remain. Narrow the window via the backfill chunker.`,
+        );
+        break;
+      }
     }
 
-    const response = await stFetch<STJobsResponse>(config, `/jobs?${params.toString()}`);
-    batchJobs.push(...response.data);
-    hasMore = response.hasMore;
-
-    if (page % PAGES_PER_BATCH === 0 || !hasMore) {
-      console.log(`[ServiceTitan] Fetched page ${page}, processing batch of ${batchJobs.length} jobs`);
+    if (batchJobs.length > 0) {
       await processBatch(batchJobs);
-      batchJobs = [];
-    }
-    page++;
-
-    // Safety cap: 500 pages × 100 = 50,000 jobs per single call.
-    // Initial backfills with wide windows can exceed the previous 5,000-job
-    // cap silently — the backfill route already chunks the timeline into
-    // 90-day windows so this only fires on pathological tenants. If we hit
-    // it, log loudly so operators see an incomplete page walk in the
-    // workflow logs instead of finding it later via missing-data symptoms.
-    if (page > 500) {
-      console.warn(
-        `[ServiceTitan] fetchCompletedJobs hit 500-page safety cap (modifiedAfter=${modifiedAfter ?? "none"}, modifiedBefore=${modifiedBefore ?? "none"}); ${totalFetched} jobs fetched so far, more remain. Narrow the window via the backfill chunker.`,
-      );
-      break;
     }
   }
 
-  if (batchJobs.length > 0) {
-    await processBatch(batchJobs);
-  }
-
-  console.log(`[ServiceTitan] ${totalFetched} total jobs, ${totalRevenue} with revenue`);
+  console.log(`[ServiceTitan] ${totalFetched} total jobs (${statuses.join(", ")}), ${totalRevenue} with revenue`);
   return collectedJobs;
+}
+
+export async function fetchCompletedJobs(
+  config: STAuthConfig,
+  modifiedAfter?: string,
+  onBatch?: (jobs: STJob[]) => Promise<void>,
+  modifiedBefore?: string,
+): Promise<STJob[]> {
+  return fetchJobsByStatuses(config, ["Completed"], modifiedAfter, onBatch, modifiedBefore);
 }
 
 function extractPhone(customer?: STCustomer): string | null {
@@ -683,6 +704,15 @@ export function formatSTJobForSync(stJob: STJob) {
   const address = stJob.location?.address;
   const phone = extractPhone(stJob.customer);
   const email = extractEmail(stJob.customer);
+  const normalizedStatus = stJob.jobStatus.toLowerCase().replace(/[^a-z]/g, "");
+  const status =
+    normalizedStatus === "completed"
+      ? "completed" as const
+      : normalizedStatus === "canceled" || normalizedStatus === "cancelled"
+        ? "cancelled" as const
+        : normalizedStatus === "inprogress" || normalizedStatus === "dispatched"
+          ? "in_progress" as const
+          : "pending" as const;
 
   return {
     stJobId: String(stJob.id),
@@ -698,7 +728,7 @@ export function formatSTJobForSync(stJob: STJob) {
     jobTypeName: extractJobTypeName(stJob),
     businessUnit: stJob.businessUnit?.name || null,
     revenue: stJob.total || 0,
-    status: stJob.jobStatus.toLowerCase() === "completed" ? "completed" as const : "pending" as const,
+    status,
     completedAt: stJob.completedOn ? new Date(stJob.completedOn) : null,
   };
 }
