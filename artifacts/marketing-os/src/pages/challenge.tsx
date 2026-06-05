@@ -187,9 +187,9 @@ const METRIC_BY_KEY = Object.fromEntries(METRICS.map((metric) => [metric.key, me
 const DEFAULT_VISIBILITY = Object.fromEntries(METRICS.map((metric) => [metric.key, true])) as Record<MetricKey, boolean>;
 const PRESENTATION_HOVER_BASE =
   "transform-gpu transition-[scale,transform,background-color,color,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[scale,transform,background-color,color]";
-const PRESENTATION_ACTIVE_SURFACE = "text-secondary";
+const PRESENTATION_ACTIVE_SURFACE = "text-[#C0D4E6]";
 const PRESENTATION_HOVER_OVERLAY =
-  "pointer-events-none absolute inset-0 rounded-lg border border-primary bg-primary shadow-[0_22px_60px_rgba(242,5,5,0.38)]";
+  "pointer-events-none absolute inset-0 z-0 rounded-lg border border-primary bg-primary shadow-[0_22px_60px_rgba(242,5,5,0.38)]";
 const PRESENTATION_CARD_MOTION =
   "transform-gpu transition-[scale,transform,filter] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[scale,transform]";
 const PRESENTATION_CARD_SYNC =
@@ -563,7 +563,7 @@ export default function Challenge() {
             ) : (
               <LayoutGroup id="challenge-breakdown-hover">
                 <div
-                  className="max-h-[72vh] overflow-auto overscroll-contain"
+                  className="max-h-[72vh] overflow-auto"
                   data-challenge-breakdown-grid
                   onMouseLeave={() => setBreakdownHover(null)}
                   onBlur={clearBreakdownHoverWhenFocusLeaves}
@@ -588,7 +588,7 @@ export default function Challenge() {
                           >
                             <span
                               className={cn(
-                                "relative z-10 inline-flex min-h-14 w-full origin-top-right items-center justify-end overflow-hidden px-3 py-2 text-muted-foreground",
+                                "relative z-10 isolate inline-flex min-h-14 w-full origin-top-right items-center justify-end overflow-visible px-3 py-2 text-muted-foreground",
                                 PRESENTATION_HOVER_BASE,
                                 isActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                               )}
@@ -617,7 +617,7 @@ export default function Challenge() {
                           >
                             <span
                               className={cn(
-                                "relative z-10 flex min-h-16 w-full origin-left items-center overflow-hidden px-3 py-3 text-white",
+                                "relative z-10 isolate flex min-h-16 w-full origin-left items-center overflow-visible px-3 py-3 text-white",
                                 PRESENTATION_HOVER_BASE,
                                 isRowActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                               )}
@@ -642,7 +642,7 @@ export default function Challenge() {
                                   tabIndex={0}
                                   aria-label={`${row.funnel || "Unassigned"} ${metric.label}: ${metric.format(row[metric.key])}`}
                                   className={cn(
-                                    "relative z-10 flex min-h-16 w-full origin-center items-center justify-end overflow-hidden whitespace-nowrap px-3 py-3 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
+                                    "relative z-10 isolate flex min-h-16 w-full origin-center items-center justify-end overflow-visible whitespace-nowrap px-3 py-3 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
                                     PRESENTATION_HOVER_BASE,
                                     isActive && `z-40 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                                   )}
@@ -679,8 +679,9 @@ function PresentationHoverOverlay({ layoutId }: { layoutId: string }) {
   return (
     <motion.span
       layoutId={layoutId}
+      layout="position"
       className={PRESENTATION_HOVER_OVERLAY}
-      transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.7 }}
+      transition={{ type: "spring", stiffness: 520, damping: 42, mass: 0.7 }}
       data-challenge-hover-overlay={layoutId}
     />
   );
@@ -708,22 +709,22 @@ function MetricCard({
         className={cn(
           "flex min-h-36 flex-col justify-between overflow-visible p-5 text-white",
           PRESENTATION_CARD_SYNC,
-          "group-hover:border-primary group-hover:bg-primary group-hover:text-secondary group-hover:shadow-[0_28px_80px_rgba(242,5,5,0.38)]",
+          "group-hover:border-primary group-hover:bg-primary group-hover:text-[#C0D4E6] group-hover:shadow-[0_28px_80px_rgba(242,5,5,0.38)]",
         )}
         data-challenge-card-surface={metric.key}
       >
         <div className="flex items-start justify-between gap-3">
           <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10")}>
-            <Icon className={cn("h-5 w-5", PRESENTATION_CARD_SYNC, metric.tone, "group-hover:text-secondary")} />
+            <Icon className={cn("h-5 w-5", PRESENTATION_CARD_SYNC, metric.tone, "group-hover:text-[#C0D4E6]")} />
           </div>
-          <span className={cn("rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-secondary")}>
+          <span className={cn("rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]")}>
             {metric.shortLabel}
           </span>
         </div>
         <div className="mt-5">
-          <p className={cn("mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-secondary")}>{metric.label}</p>
-          <p className={cn("font-display text-3xl text-white", PRESENTATION_CARD_SYNC, "group-hover:text-secondary")}>{metric.format(value)}</p>
-          {metric.sub && <p className={cn("mt-1 text-[11px] text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-secondary/80")}>{metric.sub(row)}</p>}
+          <p className={cn("mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.label}</p>
+          <p className={cn("font-display text-3xl text-white", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.format(value)}</p>
+          {metric.sub && <p className={cn("mt-1 text-[11px] text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]/80")}>{metric.sub(row)}</p>}
         </div>
       </PremiumCard>
     </div>
