@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Challenge from "../challenge";
 
@@ -139,5 +139,17 @@ describe("Challenge metric preferences", () => {
     const menu = await screen.findByText("Column metrics");
     expect(menu).toBeInTheDocument();
     expect(within(document.body).getByText("Cost Per Lead")).toBeInTheDocument();
+  });
+
+  it("coordinates presentation hover across a funnel cell, funnel label, and metric label", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Per-Funnel Breakdown");
+    const metaLeadCell = screen.getByLabelText("Install Leads From Meta: 10");
+
+    fireEvent.mouseEnter(metaLeadCell);
+
+    expect(metaLeadCell).toHaveAttribute("data-challenge-hover", "active");
+    expect(container.querySelectorAll('[data-challenge-hover="active"]')).toHaveLength(3);
   });
 });

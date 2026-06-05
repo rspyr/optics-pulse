@@ -184,10 +184,19 @@ const METRIC_KEYS = METRICS.map((metric) => metric.key);
 const METRIC_KEY_SET = new Set<MetricKey>(METRIC_KEYS);
 const METRIC_BY_KEY = Object.fromEntries(METRICS.map((metric) => [metric.key, metric])) as Record<MetricKey, typeof METRICS[number]>;
 const DEFAULT_VISIBILITY = Object.fromEntries(METRICS.map((metric) => [metric.key, true])) as Record<MetricKey, boolean>;
+const PRESENTATION_HOVER_BASE =
+  "transform-gpu transition-[transform,background-color,color,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform";
+const PRESENTATION_ACTIVE_SURFACE =
+  "scale-[1.2] border-primary bg-primary text-secondary shadow-[0_22px_60px_rgba(242,5,5,0.38)]";
 const DEFAULT_METRIC_PREFERENCES: MetricPreferences = {
   order: METRIC_KEYS,
   visibility: DEFAULT_VISIBILITY,
 };
+
+type BreakdownHover = {
+  rowKey?: string;
+  metricKey?: MetricKey;
+} | null;
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -279,6 +288,7 @@ export default function Challenge() {
   const [data, setData] = useState<ChallengeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [breakdownHover, setBreakdownHover] = useState<BreakdownHover>(null);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "agency_user" || user?.role === "client_admin";
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
@@ -493,9 +503,9 @@ export default function Challenge() {
               <p className="text-sm text-muted-foreground">All metrics are hidden.</p>
             </PremiumCard>
           ) : (
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {visibleMetrics.map((metric, index) => (
-                <MetricCard key={metric.key} metric={metric} row={data.summary} index={index} />
+            <section className="relative grid grid-cols-1 gap-4 overflow-visible sm:grid-cols-2 xl:grid-cols-4">
+              {visibleMetrics.map((metric) => (
+                <MetricCard key={metric.key} metric={metric} row={data.summary} />
               ))}
             </section>
           )}
@@ -530,33 +540,85 @@ export default function Challenge() {
             {data.byFunnel.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">No funnel activity in this range.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] border-collapse text-left">
+              <div className="overflow-x-auto overflow-y-visible px-2 py-4">
+                <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left">
                   <thead>
-                    <tr className="border-b border-white/5 bg-background/50">
-                      <th className="sticky left-0 z-10 bg-background/95 p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        Funnel
+                    <tr className="bg-background/50">
+                      <th className="sticky left-0 z-20 border-b border-white/5 bg-background/95 p-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        <span className="inline-flex min-h-14 w-full items-center rounded-lg border border-transparent px-3 py-2">
+                          Funnel
+                        </span>
                       </th>
-                      {visibleMetrics.map((metric) => (
-                        <th key={metric.key} className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          {metric.shortLabel}
-                        </th>
-                      ))}
+                      {visibleMetrics.map((metric) => {
+                        const isActive = breakdownHover?.metricKey === metric.key;
+                        return (
+                          <th
+                            key={metric.key}
+                            className="border-b border-white/5 p-3 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                          >
+                            <span
+                              className={cn(
+                                "relative z-10 inline-flex min-h-14 min-w-24 origin-bottom-right items-center justify-end rounded-lg border border-transparent px-3 py-2 text-muted-foreground",
+                                PRESENTATION_HOVER_BASE,
+                                isActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                              )}
+                              data-challenge-hover={isActive ? "active" : undefined}
+                              onMouseEnter={() => setBreakdownHover({ metricKey: metric.key })}
+                              onMouseLeave={() => setBreakdownHover(null)}
+                            >
+                              {metric.shortLabel}
+                            </span>
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {data.byFunnel.map((row) => (
-                      <tr key={row.funnel ?? "unknown"} className="hover:bg-white/[0.02]">
-                        <td className="sticky left-0 z-10 max-w-64 bg-card/95 p-4 text-sm font-medium text-white">
-                          <span className="line-clamp-2">{row.funnel || "Unassigned"}</span>
-                        </td>
-                        {visibleMetrics.map((metric) => (
-                          <td key={metric.key} className="whitespace-nowrap p-4 text-right text-sm text-white">
-                            {metric.format(row[metric.key])}
+                    {data.byFunnel.map((row, rowIndex) => {
+                      const rowKey = `${row.funnel ?? "unassigned"}-${rowIndex}`;
+                      const isRowActive = breakdownHover?.rowKey === rowKey;
+                      return (
+                        <tr key={rowKey} className="transition-colors duration-300 hover:bg-white/[0.015]">
+                          <td className="sticky left-0 z-20 max-w-64 border-b border-white/5 bg-card/95 p-2 text-sm font-medium text-white">
+                            <span
+                              className={cn(
+                                "relative z-10 flex min-h-16 w-full origin-left items-center rounded-lg border border-transparent px-3 py-3 text-white",
+                                PRESENTATION_HOVER_BASE,
+                                isRowActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                              )}
+                              data-challenge-hover={isRowActive ? "active" : undefined}
+                              onMouseEnter={() => setBreakdownHover({ rowKey })}
+                              onMouseLeave={() => setBreakdownHover(null)}
+                            >
+                              <span className="line-clamp-2">{row.funnel || "Unassigned"}</span>
+                            </span>
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {visibleMetrics.map((metric) => {
+                            const isActive = breakdownHover?.rowKey === rowKey && breakdownHover.metricKey === metric.key;
+                            return (
+                              <td key={metric.key} className="border-b border-white/5 p-2 text-right text-sm text-white">
+                                <div
+                                  tabIndex={0}
+                                  aria-label={`${row.funnel || "Unassigned"} ${metric.label}: ${metric.format(row[metric.key])}`}
+                                  className={cn(
+                                    "relative z-10 ml-auto flex min-h-16 min-w-24 origin-center items-center justify-end whitespace-nowrap rounded-lg border border-transparent px-3 py-3 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
+                                    PRESENTATION_HOVER_BASE,
+                                    isActive && `z-40 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
+                                  )}
+                                  data-challenge-hover={isActive ? "active" : undefined}
+                                  onMouseEnter={() => setBreakdownHover({ rowKey, metricKey: metric.key })}
+                                  onMouseLeave={() => setBreakdownHover(null)}
+                                  onFocus={() => setBreakdownHover({ rowKey, metricKey: metric.key })}
+                                  onBlur={() => setBreakdownHover(null)}
+                                >
+                                  {metric.format(row[metric.key])}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -575,30 +637,42 @@ export default function Challenge() {
 function MetricCard({
   metric,
   row,
-  index,
 }: {
   metric: (typeof METRICS)[number];
   row: ChallengeMetric;
-  index: number;
 }) {
   const Icon = metric.icon;
   const value = row[metric.key];
   return (
-    <PremiumCard className="flex min-h-36 flex-col justify-between p-5" transition={{ delay: Math.min(index * 0.03, 0.24) }}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]">
-          <Icon className={`h-5 w-5 ${metric.tone}`} />
+    <div
+      className={cn(
+        "group relative z-0 origin-center transform-gpu transition-[transform,z-index] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform",
+        "hover:z-30 hover:scale-[1.2]",
+      )}
+      data-challenge-card={metric.key}
+    >
+      <PremiumCard
+        className={cn(
+          "flex min-h-36 flex-col justify-between overflow-visible p-5 text-white",
+          "transition-[background-color,border-color,box-shadow,color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "group-hover:border-primary group-hover:bg-primary group-hover:text-secondary group-hover:shadow-[0_28px_80px_rgba(242,5,5,0.38)]",
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04] transition-colors duration-300 group-hover:border-secondary/25 group-hover:bg-secondary/10">
+            <Icon className={cn("h-5 w-5 transition-colors duration-300 group-hover:text-secondary", metric.tone)} />
+          </div>
+          <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors duration-300 group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-secondary">
+            {metric.shortLabel}
+          </span>
         </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {metric.shortLabel}
-        </span>
-      </div>
-      <div className="mt-5">
-        <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">{metric.label}</p>
-        <p className="font-display text-3xl text-white">{metric.format(value)}</p>
-        {metric.sub && <p className="mt-1 text-[11px] text-muted-foreground">{metric.sub(row)}</p>}
-      </div>
-    </PremiumCard>
+        <div className="mt-5">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-300 group-hover:text-secondary">{metric.label}</p>
+          <p className="font-display text-3xl text-white transition-colors duration-300 group-hover:text-secondary">{metric.format(value)}</p>
+          {metric.sub && <p className="mt-1 text-[11px] text-muted-foreground transition-colors duration-300 group-hover:text-secondary/80">{metric.sub(row)}</p>}
+        </div>
+      </PremiumCard>
+    </div>
   );
 }
 
