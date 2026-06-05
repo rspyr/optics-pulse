@@ -55,6 +55,11 @@ function getDateRange(range: DateRange): { startDate: string; endDate: string; l
   }
 }
 
+function safeNumber(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function Dashboard() {
   const [, navigate] = useLocation();
   const [dateRange, setDateRange] = useState<DateRange>("last30");
@@ -95,22 +100,39 @@ export default function Dashboard() {
     );
   }
 
+  const overviewTotals = {
+    totalRevenue: safeNumber(overview.totalRevenue),
+    totalSpend: safeNumber(overview.totalSpend),
+    roas: safeNumber(overview.roas),
+    totalLeads: safeNumber(overview.totalLeads),
+    bookedLeads: safeNumber(overview.bookedLeads),
+    soldLeads: safeNumber(overview.soldLeads),
+    bookingRate: safeNumber(overview.bookingRate),
+    closeRate: safeNumber(overview.closeRate),
+    cpl: safeNumber(overview.cpl),
+    avgSaleValue: safeNumber(overview.avgSaleValue),
+    attributionMatchRate: safeNumber(overview.attributionMatchRate),
+    paidRevenue: safeNumber(overview.paidRevenue),
+    unpaidRevenue: safeNumber(overview.unpaidRevenue),
+    invoicedJobCount: safeNumber(overview.invoicedJobCount),
+  };
+
   function handleExportCSV() {
     if (!overview) return;
     setExporting(true);
     const rows = [
       ["Metric", "Value"],
-      ["Total Revenue", String(overview.totalRevenue)],
-      ["Ad Spend", String(overview.totalSpend)],
-      ["ROAS", String(overview.roas)],
-      ["Total Leads", String(overview.totalLeads)],
-      ["Booked Leads", String(overview.bookedLeads)],
-      ["Sold Leads", String(overview.soldLeads)],
-      ["Booking Rate %", String(overview.bookingRate)],
-      ["Close Rate %", String(overview.closeRate)],
-      ["CPL", String(overview.cpl)],
-      ["Avg Sale Value", String(overview.avgSaleValue)],
-      ["Match Rate %", String(overview.attributionMatchRate)],
+      ["Total Revenue", String(overviewTotals.totalRevenue)],
+      ["Ad Spend", String(overviewTotals.totalSpend)],
+      ["ROAS", String(overviewTotals.roas)],
+      ["Total Leads", String(overviewTotals.totalLeads)],
+      ["Booked Leads", String(overviewTotals.bookedLeads)],
+      ["Sold Leads", String(overviewTotals.soldLeads)],
+      ["Booking Rate %", String(overviewTotals.bookingRate)],
+      ["Close Rate %", String(overviewTotals.closeRate)],
+      ["CPL", String(overviewTotals.cpl)],
+      ["Avg Sale Value", String(overviewTotals.avgSaleValue)],
+      ["Match Rate %", String(overviewTotals.attributionMatchRate)],
       ["Period", `${startDate} to ${endDate}`],
     ];
 
@@ -139,12 +161,20 @@ export default function Dashboard() {
   // date-range preset) so the figures reconcile with that page's job list.
   const openRevenueDrilldown = () => navigate(`/revenue-attributed?range=${dateRange}`);
   const metrics: Array<{ label: string; value: string; icon: typeof DollarSign; sub?: string; onClick?: () => void }> = [
-    { label: "Total Revenue", value: formatCurrency(overview.totalRevenue), icon: DollarSign, sub: overview.paidRevenue > 0 || overview.unpaidRevenue > 0 ? `${formatCurrency(overview.paidRevenue)} paid · ${formatCurrency(overview.unpaidRevenue)} unpaid` : undefined, onClick: openRevenueDrilldown },
-    { label: "Ad Spend", value: formatCurrency(overview.totalSpend), icon: Activity },
-    { label: "ROAS", value: `${overview.roas.toFixed(2)}x`, icon: Target },
-    { label: "Total Leads", value: overview.totalLeads.toString(), icon: Users },
-    { label: "Booking Rate", value: `${overview.bookingRate}%`, icon: Users, sub: `Leads → Appointments · ${overview.bookedLeads} booked / ${overview.totalLeads} leads` },
-    { label: "Close Rate", value: `${overview.closeRate}%`, icon: Target, sub: `Appointments → Invoiced Jobs · ${overview.invoicedJobCount} invoiced / ${overview.bookedLeads} booked` },
+    {
+      label: "Total Revenue",
+      value: formatCurrency(overviewTotals.totalRevenue),
+      icon: DollarSign,
+      sub: overviewTotals.paidRevenue > 0 || overviewTotals.unpaidRevenue > 0
+        ? `${formatCurrency(overviewTotals.paidRevenue)} paid · ${formatCurrency(overviewTotals.unpaidRevenue)} unpaid`
+        : undefined,
+      onClick: openRevenueDrilldown,
+    },
+    { label: "Ad Spend", value: formatCurrency(overviewTotals.totalSpend), icon: Activity },
+    { label: "ROAS", value: `${overviewTotals.roas.toFixed(2)}x`, icon: Target },
+    { label: "Total Leads", value: overviewTotals.totalLeads.toString(), icon: Users },
+    { label: "Booking Rate", value: `${overviewTotals.bookingRate}%`, icon: Users, sub: `Leads -> Appointments · ${overviewTotals.bookedLeads} booked / ${overviewTotals.totalLeads} leads` },
+    { label: "Close Rate", value: `${overviewTotals.closeRate}%`, icon: Target, sub: `Appointments -> Invoiced Jobs · ${overviewTotals.invoicedJobCount} invoiced / ${overviewTotals.bookedLeads} booked` },
   ];
 
   const chartDaily = chartData?.daily ?? [];

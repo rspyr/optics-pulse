@@ -159,7 +159,7 @@ vi.mock("../services/integrations/meta", async () => {
 
 // Mock the ServiceTitan service module — expose configurable spies.
 const stMocks = vi.hoisted(() => ({
-  fetchCompletedJobs: vi.fn(),
+  fetchJobsByStatuses: vi.fn(),
   formatSTJobForSync: vi.fn(),
 }));
 
@@ -168,7 +168,8 @@ vi.mock("../services/integrations/service-titan", async () => {
     "../services/integrations/service-titan",
   );
   return {
-    fetchCompletedJobs: stMocks.fetchCompletedJobs,
+    SERVICE_TITAN_JOB_STATUSES: actual.SERVICE_TITAN_JOB_STATUSES,
+    fetchJobsByStatuses: stMocks.fetchJobsByStatuses,
     formatSTJobForSync: stMocks.formatSTJobForSync,
     fetchCustomerContactsById: vi.fn(),
     fetchLocationsByIds: vi.fn(),
@@ -245,7 +246,7 @@ function tenantWithST(overrides: Partial<Record<string, unknown>> = {}) {
 
 beforeEach(async () => {
   state.reset();
-  stMocks.fetchCompletedJobs.mockReset();
+  stMocks.fetchJobsByStatuses.mockReset();
   stMocks.formatSTJobForSync.mockReset();
   state.insertReturning.set("integration_sync_logs", [{ id: 1 }]);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -266,7 +267,7 @@ describe("POST /integrations/service_titan/backfill — days validation", () => 
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/days must be a number > 30/);
     expect(state.insertCalls.find((c) => c.table === "integration_sync_logs")).toBeUndefined();
-    expect(stMocks.fetchCompletedJobs).not.toHaveBeenCalled();
+    expect(stMocks.fetchJobsByStatuses).not.toHaveBeenCalled();
   });
 
   it("rejects days > 1095 with 400 (ST backfill capped at ~3 years)", async () => {
@@ -274,7 +275,7 @@ describe("POST /integrations/service_titan/backfill — days validation", () => 
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/cannot exceed 1095/);
     expect(state.insertCalls.find((c) => c.table === "integration_sync_logs")).toBeUndefined();
-    expect(stMocks.fetchCompletedJobs).not.toHaveBeenCalled();
+    expect(stMocks.fetchJobsByStatuses).not.toHaveBeenCalled();
   });
 
   it("rejects missing tenantId with 400", async () => {
@@ -291,7 +292,7 @@ describe("POST /integrations/service_titan/backfill — early exits", () => {
     expect(res.status).toBe(404);
     expect(String(res.body.error)).toMatch(/tenant not found/i);
     expect(state.insertCalls.find((c) => c.table === "integration_sync_logs")).toBeUndefined();
-    expect(stMocks.fetchCompletedJobs).not.toHaveBeenCalled();
+    expect(stMocks.fetchJobsByStatuses).not.toHaveBeenCalled();
   });
 
   it("returns 400 when ST credentials are missing and finalizes the backfill log as error", async () => {
@@ -299,7 +300,7 @@ describe("POST /integrations/service_titan/backfill — early exits", () => {
     const res = await postJson("/integrations/service_titan/backfill", { tenantId: 7, days: 60 });
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/servicetitan not configured/i);
-    expect(stMocks.fetchCompletedJobs).not.toHaveBeenCalled();
+    expect(stMocks.fetchJobsByStatuses).not.toHaveBeenCalled();
 
     const opened = state.insertCalls.find((c) => c.table === "integration_sync_logs");
     expect(opened).toBeDefined();
@@ -320,7 +321,7 @@ describe("POST /integrations/service_titan/backfill — early exits", () => {
     const res = await postJson("/integrations/service_titan/backfill", { tenantId: 7, days: 60 });
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/paused/i);
-    expect(stMocks.fetchCompletedJobs).not.toHaveBeenCalled();
+    expect(stMocks.fetchJobsByStatuses).not.toHaveBeenCalled();
 
     const errLog = state.updateCalls.find(
       (u) => u.table === "integration_sync_logs" && u.set.status === "error",
@@ -350,7 +351,7 @@ describe("POST /integrations/service_titan/backfill — successful run", () => {
     stMocks.formatSTJobForSync.mockReturnValue({
       stJobId: "st-job-1",
       revenue: "999.99",
-      status: "Completed",
+      status: "completed",
       completedAt: new Date("2026-04-15"),
       customerName: "Jane Doe",
       customerPhone: "555-1234",
@@ -363,8 +364,8 @@ describe("POST /integrations/service_titan/backfill — successful run", () => {
     });
 
     // 31-day window → 1 chunk (90-day chunks).
-    stMocks.fetchCompletedJobs.mockImplementation(
-      async (_cfg: unknown, _since: unknown, processBatch: (jobs: unknown[]) => Promise<void>) => {
+    stMocks.fetchJobsByStatuses.mockImplementation(
+      async (_cfg: unknown, _statuses: unknown, _since: unknown, processBatch: (jobs: unknown[]) => Promise<void>) => {
         await processBatch([{ id: "st-job-1" }]);
       },
     );
@@ -376,13 +377,15 @@ describe("POST /integrations/service_titan/backfill — successful run", () => {
     expect(res.body.synced).toBe(1);
     expect(res.body.chunks).toBe(1);
 
-    expect(stMocks.fetchCompletedJobs).toHaveBeenCalledTimes(1);
+    expect(stMocks.fetchJobsByStatuses).toHaveBeenCalledTimes(1);
+    // Confirm all ServiceTitan job statuses are included, including Canceled.
+    const callArgs = stMocks.fetchJobsByStatuses.mock.calls[0];
+    expect(callArgs[1]).toEqual(expect.arrayContaining(["Completed", "Canceled"]));
     // Confirm the chunk window args (since, before) were ISO timestamps.
-    const callArgs = stMocks.fetchCompletedJobs.mock.calls[0];
-    expect(typeof callArgs[1]).toBe("string");
-    expect(typeof callArgs[3]).toBe("string");
-    expect(callArgs[1]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(callArgs[3]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(typeof callArgs[2]).toBe("string");
+    expect(typeof callArgs[4]).toBe("string");
+    expect(callArgs[2]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(callArgs[4]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
     // A jobs row was inserted with the formatted ST job id.
     const jobIns = state.insertCalls.find((c) => c.table === "jobs");
@@ -423,7 +426,7 @@ describe("POST /integrations/service_titan/backfill — partial failure mid-chun
     stMocks.formatSTJobForSync.mockReturnValue({
       stJobId: "st-job-1",
       revenue: "10",
-      status: "Completed",
+      status: "completed",
       completedAt: new Date("2026-04-15"),
       customerName: "Jane",
       customerPhone: null,
@@ -435,12 +438,12 @@ describe("POST /integrations/service_titan/backfill — partial failure mid-chun
       businessUnit: null,
     });
 
-    stMocks.fetchCompletedJobs.mockImplementationOnce(
-      async (_cfg: unknown, _since: unknown, processBatch: (jobs: unknown[]) => Promise<void>) => {
+    stMocks.fetchJobsByStatuses.mockImplementationOnce(
+      async (_cfg: unknown, _statuses: unknown, _since: unknown, processBatch: (jobs: unknown[]) => Promise<void>) => {
         await processBatch([{ id: "st-job-1" }]);
       },
     );
-    stMocks.fetchCompletedJobs.mockRejectedValueOnce(
+    stMocks.fetchJobsByStatuses.mockRejectedValueOnce(
       new Error("ServiceTitan API 500"),
     );
 
@@ -469,6 +472,6 @@ describe("POST /integrations/service_titan/backfill — partial failure mid-chun
     expect(errLog).toBeDefined();
     expect(String(errLog!.set.errorMessage)).toMatch(/servicetitan api 500/i);
 
-    expect(stMocks.fetchCompletedJobs).toHaveBeenCalledTimes(2);
+    expect(stMocks.fetchJobsByStatuses).toHaveBeenCalledTimes(2);
   });
 });

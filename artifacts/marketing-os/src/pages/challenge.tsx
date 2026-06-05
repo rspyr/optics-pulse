@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   DropdownMenu,
@@ -11,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
 import { useAuth } from "@/components/auth-context";
 import {
@@ -21,8 +24,9 @@ import {
   DollarSign,
   Eye,
   EyeOff,
+  GripVertical,
   Layers3,
-  Loader2,
+  RotateCcw,
   SlidersHorizontal,
   Target,
   TrendingUp,
@@ -30,7 +34,9 @@ import {
 } from "lucide-react";
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
-const VISIBILITY_STORAGE_KEY = "challengeDashboard.visibleMetrics.v1";
+const LEGACY_VISIBILITY_STORAGE_KEY = "challengeDashboard.visibleMetrics.v1";
+const METRIC_PREFS_STORAGE_KEY = "challengeDashboard.metricPreferences.v2";
+const USER_PREF_KEY = "challengeDashboardMetrics";
 
 type DateRange = "last7" | "last30" | "thisMonth" | "lastMonth";
 
@@ -87,8 +93,12 @@ type ChallengeResponse = {
   summary: ChallengeMetric;
   byFunnel: ChallengeMetric[];
   allocation: {
-    method: "pulse_lead_share";
+    method: "pulse_lead_share" | "meta_campaign_funnel_mapping";
     allUniquePulseLeads: number;
+    mappedSpend: number;
+    mappedMetaLeads: number;
+    unmappedSpend: number;
+    unmappedMetaLeads: number;
     note: string;
   };
 };
@@ -165,7 +175,19 @@ const METRICS: Array<{
   },
 ];
 
+type MetricPreferences = {
+  order: MetricKey[];
+  visibility: Record<MetricKey, boolean>;
+};
+
+const METRIC_KEYS = METRICS.map((metric) => metric.key);
+const METRIC_KEY_SET = new Set<MetricKey>(METRIC_KEYS);
+const METRIC_BY_KEY = Object.fromEntries(METRICS.map((metric) => [metric.key, metric])) as Record<MetricKey, typeof METRICS[number]>;
 const DEFAULT_VISIBILITY = Object.fromEntries(METRICS.map((metric) => [metric.key, true])) as Record<MetricKey, boolean>;
+const DEFAULT_METRIC_PREFERENCES: MetricPreferences = {
+  order: METRIC_KEYS,
+  visibility: DEFAULT_VISIBILITY,
+};
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -181,22 +203,67 @@ function formatMultiplier(value: number): string {
   return `${value.toFixed(2)}x`;
 }
 
-function readVisibility(): Record<MetricKey, boolean> {
-  if (typeof window === "undefined") return DEFAULT_VISIBILITY;
-  try {
-    const raw = window.localStorage.getItem(VISIBILITY_STORAGE_KEY);
-    if (!raw) return DEFAULT_VISIBILITY;
-    const parsed = JSON.parse(raw) as Partial<Record<MetricKey, boolean>>;
-    return { ...DEFAULT_VISIBILITY, ...parsed };
-  } catch {
-    return DEFAULT_VISIBILITY;
-  }
+function isMetricKey(value: string): value is MetricKey {
+  return METRIC_KEY_SET.has(value as MetricKey);
 }
 
-function writeVisibility(visibility: Record<MetricKey, boolean>) {
+function normalizeMetricPreferences(input: unknown): MetricPreferences {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {
+      order: [...DEFAULT_METRIC_PREFERENCES.order],
+      visibility: { ...DEFAULT_METRIC_PREFERENCES.visibility },
+    };
+  }
+
+  const candidate = input as {
+    order?: unknown;
+    visibility?: unknown;
+  };
+  const seen = new Set<MetricKey>();
+  const order = Array.isArray(candidate.order)
+    ? candidate.order.filter((item): item is MetricKey => {
+        if (typeof item !== "string" || !isMetricKey(item) || seen.has(item)) return false;
+        seen.add(item);
+        return true;
+      })
+    : [];
+
+  for (const key of METRIC_KEYS) {
+    if (!seen.has(key)) order.push(key);
+  }
+
+  const visibility = { ...DEFAULT_VISIBILITY };
+  if (candidate.visibility && typeof candidate.visibility === "object" && !Array.isArray(candidate.visibility)) {
+    for (const [key, value] of Object.entries(candidate.visibility)) {
+      if (isMetricKey(key) && typeof value === "boolean") {
+        visibility[key] = value;
+      }
+    }
+  }
+
+  return { order, visibility };
+}
+
+function readMetricPreferences(): MetricPreferences {
+  if (typeof window === "undefined") return normalizeMetricPreferences(null);
+  try {
+    const raw = window.localStorage.getItem(METRIC_PREFS_STORAGE_KEY);
+    if (raw) return normalizeMetricPreferences(JSON.parse(raw));
+
+    const legacy = window.localStorage.getItem(LEGACY_VISIBILITY_STORAGE_KEY);
+    if (legacy) {
+      return normalizeMetricPreferences({ visibility: JSON.parse(legacy) });
+    }
+  } catch {
+    // Ignore disabled or malformed storage.
+  }
+  return normalizeMetricPreferences(null);
+}
+
+function writeMetricPreferences(preferences: MetricPreferences) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(visibility));
+    window.localStorage.setItem(METRIC_PREFS_STORAGE_KEY, JSON.stringify(preferences));
   } catch {
     // Ignore disabled storage.
   }
@@ -207,18 +274,63 @@ export default function Challenge() {
   const { user } = useAuth();
   const [dateRange, setDateRange] = useState<DateRange>("last30");
   const [selectedFunnels, setSelectedFunnels] = useState<string[]>([]);
-  const [visibility, setVisibility] = useState<Record<MetricKey, boolean>>(readVisibility);
+  const [metricPreferences, setMetricPreferences] = useState<MetricPreferences>(readMetricPreferences);
+  const [metricPreferencesLoaded, setMetricPreferencesLoaded] = useState(false);
   const [data, setData] = useState<ChallengeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "agency_user" || user?.role === "client_admin";
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
-  const visibleMetrics = useMemo(() => METRICS.filter((metric) => visibility[metric.key]), [visibility]);
+  const orderedMetrics = useMemo(
+    () => metricPreferences.order.map((key) => METRIC_BY_KEY[key]).filter(Boolean),
+    [metricPreferences.order],
+  );
+  const visibleMetrics = useMemo(
+    () => orderedMetrics.filter((metric) => metricPreferences.visibility[metric.key]),
+    [orderedMetrics, metricPreferences.visibility],
+  );
 
   useEffect(() => {
-    writeVisibility(visibility);
-  }, [visibility]);
+    if (!user) return;
+    let cancelled = false;
+    fetch(`${API_BASE}/api/users/me/preferences`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((prefs: unknown) => {
+        if (cancelled) return;
+        if (prefs && typeof prefs === "object" && USER_PREF_KEY in prefs) {
+          setMetricPreferences(normalizeMetricPreferences((prefs as Record<string, unknown>)[USER_PREF_KEY]));
+        }
+      })
+      .catch(() => {
+        // Local storage still preserves the user's layout when the preference API is unavailable.
+      })
+      .finally(() => {
+        if (!cancelled) setMetricPreferencesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    writeMetricPreferences(metricPreferences);
+  }, [metricPreferences]);
+
+  useEffect(() => {
+    if (!user || !metricPreferencesLoaded) return;
+    const timer = window.setTimeout(() => {
+      fetch(`${API_BASE}/api/users/me/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ [USER_PREF_KEY]: metricPreferences }),
+      }).catch(() => {
+        // Browser persistence remains the fallback if the server save fails.
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [metricPreferences, metricPreferencesLoaded, user?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -265,7 +377,32 @@ export default function Challenge() {
   }
 
   function toggleMetric(key: MetricKey) {
-    setVisibility((current) => ({ ...current, [key]: !current[key] }));
+    setMetricPreferences((current) => ({
+      ...current,
+      visibility: { ...current.visibility, [key]: !current.visibility[key] },
+    }));
+  }
+
+  function showAllMetrics() {
+    setMetricPreferences((current) => ({
+      ...current,
+      visibility: { ...DEFAULT_VISIBILITY },
+    }));
+  }
+
+  function resetMetricPreferences() {
+    setMetricPreferences(normalizeMetricPreferences(null));
+  }
+
+  function reorderMetrics(result: DropResult) {
+    if (!result.destination || result.destination.index === result.source.index) return;
+    setMetricPreferences((current) => {
+      const nextOrder = [...current.order];
+      const [moved] = nextOrder.splice(result.source.index, 1);
+      if (!moved) return current;
+      nextOrder.splice(result.destination!.index, 0, moved);
+      return { ...current, order: nextOrder };
+    });
   }
 
   return (
@@ -323,32 +460,16 @@ export default function Challenge() {
           </Select>
 
           {isAdmin && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="bg-card/60 text-white">
-                  <SlidersHorizontal className="h-4 w-4" />
-                  Metrics
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80">
-                <DropdownMenuLabel>Visible metrics</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {METRICS.map((metric) => (
-                  <DropdownMenuCheckboxItem
-                    key={metric.key}
-                    checked={visibility[metric.key]}
-                    onSelect={(event) => event.preventDefault()}
-                    onCheckedChange={() => toggleMetric(metric.key)}
-                  >
-                    <span className="truncate">{metric.label}</span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setVisibility(DEFAULT_VISIBILITY)}>
-                  Show all metrics
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <MetricSettingsDropdown
+              orderedMetrics={orderedMetrics}
+              preferences={metricPreferences}
+              visibleCount={visibleMetrics.length}
+              onToggle={toggleMetric}
+              onDragEnd={reorderMetrics}
+              onShowAll={showAllMetrics}
+              onReset={resetMetricPreferences}
+              trigger="toolbar"
+            />
           )}
         </div>
       </header>
@@ -387,10 +508,23 @@ export default function Challenge() {
                   {selectedFunnels.length > 0 ? "Top cards stack the selected funnels; this table shows each selected funnel." : "Showing every funnel in the lead window."}
                 </p>
               </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-muted-foreground">
-                <Eye className="h-3.5 w-3.5" />
-                {visibleMetrics.length} visible
-              </div>
+              {isAdmin ? (
+                <MetricSettingsDropdown
+                  orderedMetrics={orderedMetrics}
+                  preferences={metricPreferences}
+                  visibleCount={visibleMetrics.length}
+                  onToggle={toggleMetric}
+                  onDragEnd={reorderMetrics}
+                  onShowAll={showAllMetrics}
+                  onReset={resetMetricPreferences}
+                  trigger="visible"
+                />
+              ) : (
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-muted-foreground">
+                  <Eye className="h-3.5 w-3.5" />
+                  {visibleMetrics.length} visible
+                </div>
+              )}
             </div>
 
             {data.byFunnel.length === 0 ? (
@@ -465,5 +599,129 @@ function MetricCard({
         {metric.sub && <p className="mt-1 text-[11px] text-muted-foreground">{metric.sub(row)}</p>}
       </div>
     </PremiumCard>
+  );
+}
+
+function MetricSettingsDropdown({
+  orderedMetrics,
+  preferences,
+  visibleCount,
+  onToggle,
+  onDragEnd,
+  onShowAll,
+  onReset,
+  trigger,
+}: {
+  orderedMetrics: Array<typeof METRICS[number]>;
+  preferences: MetricPreferences;
+  visibleCount: number;
+  onToggle: (key: MetricKey) => void;
+  onDragEnd: (result: DropResult) => void;
+  onShowAll: () => void;
+  onReset: () => void;
+  trigger: "toolbar" | "visible";
+}) {
+  const triggerButton = trigger === "toolbar" ? (
+    <Button variant="outline" className="bg-card/60 text-white">
+      <SlidersHorizontal className="h-4 w-4" />
+      Metrics
+    </Button>
+  ) : (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-8 rounded-full border-white/10 bg-white/[0.03] px-3 text-xs text-muted-foreground hover:bg-white/[0.06] hover:text-white"
+    >
+      <Eye className="h-3.5 w-3.5" />
+      {visibleCount} visible
+    </Button>
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{triggerButton}</DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[21.5rem]">
+        <DropdownMenuLabel>Column metrics</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DragDropContext onDragEnd={onDragEnd}>
+          <Droppable droppableId="challenge-metric-columns">
+            {(provided) => (
+              <div
+                ref={provided.innerRef}
+                {...provided.droppableProps}
+                className="max-h-[420px] space-y-1 overflow-y-auto px-1 py-1"
+              >
+                {orderedMetrics.map((metric, index) => {
+                  const Icon = metric.icon;
+                  const checked = preferences.visibility[metric.key];
+                  return (
+                    <Draggable key={metric.key} draggableId={metric.key} index={index}>
+                      {(dragProvided, snapshot) => {
+                        const row = (
+                          <div
+                            ref={dragProvided.innerRef}
+                            {...dragProvided.draggableProps}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-2 text-sm text-white outline-none transition-colors",
+                              "hover:border-white/10 hover:bg-white/[0.04]",
+                              snapshot.isDragging && "border-primary/40 bg-background shadow-xl",
+                            )}
+                          >
+                            <span
+                              {...dragProvided.dragHandleProps}
+                              className="flex h-7 w-6 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-white/[0.04] hover:text-white active:cursor-grabbing"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </span>
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              aria-pressed={checked}
+                              className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                              onClick={() => onToggle(metric.key)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  onToggle(metric.key);
+                                }
+                              }}
+                            >
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={() => onToggle(metric.key)}
+                                onClick={(event) => event.stopPropagation()}
+                                className="border-white/20 data-[state=checked]:border-primary"
+                              />
+                              <Icon className={cn("h-4 w-4 shrink-0", metric.tone)} />
+                              <span className="truncate">{metric.label}</span>
+                            </div>
+                          </div>
+                        );
+
+                        if (snapshot.isDragging && typeof document !== "undefined") {
+                          return createPortal(row, document.body);
+                        }
+                        return row;
+                      }}
+                    </Draggable>
+                  );
+                })}
+                {provided.placeholder}
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onShowAll}>
+          <Eye className="h-4 w-4" />
+          Show all
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onReset}>
+          <RotateCcw className="h-4 w-4" />
+          Reset order
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

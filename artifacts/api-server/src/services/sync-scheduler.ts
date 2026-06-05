@@ -2,7 +2,7 @@ import { db, tenantsTable, jobsTable, leadsTable, campaignsTable, campaignDailyS
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { fetchCompletedJobs, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
+import { SERVICE_TITAN_JOB_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -576,7 +576,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
 
   // Delta-sync window: only pull jobs modified since the last successful run
   // (with a small overlap buffer so we never miss in-flight edits). Without
-  // this the scheduled sync calls `fetchCompletedJobs` with no date filter,
+  // this the scheduled sync calls ServiceTitan with no date filter,
   // which under the raised 500-page safety cap can mean pulling up to 50,000
   // jobs every 15 minutes per tenant — expensive on the ServiceTitan API
   // quota and a guaranteed source of contention with manual backfills.
@@ -601,7 +601,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
   const modifiedOnOrAfter = new Date(sinceMs).toISOString();
 
   // Task #567: clamp detection — if the watermark is older than the 30-day
-  // rolling fallback window, the in-flight `fetchCompletedJobs` page cap can
+  // rolling fallback window, the in-flight ServiceTitan page cap can
   // silently truncate jobs modified during the gap. Stash the missed range
   // and dispatch a backfill from `finally` after releasing the STAN lock
   // (the backfill re-acquires the same lock).
@@ -694,7 +694,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       }
     }
 
-    await fetchCompletedJobs(stConfig, modifiedOnOrAfter, processJobBatch);
+    await fetchJobsByStatuses(stConfig, SERVICE_TITAN_JOB_STATUSES, modifiedOnOrAfter, processJobBatch);
 
     await completeSyncLog(syncLog.id, "completed", synced);
     console.log(`[Sync] ServiceTitan: synced ${synced} jobs for tenant ${tenantId} (modifiedOnOrAfter=${modifiedOnOrAfter})`);
@@ -2245,7 +2245,7 @@ export async function backfillGoogleAdsCampaigns(
  * One-shot historical ServiceTitan jobs backfill. Walks the trailing `days`
  * window (default 365, capped at 1095 ≈ 3 years) in 90-day chunks using the
  * `modifiedOnOrAfter` + `modifiedBefore` ServiceTitan filters so each chunk
- * stays well under the 50-page (5000 job) hard cap inside `fetchCompletedJobs`.
+ * stays well under the per-status page cap inside the ServiceTitan job fetcher.
  * Reuses the same upsert + enrichment pipeline as the scheduled jobs sync.
  * Progress + completion land in `integration_sync_logs` with
  * sync_type=`backfill`.
@@ -2321,7 +2321,7 @@ export async function backfillServiceTitanJobs(
     let currentChunkIdx = 0;
     let cancelledAt: { chunkIdx: number; rows: number } | null = null;
 
-    // Throw-to-unwind sentinel: the only way to stop `fetchCompletedJobs`
+    // Throw-to-unwind sentinel: the only way to stop the ServiceTitan page walk
     // mid-page-walk is to make `processJobBatch` throw. The outer try/catch
     // distinguishes this from a real upstream error by checking
     // `cancelledAt`.
@@ -2427,7 +2427,7 @@ export async function backfillServiceTitanJobs(
 
       // Cooperative cancel check: poll the sync log row after each batch. If
       // the cancel route flipped the flag, throw to unwind out of
-      // `fetchCompletedJobs`. The outer chunk loop catches this and marks
+      // the ServiceTitan page walk. The outer chunk loop catches this and marks
       // the run as cancelled instead of errored.
       if (await checkCancel()) {
         cancelledAt = { chunkIdx: currentChunkIdx, rows: totalSynced };
@@ -2453,7 +2453,7 @@ export async function backfillServiceTitanJobs(
           since.slice(0, 10),
           before.slice(0, 10),
         );
-        await fetchCompletedJobs(stConfig, since, processJobBatch, before);
+        await fetchJobsByStatuses(stConfig, SERVICE_TITAN_JOB_STATUSES, since, processJobBatch, before);
       }
     } catch (innerErr) {
       // BackfillCancelled is an expected unwind path, not a partial failure.

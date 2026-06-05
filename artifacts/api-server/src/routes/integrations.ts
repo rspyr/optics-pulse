@@ -149,7 +149,7 @@ router.post("/integrations/callrail/backfill", requireRole("super_admin", "agenc
  * One-shot historical ServiceTitan jobs backfill. Mirrors the Meta backfill
  * contract: `days` must be > 30 and ≤ 1095. Walks the trailing window in
  * 90-day chunks using the ST `modifiedOnOrAfter`/`modifiedBefore` filters so
- * each chunk fits inside the per-call page cap inside `fetchCompletedJobs`.
+ * each chunk fits inside the per-status page cap inside the ServiceTitan job fetcher.
  */
 router.post("/integrations/service_titan/backfill", requireRole("super_admin", "agency_user"), async (req, res) => {
   const tenantId = Number(req.query.tenantId ?? req.body?.tenantId);
