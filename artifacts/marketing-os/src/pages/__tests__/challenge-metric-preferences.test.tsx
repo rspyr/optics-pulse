@@ -24,7 +24,7 @@ const challengeResponse: any = {
   availableFunnels: [{ id: 10, name: "Install", runCount: 1 }, { id: 11, name: "Repair", runCount: 1 }],
   selectedRuns: [],
   allocation: {
-    method: "meta_campaign_funnel_mapping",
+    method: "meta_campaign_adset_funnel_mapping",
     note: "Allocation note",
   },
   summary: {

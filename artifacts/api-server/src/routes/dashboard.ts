@@ -205,10 +205,10 @@ export function buildChallengeDashboardResponse(input: {
     return totals;
   }, { spend: 0, metaLeads: 0 });
   const selectedSpend = hasCampaignMappings
-    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.spend : input.totalSpend)
+    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.spend : mappedSpend)
     : input.totalSpend * selectedShare;
   const selectedMetaLeads = hasCampaignMappings
-    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.metaLeads : input.metaLeads)
+    ? (input.selectedFunnels.length > 0 ? selectedMappedTotals.metaLeads : mappedMetaLeads)
     : null;
 
   const summary = buildChallengeMetricRow(
@@ -237,15 +237,15 @@ export function buildChallengeDashboardResponse(input: {
     summary,
     byFunnel,
     allocation: {
-      method: hasCampaignMappings ? "meta_campaign_funnel_mapping" : "pulse_lead_share",
+      method: hasCampaignMappings ? "meta_campaign_adset_funnel_mapping" : "pulse_lead_share",
       allUniquePulseLeads,
       mappedSpend: round2(mappedSpend),
       mappedMetaLeads: round1(mappedMetaLeads),
       unmappedSpend: round2(unmappedSpend),
       unmappedMetaLeads: round1(unmappedMetaLeads),
       note: hasCampaignMappings
-        ? "Per-funnel spend and Meta Leads use the saved Meta campaign-to-funnel map. Any unmapped Meta spend is excluded from individual funnel rows until it is assigned."
-        : "No Meta campaign-to-funnel map exists yet, so selected and per-funnel views allocate spend by each funnel's share of unique Pulse leads in the same lead-received window. Meta Leads count raw Meta-sourced lead submissions received in that window, while Pulse Leads are deduped.",
+        ? "Per-funnel spend and Meta Leads use saved Meta campaign/ad-set funnel mappings. Any unmapped Meta spend is excluded until it is assigned."
+        : "No Meta campaign/ad-set funnel map exists yet, so selected and per-funnel views allocate spend by each funnel's share of unique Pulse leads in the same lead-received window. Meta Leads count raw Meta-sourced lead submissions received in that window, while Pulse Leads are deduped.",
     },
   };
 }
@@ -847,20 +847,26 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
       spend_by_run AS (
         SELECT
           vr.run_id,
-          COALESCE(SUM(cds.spend), 0)::numeric AS total_spend,
-          COALESCE(SUM(cds.conversions), 0)::numeric AS meta_leads
+          COALESCE(SUM(mads.spend), 0)::numeric AS total_spend,
+          COALESCE(SUM(mads.conversions), 0)::numeric AS meta_leads
         FROM valid_runs vr
-        JOIN campaign_funnel_mappings cfm
-          ON cfm.tenant_id = vr.tenant_id
-          AND cfm.funnel_type_id = vr.funnel_type_id
         JOIN campaigns c
-          ON c.id = cfm.campaign_id
-          AND c.tenant_id = cfm.tenant_id
+          ON c.tenant_id = vr.tenant_id
           AND c.platform = 'meta'
-        JOIN campaign_daily_stats cds
-          ON cds.campaign_id = c.id
-          AND cds.date >= vr.window_start
-          AND cds.date <= vr.window_end
+        JOIN meta_ad_daily_stats mads
+          ON mads.tenant_id = vr.tenant_id
+          AND mads.campaign_external_id = c.external_id
+          AND mads.date >= vr.window_start
+          AND mads.date <= vr.window_end
+        LEFT JOIN campaign_funnel_mappings ad_cfm
+          ON ad_cfm.tenant_id = vr.tenant_id
+          AND ad_cfm.campaign_id = c.id
+          AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+        LEFT JOIN campaign_funnel_mappings campaign_cfm
+          ON campaign_cfm.tenant_id = vr.tenant_id
+          AND campaign_cfm.campaign_id = c.id
+          AND campaign_cfm.ad_set_external_id IS NULL
+        WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
         GROUP BY vr.run_id
       ),
       activity_days AS (
@@ -870,21 +876,29 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
 
         UNION
 
-        SELECT vr.run_id, cds.date AS activity_day
+        SELECT vr.run_id, mads.date AS activity_day
         FROM valid_runs vr
-        JOIN campaign_funnel_mappings cfm
-          ON cfm.tenant_id = vr.tenant_id
-          AND cfm.funnel_type_id = vr.funnel_type_id
         JOIN campaigns c
-          ON c.id = cfm.campaign_id
-          AND c.tenant_id = cfm.tenant_id
+          ON c.tenant_id = vr.tenant_id
           AND c.platform = 'meta'
-        JOIN campaign_daily_stats cds
-          ON cds.campaign_id = c.id
-          AND cds.date >= vr.window_start
-          AND cds.date <= vr.window_end
-        WHERE COALESCE(cds.spend, 0) > 0
-          OR COALESCE(cds.conversions, 0) > 0
+        JOIN meta_ad_daily_stats mads
+          ON mads.tenant_id = vr.tenant_id
+          AND mads.campaign_external_id = c.external_id
+          AND mads.date >= vr.window_start
+          AND mads.date <= vr.window_end
+        LEFT JOIN campaign_funnel_mappings ad_cfm
+          ON ad_cfm.tenant_id = vr.tenant_id
+          AND ad_cfm.campaign_id = c.id
+          AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+        LEFT JOIN campaign_funnel_mappings campaign_cfm
+          ON campaign_cfm.tenant_id = vr.tenant_id
+          AND campaign_cfm.campaign_id = c.id
+          AND campaign_cfm.ad_set_external_id IS NULL
+        WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+          AND (
+            COALESCE(mads.spend, 0) > 0
+            OR COALESCE(mads.conversions, 0) > 0
+          )
       ),
       active_days AS (
         SELECT run_id, COUNT(DISTINCT activity_day)::int AS active_days
@@ -963,8 +977,8 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
       byFunnel: rows,
       rows,
       allocation: {
-        method: "meta_campaign_funnel_mapping",
-        note: "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign-to-funnel mappings for the same run days.",
+        method: "meta_campaign_adset_funnel_mapping",
+        note: "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign/ad-set mappings for the same run days.",
       },
     };
   })();
@@ -1228,28 +1242,41 @@ router.get("/dashboard/challenge", async (req, res) => {
   const adMappingResult = await db.execute(sql`
     SELECT
       CASE
-        WHEN cfm.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL THEN ft.name
+        WHEN effective.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL THEN ft.name
         ELSE NULL
       END AS funnel,
-      (cfm.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL) AS mapped,
-      COALESCE(SUM(cds.spend), 0)::numeric AS spend,
-      COALESCE(SUM(cds.conversions), 0)::numeric AS meta_leads
-    FROM campaigns c
-    LEFT JOIN campaign_daily_stats cds
-      ON cds.campaign_id = c.id
-      AND cds.date >= ${startDate}
-      AND cds.date <= ${endDate}
-    LEFT JOIN campaign_funnel_mappings cfm
-      ON cfm.campaign_id = c.id
-      AND cfm.tenant_id = c.tenant_id
+      (effective.funnel_type_id IS NOT NULL AND ft.id IS NOT NULL) AS mapped,
+      COALESCE(SUM(effective.spend), 0)::numeric AS spend,
+      COALESCE(SUM(effective.meta_leads), 0)::numeric AS meta_leads
+    FROM (
+      SELECT
+        c.tenant_id,
+        COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) AS funnel_type_id,
+        mads.spend,
+        mads.conversions AS meta_leads
+      FROM meta_ad_daily_stats mads
+      JOIN campaigns c
+        ON c.tenant_id = mads.tenant_id
+        AND c.external_id = mads.campaign_external_id
+        AND c.platform = 'meta'
+      LEFT JOIN campaign_funnel_mappings ad_cfm
+        ON ad_cfm.tenant_id = mads.tenant_id
+        AND ad_cfm.campaign_id = c.id
+        AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+      LEFT JOIN campaign_funnel_mappings campaign_cfm
+        ON campaign_cfm.tenant_id = mads.tenant_id
+        AND campaign_cfm.campaign_id = c.id
+        AND campaign_cfm.ad_set_external_id IS NULL
+      WHERE mads.date >= ${startDate}
+        AND mads.date <= ${endDate}
+        ${tenantId ? sql`AND c.tenant_id = ${tenantId}` : sql``}
+    ) effective
     LEFT JOIN tenant_funnel_types tft
-      ON tft.tenant_id = c.tenant_id
-      AND tft.funnel_type_id = cfm.funnel_type_id
+      ON tft.tenant_id = effective.tenant_id
+      AND tft.funnel_type_id = effective.funnel_type_id
     LEFT JOIN funnel_types ft
       ON ft.id = tft.funnel_type_id
-    WHERE c.platform = 'meta'
-      ${tenantCampaignFilter}
-    GROUP BY cfm.funnel_type_id, ft.id, ft.name
+    GROUP BY effective.funnel_type_id, ft.id, ft.name
   `);
 
   const funnelResult = await db.execute(sql`

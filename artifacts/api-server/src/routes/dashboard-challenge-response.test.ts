@@ -207,7 +207,7 @@ describe("buildChallengeDashboardResponse", () => {
       ],
     });
 
-    expect(response.allocation.method).toBe("meta_campaign_funnel_mapping");
+    expect(response.allocation.method).toBe("meta_campaign_adset_funnel_mapping");
     expect(response.allocation.mappedSpend).toBe(500);
     expect(response.allocation.unmappedSpend).toBe(500);
     expect(response.summary.totalSpend).toBe(300);
@@ -220,5 +220,42 @@ describe("buildChallengeDashboardResponse", () => {
     expect(install?.costPerLead).toBe(10);
     expect(heatPump?.totalSpend).toBe(200);
     expect(heatPump?.costPerLead).toBe(40);
+  });
+
+  it("omits unmapped Meta rows from the all-funnels summary when mappings exist", () => {
+    const response = buildChallengeDashboardResponse({
+      startDate: "2026-06-01",
+      endDate: "2026-06-30",
+      selectedFunnels: [],
+      funnels: ["Install", "Heat Pump"],
+      totalSpend: 1000,
+      metaLeads: 100,
+      adRows: [
+        { funnel: "Install", mapped: true, spend: 300, meta_leads: 30 },
+        { funnel: "Heat Pump", mapped: true, spend: 200, meta_leads: 5 },
+        { funnel: null, mapped: false, spend: 500, meta_leads: 65 },
+      ],
+      rows: [
+        {
+          row_type: "summary",
+          funnel: "All funnels",
+          meta_leads: 80,
+          unique_pulse_leads: 25,
+          appointments_booked: 0,
+          total_jobs: 0,
+          cancelled_jobs: 0,
+          completed_estimate_jobs: 0,
+          total_estimate_value: 30000,
+          sold_closed_value: 0,
+          sold_jobs: 0,
+          all_unique_pulse_leads: 25,
+        },
+      ],
+    });
+
+    expect(response.summary.totalSpend).toBe(500);
+    expect(response.summary.metaLeads).toBe(35);
+    expect(response.allocation.unmappedSpend).toBe(500);
+    expect(response.allocation.unmappedMetaLeads).toBe(65);
   });
 });

@@ -3,17 +3,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
   CheckCircle2,
+  Layers3,
   Loader2,
   Megaphone,
+  Plus,
   Search,
   Sparkles,
+  Tags,
+  Trash2,
   XCircle,
 } from "lucide-react";
 
 type DateRange = "last7" | "last30" | "thisMonth" | "lastMonth";
+type MappingLevel = "campaign" | "ad_set";
 
 function getDateRange(range: DateRange): { startDate: string; endDate: string; label: string } {
   const now = new Date();
@@ -45,9 +51,16 @@ function formatNumber(value: number): string {
   }).format(value);
 }
 
+type FunnelMatchCode = {
+  id: number;
+  code: string;
+};
+
 type CampaignFunnelOption = {
   id: number;
   name: string;
+  slug: string;
+  matchCodes: FunnelMatchCode[];
 };
 
 type CampaignMapping = {
@@ -65,15 +78,45 @@ type CampaignMapping = {
   mappingSource: string | null;
   suggestedFunnelTypeId: number | null;
   suggestedFunnelName: string | null;
+  suggestedMatchCode: string | null;
+};
+
+type AdSetMapping = {
+  campaignId: number;
+  campaignExternalId: string;
+  campaignName: string;
+  adSetExternalId: string;
+  name: string;
+  status: string | null;
+  adAccountId: string | null;
+  spend: number;
+  conversions: number;
+  cpl: number;
+  funnelTypeId: number | null;
+  funnelName: string | null;
+  mappingSource: string | null;
+  campaignFunnelTypeId: number | null;
+  campaignFunnelName: string | null;
+  effectiveFunnelTypeId: number | null;
+  effectiveFunnelName: string | null;
+  effectiveMappingLevel: MappingLevel | null;
+  suggestedFunnelTypeId: number | null;
+  suggestedFunnelName: string | null;
+  suggestedMatchCode: string | null;
 };
 
 type CampaignFunnelMappingResponse = {
   dateRange: { startDate: string | null; endDate: string | null };
   funnels: CampaignFunnelOption[];
   campaigns: CampaignMapping[];
+  adSets: AdSetMapping[];
   unmappedSpend: number;
   unmappedConversions: number;
 };
+
+function rowKey(level: MappingLevel, campaignId: number, adSetExternalId?: string | null) {
+  return `${level}:${campaignId}:${adSetExternalId ?? "campaign"}`;
+}
 
 export function MetaCampaignFunnelMapping({
   tenantId,
@@ -85,13 +128,18 @@ export function MetaCampaignFunnelMapping({
   tenantName?: string;
 }) {
   const [dateRange, setDateRange] = useState<DateRange>("last30");
+  const [mappingLevel, setMappingLevel] = useState<MappingLevel>("ad_set");
   const [refreshToken, setRefreshToken] = useState(0);
   const [data, setData] = useState<CampaignFunnelMappingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savingCampaignId, setSavingCampaignId] = useState<number | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showOnlyUnmapped, setShowOnlyUnmapped] = useState(false);
+  const [codeFunnelId, setCodeFunnelId] = useState<string>("");
+  const [newCode, setNewCode] = useState("");
+  const [savingCode, setSavingCode] = useState(false);
+  const [deletingCodeId, setDeletingCodeId] = useState<number | null>(null);
 
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
@@ -114,10 +162,12 @@ export function MetaCampaignFunnelMapping({
         return res.json() as Promise<CampaignFunnelMappingResponse>;
       })
       .then((next) => {
-        if (!cancelled) setData(next);
+        if (cancelled) return;
+        setData(next);
+        setCodeFunnelId((current) => current || (next.funnels[0] ? String(next.funnels[0].id) : ""));
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message || "Could not load Meta campaign mappings");
+        if (!cancelled) setError(err.message || "Could not load Meta funnel mappings");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -139,51 +189,99 @@ export function MetaCampaignFunnelMapping({
         campaign.externalId,
         campaign.funnelName ?? "",
         campaign.suggestedFunnelName ?? "",
+        campaign.suggestedMatchCode ?? "",
       ].some((value) => value.toLowerCase().includes(q));
     });
   }, [data?.campaigns, search, showOnlyUnmapped]);
 
-  const funnelOptions = data?.funnels ?? [];
-  const mappedCount = data?.campaigns.filter((campaign) => campaign.funnelTypeId != null).length ?? 0;
-  const unmappedCount = (data?.campaigns.length ?? 0) - mappedCount;
+  const filteredAdSets = useMemo(() => {
+    const adSets = data?.adSets ?? [];
+    const q = search.trim().toLowerCase();
+    return adSets.filter((adSet) => {
+      if (showOnlyUnmapped && adSet.effectiveFunnelTypeId != null) return false;
+      if (!q) return true;
+      return [
+        adSet.name,
+        adSet.adSetExternalId,
+        adSet.campaignName,
+        adSet.campaignExternalId,
+        adSet.effectiveFunnelName ?? "",
+        adSet.suggestedFunnelName ?? "",
+        adSet.suggestedMatchCode ?? "",
+      ].some((value) => value.toLowerCase().includes(q));
+    });
+  }, [data?.adSets, search, showOnlyUnmapped]);
 
-  async function saveMapping(campaignId: number, funnelTypeId: number | null) {
-    setSavingCampaignId(campaignId);
+  const funnelOptions = data?.funnels ?? [];
+  const activeRows = mappingLevel === "campaign" ? filteredCampaigns : filteredAdSets;
+  const allRows = mappingLevel === "campaign" ? (data?.campaigns ?? []) : (data?.adSets ?? []);
+  const mappedCount = mappingLevel === "campaign"
+    ? (data?.campaigns.filter((campaign) => campaign.funnelTypeId != null).length ?? 0)
+    : (data?.adSets.filter((adSet) => adSet.effectiveFunnelTypeId != null).length ?? 0);
+  const unmappedCount = Math.max(0, allRows.length - mappedCount);
+
+  async function saveMapping(level: MappingLevel, campaignId: number, funnelTypeId: number | null, adSetExternalId?: string | null) {
+    const key = rowKey(level, campaignId, adSetExternalId);
+    setSavingKey(key);
     setError(null);
     try {
       const res = await fetch(`${apiBase}/api/campaigns/${campaignId}/funnel-mapping`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ funnelTypeId }),
+        body: JSON.stringify({
+          funnelTypeId,
+          mappingLevel: level,
+          ...(level === "ad_set" ? { adSetExternalId } : {}),
+        }),
       });
-      const payload = await res.json().catch(() => null) as { error?: string; funnelName?: string | null } | null;
+      const payload = await res.json().catch(() => null) as { error?: string } | null;
       if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-
-      setData((current) => {
-        if (!current) return current;
-        const selectedFunnel = funnelTypeId == null
-          ? null
-          : current.funnels.find((funnel) => funnel.id === funnelTypeId) ?? null;
-        return {
-          ...current,
-          campaigns: current.campaigns.map((campaign) => campaign.campaignId === campaignId
-            ? {
-                ...campaign,
-                funnelTypeId,
-                funnelName: payload?.funnelName ?? selectedFunnel?.name ?? null,
-                mappingSource: funnelTypeId == null ? null : "manual",
-                suggestedFunnelTypeId: null,
-                suggestedFunnelName: null,
-              }
-            : campaign),
-        };
-      });
       setRefreshToken((current) => current + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save campaign mapping");
+      setError(err instanceof Error ? err.message : "Could not save mapping");
     } finally {
-      setSavingCampaignId(null);
+      setSavingKey(null);
+    }
+  }
+
+  async function addCode() {
+    if (!codeFunnelId || !newCode.trim()) return;
+    setSavingCode(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/campaigns/meta-funnel-match-codes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantId, funnelTypeId: Number(codeFunnelId), code: newCode.trim() }),
+      });
+      const payload = await res.json().catch(() => null) as { error?: string } | null;
+      if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+      setNewCode("");
+      setRefreshToken((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add match code");
+    } finally {
+      setSavingCode(false);
+    }
+  }
+
+  async function deleteCode(id: number) {
+    setDeletingCodeId(id);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/campaigns/meta-funnel-match-codes/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const payload = await res.json().catch(() => null) as { error?: string } | null;
+      if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+      setRefreshToken((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove match code");
+    } finally {
+      setDeletingCodeId(null);
     }
   }
 
@@ -195,9 +293,9 @@ export function MetaCampaignFunnelMapping({
             <Megaphone className="h-5 w-5 text-sky-300" />
           </div>
           <div>
-            <h3 className="font-display text-xl text-white">Meta Campaign Funnel Map</h3>
+            <h3 className="font-display text-xl text-white">Meta Funnel Map</h3>
             <p className="max-w-3xl text-sm text-muted-foreground">
-              Assign each Meta campaign{tenantName ? ` for ${tenantName}` : ""} to one funnel so Challenge spend, Meta leads, CPL, ROAS, CAC, and appointment cost land in the correct funnel row.
+              Match Meta campaigns or ad sets{tenantName ? ` for ${tenantName}` : ""} to funnels for Challenge spend, Meta leads, CPL, ROAS, CAC, and appointment cost.
             </p>
           </div>
         </div>
@@ -219,18 +317,80 @@ export function MetaCampaignFunnelMapping({
 
       {data && data.unmappedSpend > 0 && (
         <div className="border-b border-amber-400/15 bg-amber-400/[0.06] px-5 py-3 text-sm text-amber-100">
-          {formatCurrency(data.unmappedSpend)} in Meta spend and {formatNumber(data.unmappedConversions)} Meta leads are not assigned to a funnel in {label.toLowerCase()}.
+          {formatCurrency(data.unmappedSpend)} in Meta spend and {formatNumber(data.unmappedConversions)} Meta leads are unmapped in {label.toLowerCase()} and excluded from funnel dashboards.
         </div>
       )}
 
-      <div className="flex flex-col gap-3 border-b border-white/5 p-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="border-b border-white/5 p-4">
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
+          <Tags className="h-4 w-4 text-sky-300" />
+          Funnel codes and names
+        </div>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <Select value={codeFunnelId} onValueChange={setCodeFunnelId}>
+            <SelectTrigger className="w-full lg:w-60">
+              <SelectValue placeholder="Select funnel" />
+            </SelectTrigger>
+            <SelectContent>
+              {funnelOptions.map((funnel) => (
+                <SelectItem key={funnel.id} value={String(funnel.id)}>{funnel.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            value={newCode}
+            onChange={(event) => setNewCode(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && addCode()}
+            placeholder="Code or name"
+            className="lg:max-w-xs"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={addCode} disabled={!codeFunnelId || !newCode.trim() || savingCode}>
+            {savingCode ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Add
+          </Button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {funnelOptions.flatMap((funnel) => funnel.matchCodes.map((code) => (
+            <span key={code.id} className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/80">
+              <span className="text-white/45">{funnel.name}</span>
+              {code.code}
+              <button
+                type="button"
+                onClick={() => deleteCode(code.id)}
+                disabled={deletingCodeId === code.id}
+                className="text-white/35 transition-colors hover:text-red-300 disabled:opacity-50"
+                aria-label={`Remove ${code.code}`}
+              >
+                {deletingCodeId === code.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              </button>
+            </span>
+          )))}
+          {funnelOptions.every((funnel) => funnel.matchCodes.length === 0) && (
+            <span className="text-xs text-muted-foreground">No codes yet.</span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 border-b border-white/5 p-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+          <Tabs value={mappingLevel} onValueChange={(value) => setMappingLevel(value as MappingLevel)}>
+            <TabsList className="grid w-full grid-cols-2 bg-white/[0.04] md:w-[22rem]">
+              <TabsTrigger value="ad_set" className="gap-2">
+                <Layers3 className="h-4 w-4" />
+                Ad Sets
+              </TabsTrigger>
+              <TabsTrigger value="campaign" className="gap-2">
+                <Megaphone className="h-4 w-4" />
+                Campaigns
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <div className="relative w-full md:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search campaigns"
+              placeholder={mappingLevel === "ad_set" ? "Search ad sets" : "Search campaigns"}
               className="pl-9"
             />
           </div>
@@ -264,92 +424,235 @@ export function MetaCampaignFunnelMapping({
       {loading && !data ? (
         <div className="p-8 text-center text-sm text-muted-foreground">
           <Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin" />
-          Loading Meta campaigns...
+          Loading Meta mappings...
         </div>
-      ) : data?.campaigns.length === 0 ? (
-        <div className="p-8 text-center text-sm text-muted-foreground">No Meta campaigns were found for this tenant.</div>
+      ) : mappingLevel === "campaign" ? (
+        <CampaignTable
+          campaigns={filteredCampaigns}
+          funnelOptions={funnelOptions}
+          savingKey={savingKey}
+          onSave={(campaign, funnelTypeId) => saveMapping("campaign", campaign.campaignId, funnelTypeId)}
+        />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] border-collapse text-left">
-            <thead>
-              <tr className="border-b border-white/5 bg-background/50">
-                <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Campaign</th>
-                <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Spend</th>
-                <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Meta Leads</th>
-                <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">CPL</th>
-                <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Funnel</th>
-                <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Suggestion</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {filteredCampaigns.map((campaign) => {
-                const saving = savingCampaignId === campaign.campaignId;
-                return (
-                  <tr key={campaign.campaignId} className="hover:bg-white/[0.02]">
-                    <td className="max-w-[28rem] p-4">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-white">{campaign.name}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {campaign.status || "unknown"} · {campaign.externalId}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatCurrency(campaign.spend)}</td>
-                    <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatNumber(campaign.conversions)}</td>
-                    <td className="whitespace-nowrap p-4 text-right text-sm text-white">{campaign.conversions > 0 ? formatCurrency(campaign.cpl) : "$0"}</td>
-                    <td className="w-72 p-4">
-                      <Select
-                        value={campaign.funnelTypeId == null ? "unmapped" : String(campaign.funnelTypeId)}
-                        onValueChange={(value) => saveMapping(campaign.campaignId, value === "unmapped" ? null : Number(value))}
-                        disabled={saving}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="unmapped">Unmapped</SelectItem>
-                          {funnelOptions.map((funnel) => (
-                            <SelectItem key={funnel.id} value={String(funnel.id)}>{funnel.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </td>
-                    <td className="w-64 p-4">
-                      {saving ? (
-                        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Saving
-                        </span>
-                      ) : campaign.suggestedFunnelTypeId ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-8 border-sky-400/20 bg-sky-400/5 text-sky-100 hover:bg-sky-400/10"
-                          onClick={() => saveMapping(campaign.campaignId, campaign.suggestedFunnelTypeId)}
-                        >
-                          <Sparkles className="h-3.5 w-3.5" />
-                          Use {campaign.suggestedFunnelName}
-                        </Button>
-                      ) : campaign.funnelTypeId ? (
-                        <span className="inline-flex items-center gap-2 text-xs text-emerald-200">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Mapped
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No match suggested</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filteredCampaigns.length === 0 && (
-            <div className="border-t border-white/5 p-8 text-center text-sm text-muted-foreground">No campaigns match this view.</div>
-          )}
-        </div>
+        <AdSetTable
+          adSets={filteredAdSets}
+          funnelOptions={funnelOptions}
+          savingKey={savingKey}
+          onSave={(adSet, funnelTypeId) => saveMapping("ad_set", adSet.campaignId, funnelTypeId, adSet.adSetExternalId)}
+        />
       )}
     </div>
   );
+}
+
+function CampaignTable({
+  campaigns,
+  funnelOptions,
+  savingKey,
+  onSave,
+}: {
+  campaigns: CampaignMapping[];
+  funnelOptions: CampaignFunnelOption[];
+  savingKey: string | null;
+  onSave: (campaign: CampaignMapping, funnelTypeId: number | null) => void;
+}) {
+  if (campaigns.length === 0) {
+    return <div className="p-8 text-center text-sm text-muted-foreground">No campaigns match this view.</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[980px] border-collapse text-left">
+        <thead>
+          <tr className="border-b border-white/5 bg-background/50">
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Campaign</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Spend</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Meta Leads</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">CPL</th>
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Funnel</th>
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Suggestion</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {campaigns.map((campaign) => {
+            const saving = savingKey === rowKey("campaign", campaign.campaignId);
+            return (
+              <tr key={campaign.campaignId} className="hover:bg-white/[0.02]">
+                <td className="max-w-[28rem] p-4">
+                  <p className="truncate text-sm font-medium text-white">{campaign.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{campaign.status || "unknown"} · {campaign.externalId}</p>
+                </td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatCurrency(campaign.spend)}</td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatNumber(campaign.conversions)}</td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{campaign.conversions > 0 ? formatCurrency(campaign.cpl) : "$0"}</td>
+                <td className="w-72 p-4">
+                  <Select
+                    value={campaign.funnelTypeId == null ? "unmapped" : String(campaign.funnelTypeId)}
+                    onValueChange={(value) => onSave(campaign, value === "unmapped" ? null : Number(value))}
+                    disabled={saving}
+                  >
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="unmapped">Unmapped</SelectItem>
+                      {funnelOptions.map((funnel) => (
+                        <SelectItem key={funnel.id} value={String(funnel.id)}>{funnel.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
+                <td className="w-64 p-4">
+                  <SuggestionCell
+                    saving={saving}
+                    mapped={campaign.funnelTypeId != null}
+                    suggestedFunnelName={campaign.suggestedFunnelName}
+                    suggestedFunnelTypeId={campaign.suggestedFunnelTypeId}
+                    suggestedMatchCode={campaign.suggestedMatchCode}
+                    onUse={(id) => onSave(campaign, id)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AdSetTable({
+  adSets,
+  funnelOptions,
+  savingKey,
+  onSave,
+}: {
+  adSets: AdSetMapping[];
+  funnelOptions: CampaignFunnelOption[];
+  savingKey: string | null;
+  onSave: (adSet: AdSetMapping, funnelTypeId: number | null) => void;
+}) {
+  if (adSets.length === 0) {
+    return <div className="p-8 text-center text-sm text-muted-foreground">No ad sets match this view.</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[1120px] border-collapse text-left">
+        <thead>
+          <tr className="border-b border-white/5 bg-background/50">
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Campaign</th>
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Ad Set</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Spend</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Meta Leads</th>
+            <th className="p-4 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">CPL</th>
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Funnel</th>
+            <th className="p-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">Suggestion</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {adSets.map((adSet) => {
+            const saving = savingKey === rowKey("ad_set", adSet.campaignId, adSet.adSetExternalId);
+            return (
+              <tr key={`${adSet.campaignId}:${adSet.adSetExternalId}`} className="hover:bg-white/[0.02]">
+                <td className="max-w-[18rem] p-4">
+                  <p className="truncate text-sm font-medium text-white">{adSet.campaignName}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{adSet.campaignExternalId}</p>
+                </td>
+                <td className="max-w-[22rem] p-4">
+                  <p className="truncate text-sm font-medium text-white">{adSet.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{adSet.status || "unknown"} · {adSet.adSetExternalId}</p>
+                </td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatCurrency(adSet.spend)}</td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatNumber(adSet.conversions)}</td>
+                <td className="whitespace-nowrap p-4 text-right text-sm text-white">{adSet.conversions > 0 ? formatCurrency(adSet.cpl) : "$0"}</td>
+                <td className="w-72 p-4">
+                  <Select
+                    value={adSet.funnelTypeId == null ? "inherit" : String(adSet.funnelTypeId)}
+                    onValueChange={(value) => onSave(adSet, value === "inherit" ? null : Number(value))}
+                    disabled={saving}
+                  >
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">{adSet.campaignFunnelName ? "Use campaign mapping" : "No ad-set match"}</SelectItem>
+                      {funnelOptions.map((funnel) => (
+                        <SelectItem key={funnel.id} value={String(funnel.id)}>{funnel.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {adSet.funnelTypeId == null && adSet.campaignFunnelName && (
+                    <p className="mt-1 text-xs text-muted-foreground">Using campaign: {adSet.campaignFunnelName}</p>
+                  )}
+                </td>
+                <td className="w-64 p-4">
+                  <SuggestionCell
+                    saving={saving}
+                    mapped={adSet.effectiveFunnelTypeId != null}
+                    suggestedFunnelName={adSet.suggestedFunnelName}
+                    suggestedFunnelTypeId={adSet.suggestedFunnelTypeId}
+                    suggestedMatchCode={adSet.suggestedMatchCode}
+                    onUse={(id) => onSave(adSet, id)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SuggestionCell({
+  saving,
+  mapped,
+  suggestedFunnelName,
+  suggestedFunnelTypeId,
+  suggestedMatchCode,
+  onUse,
+}: {
+  saving: boolean;
+  mapped: boolean;
+  suggestedFunnelName: string | null;
+  suggestedFunnelTypeId: number | null;
+  suggestedMatchCode: string | null;
+  onUse: (funnelTypeId: number) => void;
+}) {
+  if (saving) {
+    return (
+      <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Saving
+      </span>
+    );
+  }
+
+  if (suggestedFunnelTypeId) {
+    return (
+      <div className="flex flex-col items-start gap-1.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 border-sky-400/20 bg-sky-400/5 text-sky-100 hover:bg-sky-400/10"
+          onClick={() => onUse(suggestedFunnelTypeId)}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Use {suggestedFunnelName}
+        </Button>
+        {suggestedMatchCode && (
+          <span className="text-xs text-muted-foreground">Matched {suggestedMatchCode}</span>
+        )}
+      </div>
+    );
+  }
+
+  if (mapped) {
+    return (
+      <span className="inline-flex items-center gap-2 text-xs text-emerald-200">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Mapped
+      </span>
+    );
+  }
+
+  return <span className="text-xs text-muted-foreground">No match suggested</span>;
 }

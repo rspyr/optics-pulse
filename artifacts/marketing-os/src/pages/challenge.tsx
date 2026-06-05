@@ -122,7 +122,7 @@ type ChallengeResponse = {
   byFunnel: ChallengeMetric[];
   rows: ChallengeMetric[];
   allocation: {
-    method: "meta_campaign_funnel_mapping";
+    method: "meta_campaign_funnel_mapping" | "meta_campaign_adset_funnel_mapping";
     note: string;
   };
 };

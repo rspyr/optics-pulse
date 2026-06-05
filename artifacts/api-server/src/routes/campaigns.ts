@@ -3,6 +3,7 @@ import {
   db,
   campaignsTable,
   campaignFunnelMappingsTable,
+  campaignFunnelMatchCodesTable,
   campaignDailyStatsTable,
   funnelTypesTable,
   metaAdAccountsTable,
@@ -95,14 +96,32 @@ function normalizeCampaignText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function suggestFunnel(campaignName: string, funnels: Array<{ id: number; name: string }>) {
-  const normalizedCampaign = normalizeCampaignText(campaignName);
-  if (!normalizedCampaign) return null;
+type FunnelMappingOption = {
+  id: number;
+  name: string;
+  slug: string;
+  matchCodes: Array<{ id: number; code: string }>;
+};
+
+function suggestFunnel(textValues: string[], funnels: FunnelMappingOption[]) {
+  const normalizedTitle = normalizeCampaignText(textValues.filter(Boolean).join(" "));
+  if (!normalizedTitle) return null;
 
   return funnels
-    .map((funnel) => ({ funnel, normalized: normalizeCampaignText(funnel.name) }))
-    .filter(({ normalized }) => normalized.length > 0 && normalizedCampaign.includes(normalized))
-    .sort((a, b) => b.normalized.length - a.normalized.length)[0]?.funnel ?? null;
+    .flatMap((funnel) => {
+      const terms = [
+        { value: funnel.name, matchedCode: null as string | null },
+        { value: funnel.slug, matchedCode: funnel.slug },
+        ...funnel.matchCodes.map((code) => ({ value: code.code, matchedCode: code.code })),
+      ];
+      return terms.map((term) => ({
+        funnel,
+        matchedCode: term.matchedCode,
+        normalized: normalizeCampaignText(term.value),
+      }));
+    })
+    .filter(({ normalized }) => normalized.length >= 2 && normalizedTitle.includes(normalized))
+    .sort((a, b) => b.normalized.length - a.normalized.length)[0] ?? null;
 }
 
 router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
@@ -121,13 +140,35 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
   const funnels = await db.select({
     id: funnelTypesTable.id,
     name: funnelTypesTable.name,
+    slug: funnelTypesTable.slug,
   })
     .from(tenantFunnelTypesTable)
     .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
     .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
     .orderBy(asc(funnelTypesTable.name));
 
-  const result = await db.execute(sql`
+  const matchCodes = await db.select({
+    id: campaignFunnelMatchCodesTable.id,
+    funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+    code: campaignFunnelMatchCodesTable.code,
+  })
+    .from(campaignFunnelMatchCodesTable)
+    .where(eq(campaignFunnelMatchCodesTable.tenantId, tenantId))
+    .orderBy(asc(campaignFunnelMatchCodesTable.code));
+
+  const codesByFunnel = new Map<number, Array<{ id: number; code: string }>>();
+  for (const code of matchCodes) {
+    const list = codesByFunnel.get(code.funnelTypeId) ?? [];
+    list.push({ id: code.id, code: code.code });
+    codesByFunnel.set(code.funnelTypeId, list);
+  }
+
+  const funnelOptions: FunnelMappingOption[] = funnels.map((funnel) => ({
+    ...funnel,
+    matchCodes: codesByFunnel.get(funnel.id) ?? [],
+  }));
+
+  const campaignResult = await db.execute(sql`
     SELECT
       c.id AS campaign_id,
       c.external_id,
@@ -148,6 +189,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     LEFT JOIN campaign_funnel_mappings cfm
       ON cfm.campaign_id = c.id
       AND cfm.tenant_id = c.tenant_id
+      AND cfm.ad_set_external_id IS NULL
     LEFT JOIN tenant_funnel_types tft
       ON tft.tenant_id = c.tenant_id
       AND tft.funnel_type_id = cfm.funnel_type_id
@@ -173,8 +215,8 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     conversions: string | number | null;
   };
 
-  const campaigns = ((result as unknown as { rows?: CampaignMappingRow[] }).rows ?? []).map((row) => {
-    const suggested = row.funnel_type_id ? null : suggestFunnel(row.name, funnels);
+  const campaigns = ((campaignResult as unknown as { rows?: CampaignMappingRow[] }).rows ?? []).map((row) => {
+    const suggested = row.funnel_type_id ? null : suggestFunnel([row.name], funnelOptions);
     const spend = Number(row.spend ?? 0);
     const conversions = Number(row.conversions ?? 0);
     return {
@@ -190,25 +232,280 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       funnelTypeId: row.funnel_type_id == null ? null : Number(row.funnel_type_id),
       funnelName: row.funnel_name,
       mappingSource: row.mapping_source,
-      suggestedFunnelTypeId: suggested?.id ?? null,
-      suggestedFunnelName: suggested?.name ?? null,
+      suggestedFunnelTypeId: suggested?.funnel.id ?? null,
+      suggestedFunnelName: suggested?.funnel.name ?? null,
+      suggestedMatchCode: suggested?.matchedCode ?? null,
     };
   });
 
-  const unmappedSpend = campaigns
-    .filter((campaign) => campaign.funnelTypeId == null && campaign.spend > 0)
-    .reduce((sum, campaign) => sum + campaign.spend, 0);
-  const unmappedConversions = campaigns
-    .filter((campaign) => campaign.funnelTypeId == null && campaign.conversions > 0)
-    .reduce((sum, campaign) => sum + campaign.conversions, 0);
+  const adSetResult = await db.execute(sql`
+    SELECT
+      c.id AS campaign_id,
+      c.external_id AS campaign_external_id,
+      c.name AS campaign_name,
+      mas.external_id AS ad_set_external_id,
+      mas.name AS ad_set_name,
+      mas.effective_status,
+      mas.ad_account_id,
+      ad_cfm.funnel_type_id,
+      ad_ft.name AS funnel_name,
+      ad_cfm.mapping_source,
+      campaign_cfm.funnel_type_id AS campaign_funnel_type_id,
+      campaign_ft.name AS campaign_funnel_name,
+      campaign_cfm.mapping_source AS campaign_mapping_source,
+      COALESCE(SUM(mads.spend), 0)::numeric AS spend,
+      COALESCE(SUM(mads.conversions), 0)::numeric AS conversions
+    FROM meta_ad_sets mas
+    JOIN campaigns c
+      ON c.tenant_id = mas.tenant_id
+      AND c.external_id = mas.campaign_external_id
+      AND c.platform = 'meta'
+    LEFT JOIN meta_ad_daily_stats mads
+      ON mads.tenant_id = mas.tenant_id
+      AND mads.ad_set_external_id = mas.external_id
+      ${startDate ? sql`AND mads.date >= ${startDate}` : sql``}
+      ${endDate ? sql`AND mads.date <= ${endDate}` : sql``}
+    LEFT JOIN campaign_funnel_mappings ad_cfm
+      ON ad_cfm.tenant_id = mas.tenant_id
+      AND ad_cfm.campaign_id = c.id
+      AND ad_cfm.ad_set_external_id = mas.external_id
+    LEFT JOIN tenant_funnel_types ad_tft
+      ON ad_tft.tenant_id = mas.tenant_id
+      AND ad_tft.funnel_type_id = ad_cfm.funnel_type_id
+    LEFT JOIN funnel_types ad_ft
+      ON ad_ft.id = ad_tft.funnel_type_id
+    LEFT JOIN campaign_funnel_mappings campaign_cfm
+      ON campaign_cfm.tenant_id = mas.tenant_id
+      AND campaign_cfm.campaign_id = c.id
+      AND campaign_cfm.ad_set_external_id IS NULL
+    LEFT JOIN tenant_funnel_types campaign_tft
+      ON campaign_tft.tenant_id = mas.tenant_id
+      AND campaign_tft.funnel_type_id = campaign_cfm.funnel_type_id
+    LEFT JOIN funnel_types campaign_ft
+      ON campaign_ft.id = campaign_tft.funnel_type_id
+    WHERE mas.tenant_id = ${tenantId}
+    GROUP BY
+      c.id,
+      c.external_id,
+      c.name,
+      mas.external_id,
+      mas.name,
+      mas.effective_status,
+      mas.ad_account_id,
+      ad_cfm.funnel_type_id,
+      ad_ft.name,
+      ad_cfm.mapping_source,
+      campaign_cfm.funnel_type_id,
+      campaign_ft.name,
+      campaign_cfm.mapping_source
+    ORDER BY spend DESC, c.name ASC, mas.name ASC
+  `);
+
+  type AdSetMappingRow = {
+    campaign_id: number;
+    campaign_external_id: string;
+    campaign_name: string;
+    ad_set_external_id: string;
+    ad_set_name: string;
+    effective_status: string | null;
+    ad_account_id: string | null;
+    funnel_type_id: number | null;
+    funnel_name: string | null;
+    mapping_source: string | null;
+    campaign_funnel_type_id: number | null;
+    campaign_funnel_name: string | null;
+    campaign_mapping_source: string | null;
+    spend: string | number | null;
+    conversions: string | number | null;
+  };
+
+  const adSets = ((adSetResult as unknown as { rows?: AdSetMappingRow[] }).rows ?? []).map((row) => {
+    const explicitFunnelTypeId = row.funnel_type_id == null ? null : Number(row.funnel_type_id);
+    const inheritedFunnelTypeId = row.campaign_funnel_type_id == null ? null : Number(row.campaign_funnel_type_id);
+    const effectiveFunnelTypeId = explicitFunnelTypeId ?? inheritedFunnelTypeId;
+    const suggested = effectiveFunnelTypeId ? null : suggestFunnel([row.ad_set_name, row.campaign_name], funnelOptions);
+    const spend = Number(row.spend ?? 0);
+    const conversions = Number(row.conversions ?? 0);
+    return {
+      campaignId: Number(row.campaign_id),
+      campaignExternalId: row.campaign_external_id,
+      campaignName: row.campaign_name,
+      adSetExternalId: row.ad_set_external_id,
+      name: row.ad_set_name,
+      status: row.effective_status,
+      adAccountId: row.ad_account_id,
+      spend: round2(Number.isFinite(spend) ? spend : 0),
+      conversions: Number.isFinite(conversions) ? conversions : 0,
+      cpl: cplOf(Number.isFinite(spend) ? spend : 0, Number.isFinite(conversions) ? conversions : 0),
+      funnelTypeId: explicitFunnelTypeId,
+      funnelName: row.funnel_name,
+      mappingSource: row.mapping_source,
+      campaignFunnelTypeId: inheritedFunnelTypeId,
+      campaignFunnelName: row.campaign_funnel_name,
+      campaignMappingSource: row.campaign_mapping_source,
+      effectiveFunnelTypeId,
+      effectiveFunnelName: row.funnel_name ?? row.campaign_funnel_name,
+      effectiveMappingLevel: explicitFunnelTypeId ? "ad_set" : (inheritedFunnelTypeId ? "campaign" : null),
+      suggestedFunnelTypeId: suggested?.funnel.id ?? null,
+      suggestedFunnelName: suggested?.funnel.name ?? null,
+      suggestedMatchCode: suggested?.matchedCode ?? null,
+    };
+  });
+
+  const effectiveMappingResult = await db.execute(sql`
+    SELECT
+      COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) AS funnel_type_id,
+      COALESCE(SUM(mads.spend), 0)::numeric AS spend,
+      COALESCE(SUM(mads.conversions), 0)::numeric AS conversions
+    FROM meta_ad_daily_stats mads
+    JOIN campaigns c
+      ON c.tenant_id = mads.tenant_id
+      AND c.external_id = mads.campaign_external_id
+      AND c.platform = 'meta'
+    LEFT JOIN campaign_funnel_mappings ad_cfm
+      ON ad_cfm.tenant_id = mads.tenant_id
+      AND ad_cfm.campaign_id = c.id
+      AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+    LEFT JOIN campaign_funnel_mappings campaign_cfm
+      ON campaign_cfm.tenant_id = mads.tenant_id
+      AND campaign_cfm.campaign_id = c.id
+      AND campaign_cfm.ad_set_external_id IS NULL
+    WHERE mads.tenant_id = ${tenantId}
+      ${startDate ? sql`AND mads.date >= ${startDate}` : sql``}
+      ${endDate ? sql`AND mads.date <= ${endDate}` : sql``}
+    GROUP BY COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id)
+  `);
+
+  const effectiveRows = ((effectiveMappingResult as unknown as { rows?: Array<{ funnel_type_id: number | null; spend: string | number | null; conversions: string | number | null }> }).rows ?? []);
+  const unmappedSpend = effectiveRows
+    .filter((row) => row.funnel_type_id == null)
+    .reduce((sum, row) => sum + toFiniteNumber(row.spend), 0);
+  const unmappedConversions = effectiveRows
+    .filter((row) => row.funnel_type_id == null)
+    .reduce((sum, row) => sum + toFiniteNumber(row.conversions), 0);
 
   res.json({
     dateRange: { startDate: startDate ?? null, endDate: endDate ?? null },
-    funnels,
+    funnels: funnelOptions,
     campaigns,
+    adSets,
     unmappedSpend: round2(unmappedSpend),
     unmappedConversions,
   });
+});
+
+function toFiniteNumber(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+  const body = req.body as { tenantId?: unknown; funnelTypeId?: unknown; code?: unknown } | undefined;
+  const scope = resolveListTenantScope(req, res, body?.tenantId ? Number(body.tenantId) : null);
+  if (!scope.ok) return;
+  const tenantId = scope.tenantId;
+  if (!tenantId) {
+    res.status(400).json({ error: "Select a client before adding a match code." });
+    return;
+  }
+
+  const funnelTypeId = Number(body?.funnelTypeId);
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  if (!Number.isFinite(funnelTypeId) || funnelTypeId <= 0 || !code) {
+    res.status(400).json({ error: "funnelTypeId and code are required." });
+    return;
+  }
+
+  const [tenantFunnel] = await db.select({
+    id: funnelTypesTable.id,
+    name: funnelTypesTable.name,
+  })
+    .from(tenantFunnelTypesTable)
+    .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
+    .where(and(
+      eq(tenantFunnelTypesTable.tenantId, tenantId),
+      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
+    ))
+    .limit(1);
+
+  if (!tenantFunnel) {
+    res.status(400).json({ error: "That funnel is not enabled for this client." });
+    return;
+  }
+
+  const [existing] = await db.select({
+    id: campaignFunnelMatchCodesTable.id,
+    funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+  })
+    .from(campaignFunnelMatchCodesTable)
+    .where(and(
+      eq(campaignFunnelMatchCodesTable.tenantId, tenantId),
+      sql`LOWER(${campaignFunnelMatchCodesTable.code}) = LOWER(${code})`,
+    ))
+    .limit(1);
+
+  if (existing && existing.funnelTypeId !== funnelTypeId) {
+    res.status(409).json({ error: "That code is already assigned to another funnel." });
+    return;
+  }
+
+  const userId = req.session.userId ?? null;
+  if (existing) {
+    const [updated] = await db.update(campaignFunnelMatchCodesTable)
+      .set({ code, updatedByUserId: userId, updatedAt: new Date() })
+      .where(eq(campaignFunnelMatchCodesTable.id, existing.id))
+      .returning({
+        id: campaignFunnelMatchCodesTable.id,
+        funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+        code: campaignFunnelMatchCodesTable.code,
+      });
+    res.json({ ...updated, funnelName: tenantFunnel.name });
+    return;
+  }
+
+  const [saved] = await db.insert(campaignFunnelMatchCodesTable).values({
+    tenantId,
+    funnelTypeId,
+    code,
+    createdByUserId: userId,
+    updatedByUserId: userId,
+  }).returning({
+    id: campaignFunnelMatchCodesTable.id,
+    funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+    code: campaignFunnelMatchCodesTable.code,
+  });
+
+  res.status(201).json({ ...saved, funnelName: tenantFunnel.name });
+});
+
+router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid code id." });
+    return;
+  }
+
+  const [existing] = await db.select({
+    id: campaignFunnelMatchCodesTable.id,
+    tenantId: campaignFunnelMatchCodesTable.tenantId,
+  }).from(campaignFunnelMatchCodesTable)
+    .where(eq(campaignFunnelMatchCodesTable.id, id))
+    .limit(1);
+
+  if (!existing) {
+    res.status(404).json({ error: "Match code not found." });
+    return;
+  }
+
+  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
+    notFoundOnMismatch: true,
+    notFoundMessage: "Match code not found.",
+  });
+  if (!access.ok) return;
+
+  await db.delete(campaignFunnelMatchCodesTable)
+    .where(eq(campaignFunnelMatchCodesTable.id, id));
+  res.json({ success: true });
 });
 
 router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
@@ -230,15 +527,47 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
   });
   if (!access.ok) return;
 
-  const rawFunnelTypeId = (req.body as { funnelTypeId?: unknown } | undefined)?.funnelTypeId;
+  const body = req.body as { funnelTypeId?: unknown; mappingLevel?: unknown; adSetExternalId?: unknown } | undefined;
+  const rawFunnelTypeId = body?.funnelTypeId;
   const funnelTypeId = rawFunnelTypeId == null || rawFunnelTypeId === ""
     ? null
     : Number(rawFunnelTypeId);
+  const adSetExternalId = typeof body?.adSetExternalId === "string" && body.adSetExternalId.trim()
+    ? body.adSetExternalId.trim()
+    : null;
+  const mappingLevel = body?.mappingLevel === "ad_set" || adSetExternalId ? "ad_set" : "campaign";
+
+  if (mappingLevel === "ad_set") {
+    if (!adSetExternalId) {
+      res.status(400).json({ error: "adSetExternalId is required for ad set mappings." });
+      return;
+    }
+    const [adSet] = await db.select({
+      externalId: metaAdSetsTable.externalId,
+      campaignExternalId: metaAdSetsTable.campaignExternalId,
+    })
+      .from(metaAdSetsTable)
+      .where(and(
+        eq(metaAdSetsTable.tenantId, campaign.tenantId),
+        eq(metaAdSetsTable.externalId, adSetExternalId),
+      ))
+      .limit(1);
+    if (!adSet || adSet.campaignExternalId !== campaign.externalId) {
+      res.status(404).json({ error: "Ad set not found for this campaign." });
+      return;
+    }
+  }
 
   if (funnelTypeId == null) {
-    await db.delete(campaignFunnelMappingsTable)
-      .where(eq(campaignFunnelMappingsTable.campaignId, campaignId));
-    res.json({ campaignId, funnelTypeId: null, funnelName: null });
+    await db.execute(sql`
+      DELETE FROM campaign_funnel_mappings
+      WHERE tenant_id = ${campaign.tenantId}
+        AND campaign_id = ${campaignId}
+        ${mappingLevel === "ad_set"
+          ? sql`AND ad_set_external_id = ${adSetExternalId}`
+          : sql`AND ad_set_external_id IS NULL`}
+    `);
+    res.json({ campaignId, adSetExternalId, mappingLevel, funnelTypeId: null, funnelName: null });
     return;
   }
 
@@ -265,37 +594,74 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
   }
 
   const userId = req.session.userId ?? null;
-  await db.execute(sql`
-    INSERT INTO campaign_funnel_mappings (
-      tenant_id,
-      campaign_id,
-      funnel_type_id,
-      mapping_source,
-      created_by_user_id,
-      updated_by_user_id,
-      created_at,
-      updated_at
-    )
-    VALUES (
-      ${campaign.tenantId},
-      ${campaignId},
-      ${funnelTypeId},
-      'manual',
-      ${userId},
-      ${userId},
-      NOW(),
-      NOW()
-    )
-    ON CONFLICT (campaign_id)
-    DO UPDATE SET
-      funnel_type_id = EXCLUDED.funnel_type_id,
-      mapping_source = 'manual',
-      updated_by_user_id = EXCLUDED.updated_by_user_id,
-      updated_at = NOW()
-  `);
+  if (mappingLevel === "ad_set") {
+    await db.execute(sql`
+      INSERT INTO campaign_funnel_mappings (
+        tenant_id,
+        campaign_id,
+        ad_set_external_id,
+        funnel_type_id,
+        mapping_source,
+        created_by_user_id,
+        updated_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${campaign.tenantId},
+        ${campaignId},
+        ${adSetExternalId},
+        ${funnelTypeId},
+        'manual',
+        ${userId},
+        ${userId},
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (tenant_id, campaign_id, ad_set_external_id) WHERE ad_set_external_id IS NOT NULL
+      DO UPDATE SET
+        funnel_type_id = EXCLUDED.funnel_type_id,
+        mapping_source = 'manual',
+        updated_by_user_id = EXCLUDED.updated_by_user_id,
+        updated_at = NOW()
+    `);
+  } else {
+    await db.execute(sql`
+      INSERT INTO campaign_funnel_mappings (
+        tenant_id,
+        campaign_id,
+        ad_set_external_id,
+        funnel_type_id,
+        mapping_source,
+        created_by_user_id,
+        updated_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${campaign.tenantId},
+        ${campaignId},
+        NULL,
+        ${funnelTypeId},
+        'manual',
+        ${userId},
+        ${userId},
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (campaign_id) WHERE ad_set_external_id IS NULL
+      DO UPDATE SET
+        funnel_type_id = EXCLUDED.funnel_type_id,
+        mapping_source = 'manual',
+        updated_by_user_id = EXCLUDED.updated_by_user_id,
+        updated_at = NOW()
+    `);
+  }
 
   res.json({
     campaignId,
+    adSetExternalId,
+    mappingLevel,
     funnelTypeId,
     funnelName: tenantFunnel.name,
   });
