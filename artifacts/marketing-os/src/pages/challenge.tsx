@@ -187,7 +187,7 @@ const METRIC_BY_KEY = Object.fromEntries(METRICS.map((metric) => [metric.key, me
 const DEFAULT_VISIBILITY = Object.fromEntries(METRICS.map((metric) => [metric.key, true])) as Record<MetricKey, boolean>;
 const PRESENTATION_HOVER_BASE =
   "transform-gpu transition-[scale,transform,background-color,color,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[scale,transform,background-color,color]";
-const PRESENTATION_ACTIVE_SURFACE = "scale-[1.2] text-secondary";
+const PRESENTATION_ACTIVE_SURFACE = "text-secondary";
 const PRESENTATION_HOVER_OVERLAY =
   "pointer-events-none absolute inset-0 rounded-lg border border-primary bg-primary shadow-[0_22px_60px_rgba(242,5,5,0.38)]";
 const PRESENTATION_CARD_MOTION =
@@ -571,8 +571,8 @@ export default function Challenge() {
                   <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left">
                     <thead>
                     <tr className="bg-background/50">
-                      <th className="sticky left-0 top-0 z-40 min-w-56 border-b border-white/5 bg-background/95 p-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        <span className="inline-flex min-h-16 w-full items-center px-4 py-3">
+                      <th className="sticky left-0 top-0 z-40 min-w-56 border-b border-white/5 bg-background p-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        <span className="inline-flex min-h-14 w-full items-center px-3 py-2">
                           Funnel
                         </span>
                       </th>
@@ -581,11 +581,14 @@ export default function Challenge() {
                         return (
                           <th
                             key={metric.key}
-                            className="sticky top-0 z-30 min-w-32 border-b border-white/5 bg-background/95 p-0 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                            className={cn(
+                              "sticky top-0 min-w-28 border-b border-white/5 bg-background p-0 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground",
+                              isActive ? "z-50" : "z-30",
+                            )}
                           >
                             <span
                               className={cn(
-                                "relative z-10 inline-flex min-h-16 w-full origin-top-right items-center justify-end overflow-visible px-4 py-3 text-muted-foreground",
+                                "relative z-10 inline-flex min-h-14 w-full origin-top-right items-center justify-end overflow-hidden px-3 py-2 text-muted-foreground",
                                 PRESENTATION_HOVER_BASE,
                                 isActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                               )}
@@ -606,10 +609,15 @@ export default function Challenge() {
                       const isRowActive = breakdownHover?.rowKey === rowKey;
                       return (
                         <tr key={rowKey} className="transition-colors duration-300 hover:bg-white/[0.015]">
-                          <td className="sticky left-0 z-20 max-w-64 border-b border-white/5 bg-card/95 p-0 text-sm font-medium text-white">
+                          <td
+                            className={cn(
+                              "sticky left-0 max-w-64 border-b border-white/5 bg-card p-0 text-sm font-medium text-white",
+                              isRowActive ? "z-50" : "z-20",
+                            )}
+                          >
                             <span
                               className={cn(
-                                "relative z-10 flex min-h-24 w-full origin-left items-center overflow-visible px-4 py-4 text-white",
+                                "relative z-10 flex min-h-16 w-full origin-left items-center overflow-hidden px-3 py-3 text-white",
                                 PRESENTATION_HOVER_BASE,
                                 isRowActive && `z-30 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                               )}
@@ -623,12 +631,18 @@ export default function Challenge() {
                           {visibleMetrics.map((metric) => {
                             const isActive = breakdownHover?.rowKey === rowKey && breakdownHover.metricKey === metric.key;
                             return (
-                              <td key={metric.key} className="border-b border-white/5 p-0 text-right text-sm text-white">
+                              <td
+                                key={metric.key}
+                                className={cn(
+                                  "border-b border-white/5 p-0 text-right text-sm text-white",
+                                  isActive && "relative z-40",
+                                )}
+                              >
                                 <div
                                   tabIndex={0}
                                   aria-label={`${row.funnel || "Unassigned"} ${metric.label}: ${metric.format(row[metric.key])}`}
                                   className={cn(
-                                    "relative z-10 flex min-h-24 w-full origin-center items-center justify-end overflow-visible whitespace-nowrap px-4 py-4 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
+                                    "relative z-10 flex min-h-16 w-full origin-center items-center justify-end overflow-hidden whitespace-nowrap px-3 py-3 text-white outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
                                     PRESENTATION_HOVER_BASE,
                                     isActive && `z-40 ${PRESENTATION_ACTIVE_SURFACE} font-semibold`,
                                   )}
