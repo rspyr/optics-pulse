@@ -79,7 +79,6 @@ vi.mock("@workspace/db", () => {
     ]),
     campaignFunnelMatchCodesTable: tbl("campaign_funnel_match_codes", [
       "id",
-      "tenantId",
       "funnelTypeId",
       "code",
     ]),

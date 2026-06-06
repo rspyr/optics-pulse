@@ -20,6 +20,7 @@ import {
 
 type DateRange = "last7" | "last30" | "thisMonth" | "lastMonth";
 type MappingLevel = "campaign" | "ad_set";
+type StatusFilter = "all" | "active" | "paused";
 
 function getDateRange(range: DateRange): { startDate: string; endDate: string; label: string } {
   const now = new Date();
@@ -49,6 +50,11 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: Number.isInteger(value) ? 0 : 1,
   }).format(value);
+}
+
+function statusMatches(status: string | null, filter: StatusFilter): boolean {
+  if (filter === "all") return true;
+  return (status ?? "").toLowerCase().includes(filter);
 }
 
 type FunnelMatchCode = {
@@ -140,6 +146,7 @@ export function MetaCampaignFunnelMapping({
   const [newCode, setNewCode] = useState("");
   const [savingCode, setSavingCode] = useState(false);
   const [deletingCodeId, setDeletingCodeId] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const { startDate, endDate, label } = useMemo(() => getDateRange(dateRange), [dateRange]);
 
@@ -178,10 +185,19 @@ export function MetaCampaignFunnelMapping({
     };
   }, [apiBase, tenantId, startDate, endDate, refreshToken]);
 
-  const filteredCampaigns = useMemo(() => {
+  const statusFilteredCampaigns = useMemo(() => {
     const campaigns = data?.campaigns ?? [];
+    return campaigns.filter((campaign) => statusMatches(campaign.status, statusFilter));
+  }, [data?.campaigns, statusFilter]);
+
+  const statusFilteredAdSets = useMemo(() => {
+    const adSets = data?.adSets ?? [];
+    return adSets.filter((adSet) => statusMatches(adSet.status, statusFilter));
+  }, [data?.adSets, statusFilter]);
+
+  const filteredCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return campaigns.filter((campaign) => {
+    return statusFilteredCampaigns.filter((campaign) => {
       if (showOnlyUnmapped && campaign.funnelTypeId != null) return false;
       if (!q) return true;
       return [
@@ -192,12 +208,11 @@ export function MetaCampaignFunnelMapping({
         campaign.suggestedMatchCode ?? "",
       ].some((value) => value.toLowerCase().includes(q));
     });
-  }, [data?.campaigns, search, showOnlyUnmapped]);
+  }, [statusFilteredCampaigns, search, showOnlyUnmapped]);
 
   const filteredAdSets = useMemo(() => {
-    const adSets = data?.adSets ?? [];
     const q = search.trim().toLowerCase();
-    return adSets.filter((adSet) => {
+    return statusFilteredAdSets.filter((adSet) => {
       if (showOnlyUnmapped && adSet.effectiveFunnelTypeId != null) return false;
       if (!q) return true;
       return [
@@ -210,14 +225,13 @@ export function MetaCampaignFunnelMapping({
         adSet.suggestedMatchCode ?? "",
       ].some((value) => value.toLowerCase().includes(q));
     });
-  }, [data?.adSets, search, showOnlyUnmapped]);
+  }, [statusFilteredAdSets, search, showOnlyUnmapped]);
 
   const funnelOptions = data?.funnels ?? [];
-  const activeRows = mappingLevel === "campaign" ? filteredCampaigns : filteredAdSets;
-  const allRows = mappingLevel === "campaign" ? (data?.campaigns ?? []) : (data?.adSets ?? []);
+  const allRows = mappingLevel === "campaign" ? statusFilteredCampaigns : statusFilteredAdSets;
   const mappedCount = mappingLevel === "campaign"
-    ? (data?.campaigns.filter((campaign) => campaign.funnelTypeId != null).length ?? 0)
-    : (data?.adSets.filter((adSet) => adSet.effectiveFunnelTypeId != null).length ?? 0);
+    ? statusFilteredCampaigns.filter((campaign) => campaign.funnelTypeId != null).length
+    : statusFilteredAdSets.filter((adSet) => adSet.effectiveFunnelTypeId != null).length;
   const unmappedCount = Math.max(0, allRows.length - mappedCount);
 
   async function saveMapping(level: MappingLevel, campaignId: number, funnelTypeId: number | null, adSetExternalId?: string | null) {
@@ -324,7 +338,7 @@ export function MetaCampaignFunnelMapping({
       <div className="border-b border-white/5 p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
           <Tags className="h-4 w-4 text-sky-300" />
-          Funnel codes and names
+          Global funnel codes and names
         </div>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <Select value={codeFunnelId} onValueChange={setCodeFunnelId}>
@@ -341,7 +355,7 @@ export function MetaCampaignFunnelMapping({
             value={newCode}
             onChange={(event) => setNewCode(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && addCode()}
-            placeholder="Code or name"
+            placeholder="Shared code or name"
             className="lg:max-w-xs"
           />
           <Button type="button" variant="outline" size="sm" onClick={addCode} disabled={!codeFunnelId || !newCode.trim() || savingCode}>
@@ -403,6 +417,16 @@ export function MetaCampaignFunnelMapping({
               <SelectItem value="last30">Last 30 Days</SelectItem>
               <SelectItem value="thisMonth">This Month</SelectItem>
               <SelectItem value="lastMonth">Last Month</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
+            <SelectTrigger className="w-full md:w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="paused">Paused</SelectItem>
             </SelectContent>
           </Select>
         </div>

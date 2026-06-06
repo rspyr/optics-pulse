@@ -21,6 +21,8 @@ const BOOTSTRAP_PENDING = new Set([
   "0084_funnel_runs",
   "0085_challenge_run_performance_indexes",
   "0086_funnel_runs_backfill",
+  "0087_meta_adset_funnel_mappings",
+  "0088_global_campaign_funnel_match_codes",
 ]);
 
 function resolveMigrationsDir(): string {

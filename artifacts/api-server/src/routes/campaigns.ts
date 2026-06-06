@@ -147,14 +147,17 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     .where(eq(tenantFunnelTypesTable.tenantId, tenantId))
     .orderBy(asc(funnelTypesTable.name));
 
-  const matchCodes = await db.select({
-    id: campaignFunnelMatchCodesTable.id,
-    funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
-    code: campaignFunnelMatchCodesTable.code,
-  })
-    .from(campaignFunnelMatchCodesTable)
-    .where(eq(campaignFunnelMatchCodesTable.tenantId, tenantId))
-    .orderBy(asc(campaignFunnelMatchCodesTable.code));
+  const funnelIds = funnels.map((funnel) => funnel.id);
+  const matchCodes = funnelIds.length > 0
+    ? await db.select({
+      id: campaignFunnelMatchCodesTable.id,
+      funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+      code: campaignFunnelMatchCodesTable.code,
+    })
+      .from(campaignFunnelMatchCodesTable)
+      .where(inArray(campaignFunnelMatchCodesTable.funnelTypeId, funnelIds))
+      .orderBy(asc(campaignFunnelMatchCodesTable.code))
+    : [];
 
   const codesByFunnel = new Map<number, Array<{ id: number; code: string }>>();
   for (const code of matchCodes) {
@@ -198,6 +201,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     WHERE c.tenant_id = ${tenantId}
       AND c.platform = 'meta'
     GROUP BY c.id, c.external_id, c.name, c.status, c.currency, c.meta_ad_account_id, cfm.funnel_type_id, ft.name, cfm.mapping_source
+    HAVING COALESCE(SUM(cds.spend), 0) > 0
     ORDER BY spend DESC, c.name ASC
   `);
 
@@ -298,6 +302,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       campaign_cfm.funnel_type_id,
       campaign_ft.name,
       campaign_cfm.mapping_source
+    HAVING COALESCE(SUM(mads.spend), 0) > 0
     ORDER BY spend DESC, c.name ASC, mas.name ASC
   `);
 
@@ -438,10 +443,7 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
     funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
   })
     .from(campaignFunnelMatchCodesTable)
-    .where(and(
-      eq(campaignFunnelMatchCodesTable.tenantId, tenantId),
-      sql`LOWER(${campaignFunnelMatchCodesTable.code}) = LOWER(${code})`,
-    ))
+    .where(sql`LOWER(${campaignFunnelMatchCodesTable.code}) = LOWER(${code})`)
     .limit(1);
 
   if (existing && existing.funnelTypeId !== funnelTypeId) {
@@ -464,7 +466,6 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
   }
 
   const [saved] = await db.insert(campaignFunnelMatchCodesTable).values({
-    tenantId,
     funnelTypeId,
     code,
     createdByUserId: userId,
@@ -487,7 +488,7 @@ router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin
 
   const [existing] = await db.select({
     id: campaignFunnelMatchCodesTable.id,
-    tenantId: campaignFunnelMatchCodesTable.tenantId,
+    funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
   }).from(campaignFunnelMatchCodesTable)
     .where(eq(campaignFunnelMatchCodesTable.id, id))
     .limit(1);
@@ -497,11 +498,25 @@ router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin
     return;
   }
 
-  const access = assertResourceTenantAccess(req, res, existing.tenantId, {
-    notFoundOnMismatch: true,
-    notFoundMessage: "Match code not found.",
-  });
-  if (!access.ok) return;
+  const role = req.session.userRole;
+  if (role !== "super_admin" && role !== "agency_user") {
+    const tenantId = req.session.tenantId ?? null;
+    if (!tenantId) {
+      res.status(403).json({ error: "No tenant assigned" });
+      return;
+    }
+    const [tenantFunnel] = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
+      .from(tenantFunnelTypesTable)
+      .where(and(
+        eq(tenantFunnelTypesTable.tenantId, tenantId),
+        eq(tenantFunnelTypesTable.funnelTypeId, existing.funnelTypeId),
+      ))
+      .limit(1);
+    if (!tenantFunnel) {
+      res.status(404).json({ error: "Match code not found." });
+      return;
+    }
+  }
 
   await db.delete(campaignFunnelMatchCodesTable)
     .where(eq(campaignFunnelMatchCodesTable.id, id));

@@ -20,7 +20,6 @@ CREATE INDEX IF NOT EXISTS "campaign_funnel_mappings_tenant_ad_set_idx"
 
 CREATE TABLE IF NOT EXISTS "campaign_funnel_match_codes" (
   "id" serial PRIMARY KEY,
-  "tenant_id" integer NOT NULL REFERENCES "tenants"("id") ON DELETE CASCADE,
   "funnel_type_id" integer NOT NULL REFERENCES "funnel_types"("id") ON DELETE CASCADE,
   "code" text NOT NULL,
   "created_by_user_id" integer REFERENCES "users"("id") ON DELETE SET NULL,
@@ -29,11 +28,8 @@ CREATE TABLE IF NOT EXISTS "campaign_funnel_match_codes" (
   "updated_at" timestamp NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "campaign_funnel_match_codes_tenant_code_idx"
-  ON "campaign_funnel_match_codes" ("tenant_id", lower("code"));
+CREATE UNIQUE INDEX IF NOT EXISTS "campaign_funnel_match_codes_code_idx"
+  ON "campaign_funnel_match_codes" (lower("code"));
 
-CREATE INDEX IF NOT EXISTS "campaign_funnel_match_codes_tenant_idx"
-  ON "campaign_funnel_match_codes" ("tenant_id");
-
-CREATE INDEX IF NOT EXISTS "campaign_funnel_match_codes_tenant_funnel_idx"
-  ON "campaign_funnel_match_codes" ("tenant_id", "funnel_type_id");
+CREATE INDEX IF NOT EXISTS "campaign_funnel_match_codes_funnel_idx"
+  ON "campaign_funnel_match_codes" ("funnel_type_id");
