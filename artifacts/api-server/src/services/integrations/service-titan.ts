@@ -54,6 +54,7 @@ export interface STJob {
   jobStatus: string;
   summary: string;
   total: number;
+  createdOn?: string | null;
   completedOn: string | null;
   customer?: STCustomer;
   location?: STLocation;
@@ -416,6 +417,16 @@ function extractJobTypeName(stJob: STJob): string {
   return "Service";
 }
 
+function parseServiceTitanDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function getServiceTitanJobOriginAt(stJob: STJob): Date | null {
+  return parseServiceTitanDate(stJob.createdOn);
+}
+
 export interface STInvoiceItem {
   id: number;
   description: string;
@@ -729,7 +740,8 @@ export function formatSTJobForSync(stJob: STJob) {
     businessUnit: stJob.businessUnit?.name || null,
     revenue: stJob.total || 0,
     status,
-    completedAt: stJob.completedOn ? new Date(stJob.completedOn) : null,
+    stJobOriginAt: getServiceTitanJobOriginAt(stJob),
+    completedAt: parseServiceTitanDate(stJob.completedOn),
   };
 }
 

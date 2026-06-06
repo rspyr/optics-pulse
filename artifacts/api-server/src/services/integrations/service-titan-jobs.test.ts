@@ -10,6 +10,7 @@ function makeJob(jobStatus: string): STJob {
     jobStatus,
     summary: "Estimate",
     total: 0,
+    createdOn: "2026-06-01T10:00:00.000Z",
     completedOn: null,
   };
 }
@@ -24,5 +25,9 @@ describe("ServiceTitan job formatting", () => {
     expect(formatSTJobForSync(makeJob("Dispatched")).status).toBe("in_progress");
     expect(formatSTJobForSync(makeJob("Scheduled")).status).toBe("pending");
     expect(formatSTJobForSync(makeJob("Hold")).status).toBe("pending");
+  });
+
+  it("stores ServiceTitan createdOn separately as the job origin date", () => {
+    expect(formatSTJobForSync(makeJob("Completed")).stJobOriginAt?.toISOString()).toBe("2026-06-01T10:00:00.000Z");
   });
 });

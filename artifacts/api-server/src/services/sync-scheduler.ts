@@ -12,6 +12,7 @@ import { hashPhone, normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
 import { classifyBackfillError } from "./backfill-status-format";
 import { DEFAULT_INACTIVITY_STALE_MINUTES } from "./orphan-sync-reaper";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
+import { getChallengeJobAttributionAt, getLeadSearchWindowForJob } from "./challenge-job-attribution";
 
 interface TenantApiConfig {
   serviceTitanClientId?: string;
@@ -324,6 +325,10 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
     id: jobsTable.id,
     customerPhone: jobsTable.customerPhone,
     customerEmail: jobsTable.customerEmail,
+    stJobOriginAt: jobsTable.stJobOriginAt,
+    completedAt: jobsTable.completedAt,
+    createdAt: jobsTable.createdAt,
+    status: jobsTable.status,
   }).from(jobsTable).where(
     and(
       eq(jobsTable.tenantId, tenantId),
@@ -355,10 +360,20 @@ export async function matchJobsToLeads(tenantId: number): Promise<{ matched: num
 
     matchConditions.push(or(...orClauses)!);
 
+    const jobAttributionAt = getChallengeJobAttributionAt(job);
+    if (!jobAttributionAt) continue;
+
+    const { earliestLeadAt, latestLeadAt } = getLeadSearchWindowForJob(jobAttributionAt);
+    matchConditions.push(sql`${leadsTable.createdAt} >= ${earliestLeadAt}`);
+    matchConditions.push(sql`${leadsTable.createdAt} <= ${latestLeadAt}`);
+
     const [lead] = await db.select({ id: leadsTable.id })
       .from(leadsTable)
       .where(and(...matchConditions))
-      .orderBy(desc(leadsTable.createdAt))
+      .orderBy(
+        sql`CASE WHEN ${leadsTable.createdAt} <= ${jobAttributionAt} THEN 0 ELSE 1 END`,
+        desc(leadsTable.createdAt),
+      )
       .limit(1);
 
     if (lead) {
@@ -631,6 +646,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 revenue: formatted.revenue,
                 status: formatted.status,
                 completedAt: formatted.completedAt,
+                stJobOriginAt: formatted.stJobOriginAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
                 // Job number is a reference (not PII) and is never purged, so
@@ -645,6 +661,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 revenue: formatted.revenue,
                 status: formatted.status,
                 completedAt: formatted.completedAt,
+                stJobOriginAt: formatted.stJobOriginAt,
                 customerName: formatted.customerName,
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,
@@ -2343,6 +2360,7 @@ export async function backfillServiceTitanJobs(
                 revenue: formatted.revenue,
                 status: formatted.status,
                 completedAt: formatted.completedAt,
+                stJobOriginAt: formatted.stJobOriginAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
                 // Job number is a reference (not PII) and is never purged, so
@@ -2357,6 +2375,7 @@ export async function backfillServiceTitanJobs(
                 revenue: formatted.revenue,
                 status: formatted.status,
                 completedAt: formatted.completedAt,
+                stJobOriginAt: formatted.stJobOriginAt,
                 customerName: formatted.customerName,
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,

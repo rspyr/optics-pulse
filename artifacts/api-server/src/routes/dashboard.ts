@@ -3,6 +3,10 @@ import { db, leadsTable, jobsTable, campaignsTable, campaignDailyStatsTable, att
 import { eq, and, gte, lte, count, sum, sql, inArray, SQL, desc } from "drizzle-orm";
 import { requireRole, denyClientUser } from "../middleware/auth";
 import { resolveListTenantScope } from "../lib/tenant-scope";
+import {
+  CHALLENGE_JOB_ATTRIBUTION_WINDOW_DAYS,
+  CHALLENGE_JOB_LEAD_GRACE_DAYS,
+} from "../services/challenge-job-attribution";
 
 const router: IRouter = Router();
 
@@ -14,6 +18,21 @@ const CHALLENGE_UNASSIGNED_FUNNEL = "Unassigned";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+function challengeJobAttributionWindowSql() {
+  const jobAttributionAt = sql`
+    COALESCE(
+      j.st_job_origin_at,
+      j.completed_at,
+      CASE WHEN j.status IN ('pending', 'in_progress') THEN j.created_at ELSE NULL END
+    )
+  `;
+
+  return sql`
+    AND ${jobAttributionAt} >= lc.created_at - (${CHALLENGE_JOB_LEAD_GRACE_DAYS}::int * INTERVAL '1 day')
+    AND ${jobAttributionAt} <= lc.created_at + (${CHALLENGE_JOB_ATTRIBUTION_WINDOW_DAYS}::int * INTERVAL '1 day')
+  `;
+}
 
 function parseRepeatedStrings(raw: unknown): string[] {
   const vals = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
@@ -730,6 +749,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           vr.run_id,
           l.id,
           l.tenant_id,
+          l.created_at,
           (
             l.tenant_id::text || ':' ||
             COALESCE(
@@ -774,6 +794,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
         FROM lead_cohort lc
         JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+          ${challengeJobAttributionWindowSql()}
         LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
         GROUP BY lc.run_id
       ),
@@ -1021,6 +1042,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       SELECT
         l.id,
         l.tenant_id,
+        l.created_at,
         COALESCE(ft.name, l.lead_type, ${CHALLENGE_UNASSIGNED_FUNNEL}) AS funnel,
         (
           l.tenant_id::text || ':' ||
@@ -1083,6 +1105,7 @@ router.get("/dashboard/challenge", async (req, res) => {
         COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
       FROM lead_cohort lc
       JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        ${challengeJobAttributionWindowSql()}
       LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
       GROUP BY lc.funnel
     ),
@@ -1093,6 +1116,7 @@ router.get("/dashboard/challenge", async (req, res) => {
         COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
       FROM lead_cohort lc
       JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        ${challengeJobAttributionWindowSql()}
       LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
     ),
     estimate_options AS (
