@@ -767,6 +767,9 @@ interface STEstimatesResponse {
   hasMore: boolean;
 }
 
+export const SERVICE_TITAN_ESTIMATE_STATUSES = ["Sold", "Open", "Dismissed"] as const;
+type ServiceTitanEstimateStatusRequest = string | null;
+
 interface STEmployee {
   id: number;
   name: string;
@@ -778,64 +781,76 @@ export async function fetchSoldEstimates(
   modifiedAfter?: string,
   processBatch?: (estimates: STEstimate[]) => Promise<void>,
   onTotalCount?: (totalCount: number) => void,
-  options?: { status?: string | null },
+  options?: { status?: ServiceTitanEstimateStatusRequest | readonly ServiceTitanEstimateStatusRequest[] },
 ): Promise<STEstimate[]> {
-  let page = 1;
   const pageSize = 50;
-  let hasMore = true;
   const allEstimates: STEstimate[] = [];
   let batchEstimates: STEstimate[] = [];
-  let reportedTotal = false;
+  const seenEstimateIds = new Set<string>();
+  let reportedTotal = 0;
+  const statusRequests = Array.isArray(options?.status)
+    ? [...options.status]
+    : [options?.status === undefined ? "Sold" : options.status];
 
-  while (hasMore) {
-    const params = new URLSearchParams({
-      page: String(page),
-      pageSize: String(pageSize),
-    });
-    const status = options?.status === undefined ? "Sold" : options.status;
-    if (status) params.set("status", status);
-    if (modifiedAfter) {
-      params.set("modifiedOnOrAfter", modifiedAfter);
-    }
+  for (const status of statusRequests) {
+    let page = 1;
+    let hasMore = true;
 
-    const response = await stFetch<STEstimatesResponse>(
-      config,
-      `/estimates?${params.toString()}`,
-      {},
-      "sales",
-    );
-
-    // Surface the upstream total-count once (first page) so callers can show a
-    // percent-complete bar. See fetchInvoices for rationale.
-    if (!reportedTotal && onTotalCount && typeof response.totalCount === "number") {
-      reportedTotal = true;
-      onTotalCount(response.totalCount);
-    }
-
-    const activeEstimates = response.data.filter((est) => est.active !== false);
-    batchEstimates.push(...activeEstimates);
-    hasMore = response.hasMore;
-
-    if (batchEstimates.length >= 50 || !hasMore) {
-      if (processBatch) {
-        await processBatch(batchEstimates);
-      } else {
-        allEstimates.push(...batchEstimates);
+    while (hasMore) {
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (status) params.set("status", status);
+      if (modifiedAfter) {
+        params.set("modifiedOnOrAfter", modifiedAfter);
       }
-      batchEstimates = [];
-    }
 
-    page++;
-    // Safety cap: 1000 pages × 50 = 50,000 estimates per single call. The
-    // incremental sync only walks recent (post-watermark) pages so this never
-    // fires there; a full re-sync (recompute-revenue) can walk the whole
-    // history, so log loudly if we truncate instead of silently leaving old
-    // rows on the pre-fix revenue logic.
-    if (page > 1000) {
-      console.warn(
-        `[ServiceTitan] fetchSoldEstimates hit 1000-page safety cap (modifiedAfter=${modifiedAfter ?? "none"}); more estimates remain unfetched — full re-sync is incomplete.`,
+      const response = await stFetch<STEstimatesResponse>(
+        config,
+        `/estimates?${params.toString()}`,
+        {},
+        "sales",
       );
-      break;
+
+      // Surface a running upstream total so callers can show progress when
+      // multiple statuses are fetched separately.
+      if (onTotalCount && page === 1 && typeof response.totalCount === "number") {
+        reportedTotal += response.totalCount;
+        onTotalCount(reportedTotal);
+      }
+
+      const activeEstimates = response.data.filter((est) => {
+        if (est.active === false) return false;
+        const estimateId = String(est.id);
+        if (seenEstimateIds.has(estimateId)) return false;
+        seenEstimateIds.add(estimateId);
+        return true;
+      });
+      batchEstimates.push(...activeEstimates);
+      hasMore = response.hasMore;
+
+      if (batchEstimates.length >= 50 || !hasMore) {
+        if (processBatch) {
+          await processBatch(batchEstimates);
+        } else {
+          allEstimates.push(...batchEstimates);
+        }
+        batchEstimates = [];
+      }
+
+      page++;
+      // Safety cap: 1000 pages × 50 = 50,000 estimates per status. The
+      // incremental sync only walks recent (post-watermark) pages so this never
+      // fires there; a full re-sync (recompute-revenue) can walk the whole
+      // history, so log loudly if we truncate instead of silently leaving old
+      // rows on the pre-fix revenue logic.
+      if (page > 1000) {
+        console.warn(
+          `[ServiceTitan] fetchSoldEstimates hit 1000-page safety cap for status=${status ?? "all"} (modifiedAfter=${modifiedAfter ?? "none"}); more estimates remain unfetched — full re-sync is incomplete.`,
+        );
+        break;
+      }
     }
   }
 
