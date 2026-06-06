@@ -503,7 +503,7 @@ function CampaignTable({
             return (
               <tr key={campaign.campaignId} className="hover:bg-white/[0.02]">
                 <td className="max-w-[28rem] p-4">
-                  <p className="truncate text-sm font-medium text-white">{campaign.name}</p>
+                  <p className="whitespace-normal break-words text-sm font-medium leading-5 text-white">{campaign.name}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{campaign.status || "unknown"} · {campaign.externalId}</p>
                 </td>
                 <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatCurrency(campaign.spend)}</td>
@@ -578,11 +578,11 @@ function AdSetTable({
             return (
               <tr key={`${adSet.campaignId}:${adSet.adSetExternalId}`} className="hover:bg-white/[0.02]">
                 <td className="max-w-[18rem] p-4">
-                  <p className="truncate text-sm font-medium text-white">{adSet.campaignName}</p>
+                  <p className="whitespace-normal break-words text-sm font-medium leading-5 text-white">{adSet.campaignName}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{adSet.campaignExternalId}</p>
                 </td>
                 <td className="max-w-[22rem] p-4">
-                  <p className="truncate text-sm font-medium text-white">{adSet.name}</p>
+                  <p className="whitespace-normal break-words text-sm font-medium leading-5 text-white">{adSet.name}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{adSet.status || "unknown"} · {adSet.adSetExternalId}</p>
                 </td>
                 <td className="whitespace-nowrap p-4 text-right text-sm text-white">{formatCurrency(adSet.spend)}</td>
