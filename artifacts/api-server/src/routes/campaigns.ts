@@ -404,7 +404,7 @@ function toFiniteNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "agency_user"), async (req, res) => {
   const body = req.body as { tenantId?: unknown; funnelTypeId?: unknown; code?: unknown } | undefined;
   const scope = resolveListTenantScope(req, res, body?.tenantId ? Number(body.tenantId) : null);
   if (!scope.ok) return;
@@ -479,7 +479,7 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
   res.status(201).json({ ...saved, funnelName: tenantFunnel.name });
 });
 
-router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin", "agency_user", "client_admin"), async (req, res) => {
+router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin", "agency_user"), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) {
     res.status(400).json({ error: "Invalid code id." });
@@ -496,26 +496,6 @@ router.delete("/campaigns/meta-funnel-match-codes/:id", requireRole("super_admin
   if (!existing) {
     res.status(404).json({ error: "Match code not found." });
     return;
-  }
-
-  const role = req.session.userRole;
-  if (role !== "super_admin" && role !== "agency_user") {
-    const tenantId = req.session.tenantId ?? null;
-    if (!tenantId) {
-      res.status(403).json({ error: "No tenant assigned" });
-      return;
-    }
-    const [tenantFunnel] = await db.select({ funnelTypeId: tenantFunnelTypesTable.funnelTypeId })
-      .from(tenantFunnelTypesTable)
-      .where(and(
-        eq(tenantFunnelTypesTable.tenantId, tenantId),
-        eq(tenantFunnelTypesTable.funnelTypeId, existing.funnelTypeId),
-      ))
-      .limit(1);
-    if (!tenantFunnel) {
-      res.status(404).json({ error: "Match code not found." });
-      return;
-    }
   }
 
   await db.delete(campaignFunnelMatchCodesTable)

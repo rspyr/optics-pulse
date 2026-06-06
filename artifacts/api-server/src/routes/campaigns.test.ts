@@ -179,6 +179,77 @@ function getJson(
   });
 }
 
+function sendJson(
+  expressApp: express.Express,
+  method: "POST" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; json: unknown }> {
+  return new Promise((resolve) => {
+    const http = require("http");
+    const server = http.createServer(expressApp);
+    server.listen(0, () => {
+      const port = (server.address() as { port: number }).port;
+      const payload = body === undefined ? "" : JSON.stringify(body);
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path,
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+          },
+        },
+        (res: { statusCode: number; on: Function }) => {
+          let data = "";
+          res.on("data", (chunk: string) => (data += chunk));
+          res.on("end", () => {
+            server.close();
+            resolve({ status: res.statusCode, json: data ? JSON.parse(data) : {} });
+          });
+        },
+      );
+      if (payload) req.write(payload);
+      req.end();
+    });
+  });
+}
+
+describe("meta-funnel-match-codes authorization", () => {
+  beforeEach(() => {
+    mockDb.reset();
+    vi.clearAllMocks();
+  });
+
+  it("forbids client_admin from creating a global match code", async () => {
+    await setupApp("client_admin", 5);
+    const res = await sendJson(app, "POST", "/campaigns/meta-funnel-match-codes", {
+      tenantId: 5,
+      funnelTypeId: 1,
+      code: "foo",
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("forbids client_admin from deleting a global match code", async () => {
+    await setupApp("client_admin", 5);
+    const res = await sendJson(app, "DELETE", "/campaigns/meta-funnel-match-codes/1");
+    expect(res.status).toBe(403);
+  });
+
+  it("forbids client_user from mutating global match codes", async () => {
+    await setupApp("client_user", 5);
+    const res = await sendJson(app, "POST", "/campaigns/meta-funnel-match-codes", {
+      tenantId: 5,
+      funnelTypeId: 1,
+      code: "foo",
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("GET /campaigns/meta-summary", () => {
   beforeEach(async () => {
     mockDb.reset();
