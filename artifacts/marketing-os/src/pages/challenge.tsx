@@ -6,6 +6,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -31,6 +32,7 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  Info,
   Layers3,
   RotateCcw,
   SlidersHorizontal,
@@ -152,6 +154,7 @@ const METRICS: Array<{
   tone: string;
   format: (value: number) => string;
   sub?: (metric: ChallengeMetric) => string;
+  explainer?: string;
 }> = [
   {
     key: "activeDays",
@@ -175,11 +178,44 @@ const METRICS: Array<{
     tone: "text-red-300",
     format: formatPercent,
     sub: (m) => `${formatNumber(m.cancelledJobs)} cancelled / ${formatNumber(m.totalJobs)} jobs`,
+    explainer: "Cancelled downstream jobs divided by all downstream jobs from leads received in the selected run window. Jobs must originate within 90 days of the lead, with 1 day of timing grace.",
   },
-  { key: "totalEstimateValue", label: "Total Estimate Value", shortLabel: "Est. Value", icon: DollarSign, tone: "text-amber-300", format: formatCurrency },
-  { key: "totalSoldClosedValue", label: "Total Sold/Closed Value", shortLabel: "Sold Value", icon: DollarSign, tone: "text-emerald-300", format: formatCurrency },
-  { key: "roasPotential", label: "ROAS Potential", shortLabel: "ROAS Pot.", icon: TrendingUp, tone: "text-amber-300", format: formatMultiplier },
-  { key: "roasSold", label: "ROAS Sold", shortLabel: "ROAS Sold", icon: TrendingUp, tone: "text-emerald-300", format: formatMultiplier },
+  {
+    key: "totalEstimateValue",
+    label: "Total Estimate Value",
+    shortLabel: "Est. Value",
+    icon: DollarSign,
+    tone: "text-amber-300",
+    format: formatCurrency,
+    explainer: "Potential pipeline from estimates tied to the selected lead cohort. Estimate/job origin must fall within 90 days of the lead; multiple options for one lead are averaged before summing.",
+  },
+  {
+    key: "totalSoldClosedValue",
+    label: "Total Sold/Closed Value",
+    shortLabel: "Sold Value",
+    icon: DollarSign,
+    tone: "text-emerald-300",
+    format: formatCurrency,
+    explainer: "Sold estimate value from the selected lead cohort. The sale can close later, but the estimate or job must originate inside the downstream attribution window.",
+  },
+  {
+    key: "roasPotential",
+    label: "ROAS Potential",
+    shortLabel: "ROAS Pot.",
+    icon: TrendingUp,
+    tone: "text-amber-300",
+    format: formatMultiplier,
+    explainer: "Estimate value divided by ad spend for the selected run window. Estimate value uses the downstream lead-cohort attribution rule.",
+  },
+  {
+    key: "roasSold",
+    label: "ROAS Sold",
+    shortLabel: "ROAS Sold",
+    icon: TrendingUp,
+    tone: "text-emerald-300",
+    format: formatMultiplier,
+    explainer: "Sold value divided by ad spend for the selected run window. Sold value is credited only when the originating estimate/job belongs to the selected lead cohort.",
+  },
   { key: "totalSpend", label: "Total Spend", shortLabel: "Spend", icon: DollarSign, tone: "text-sky-300", format: formatCurrency },
   {
     key: "averageCostPerInHomeAppointment",
@@ -189,6 +225,7 @@ const METRICS: Array<{
     tone: "text-violet-300",
     format: formatCurrency,
     sub: (m) => `${formatNumber(m.completedEstimateJobs)} completed estimate jobs`,
+    explainer: "Ad spend divided by completed downstream jobs that have an estimate. Jobs must originate within the selected lead cohort's attribution window.",
   },
   {
     key: "costToAcquireCustomer",
@@ -198,6 +235,7 @@ const METRICS: Array<{
     tone: "text-rose-300",
     format: formatCurrency,
     sub: (m) => `${formatNumber(m.soldJobs)} sold jobs`,
+    explainer: "Ad spend divided by sold downstream estimates/jobs from the selected lead cohort. Repeat-customer sales outside the attribution window are excluded.",
   },
   {
     key: "averageClosedJobValue",
@@ -206,6 +244,7 @@ const METRICS: Array<{
     icon: DollarSign,
     tone: "text-emerald-300",
     format: formatCurrency,
+    explainer: "Sold value divided by sold downstream jobs/estimates credited to the selected lead cohort.",
   },
 ];
 
@@ -719,6 +758,7 @@ export default function Challenge() {
   }
 
   return (
+    <TooltipProvider delayDuration={120}>
     <div className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
@@ -1006,7 +1046,7 @@ export default function Challenge() {
                               onMouseEnter={() => updateBreakdownHover({ metricKey: metric.key })}
                             >
                               {isActive && <PresentationHoverOverlay layoutId="challenge-metric-label-hover" />}
-                              <span className="relative z-10">{metric.shortLabel}</span>
+                              <MetricExplainerLabel metric={metric} />
                             </span>
                           </th>
                         );
@@ -1091,6 +1131,7 @@ export default function Challenge() {
         </>
       ) : null}
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -1103,6 +1144,60 @@ function PresentationHoverOverlay({ layoutId }: { layoutId: string }) {
       transition={{ type: "spring", stiffness: 520, damping: 42, mass: 0.7 }}
       data-challenge-hover-overlay={layoutId}
     />
+  );
+}
+
+function MetricExplainerLabel({ metric }: { metric: (typeof METRICS)[number] }) {
+  const label = (
+    <span
+      className={cn(
+        "relative z-10 inline-flex items-center justify-end gap-1.5",
+        metric.explainer && "cursor-help",
+      )}
+      tabIndex={metric.explainer ? 0 : undefined}
+    >
+      <span>{metric.shortLabel}</span>
+      {metric.explainer && <Info className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />}
+    </span>
+  );
+
+  if (!metric.explainer) return label;
+
+  return (
+    <Tooltip delayDuration={120}>
+      <TooltipTrigger asChild>{label}</TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-80 bg-card px-3 py-2 text-left text-xs leading-relaxed text-white shadow-xl">
+        {metric.explainer}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function MetricExplainerBadge({ metric }: { metric: (typeof METRICS)[number] }) {
+  const badge = (
+    <span
+      className={cn(
+        "rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground",
+        PRESENTATION_CARD_SYNC,
+        "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]",
+        metric.explainer && "inline-flex cursor-help items-center gap-1.5",
+      )}
+      tabIndex={metric.explainer ? 0 : undefined}
+    >
+      {metric.shortLabel}
+      {metric.explainer && <Info className="h-3 w-3 opacity-70" aria-hidden="true" />}
+    </span>
+  );
+
+  if (!metric.explainer) return badge;
+
+  return (
+    <Tooltip delayDuration={120}>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-80 bg-card px-3 py-2 text-left text-xs leading-relaxed text-white shadow-xl">
+        {metric.explainer}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1136,9 +1231,7 @@ function MetricCard({
           <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10")}>
             <Icon className={cn("h-5 w-5", PRESENTATION_CARD_SYNC, metric.tone, "group-hover:text-[#C0D4E6]")} />
           </div>
-          <span className={cn("rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]")}>
-            {metric.shortLabel}
-          </span>
+          <MetricExplainerBadge metric={metric} />
         </div>
         <div className="mt-5">
           <p className={cn("mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.label}</p>

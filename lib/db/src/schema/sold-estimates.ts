@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { leadsTable } from "./leads";
 import { jobsTable } from "./jobs";
@@ -18,6 +18,7 @@ export const soldEstimatesTable = pgTable("sold_estimates", {
   estimateName: text("estimate_name"),
   estimateStatus: text("estimate_status"),
   summary: text("summary"),
+  stEstimateCreatedAt: timestamp("st_estimate_created_at"),
   followUpOn: timestamp("follow_up_on"),
   soldByName: text("sold_by_name"),
   soldByStEmployeeId: integer("sold_by_st_employee_id"),
@@ -34,6 +35,7 @@ export const soldEstimatesTable = pgTable("sold_estimates", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("uq_sold_estimates_tenant_st_id").on(table.tenantId, table.stEstimateId),
+  index("sold_estimates_tenant_lead_created_idx").on(table.tenantId, table.leadId, table.stEstimateCreatedAt),
 ]);
 
 export type SoldEstimate = typeof soldEstimatesTable.$inferSelect;

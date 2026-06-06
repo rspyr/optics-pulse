@@ -761,6 +761,7 @@ export interface STEstimate {
   name: string;
   status: { name: string; value: number };
   summary: string;
+  createdOn?: string | null;
   followUpOn?: string | null;
   soldBy: number | null;
   soldOn: string | null;
@@ -939,6 +940,7 @@ export function parseEstimateData(estimate: STEstimate, patterns: RegExp[] = REB
     estimateName: estimate.name || null,
     estimateStatus: estimate.status?.name || null,
     summary: estimate.summary || null,
+    stEstimateCreatedAt: parseServiceTitanDate(estimate.createdOn),
     followUpOn: estimate.followUpOn ? new Date(estimate.followUpOn) : null,
     subtotal,
     rebateAmount,

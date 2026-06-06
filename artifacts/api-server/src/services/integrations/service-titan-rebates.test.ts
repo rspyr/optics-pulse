@@ -32,6 +32,7 @@ function estimate(items: STEstimateItem[], subtotal: number): STEstimate {
     name: "Test Estimate",
     status: { name: "Sold", value: 2 },
     summary: "Install option",
+    createdOn: "2026-01-10T00:00:00Z",
     followUpOn: "2026-01-20T00:00:00Z",
     soldBy: 42,
     soldOn: "2026-01-15T00:00:00Z",
@@ -190,6 +191,7 @@ describe("parseEstimateData", () => {
     expect(result.estimateName).toBe("Test Estimate");
     expect(result.estimateStatus).toBe("Sold");
     expect(result.summary).toBe("Install option");
+    expect(result.stEstimateCreatedAt).toEqual(new Date("2026-01-10T00:00:00Z"));
     expect(result.followUpOn).toEqual(new Date("2026-01-20T00:00:00Z"));
   });
 

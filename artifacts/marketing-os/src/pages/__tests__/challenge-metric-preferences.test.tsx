@@ -205,6 +205,23 @@ describe("Challenge metric preferences", () => {
     expect(screen.getByRole("menuitemradio", { name: "Avg all runs" })).toHaveAttribute("aria-checked", "true");
   });
 
+  it("shows attribution explainers for downstream value metrics", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    const tableHead = container.querySelector("thead");
+    expect(tableHead).not.toBeNull();
+
+    const estimateHeaderTrigger = within(tableHead as HTMLElement)
+      .getByText("Est. Value")
+      .closest("[tabindex='0']");
+    expect(estimateHeaderTrigger).not.toBeNull();
+
+    fireEvent.focus(estimateHeaderTrigger as HTMLElement);
+
+    expect(await screen.findAllByText(/Potential pipeline from estimates tied to the selected lead cohort/i)).not.toHaveLength(0);
+  });
+
   it("keeps shared row and metric hover state while moving on one table axis", async () => {
     const { container } = render(<Challenge />);
 

@@ -19,19 +19,37 @@ const CHALLENGE_UNASSIGNED_FUNNEL = "Unassigned";
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-function challengeJobAttributionWindowSql() {
-  const jobAttributionAt = sql`
+function challengeJobAttributionAtSql() {
+  return sql`
     COALESCE(
       j.st_job_origin_at,
       j.completed_at,
       CASE WHEN j.status IN ('pending', 'in_progress') THEN j.created_at ELSE NULL END
     )
   `;
+}
 
+function challengeLeadWindowSql(attributionAt: SQL) {
   return sql`
-    AND ${jobAttributionAt} >= lc.created_at - (${CHALLENGE_JOB_LEAD_GRACE_DAYS}::int * INTERVAL '1 day')
-    AND ${jobAttributionAt} <= lc.created_at + (${CHALLENGE_JOB_ATTRIBUTION_WINDOW_DAYS}::int * INTERVAL '1 day')
+    AND ${attributionAt} >= lc.created_at - (${CHALLENGE_JOB_LEAD_GRACE_DAYS}::int * INTERVAL '1 day')
+    AND ${attributionAt} <= lc.created_at + (${CHALLENGE_JOB_ATTRIBUTION_WINDOW_DAYS}::int * INTERVAL '1 day')
   `;
+}
+
+function challengeJobAttributionWindowSql() {
+  return challengeLeadWindowSql(challengeJobAttributionAtSql());
+}
+
+function challengeEstimateAttributionWindowSql() {
+  const estimateAttributionAt = sql`
+    COALESCE(
+      ${challengeJobAttributionAtSql()},
+      se.st_estimate_created_at,
+      se.sold_on
+    )
+  `;
+
+  return challengeLeadWindowSql(estimateAttributionAt);
 }
 
 function parseRepeatedStrings(raw: unknown): string[] {
@@ -805,7 +823,9 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
         FROM lead_cohort lc
         JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
         WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
 
         UNION ALL
 
@@ -818,6 +838,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
         WHERE se.lead_id IS NULL
           AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
       ),
       estimate_per_lead AS (
         SELECT run_id, unique_key, AVG(amount) AS avg_estimate
@@ -836,8 +857,10 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
         FROM lead_cohort lc
         JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
         WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
           AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+          ${challengeEstimateAttributionWindowSql()}
 
         UNION ALL
 
@@ -851,6 +874,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         WHERE se.lead_id IS NULL
           AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
           AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+          ${challengeEstimateAttributionWindowSql()}
       ),
       sold_per_job AS (
         SELECT run_id, sold_key, SUM(amount) AS sold_value
@@ -1126,7 +1150,9 @@ router.get("/dashboard/challenge", async (req, res) => {
         COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
       FROM lead_cohort lc
       JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+      LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
       WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+        ${challengeEstimateAttributionWindowSql()}
 
       UNION ALL
 
@@ -1139,6 +1165,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
       WHERE se.lead_id IS NULL
         AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+        ${challengeEstimateAttributionWindowSql()}
     ),
     estimate_per_lead AS (
       SELECT funnel, unique_key, AVG(amount) AS avg_estimate
@@ -1165,8 +1192,10 @@ router.get("/dashboard/challenge", async (req, res) => {
         COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
       FROM lead_cohort lc
       JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+      LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
       WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
         AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+        ${challengeEstimateAttributionWindowSql()}
 
       UNION ALL
 
@@ -1180,6 +1209,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       WHERE se.lead_id IS NULL
         AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
         AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+        ${challengeEstimateAttributionWindowSql()}
     ),
     sold_per_job AS (
       SELECT funnel, sold_key, SUM(amount) AS sold_value
