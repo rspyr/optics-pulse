@@ -2,7 +2,7 @@ import { db, tenantsTable, jobsTable, leadsTable, attributionEventsTable, campai
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { SERVICE_TITAN_JOB_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
+import { SERVICE_TITAN_JOB_STATUSES, SERVICE_TITAN_ESTIMATE_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -2977,7 +2977,7 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       ? (total: number) => { void updateSyncLogTotalRecords(syncLog.id, total); }
       : undefined;
     try {
-      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal, { status: null });
+      await fetchSoldEstimates(stConfig, modifiedOnOrAfter, processEstimateBatch, onEstimateTotal, { status: SERVICE_TITAN_ESTIMATE_STATUSES });
     } catch (innerErr) {
       if (!(innerErr instanceof ResyncCancelled)) throw innerErr;
     }
