@@ -70,6 +70,20 @@ vi.mock("@workspace/db", () => {
       "clicks",
       "conversions",
     ]),
+    campaignFunnelMappingsTable: tbl("campaign_funnel_mappings", [
+      "id",
+      "tenantId",
+      "campaignId",
+      "adSetExternalId",
+      "funnelTypeId",
+    ]),
+    campaignFunnelMatchCodesTable: tbl("campaign_funnel_match_codes", [
+      "id",
+      "funnelTypeId",
+      "code",
+    ]),
+    funnelTypesTable: tbl("funnel_types", ["id", "name", "slug"]),
+    tenantFunnelTypesTable: tbl("tenant_funnel_types", ["tenantId", "funnelTypeId"]),
     metaAdAccountsTable: tbl("meta_ad_accounts", [
       "tenantId",
       "accountId",
@@ -112,6 +126,7 @@ vi.mock("drizzle-orm", () => ({
   gte: vi.fn((...a: unknown[]) => a),
   lte: vi.fn((...a: unknown[]) => a),
   inArray: vi.fn((...a: unknown[]) => a),
+  asc: vi.fn((...a: unknown[]) => a),
   sql: Object.assign(vi.fn((...a: unknown[]) => a), {}),
 }));
 

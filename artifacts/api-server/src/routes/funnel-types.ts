@@ -136,21 +136,29 @@ router.get("/funnel-runs", async (req, res) => {
 
       UNION
 
-      SELECT rb.id AS run_id, cds.date AS activity_day
+      SELECT rb.id AS run_id, mads.date AS activity_day
       FROM run_base rb
-      JOIN campaign_funnel_mappings cfm
-        ON cfm.tenant_id = rb.tenant_id
-        AND cfm.funnel_type_id = rb.funnel_type_id
       JOIN campaigns c
-        ON c.id = cfm.campaign_id
-        AND c.tenant_id = cfm.tenant_id
+        ON c.tenant_id = rb.tenant_id
         AND c.platform = 'meta'
-      JOIN campaign_daily_stats cds
-        ON cds.campaign_id = c.id
-        AND cds.date >= rb.start_date
-        AND cds.date <= rb.effective_end_date
-      WHERE COALESCE(cds.spend, 0) > 0
-        OR COALESCE(cds.conversions, 0) > 0
+      JOIN meta_ad_daily_stats mads
+        ON mads.tenant_id = rb.tenant_id
+        AND mads.campaign_external_id = c.external_id
+        AND mads.date >= rb.start_date
+        AND mads.date <= rb.effective_end_date
+      LEFT JOIN campaign_funnel_mappings ad_cfm
+        ON ad_cfm.tenant_id = rb.tenant_id
+        AND ad_cfm.campaign_id = c.id
+        AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+      LEFT JOIN campaign_funnel_mappings campaign_cfm
+        ON campaign_cfm.tenant_id = rb.tenant_id
+        AND campaign_cfm.campaign_id = c.id
+        AND campaign_cfm.ad_set_external_id IS NULL
+      WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = rb.funnel_type_id
+        AND (
+          COALESCE(mads.spend, 0) > 0
+          OR COALESCE(mads.conversions, 0) > 0
+        )
     ),
     active_days AS (
       SELECT run_id, COUNT(DISTINCT activity_day)::int AS active_days
