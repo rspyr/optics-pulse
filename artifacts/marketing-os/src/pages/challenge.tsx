@@ -1,4 +1,4 @@
-import { type FocusEvent, type WheelEvent, useEffect, useMemo, useState } from "react";
+import { type FocusEvent, type WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LayoutGroup, motion } from "framer-motion";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
@@ -1405,6 +1405,7 @@ function ImpactTimeline({
   selectedStartDate: string;
   onSelectStartDate: (date: string) => void;
 }) {
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const grouped = useMemo(() => {
     const groups = new Map<string, ChallengeRunSummary[]>();
     const sortedRuns = [...runs]
@@ -1425,6 +1426,24 @@ function ImpactTimeline({
     ] as const);
   }, [runs]);
 
+  const timelineSignature = useMemo(
+    () => grouped.map(([month, monthRuns]) => `${month}:${monthRuns.map((run) => run.id).join(",")}`).join("|"),
+    [grouped],
+  );
+
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current;
+    if (!scrollContainer || !timelineSignature) return;
+
+    const scrollToNewest = () => {
+      scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
+    };
+
+    scrollToNewest();
+    const frame = window.requestAnimationFrame(scrollToNewest);
+    return () => window.cancelAnimationFrame(frame);
+  }, [timelineSignature]);
+
   if (grouped.length === 0) return null;
 
   return (
@@ -1436,7 +1455,11 @@ function ImpactTimeline({
         </div>
         <div className="text-xs text-muted-foreground">Selected {selectedStartDate}</div>
       </div>
-      <div className="flex flex-nowrap gap-3 overflow-x-auto overscroll-x-contain pb-2">
+      <div
+        ref={timelineScrollRef}
+        data-challenge-impact-timeline-scroll
+        className="flex flex-nowrap gap-3 overflow-x-auto overscroll-x-contain pb-2"
+      >
         {grouped.map(([month, monthRuns]) => (
           <div key={month} className="w-72 flex-none rounded-md border border-white/10 bg-background/40 p-3">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{month}</div>

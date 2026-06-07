@@ -273,6 +273,70 @@ describe("Challenge metric preferences", () => {
     });
   });
 
+  it("starts the impact campaign timeline scrolled to the newest month", async () => {
+    const user = userEvent.setup();
+    const originalTimeline = impactResponse.impactTimeline;
+    const originalScrollWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const originalScrollLeft = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollLeft");
+    const scrollPositions = new WeakMap<HTMLElement, number>();
+
+    const restoreProperty = (name: "scrollWidth" | "clientWidth" | "scrollLeft", descriptor: PropertyDescriptor | undefined) => {
+      if (descriptor) {
+        Object.defineProperty(HTMLElement.prototype, name, descriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, name);
+      }
+    };
+
+    impactResponse.impactTimeline = [
+      { id: 201, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "January Install", name: "January", startDate: "2026-01-10", endDate: "2026-02-09", status: "completed", activeDays: 30 },
+      { id: 202, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "March Install", name: "March", startDate: "2026-03-10", endDate: "2026-04-09", status: "completed", activeDays: 30 },
+      { id: 203, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "June Install", name: "June", startDate: "2026-06-10", endDate: "2026-07-09", status: "active", activeDays: 30 },
+    ];
+
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-challenge-impact-timeline-scroll") ? 1200 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-challenge-impact-timeline-scroll") ? 400 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollLeft", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return scrollPositions.get(this) ?? 0;
+      },
+      set(this: HTMLElement, value: number) {
+        scrollPositions.set(this, value);
+      },
+    });
+
+    try {
+      render(<Challenge />);
+
+      await screen.findByText("Comparison Breakdown");
+      await user.click(screen.getByRole("button", { name: "Meta Impact" }));
+      await screen.findByText("Campaign Start Timeline");
+
+      const timeline = document.querySelector("[data-challenge-impact-timeline-scroll]") as HTMLElement | null;
+      expect(timeline).not.toBeNull();
+      expect(screen.getByText("Jan 2026")).toBeInTheDocument();
+      expect(screen.getByText("Jun 2026")).toBeInTheDocument();
+      await waitFor(() => expect(timeline?.scrollLeft).toBe(800));
+    } finally {
+      impactResponse.impactTimeline = originalTimeline;
+      restoreProperty("scrollWidth", originalScrollWidth);
+      restoreProperty("clientWidth", originalClientWidth);
+      restoreProperty("scrollLeft", originalScrollLeft);
+    }
+  });
+
   it("shows attribution explainers for downstream value metrics", async () => {
     const { container } = render(<Challenge />);
 
