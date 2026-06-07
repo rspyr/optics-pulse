@@ -260,8 +260,8 @@ describe("Tenant-scoped fetches are gated on a tenant being picked", () => {
       expect(fetchLog.some((c) => c.url.endsWith("/api/tenants"))).toBe(true);
     });
 
-    // Pick a tenant — this is the same path the per-page <Select> and the
-    // header SCOPE chip both invoke via setSelectedTenantId.
+    // Pick a tenant — this is the same path the header Scope chip invokes via
+    // setSelectedTenantId.
     act(() => { auth!.setSelectedTenantId(11); });
 
     await waitFor(() => {

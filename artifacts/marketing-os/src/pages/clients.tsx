@@ -108,7 +108,7 @@ function ChangeLogPopover({ log, onClose }: { log: { title: string; description:
 }
 
 export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: number }) {
-  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter(tenantIdOverride);
+  const { effectiveTenantId, isAgency, tenantsLoading } = useTenantFilter(tenantIdOverride);
   // No silent fallback to a default tenant id — when the operator hasn't picked
   // a tenant (agency in "All Tenants" scope), we must NOT issue tenant-scoped
   // fetches that would otherwise leak data from an arbitrary tenant (the old
@@ -472,24 +472,6 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       {selectedChangeLog && (
         <ChangeLogPopover log={selectedChangeLog} onClose={() => setSelectedChangeLog(null)} />
       )}
-      {isAgency && tenants.length > 0 && !tenantIdOverride && (
-        <PremiumCard className="p-4">
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select value={String(localTenantId ?? "")} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
-              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {tenants.map(t => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </PremiumCard>
-      )}
-
       {!hasTenant && isAgency && tenantsLoading && (
         <PremiumCard className="p-6">
           <div className="animate-pulse space-y-3">
@@ -503,7 +485,7 @@ export default function ClientPortal({ tenantIdOverride }: { tenantIdOverride?: 
       {!hasTenant && !(isAgency && tenantsLoading) && (
         <PremiumCard className="p-6">
           <p className="text-sm text-white/50">
-            Select a tenant above (or in the header SCOPE chip) to view the Client Portal.
+            Use the top-right Scope selector to choose a tenant for the Client Portal.
           </p>
         </PremiumCard>
       )}

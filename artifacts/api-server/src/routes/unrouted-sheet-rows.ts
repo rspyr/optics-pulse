@@ -21,6 +21,7 @@ import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
+import { createLeadWithDedupe, findExistingLeadByIdentity, normalizeLeadIdentity } from "../services/lead-dedupe";
 
 const router: IRouter = Router();
 
@@ -266,31 +267,23 @@ async function routeRowToFunnel(
   }
 
   const data = (row.rowData || {}) as Record<string, string>;
-  const normalizedPhone = normalizePhone(data.phone || "");
+  const identity = normalizeLeadIdentity({ phone: data.phone, email: data.email });
 
-  if (normalizedPhone) {
-    const [dup] = await db
-      .select({ id: leadsTable.id })
-      .from(leadsTable)
-      .where(and(
-        eq(leadsTable.tenantId, row.tenantId),
-        phoneMatchesSql(leadsTable.phone, normalizedPhone),
-      ));
-    if (dup) {
-      try {
-        await handleResubmission(row.tenantId, dup.id, "Google Sheets");
-        const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
-        if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
-      } catch (err) {
-        console.warn("[UnroutedRoute] Resubmission failed for lead", dup.id, err);
-      }
-      const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
-      await db
-        .update(unroutedSheetRowsTable)
-        .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: dup.id, resolvedVia: "resubmission" })
-        .where(eq(unroutedSheetRowsTable.id, rowId));
-      return { ok: true, rowId, leadId: dup.id, resubmitted: true, valueMapUpdated };
+  const existingMatch = await findExistingLeadByIdentity(db, row.tenantId, identity);
+  if (existingMatch) {
+    try {
+      await handleResubmission(row.tenantId, existingMatch.lead.id, "Google Sheets");
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingMatch.lead.id));
+      if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
+    } catch (err) {
+      console.warn("[UnroutedRoute] Resubmission failed for lead", existingMatch.lead.id, err);
     }
+    const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
+    await db
+      .update(unroutedSheetRowsTable)
+      .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: existingMatch.lead.id, resolvedVia: "resubmission" })
+      .where(eq(unroutedSheetRowsTable.id, rowId));
+    return { ok: true, rowId, leadId: existingMatch.lead.id, resubmitted: true, valueMapUpdated };
   }
 
   const isPreBooked = isPreBookedCellValue(data.appointmentBooked);
@@ -306,32 +299,57 @@ async function routeRowToFunnel(
 
   const normalizedIntakeSource = await normalizeSource(row.tenantId, data.source || "Unknown");
 
-  const [lead] = await db.insert(leadsTable).values({
-    tenantId: row.tenantId,
-    firstName: data.firstName || "Unknown",
-    lastName: data.lastName || "",
-    phone: normalizedPhone || null,
-    email: data.email || null,
-    source: normalizedIntakeSource,
-    originalSource: normalizedIntakeSource,
-    serviceType: data.serviceType || null,
-    notes: data.notes || null,
-    address: data.address || null,
-    city: data.city || null,
-    state: data.state || null,
-    zip: data.zip || null,
-    appointmentDate: data.appointmentDate || null,
-    appointmentTime: data.appointmentTime || null,
-    addOns: data.addOns || null,
-    visibleAfter,
-    funnelId,
-    leadType: funnelAccess.name || null,
-    hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
-    dayInSequence: 1,
-    status: "new",
-    preBooked: effectivePreBooked,
-    contactPreferences: [],
-  }).returning();
+  const dedupeResult = await createLeadWithDedupe(
+    row.tenantId,
+    { phone: data.phone, email: data.email },
+    async (tx, lockedIdentity) => {
+      const [lead] = await tx.insert(leadsTable).values({
+        tenantId: row.tenantId,
+        firstName: data.firstName || "Unknown",
+        lastName: data.lastName || "",
+        phone: lockedIdentity.phone,
+        email: lockedIdentity.email,
+        source: normalizedIntakeSource,
+        originalSource: normalizedIntakeSource,
+        serviceType: data.serviceType || null,
+        notes: data.notes || null,
+        address: data.address || null,
+        city: data.city || null,
+        state: data.state || null,
+        zip: data.zip || null,
+        appointmentDate: data.appointmentDate || null,
+        appointmentTime: data.appointmentTime || null,
+        addOns: data.addOns || null,
+        visibleAfter,
+        funnelId,
+        leadType: funnelAccess.name || null,
+        hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
+        dayInSequence: 1,
+        status: "new",
+        preBooked: effectivePreBooked,
+        contactPreferences: [],
+      }).returning();
+      return lead;
+    },
+  );
+
+  if (dedupeResult.deduplicated) {
+    try {
+      await handleResubmission(row.tenantId, dedupeResult.lead.id, "Google Sheets");
+      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dedupeResult.lead.id));
+      if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
+    } catch (err) {
+      console.warn("[UnroutedRoute] Resubmission failed for lead", dedupeResult.lead.id, err);
+    }
+    const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
+    await db
+      .update(unroutedSheetRowsTable)
+      .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: dedupeResult.lead.id, resolvedVia: "resubmission" })
+      .where(eq(unroutedSheetRowsTable.id, rowId));
+    return { ok: true, rowId, leadId: dedupeResult.lead.id, resubmitted: true, valueMapUpdated };
+  }
+
+  const lead = dedupeResult.lead;
 
   if (lead) {
     const { recordLeadStatusChange } = await import("../services/lead-status-history");

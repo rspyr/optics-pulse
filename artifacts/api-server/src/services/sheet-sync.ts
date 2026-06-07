@@ -12,6 +12,7 @@ import { normalizePhone } from "../lib/phone-utils";
 import { emitSheetDriftNotification, emitSheetSyncStalledNotification } from "./notifications";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
 import { handleResubmission } from "./lead-resubmission";
+import { createLeadWithDedupe, normalizeLeadIdentity, type NormalizedLeadIdentity } from "./lead-dedupe";
 
 const DRIFT_ALERT_THRESHOLD_MS = 10 * 60 * 1000;
 
@@ -440,17 +441,21 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
     return 0;
   }
 
-  const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
+  const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone, email: leadsTable.email })
     .from(leadsTable)
     .where(eq(leadsTable.tenantId, config.tenantId));
-  const existingPhones = new Set<string>();
   const leadIdByPhone = new Map<string, number>();
+  const leadIdByEmail = new Map<string, number>();
+  const registerIdentity = (leadId: number, identity: NormalizedLeadIdentity) => {
+    if (identity.phone) leadIdByPhone.set(identity.phone, leadId);
+    if (identity.email) leadIdByEmail.set(identity.email, leadId);
+  };
+  const findKnownLeadId = (identity: NormalizedLeadIdentity): number | null =>
+    (identity.phone ? leadIdByPhone.get(identity.phone) : undefined)
+    ?? (identity.email ? leadIdByEmail.get(identity.email) : undefined)
+    ?? null;
   for (const l of existingLeads) {
-    if (l.phone) {
-      const np = normalizePhone(l.phone);
-      existingPhones.add(np);
-      leadIdByPhone.set(np, l.id);
-    }
+    registerIdentity(l.id, normalizeLeadIdentity({ phone: l.phone, email: l.email }));
   }
 
   const funnelIds = new Set<number>();
@@ -468,24 +473,26 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
   let imported = 0;
   const newLeads: (typeof leadsTable.$inferSelect)[] = [];
-  // Repeat rows (phone already has a lead) are deferred and processed per phone
-  // in ascending submission order AFTER the main loop, so the latest booking is
-  // the one that lands on the lead even if rows arrive out of timestamp order.
-  const deferredResub = new Map<string, OrderedRow[]>();
+  // Repeat rows (phone or email already has a lead) are deferred and processed
+  // per existing lead in ascending submission order AFTER the main loop, so the
+  // latest booking is the one that lands on the lead even if rows arrive out of
+  // timestamp order.
+  const deferredResub = new Map<number, OrderedRow[]>();
 
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
     const row = rows[rowIndex];
-    const normalizedPhone = normalizePhone(row.phone || "");
+    const identity = normalizeLeadIdentity({ phone: row.phone, email: row.email });
+    const existingLeadId = findKnownLeadId(identity);
     const nameFields = [row.firstName, row.lastName, row.fullName].filter(Boolean).join(" ").toLowerCase();
-    if (normalizedPhone && existingPhones.has(normalizedPhone)) {
-      // A brand-new sheet row for a phone that already exists is a repeat
-      // submission. Defer it (the watermark advances past this row, so it never
-      // re-fires on later sync cycles) to capture this submission's appointment
-      // + source rather than silently dropping it.
+    if (existingLeadId) {
+      // A brand-new sheet row for an existing contact is a repeat submission.
+      // Defer it (the watermark advances past this row, so it never re-fires on
+      // later sync cycles) to capture this submission's appointment + source
+      // rather than silently dropping it.
       if (!nameFields.includes("test")) {
-        const list = deferredResub.get(normalizedPhone) ?? [];
+        const list = deferredResub.get(existingLeadId) ?? [];
         list.push({ row, index: rowIndex, ms: parseSubmissionMs(row.dateTime) });
-        deferredResub.set(normalizedPhone, list);
+        deferredResub.set(existingLeadId, list);
       }
       continue;
     }
@@ -512,8 +519,6 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
       continue;
     }
 
-    if (normalizedPhone) existingPhones.add(normalizedPhone);
-
     const isPreBooked = isPreBookedCellValue(row.appointmentBooked);
     const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
     const effectivePreBooked = isPreBooked || hasApptDetails;
@@ -526,37 +531,54 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
       : null;
 
     const normalizedIntakeSource = await normalizeSource(config.tenantId, row.source || "Unknown");
-    const [lead] = await db.insert(leadsTable).values({
-      tenantId: config.tenantId,
-      firstName: row.firstName || "Unknown",
-      lastName: row.lastName || "",
-      phone: normalizedPhone || null,
-      email: row.email || null,
-      source: normalizedIntakeSource,
-      originalSource: normalizedIntakeSource,
-      serviceType: row.serviceType || null,
-      notes: row.notes || null,
-      address: row.address || null,
-      city: row.city || null,
-      state: row.state || null,
-      zip: row.zip || null,
-      appointmentDate: row.appointmentDate || null,
-      appointmentTime: row.appointmentTime || null,
-      addOns: row.addOns || null,
-      visibleAfter,
-      funnelId: resolvedFunnelId,
-      leadType: funnelName || null,
-      hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
-      dayInSequence: 1,
-      status: "new",
-      preBooked: effectivePreBooked,
-      contactPreferences: [],
-    }).returning();
+    const dedupeResult = await createLeadWithDedupe(
+      config.tenantId,
+      { phone: row.phone, email: row.email },
+      async (tx, lockedIdentity) => {
+        const [lead] = await tx.insert(leadsTable).values({
+          tenantId: config.tenantId,
+          firstName: row.firstName || "Unknown",
+          lastName: row.lastName || "",
+          phone: lockedIdentity.phone,
+          email: lockedIdentity.email,
+          source: normalizedIntakeSource,
+          originalSource: normalizedIntakeSource,
+          serviceType: row.serviceType || null,
+          notes: row.notes || null,
+          address: row.address || null,
+          city: row.city || null,
+          state: row.state || null,
+          zip: row.zip || null,
+          appointmentDate: row.appointmentDate || null,
+          appointmentTime: row.appointmentTime || null,
+          addOns: row.addOns || null,
+          visibleAfter,
+          funnelId: resolvedFunnelId,
+          leadType: funnelName || null,
+          hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
+          dayInSequence: 1,
+          status: "new",
+          preBooked: effectivePreBooked,
+          contactPreferences: [],
+        }).returning();
+        return lead;
+      },
+    );
+
+    if (dedupeResult.deduplicated) {
+      registerIdentity(dedupeResult.lead.id, identity);
+      const list = deferredResub.get(dedupeResult.lead.id) ?? [];
+      list.push({ row, index: rowIndex, ms: parseSubmissionMs(row.dateTime) });
+      deferredResub.set(dedupeResult.lead.id, list);
+      continue;
+    }
+
+    const lead = dedupeResult.lead;
 
     if (lead) {
-      // Register so a later repeat row for the same phone in this same batch
+      // Register so a later repeat row for the same contact in this same batch
       // routes through resubmission instead of trying to create a duplicate.
-      if (normalizedPhone) leadIdByPhone.set(normalizedPhone, lead.id);
+      registerIdentity(lead.id, identity);
       const { recordLeadStatusChange } = await import("./lead-status-history");
       await recordLeadStatusChange({
         leadId: lead.id,
@@ -607,9 +629,7 @@ export async function syncSingleSheet(config: typeof googleSheetConfigsTable.$in
 
   // Process deferred repeat submissions: ascending submission order so the
   // last (latest) call is the one that adopts the appointment onto the lead.
-  for (const [normalizedPhone, list] of deferredResub) {
-    const existingLeadId = leadIdByPhone.get(normalizedPhone);
-    if (!existingLeadId) continue;
+  for (const [existingLeadId, list] of deferredResub) {
     // Ascending by submission order (same comparator as backfill) so the last
     // call is the latest submission and its booking is the one adopted.
     list.sort((a, b) => (rowIsLater(a, b) ? 1 : -1));

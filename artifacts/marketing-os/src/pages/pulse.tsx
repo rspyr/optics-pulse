@@ -3070,7 +3070,7 @@ function AddLeadModal({
 }
 
 export default function Leads() {
-  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter();
+  const { tenants, effectiveTenantId, isAgency, tenantsLoading } = useTenantFilter();
   const { user } = useAuth();
   const isAdmin = user?.role === "client_admin" || user?.role === "super_admin" || user?.role === "agency_user";
   const isClientUser = user?.role === "client_user";
@@ -3657,23 +3657,7 @@ export default function Leads() {
         </div>
       </header>
 
-      {isAgency && tenants.length > 0 && (
-        <PremiumCard className="p-4 mb-6">
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select value={localTenantId != null ? String(localTenantId) : undefined} onValueChange={v => { const n = parseInt(v); if (!isNaN(n)) setSelectedTenantId(n); }}>
-              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
-                <SelectValue placeholder="Select tenant…" />
-              </SelectTrigger>
-              <SelectContent>
-                {tenants.map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        </PremiumCard>
-      )}
-
-      {isAgency && !localTenantId && tenantsLoading && (
+      {isAgency && !effectiveTenantId && tenantsLoading && (
         <PremiumCard className="p-6 mb-6">
           <div className="animate-pulse space-y-3">
             <div className="h-4 w-1/3 bg-white/10 rounded" />
@@ -3683,10 +3667,10 @@ export default function Leads() {
         </PremiumCard>
       )}
 
-      {isAgency && !localTenantId && !tenantsLoading && (
+      {isAgency && !effectiveTenantId && !tenantsLoading && (
         <PremiumCard className="p-6 mb-6 text-center">
           <p className="text-sm text-white/60">
-            Select a tenant above (or in the header SCOPE chip) to view the Pulse queue.
+            Use the top-right Scope selector to choose a tenant for the Pulse queue.
           </p>
         </PremiumCard>
       )}
