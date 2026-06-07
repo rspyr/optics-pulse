@@ -1407,7 +1407,11 @@ function ImpactTimeline({
 }) {
   const grouped = useMemo(() => {
     const groups = new Map<string, ChallengeRunSummary[]>();
-    for (const run of runs) {
+    const sortedRuns = [...runs]
+      .filter((run) => Boolean(run.startDate))
+      .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.funnelName.localeCompare(b.funnelName));
+
+    for (const run of sortedRuns) {
       if (!run.startDate) continue;
       const date = new Date(`${run.startDate}T00:00:00Z`);
       const key = date.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
@@ -1415,7 +1419,10 @@ function ImpactTimeline({
       existing.push(run);
       groups.set(key, existing);
     }
-    return [...groups.entries()].slice(0, 18);
+    return [...groups.entries()].map(([month, monthRuns]) => [
+      month,
+      [...monthRuns].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.funnelName.localeCompare(b.funnelName)),
+    ] as const);
   }, [runs]);
 
   if (grouped.length === 0) return null;
@@ -1429,19 +1436,19 @@ function ImpactTimeline({
         </div>
         <div className="text-xs text-muted-foreground">Selected {selectedStartDate}</div>
       </div>
-      <div className="flex gap-3 overflow-x-auto pb-1">
+      <div className="flex flex-nowrap gap-3 overflow-x-auto overscroll-x-contain pb-2">
         {grouped.map(([month, monthRuns]) => (
-          <div key={month} className="min-w-52 rounded-md border border-white/10 bg-background/40 p-3">
+          <div key={month} className="w-72 flex-none rounded-md border border-white/10 bg-background/40 p-3">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{month}</div>
-            <div className="space-y-2">
-              {monthRuns.slice(0, 5).map((run) => {
+            <div className="max-h-[17rem] space-y-2 overflow-y-auto overscroll-y-contain pr-1">
+              {monthRuns.map((run) => {
                 const isSelected = run.startDate === selectedStartDate;
                 return (
                   <button
                     key={run.id}
                     onClick={() => onSelectStartDate(run.startDate)}
                     className={cn(
-                      "block w-full rounded-md border px-2 py-2 text-left transition-colors",
+                      "block min-h-[4.75rem] w-full rounded-md border px-2 py-2 text-left transition-colors",
                       isSelected
                         ? "border-primary bg-primary text-[#C0D4E6]"
                         : "border-white/10 bg-white/[0.03] text-white hover:border-primary/50 hover:bg-white/[0.06]",
