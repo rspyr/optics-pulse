@@ -14,6 +14,8 @@ vi.mock("@/components/auth-context", () => ({
 }));
 
 const challengeResponse: any = {
+  viewMode: "funnel",
+  attributionModel: "strict",
   compareMode: "client_funnels",
   dayRange: { startDay: 1, endDay: 30, label: "Days 1-30" },
   runRule: "newest",
@@ -22,7 +24,8 @@ const challengeResponse: any = {
   selectedFunnelTypeIds: [],
   availableClients: [{ id: 1, name: "Client A", runCount: 2 }],
   availableFunnels: [{ id: 10, name: "Install", runCount: 1 }, { id: 11, name: "Repair", runCount: 1 }],
-  selectedRuns: [],
+  selectedRuns: [{ id: 101, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "Install", name: "Spring run", startDate: "2026-03-01", endDate: "2026-03-30", status: "completed", activeDays: 30 }],
+  impactTimeline: [{ id: 101, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "Install", name: "Spring run", startDate: "2026-03-01", endDate: "2026-03-30", status: "completed", activeDays: 30 }],
   allocation: {
     method: "meta_campaign_adset_funnel_mapping",
     note: "Allocation note",
@@ -111,6 +114,34 @@ const challengeResponse: any = {
 };
 challengeResponse.rows = challengeResponse.byFunnel;
 
+const impactResponse: any = {
+  ...challengeResponse,
+  viewMode: "impact",
+  attributionModel: "strict",
+  dateRange: { startDate: "2026-03-01", endDate: "2026-06-07" },
+  dayRange: { startDay: 1, endDay: 30, label: "Since 2026-03-01" },
+  allocation: {
+    method: "meta_impact_outcome_window",
+    note: "Meta Impact allocation note",
+  },
+  summary: {
+    ...challengeResponse.summary,
+    funnel: "Meta Impact",
+    rowKey: "impact:meta",
+    rowLabel: "Meta Impact",
+  },
+  byFunnel: [
+    {
+      ...challengeResponse.byFunnel[0],
+      funnel: "Meta Impact",
+      rowKey: "impact:meta",
+      rowLabel: "Meta Impact",
+      funnelName: "Meta Impact",
+    },
+  ],
+};
+impactResponse.rows = impactResponse.byFunnel;
+
 function installLocalStorageShim() {
   const values = new Map<string, string>();
   const storage = {
@@ -150,7 +181,7 @@ describe("Challenge metric preferences", () => {
       if (url.includes("/api/dashboard/challenge")) {
         return {
           ok: true,
-          json: async () => challengeResponse,
+          json: async () => url.includes("viewMode=impact") ? impactResponse : challengeResponse,
         } as Response;
       }
       return { ok: true, json: async () => ({}) } as Response;
@@ -203,6 +234,124 @@ describe("Challenge metric preferences", () => {
     expect(screen.getByRole("menuitemradio", { name: "Newest run" })).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByRole("menuitemradio", { name: "Avg all runs" }));
     expect(screen.getByRole("menuitemradio", { name: "Avg all runs" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("requests weighted attribution when the weighted model is selected", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Weighted" }));
+
+    await waitFor(() => {
+      const urls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
+      expect(urls.some((url) => url.includes("/api/dashboard/challenge/runs") && url.includes("attributionModel=weighted"))).toBe(true);
+    });
+  });
+
+  it("requests Meta Impact mode with the selected impact date range", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Meta Impact" }));
+
+    expect(screen.getByLabelText("Impact start date")).toBeInTheDocument();
+    expect(screen.getByLabelText("Impact end date")).toBeInTheDocument();
+    await waitFor(() => {
+      const urls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
+      expect(urls.some((url) =>
+        url.includes("/api/dashboard/challenge/runs")
+        && url.includes("viewMode=impact")
+        && url.includes("startDate=")
+        && url.includes("endDate=")
+      )).toBe(true);
+    });
+  });
+
+  it("starts the impact campaign timeline scrolled to the newest month", async () => {
+    const user = userEvent.setup();
+    const originalTimeline = impactResponse.impactTimeline;
+    const originalScrollWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const originalScrollLeft = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollLeft");
+    const scrollPositions = new WeakMap<HTMLElement, number>();
+
+    const restoreProperty = (name: "scrollWidth" | "clientWidth" | "scrollLeft", descriptor: PropertyDescriptor | undefined) => {
+      if (descriptor) {
+        Object.defineProperty(HTMLElement.prototype, name, descriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, name);
+      }
+    };
+
+    impactResponse.impactTimeline = [
+      { id: 201, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "January Install", name: "January", startDate: "2026-01-10", endDate: "2026-02-09", status: "completed", activeDays: 30 },
+      { id: 202, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "March Install", name: "March", startDate: "2026-03-10", endDate: "2026-04-09", status: "completed", activeDays: 30 },
+      { id: 203, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "June Install", name: "June", startDate: "2026-06-10", endDate: "2026-07-09", status: "active", activeDays: 30 },
+    ];
+
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-challenge-impact-timeline-scroll") ? 1200 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-challenge-impact-timeline-scroll") ? 400 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollLeft", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return scrollPositions.get(this) ?? 0;
+      },
+      set(this: HTMLElement, value: number) {
+        scrollPositions.set(this, value);
+      },
+    });
+
+    try {
+      render(<Challenge />);
+
+      await screen.findByText("Comparison Breakdown");
+      await user.click(screen.getByRole("button", { name: "Meta Impact" }));
+      await screen.findByText("Campaign Start Timeline");
+
+      const timeline = document.querySelector("[data-challenge-impact-timeline-scroll]") as HTMLElement | null;
+      expect(timeline).not.toBeNull();
+      expect(screen.getByText("Jan 2026")).toBeInTheDocument();
+      expect(screen.getByText("Jun 2026")).toBeInTheDocument();
+      await waitFor(() => expect(timeline?.scrollLeft).toBe(800));
+    } finally {
+      impactResponse.impactTimeline = originalTimeline;
+      restoreProperty("scrollWidth", originalScrollWidth);
+      restoreProperty("clientWidth", originalClientWidth);
+      restoreProperty("scrollLeft", originalScrollLeft);
+    }
+  });
+
+  it("shows attribution explainers for downstream value metrics", async () => {
+    const { container } = render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    const tableHead = container.querySelector("thead");
+    expect(tableHead).not.toBeNull();
+
+    const estimateHeaderTrigger = within(tableHead as HTMLElement)
+      .getByText("Est. Value")
+      .closest("[tabindex='0']");
+    expect(estimateHeaderTrigger).not.toBeNull();
+
+    fireEvent.focus(estimateHeaderTrigger as HTMLElement);
+
+    expect(await screen.findAllByText(/Potential pipeline from estimates tied to the selected lead cohort/i)).not.toHaveLength(0);
   });
 
   it("keeps shared row and metric hover state while moving on one table axis", async () => {

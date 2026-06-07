@@ -1,4 +1,4 @@
-import { type FocusEvent, type WheelEvent, useEffect, useMemo, useState } from "react";
+import { type FocusEvent, type WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LayoutGroup, motion } from "framer-motion";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
@@ -6,6 +6,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -31,6 +32,7 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  Info,
   Layers3,
   RotateCcw,
   SlidersHorizontal,
@@ -48,8 +50,24 @@ const CHALLENGE_PREFETCH_DELAY_MS = 500;
 const CHALLENGE_PREFETCH_LIMIT = 4;
 
 type CompareMode = "client_funnels" | "funnel_clients";
+type ReportMode = "funnel" | "impact";
+type AttributionModel = "strict" | "weighted";
 type RunRule = "newest" | "oldest" | "best" | "average";
 type DayWindow = "days30" | "days60" | "days70" | "custom";
+
+function formatDateInput(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function getDefaultImpactStartDate(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 90);
+  return formatDateInput(date);
+}
+
+function getTodayDate(): string {
+  return formatDateInput(new Date());
+}
 
 function getDayWindow(window: DayWindow, customStart: number, customEnd: number): { startDay: number; endDay: number; label: string } {
   if (window === "days60") return { startDay: 1, endDay: 60, label: "Days 1-60" };
@@ -97,8 +115,24 @@ type ChallengeMetric = {
   averageClosedJobValue: number;
 };
 
+type ChallengeRunSummary = {
+  id: number;
+  tenantId: number;
+  tenantName: string;
+  funnelTypeId: number;
+  funnelName: string;
+  name: string;
+  startDate: string;
+  endDate: string | null;
+  status: string;
+  activeDays: number;
+};
+
 type ChallengeResponse = {
+  viewMode?: ReportMode;
+  attributionModel?: AttributionModel;
   compareMode: CompareMode;
+  dateRange?: { startDate: string; endDate: string };
   dayRange: { startDay: number; endDay: number; label: string };
   runRule: RunRule;
   bestBy: MetricKey;
@@ -106,23 +140,17 @@ type ChallengeResponse = {
   selectedFunnelTypeIds: number[];
   availableClients: Array<{ id: number; name: string; runCount: number }>;
   availableFunnels: Array<{ id: number; name: string; runCount: number }>;
-  selectedRuns: Array<{
-    id: number;
-    tenantId: number;
-    tenantName: string;
-    funnelTypeId: number;
-    funnelName: string;
-    name: string;
-    startDate: string;
-    endDate: string | null;
-    status: string;
-    activeDays: number;
-  }>;
+  selectedRuns: ChallengeRunSummary[];
+  impactTimeline?: ChallengeRunSummary[];
   summary: ChallengeMetric;
   byFunnel: ChallengeMetric[];
   rows: ChallengeMetric[];
   allocation: {
-    method: "meta_campaign_funnel_mapping" | "meta_campaign_adset_funnel_mapping";
+    method:
+      | "meta_campaign_funnel_mapping"
+      | "meta_campaign_adset_funnel_mapping"
+      | "weighted_recency_funnel_attribution"
+      | "meta_impact_outcome_window";
     note: string;
   };
 };
@@ -152,6 +180,7 @@ const METRICS: Array<{
   tone: string;
   format: (value: number) => string;
   sub?: (metric: ChallengeMetric) => string;
+  explainer?: string;
 }> = [
   {
     key: "activeDays",
@@ -175,11 +204,44 @@ const METRICS: Array<{
     tone: "text-red-300",
     format: formatPercent,
     sub: (m) => `${formatNumber(m.cancelledJobs)} cancelled / ${formatNumber(m.totalJobs)} jobs`,
+    explainer: "Cancelled downstream jobs divided by all downstream jobs from leads received in the selected run window. Jobs must originate within 90 days of the lead, with 1 day of timing grace.",
   },
-  { key: "totalEstimateValue", label: "Total Estimate Value", shortLabel: "Est. Value", icon: DollarSign, tone: "text-amber-300", format: formatCurrency },
-  { key: "totalSoldClosedValue", label: "Total Sold/Closed Value", shortLabel: "Sold Value", icon: DollarSign, tone: "text-emerald-300", format: formatCurrency },
-  { key: "roasPotential", label: "ROAS Potential", shortLabel: "ROAS Pot.", icon: TrendingUp, tone: "text-amber-300", format: formatMultiplier },
-  { key: "roasSold", label: "ROAS Sold", shortLabel: "ROAS Sold", icon: TrendingUp, tone: "text-emerald-300", format: formatMultiplier },
+  {
+    key: "totalEstimateValue",
+    label: "Total Estimate Value",
+    shortLabel: "Est. Value",
+    icon: DollarSign,
+    tone: "text-amber-300",
+    format: formatCurrency,
+    explainer: "Potential pipeline from estimates tied to the selected lead cohort. Estimate/job origin must fall within 90 days of the lead; multiple options for one lead are averaged before summing.",
+  },
+  {
+    key: "totalSoldClosedValue",
+    label: "Total Sold/Closed Value",
+    shortLabel: "Sold Value",
+    icon: DollarSign,
+    tone: "text-emerald-300",
+    format: formatCurrency,
+    explainer: "Sold estimate value from the selected lead cohort. The sale can close later, but the estimate or job must originate inside the downstream attribution window.",
+  },
+  {
+    key: "roasPotential",
+    label: "ROAS Potential",
+    shortLabel: "ROAS Pot.",
+    icon: TrendingUp,
+    tone: "text-amber-300",
+    format: formatMultiplier,
+    explainer: "Estimate value divided by ad spend for the selected run window. Estimate value uses the downstream lead-cohort attribution rule.",
+  },
+  {
+    key: "roasSold",
+    label: "ROAS Sold",
+    shortLabel: "ROAS Sold",
+    icon: TrendingUp,
+    tone: "text-emerald-300",
+    format: formatMultiplier,
+    explainer: "Sold value divided by ad spend for the selected run window. Sold value is credited only when the originating estimate/job belongs to the selected lead cohort.",
+  },
   { key: "totalSpend", label: "Total Spend", shortLabel: "Spend", icon: DollarSign, tone: "text-sky-300", format: formatCurrency },
   {
     key: "averageCostPerInHomeAppointment",
@@ -189,6 +251,7 @@ const METRICS: Array<{
     tone: "text-violet-300",
     format: formatCurrency,
     sub: (m) => `${formatNumber(m.completedEstimateJobs)} completed estimate jobs`,
+    explainer: "Ad spend divided by completed downstream jobs that have an estimate. Jobs must originate within the selected lead cohort's attribution window.",
   },
   {
     key: "costToAcquireCustomer",
@@ -198,6 +261,7 @@ const METRICS: Array<{
     tone: "text-rose-300",
     format: formatCurrency,
     sub: (m) => `${formatNumber(m.soldJobs)} sold jobs`,
+    explainer: "Ad spend divided by sold downstream estimates/jobs from the selected lead cohort. Repeat-customer sales outside the attribution window are excluded.",
   },
   {
     key: "averageClosedJobValue",
@@ -206,6 +270,7 @@ const METRICS: Array<{
     icon: DollarSign,
     tone: "text-emerald-300",
     format: formatCurrency,
+    explainer: "Sold value divided by sold downstream jobs/estimates credited to the selected lead cohort.",
   },
 ];
 
@@ -233,8 +298,11 @@ const DEFAULT_METRIC_PREFERENCES: MetricPreferences = {
 };
 
 type ChallengeQueryOptions = {
+  reportMode: ReportMode;
+  attributionModel: AttributionModel;
   compareMode: CompareMode;
   dayRange: { startDay: number; endDay: number };
+  impactDateRange: { startDate: string; endDate: string };
   runRule: RunRule;
   bestBy: MetricKey;
   effectiveTenantId: number | null | undefined;
@@ -264,12 +332,18 @@ function sameIds(a: number[], b: number[]): boolean {
 
 function buildChallengeQueryDescriptor(options: ChallengeQueryOptions): ChallengeQueryDescriptor {
   const params = new URLSearchParams({
+    viewMode: options.reportMode,
+    attributionModel: options.attributionModel,
     mode: options.compareMode,
     dayStart: String(options.dayRange.startDay),
     dayEnd: String(options.dayRange.endDay),
     runRule: options.runRule,
     bestBy: options.bestBy,
   });
+  if (options.reportMode === "impact") {
+    params.set("startDate", options.impactDateRange.startDate);
+    params.set("endDate", options.impactDateRange.endDate);
+  }
   if (options.compareMode === "client_funnels" && options.effectiveTenantId != null) {
     params.set("tenantId", String(options.effectiveTenantId));
   }
@@ -416,10 +490,14 @@ function writeMetricPreferences(preferences: MetricPreferences) {
 export default function Challenge() {
   const { effectiveTenantId } = useTenantFilter();
   const { user } = useAuth();
+  const [reportMode, setReportMode] = useState<ReportMode>("funnel");
+  const [attributionModel, setAttributionModel] = useState<AttributionModel>("strict");
   const [compareMode, setCompareMode] = useState<CompareMode>("client_funnels");
   const [dayWindow, setDayWindow] = useState<DayWindow>("days30");
   const [customStartDay, setCustomStartDay] = useState(1);
   const [customEndDay, setCustomEndDay] = useState(30);
+  const [impactStartDate, setImpactStartDate] = useState(getDefaultImpactStartDate);
+  const [impactEndDate, setImpactEndDate] = useState(getTodayDate);
   const [runRule, setRunRule] = useState<RunRule>("newest");
   const [bestBy, setBestBy] = useState<MetricKey>("roasSold");
   const [selectedFunnelTypeIds, setSelectedFunnelTypeIds] = useState<number[]>([]);
@@ -436,8 +514,11 @@ export default function Challenge() {
   const dayRange = useMemo(() => getDayWindow(dayWindow, customStartDay, customEndDay), [dayWindow, customStartDay, customEndDay]);
   const challengeQuery = useMemo(
     () => buildChallengeQueryDescriptor({
+      reportMode,
+      attributionModel,
       compareMode,
       dayRange,
+      impactDateRange: { startDate: impactStartDate, endDate: impactEndDate },
       runRule,
       bestBy,
       effectiveTenantId,
@@ -445,9 +526,13 @@ export default function Challenge() {
       selectedClientTenantIds,
     }),
     [
+      reportMode,
+      attributionModel,
       compareMode,
       dayRange.startDay,
       dayRange.endDay,
+      impactStartDate,
+      impactEndDate,
       runRule,
       bestBy,
       effectiveTenantId,
@@ -554,12 +639,16 @@ export default function Challenge() {
 
   useEffect(() => {
     if (!displayData) return;
+    if (reportMode === "impact") return;
 
     const timer = window.setTimeout(() => {
       const descriptors = new Map<string, ChallengeQueryDescriptor>();
       const baseOptions: ChallengeQueryOptions = {
+        reportMode,
+        attributionModel,
         compareMode,
         dayRange,
+        impactDateRange: { startDate: impactStartDate, endDate: impactEndDate },
         runRule,
         bestBy,
         effectiveTenantId,
@@ -609,10 +698,14 @@ export default function Challenge() {
     return () => window.clearTimeout(timer);
   }, [
     displayData,
+    reportMode,
+    attributionModel,
     challengeQuery.cacheKey,
     compareMode,
     dayRange.startDay,
     dayRange.endDay,
+    impactStartDate,
+    impactEndDate,
     runRule,
     bestBy,
     effectiveTenantId,
@@ -646,7 +739,9 @@ export default function Challenge() {
         ? "Avg all runs"
         : "Newest run";
   const visibleRows = displayData?.rows ?? displayData?.byFunnel ?? [];
-  const primaryColumnLabel = compareMode === "funnel_clients" ? "Client" : "Funnel";
+  const primaryColumnLabel = reportMode === "impact" ? "View" : compareMode === "funnel_clients" ? "Client" : "Funnel";
+  const impactTimeline = displayData?.impactTimeline ?? displayData?.selectedRuns ?? [];
+  const metricContext = { viewMode: reportMode, attributionModel };
 
   function toggleFunnelType(id: number) {
     setSelectedFunnelTypeIds((current) =>
@@ -719,16 +814,45 @@ export default function Challenge() {
   }
 
   return (
+    <TooltipProvider delayDuration={120}>
     <div className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <GradientHeading className="mb-2 text-3xl md:text-4xl">The Challenge</GradientHeading>
           <p className="font-sub text-sm tracking-wide text-muted-foreground">
-            ADS PERFORMANCE BY FUNNEL DAY COHORT - {dayRange.label.toUpperCase()}
+            {reportMode === "impact"
+              ? `META IMPACT SINCE ${impactStartDate}`
+              : `ADS PERFORMANCE BY FUNNEL DAY COHORT - ${dayRange.label.toUpperCase()}`}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-white/10 bg-card/60 p-1">
+            {([
+              ["funnel", "Funnel Mode"],
+              ["impact", "Meta Impact"],
+            ] as Array<[ReportMode, string]>).map(([mode, text]) => (
+              <button
+                key={mode}
+                onClick={() => {
+                  setReportMode(mode);
+                  setBreakdownHover(null);
+                  if (mode === "impact") {
+                    setSelectedFunnelTypeIds([]);
+                  }
+                }}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm font-medium transition-all",
+                  reportMode === mode ? "bg-primary text-[#C0D4E6]" : "text-muted-foreground hover:text-white",
+                )}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+
+          {reportMode === "funnel" ? (
+          <>
           <div className="inline-flex rounded-lg border border-white/10 bg-card/60 p-1">
             {([
               ["client_funnels", "Client Funnels"],
@@ -752,6 +876,27 @@ export default function Challenge() {
                 className={cn(
                   "rounded-md px-3 py-2 text-sm font-medium transition-all",
                   compareMode === mode ? "bg-primary text-[#C0D4E6]" : "text-muted-foreground hover:text-white",
+                )}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+
+          <div className="inline-flex rounded-lg border border-white/10 bg-card/60 p-1">
+            {([
+              ["strict", "Strict"],
+              ["weighted", "Weighted"],
+            ] as Array<[AttributionModel, string]>).map(([model, text]) => (
+              <button
+                key={model}
+                onClick={() => {
+                  setAttributionModel(model);
+                  setBreakdownHover(null);
+                }}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm font-medium transition-all",
+                  attributionModel === model ? "bg-primary text-[#C0D4E6]" : "text-muted-foreground hover:text-white",
                 )}
               >
                 {text}
@@ -896,6 +1041,29 @@ export default function Challenge() {
               />
             </div>
           )}
+          </>
+          ) : (
+            <div className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-card/60 px-2 py-1.5">
+              <span className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Impact window</span>
+              <input
+                type="date"
+                value={impactStartDate}
+                max={impactEndDate}
+                onChange={event => setImpactStartDate(event.target.value)}
+                className="h-9 rounded-md border border-white/10 bg-background px-2 text-sm text-white"
+                aria-label="Impact start date"
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <input
+                type="date"
+                value={impactEndDate}
+                min={impactStartDate}
+                onChange={event => setImpactEndDate(event.target.value)}
+                className="h-9 rounded-md border border-white/10 bg-background px-2 text-sm text-white"
+                aria-label="Impact end date"
+              />
+            </div>
+          )}
 
           {isAdmin && (
             <MetricSettingsDropdown
@@ -933,9 +1101,17 @@ export default function Challenge() {
           ) : (
             <section className="relative grid grid-cols-1 gap-4 overflow-visible sm:grid-cols-2 xl:grid-cols-4">
               {visibleMetrics.map((metric) => (
-                <MetricCard key={metric.key} metric={metric} row={displayData.summary} />
+                <MetricCard key={metric.key} metric={metric} row={displayData.summary} context={metricContext} />
               ))}
             </section>
+          )}
+
+          {reportMode === "impact" && (
+            <ImpactTimeline
+              runs={impactTimeline}
+              selectedStartDate={impactStartDate}
+              onSelectStartDate={setImpactStartDate}
+            />
           )}
 
           <PremiumCard className="overflow-hidden p-0">
@@ -944,8 +1120,12 @@ export default function Challenge() {
                 <h3 className="font-display text-xl text-white">Comparison Breakdown</h3>
                 <p className="text-sm text-muted-foreground">
                   {compareMode === "funnel_clients"
-                    ? `Comparing clients on the same funnel days for ${selectedFunnelNames[0] || "the selected funnel"}.`
-                    : `Comparing funnel runs for the selected client scope using ${runRule === "average" ? "average run performance" : `${runRule} run performance`}.`}
+                    ? reportMode === "impact"
+                      ? `Rolling up Meta-tied outcomes from ${impactStartDate} through ${impactEndDate}.`
+                      : `Comparing clients on the same funnel days for ${selectedFunnelNames[0] || "the selected funnel"}.`
+                    : reportMode === "impact"
+                      ? `Rolling up Meta-tied outcomes from ${impactStartDate} through ${impactEndDate}.`
+                      : `Comparing funnel runs for the selected client scope using ${runRule === "average" ? "average run performance" : `${runRule} run performance`}.`}
                 </p>
               </div>
               {isAdmin ? (
@@ -1006,7 +1186,7 @@ export default function Challenge() {
                               onMouseEnter={() => updateBreakdownHover({ metricKey: metric.key })}
                             >
                               {isActive && <PresentationHoverOverlay layoutId="challenge-metric-label-hover" />}
-                              <span className="relative z-10">{metric.shortLabel}</span>
+                              <MetricExplainerLabel metric={metric} context={metricContext} />
                             </span>
                           </th>
                         );
@@ -1091,6 +1271,7 @@ export default function Challenge() {
         </>
       ) : null}
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -1106,12 +1287,217 @@ function PresentationHoverOverlay({ layoutId }: { layoutId: string }) {
   );
 }
 
+type MetricExplainerContext = {
+  viewMode: ReportMode;
+  attributionModel: AttributionModel;
+};
+
+function getMetricExplainer(metric: (typeof METRICS)[number], context: MetricExplainerContext): string | undefined {
+  if (context.viewMode === "impact") {
+    const explainers: Partial<Record<MetricKey, string>> = {
+      metaLeads: "Meta-sourced lead submissions received inside the selected impact window. Downstream outcomes may come from older Meta journeys.",
+      uniquePulseLeads: "Unique Meta-sourced people received inside the selected impact window. Outcomes are not limited to only these new leads.",
+      appointmentsBooked: "Meta leads in the selected impact window that show booked intent in Pulse. Long-tail jobs are counted separately by outcome date.",
+      bookingRate: "Booked Meta leads divided by unique Meta leads received inside the selected impact window. Use downstream jobs for long-tail channel impact.",
+      cancellationRate: "Canceled Meta-tied jobs with a cancellation date inside the impact window divided by Meta-tied jobs with booking, completion, or cancellation activity inside the same window.",
+      totalEstimateValue: "Estimate value created inside the impact window when the customer has any prior Meta lead touch in the downstream attribution model.",
+      totalSoldClosedValue: "Sold value closed inside the impact window when the customer has any prior Meta lead touch, even if the original Meta lead happened before the selected start date.",
+      roasPotential: "Impact-window estimate value divided by Meta ad spend in the same date range.",
+      roasSold: "Impact-window sold value divided by Meta ad spend in the same date range.",
+      averageCostPerInHomeAppointment: "Meta spend divided by completed Meta-tied jobs with estimates inside the selected impact window.",
+      costToAcquireCustomer: "Meta spend divided by sold Meta-tied jobs closed inside the selected impact window.",
+      averageClosedJobValue: "Sold value closed inside the selected impact window divided by sold Meta-tied jobs in that same window.",
+    };
+    return explainers[metric.key] ?? metric.explainer;
+  }
+
+  if (context.attributionModel === "weighted") {
+    const explainers: Partial<Record<MetricKey, string>> = {
+      cancellationRate: "Canceled downstream job credit divided by downstream job credit. Credit is split across prior funnel entries for the same customer using recency weighting.",
+      totalEstimateValue: "Estimate value split across prior funnel entries for the same customer using recency weighting, then summed without double-counting total pipeline.",
+      totalSoldClosedValue: "Sold value split across prior funnel entries for the same customer using recency weighting. Newer funnel touches receive more credit.",
+      roasPotential: "Weighted estimate value divided by ad spend for the selected run window.",
+      roasSold: "Weighted sold value divided by ad spend for the selected run window.",
+      averageCostPerInHomeAppointment: "Ad spend divided by weighted completed downstream jobs that have estimates.",
+      costToAcquireCustomer: "Ad spend divided by weighted sold downstream jobs.",
+      averageClosedJobValue: "Weighted sold value divided by weighted sold downstream jobs.",
+    };
+    return explainers[metric.key] ?? metric.explainer;
+  }
+
+  return metric.explainer;
+}
+
+function MetricExplainerLabel({
+  metric,
+  context,
+}: {
+  metric: (typeof METRICS)[number];
+  context: MetricExplainerContext;
+}) {
+  const explainer = getMetricExplainer(metric, context);
+  const label = (
+    <span
+      className={cn(
+        "relative z-10 inline-flex items-center justify-end gap-1.5",
+        explainer && "cursor-help",
+      )}
+      tabIndex={explainer ? 0 : undefined}
+    >
+      <span>{metric.shortLabel}</span>
+      {explainer && <Info className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />}
+    </span>
+  );
+
+  if (!explainer) return label;
+
+  return (
+    <Tooltip delayDuration={120}>
+      <TooltipTrigger asChild>{label}</TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-80 bg-card px-3 py-2 text-left text-xs leading-relaxed text-white shadow-xl">
+        {explainer}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function MetricExplainerBadge({
+  metric,
+  context,
+}: {
+  metric: (typeof METRICS)[number];
+  context: MetricExplainerContext;
+}) {
+  const explainer = getMetricExplainer(metric, context);
+  const badge = (
+    <span
+      className={cn(
+        "rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground",
+        PRESENTATION_CARD_SYNC,
+        "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]",
+        explainer && "inline-flex cursor-help items-center gap-1.5",
+      )}
+      tabIndex={explainer ? 0 : undefined}
+    >
+      {metric.shortLabel}
+      {explainer && <Info className="h-3 w-3 opacity-70" aria-hidden="true" />}
+    </span>
+  );
+
+  if (!explainer) return badge;
+
+  return (
+    <Tooltip delayDuration={120}>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-80 bg-card px-3 py-2 text-left text-xs leading-relaxed text-white shadow-xl">
+        {explainer}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ImpactTimeline({
+  runs,
+  selectedStartDate,
+  onSelectStartDate,
+}: {
+  runs: ChallengeRunSummary[];
+  selectedStartDate: string;
+  onSelectStartDate: (date: string) => void;
+}) {
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const grouped = useMemo(() => {
+    const groups = new Map<string, ChallengeRunSummary[]>();
+    const sortedRuns = [...runs]
+      .filter((run) => Boolean(run.startDate))
+      .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.funnelName.localeCompare(b.funnelName));
+
+    for (const run of sortedRuns) {
+      if (!run.startDate) continue;
+      const date = new Date(`${run.startDate}T00:00:00Z`);
+      const key = date.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+      const existing = groups.get(key) ?? [];
+      existing.push(run);
+      groups.set(key, existing);
+    }
+    return [...groups.entries()].map(([month, monthRuns]) => [
+      month,
+      [...monthRuns].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.funnelName.localeCompare(b.funnelName)),
+    ] as const);
+  }, [runs]);
+
+  const timelineSignature = useMemo(
+    () => grouped.map(([month, monthRuns]) => `${month}:${monthRuns.map((run) => run.id).join(",")}`).join("|"),
+    [grouped],
+  );
+
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current;
+    if (!scrollContainer || !timelineSignature) return;
+
+    const scrollToNewest = () => {
+      scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
+    };
+
+    scrollToNewest();
+    const frame = window.requestAnimationFrame(scrollToNewest);
+    return () => window.cancelAnimationFrame(frame);
+  }, [timelineSignature]);
+
+  if (grouped.length === 0) return null;
+
+  return (
+    <section className="rounded-lg border border-white/10 bg-card/50 p-4">
+      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="font-display text-lg text-white">Campaign Start Timeline</h2>
+          <p className="text-xs text-muted-foreground">Pick a campaign start as the impact-window floor.</p>
+        </div>
+        <div className="text-xs text-muted-foreground">Selected {selectedStartDate}</div>
+      </div>
+      <div
+        ref={timelineScrollRef}
+        data-challenge-impact-timeline-scroll
+        className="flex flex-nowrap gap-3 overflow-x-auto overscroll-x-contain pb-2"
+      >
+        {grouped.map(([month, monthRuns]) => (
+          <div key={month} className="w-72 flex-none rounded-md border border-white/10 bg-background/40 p-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{month}</div>
+            <div className="max-h-[17rem] space-y-2 overflow-y-auto overscroll-y-contain pr-1">
+              {monthRuns.map((run) => {
+                const isSelected = run.startDate === selectedStartDate;
+                return (
+                  <button
+                    key={run.id}
+                    onClick={() => onSelectStartDate(run.startDate)}
+                    className={cn(
+                      "block min-h-[4.75rem] w-full rounded-md border px-2 py-2 text-left transition-colors",
+                      isSelected
+                        ? "border-primary bg-primary text-[#C0D4E6]"
+                        : "border-white/10 bg-white/[0.03] text-white hover:border-primary/50 hover:bg-white/[0.06]",
+                    )}
+                  >
+                    <span className="block truncate text-xs font-semibold">{run.funnelName}</span>
+                    <span className="mt-0.5 block truncate text-[11px] opacity-70">{run.startDate}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function MetricCard({
   metric,
   row,
+  context,
 }: {
   metric: (typeof METRICS)[number];
   row: ChallengeMetric;
+  context: MetricExplainerContext;
 }) {
   const Icon = metric.icon;
   const value = row[metric.key];
@@ -1136,9 +1522,7 @@ function MetricCard({
           <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 bg-white/[0.04]", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10")}>
             <Icon className={cn("h-5 w-5", PRESENTATION_CARD_SYNC, metric.tone, "group-hover:text-[#C0D4E6]")} />
           </div>
-          <span className={cn("rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]")}>
-            {metric.shortLabel}
-          </span>
+          <MetricExplainerBadge metric={metric} context={context} />
         </div>
         <div className="mt-5">
           <p className={cn("mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]")}>{metric.label}</p>

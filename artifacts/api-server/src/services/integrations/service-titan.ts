@@ -54,7 +54,9 @@ export interface STJob {
   jobStatus: string;
   summary: string;
   total: number;
+  createdOn?: string | null;
   completedOn: string | null;
+  modifiedOn?: string | null;
   customer?: STCustomer;
   location?: STLocation;
   type?: STJobType;
@@ -71,6 +73,24 @@ interface STJobsResponse {
   page: number;
   pageSize: number;
   totalCount: number;
+  hasMore: boolean;
+}
+
+export interface STJobCanceledLog {
+  id: number;
+  jobId: number;
+  reasonId?: number | null;
+  memo?: string | null;
+  createdOn?: string | null;
+  createdById?: number | null;
+  active?: boolean | null;
+}
+
+interface STJobCanceledLogResponse {
+  data: STJobCanceledLog[];
+  page: number;
+  pageSize: number;
+  totalCount: number | null;
   hasMore: boolean;
 }
 
@@ -377,6 +397,14 @@ export async function fetchJobsByStatuses(
   return collectedJobs;
 }
 
+export async function fetchJobCanceledLog(config: STAuthConfig, jobId: number): Promise<STJobCanceledLog[]> {
+  const response = await stFetch<STJobCanceledLogResponse>(
+    config,
+    `/jobs/${jobId}/canceled-log?page=1&pageSize=50`,
+  );
+  return response.data ?? [];
+}
+
 export async function fetchCompletedJobs(
   config: STAuthConfig,
   modifiedAfter?: string,
@@ -414,6 +442,34 @@ function extractJobTypeName(stJob: STJob): string {
   if (firstLine && firstLine.length < 80) return firstLine;
 
   return "Service";
+}
+
+function parseServiceTitanDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function getServiceTitanJobOriginAt(stJob: STJob): Date | null {
+  return parseServiceTitanDate(stJob.createdOn);
+}
+
+export function getServiceTitanJobCancelledAt(
+  stJob: Pick<STJob, "jobStatus" | "completedOn" | "modifiedOn">,
+  canceledLog: STJobCanceledLog[] = [],
+): Date | null {
+  const normalizedStatus = stJob.jobStatus.toLowerCase().replace(/[^a-z]/g, "");
+  if (normalizedStatus !== "canceled" && normalizedStatus !== "cancelled") return null;
+
+  const newestLogDate = canceledLog
+    .filter((entry) => entry.active !== false)
+    .map((entry) => parseServiceTitanDate(entry.createdOn))
+    .filter((date): date is Date => date != null)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
+
+  return newestLogDate
+    ?? parseServiceTitanDate(stJob.completedOn)
+    ?? parseServiceTitanDate(stJob.modifiedOn);
 }
 
 export interface STInvoiceItem {
@@ -729,7 +785,9 @@ export function formatSTJobForSync(stJob: STJob) {
     businessUnit: stJob.businessUnit?.name || null,
     revenue: stJob.total || 0,
     status,
-    completedAt: stJob.completedOn ? new Date(stJob.completedOn) : null,
+    stJobOriginAt: getServiceTitanJobOriginAt(stJob),
+    stCancelledAt: getServiceTitanJobCancelledAt(stJob),
+    completedAt: parseServiceTitanDate(stJob.completedOn),
   };
 }
 
@@ -749,6 +807,7 @@ export interface STEstimate {
   name: string;
   status: { name: string; value: number };
   summary: string;
+  createdOn?: string | null;
   followUpOn?: string | null;
   soldBy: number | null;
   soldOn: string | null;
@@ -927,6 +986,7 @@ export function parseEstimateData(estimate: STEstimate, patterns: RegExp[] = REB
     estimateName: estimate.name || null,
     estimateStatus: estimate.status?.name || null,
     summary: estimate.summary || null,
+    stEstimateCreatedAt: parseServiceTitanDate(estimate.createdOn),
     followUpOn: estimate.followUpOn ? new Date(estimate.followUpOn) : null,
     subtotal,
     rebateAmount,
