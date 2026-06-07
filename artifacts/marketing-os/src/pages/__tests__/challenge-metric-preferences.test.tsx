@@ -14,6 +14,8 @@ vi.mock("@/components/auth-context", () => ({
 }));
 
 const challengeResponse: any = {
+  viewMode: "funnel",
+  attributionModel: "strict",
   compareMode: "client_funnels",
   dayRange: { startDay: 1, endDay: 30, label: "Days 1-30" },
   runRule: "newest",
@@ -22,7 +24,8 @@ const challengeResponse: any = {
   selectedFunnelTypeIds: [],
   availableClients: [{ id: 1, name: "Client A", runCount: 2 }],
   availableFunnels: [{ id: 10, name: "Install", runCount: 1 }, { id: 11, name: "Repair", runCount: 1 }],
-  selectedRuns: [],
+  selectedRuns: [{ id: 101, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "Install", name: "Spring run", startDate: "2026-03-01", endDate: "2026-03-30", status: "completed", activeDays: 30 }],
+  impactTimeline: [{ id: 101, tenantId: 1, tenantName: "Client A", funnelTypeId: 10, funnelName: "Install", name: "Spring run", startDate: "2026-03-01", endDate: "2026-03-30", status: "completed", activeDays: 30 }],
   allocation: {
     method: "meta_campaign_adset_funnel_mapping",
     note: "Allocation note",
@@ -111,6 +114,34 @@ const challengeResponse: any = {
 };
 challengeResponse.rows = challengeResponse.byFunnel;
 
+const impactResponse: any = {
+  ...challengeResponse,
+  viewMode: "impact",
+  attributionModel: "strict",
+  dateRange: { startDate: "2026-03-01", endDate: "2026-06-07" },
+  dayRange: { startDay: 1, endDay: 30, label: "Since 2026-03-01" },
+  allocation: {
+    method: "meta_impact_outcome_window",
+    note: "Meta Impact allocation note",
+  },
+  summary: {
+    ...challengeResponse.summary,
+    funnel: "Meta Impact",
+    rowKey: "impact:meta",
+    rowLabel: "Meta Impact",
+  },
+  byFunnel: [
+    {
+      ...challengeResponse.byFunnel[0],
+      funnel: "Meta Impact",
+      rowKey: "impact:meta",
+      rowLabel: "Meta Impact",
+      funnelName: "Meta Impact",
+    },
+  ],
+};
+impactResponse.rows = impactResponse.byFunnel;
+
 function installLocalStorageShim() {
   const values = new Map<string, string>();
   const storage = {
@@ -150,7 +181,7 @@ describe("Challenge metric preferences", () => {
       if (url.includes("/api/dashboard/challenge")) {
         return {
           ok: true,
-          json: async () => challengeResponse,
+          json: async () => url.includes("viewMode=impact") ? impactResponse : challengeResponse,
         } as Response;
       }
       return { ok: true, json: async () => ({}) } as Response;
@@ -203,6 +234,43 @@ describe("Challenge metric preferences", () => {
     expect(screen.getByRole("menuitemradio", { name: "Newest run" })).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByRole("menuitemradio", { name: "Avg all runs" }));
     expect(screen.getByRole("menuitemradio", { name: "Avg all runs" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("requests weighted attribution when the weighted model is selected", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Weighted" }));
+
+    await waitFor(() => {
+      const urls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
+      expect(urls.some((url) => url.includes("/api/dashboard/challenge/runs") && url.includes("attributionModel=weighted"))).toBe(true);
+    });
+  });
+
+  it("requests Meta Impact mode with the selected impact date range", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Meta Impact" }));
+
+    expect(screen.getByLabelText("Impact start date")).toBeInTheDocument();
+    expect(screen.getByLabelText("Impact end date")).toBeInTheDocument();
+    await waitFor(() => {
+      const urls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
+      expect(urls.some((url) =>
+        url.includes("/api/dashboard/challenge/runs")
+        && url.includes("viewMode=impact")
+        && url.includes("startDate=")
+        && url.includes("endDate=")
+      )).toBe(true);
+    });
   });
 
   it("shows attribution explainers for downstream value metrics", async () => {

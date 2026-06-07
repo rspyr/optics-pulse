@@ -32,6 +32,7 @@ export const jobsTable = pgTable("jobs", {
   matchedGclid: text("matched_gclid"),
   matchLevel: text("match_level"),
   stJobOriginAt: timestamp("st_job_origin_at"),
+  stCancelledAt: timestamp("st_cancelled_at"),
   completedAt: timestamp("completed_at"),
   stDataExpiresAt: timestamp("st_data_expires_at"),
   hasInvoice: boolean("has_invoice").default(false),
@@ -56,6 +57,7 @@ export const jobsTable = pgTable("jobs", {
   // tenants' rows, no sort.
   tenantCreatedAtIdIdx: index("jobs_tenant_created_at_id_idx").on(table.tenantId, table.createdAt.desc(), table.id.desc()),
   tenantLeadOriginIdx: index("jobs_tenant_lead_origin_idx").on(table.tenantId, table.leadId, table.stJobOriginAt),
+  tenantCancelledIdx: index("jobs_tenant_cancelled_idx").on(table.tenantId, table.stCancelledAt),
 }));
 
 export const insertJobSchema = createInsertSchema(jobsTable).omit({ id: true, createdAt: true, updatedAt: true });

@@ -2,7 +2,7 @@ import { db, tenantsTable, jobsTable, leadsTable, attributionEventsTable, campai
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
 import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
-import { SERVICE_TITAN_JOB_STATUSES, SERVICE_TITAN_ESTIMATE_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
+import { SERVICE_TITAN_JOB_STATUSES, SERVICE_TITAN_ESTIMATE_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchJobCanceledLog, getServiceTitanJobCancelledAt, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
 import { MetaAPIService, MetaTokenInvalidError, parseNumericField, parseIntField, sumConversionActions, type MetaAction } from "./integrations/meta";
 import { syncPodiumReviews } from "./integrations/podium";
@@ -59,6 +59,38 @@ function isSoldEstimateStatus(status: string | null | undefined): boolean {
 function isPlaceholderCustomerName(name: string | null | undefined): boolean {
   if (!name) return true;
   return /^Customer\s+\d+$/.test(name.trim());
+}
+
+type ServiceTitanSyncConfig = {
+  clientId: string;
+  clientSecret: string;
+  tenantId: string;
+  appKey?: string;
+};
+
+function createServiceTitanJobFormatter(stConfig: ServiceTitanSyncConfig, tenantId: number) {
+  let warnedCancelLogFailure = false;
+
+  return async function formatJob(stJob: STJob): Promise<ReturnType<typeof formatSTJobForSync>> {
+    const formatted = formatSTJobForSync(stJob);
+    if (formatted.status !== "cancelled") return formatted;
+
+    try {
+      const canceledLog = await fetchJobCanceledLog(stConfig, stJob.id);
+      return {
+        ...formatted,
+        stCancelledAt: getServiceTitanJobCancelledAt(stJob, canceledLog) ?? formatted.stCancelledAt,
+      };
+    } catch (err) {
+      if (!warnedCancelLogFailure) {
+        warnedCancelLogFailure = true;
+        console.warn(
+          `[ServiceTitan] Tenant ${tenantId}: failed to fetch canceled-log; using canceled job fallback dates. ${(err as Error).message}`,
+        );
+      }
+      return formatted;
+    }
+  };
 }
 
 /**
@@ -614,12 +646,13 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
       appKey: config.serviceTitanAppKey,
     };
+    const formatJobForDb = createServiceTitanJobFormatter(stConfig, tenantId);
 
     let synced = 0;
 
     async function processJobBatch(stJobs: STJob[]) {
       for (const stJob of stJobs) {
-        const formatted = formatSTJobForSync(stJob);
+        const formatted = await formatJobForDb(stJob);
         const jobIdHash = hashStJobId(formatted.stJobId);
 
         const [existingByHash] = await db.select().from(jobsTable)
@@ -647,6 +680,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 status: formatted.status,
                 completedAt: formatted.completedAt,
                 stJobOriginAt: formatted.stJobOriginAt,
+                stCancelledAt: formatted.stCancelledAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
                 // Job number is a reference (not PII) and is never purged, so
@@ -662,6 +696,7 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
                 status: formatted.status,
                 completedAt: formatted.completedAt,
                 stJobOriginAt: formatted.stJobOriginAt,
+                stCancelledAt: formatted.stCancelledAt,
                 customerName: formatted.customerName,
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,
@@ -2293,6 +2328,7 @@ export async function backfillServiceTitanJobs(
       tenantId: config.serviceTitanTenantId || tenant.serviceTitanId || "",
       appKey: config.serviceTitanAppKey,
     };
+    const formatJobForDb = createServiceTitanJobFormatter(stConfig, tenantId);
 
     const CHUNK_DAYS = 90;
     const today = new Date();
@@ -2333,7 +2369,7 @@ export async function backfillServiceTitanJobs(
 
     async function processJobBatch(stJobs: STJob[]) {
       for (const stJob of stJobs) {
-        const formatted = formatSTJobForSync(stJob);
+        const formatted = await formatJobForDb(stJob);
         const jobIdHash = hashStJobId(formatted.stJobId);
 
         const [existingByHash] = await db.select().from(jobsTable)
@@ -2361,6 +2397,7 @@ export async function backfillServiceTitanJobs(
                 status: formatted.status,
                 completedAt: formatted.completedAt,
                 stJobOriginAt: formatted.stJobOriginAt,
+                stCancelledAt: formatted.stCancelledAt,
                 jobTypeName: formatted.jobTypeName || existing.jobTypeName,
                 businessUnit: formatted.businessUnit || existing.businessUnit,
                 // Job number is a reference (not PII) and is never purged, so
@@ -2376,6 +2413,7 @@ export async function backfillServiceTitanJobs(
                 status: formatted.status,
                 completedAt: formatted.completedAt,
                 stJobOriginAt: formatted.stJobOriginAt,
+                stCancelledAt: formatted.stCancelledAt,
                 customerName: formatted.customerName,
                 customerPhone: formatted.customerPhone || existing.customerPhone,
                 customerEmail: formatted.customerEmail || existing.customerEmail,

@@ -15,6 +15,8 @@ router.use("/dashboard", denyClientUser);
 const jobDateExpr = sql`COALESCE(${jobsTable.invoiceDate}, ${jobsTable.completedAt}, ${jobsTable.createdAt})`;
 const UNMATCHED_TIER = "unmatched";
 const CHALLENGE_UNASSIGNED_FUNNEL = "Unassigned";
+const CHALLENGE_WEIGHTED_LOOKBACK_DAYS = 730;
+const CHALLENGE_WEIGHTED_HALF_LIFE_DAYS = 180;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -25,6 +27,15 @@ function challengeJobAttributionAtSql() {
       j.st_job_origin_at,
       j.completed_at,
       CASE WHEN j.status IN ('pending', 'in_progress') THEN j.created_at ELSE NULL END
+    )
+  `;
+}
+
+function challengeCancellationAtSql() {
+  return sql`
+    COALESCE(
+      j.st_cancelled_at,
+      CASE WHEN j.status = 'cancelled' THEN j.completed_at ELSE NULL END
     )
   `;
 }
@@ -50,6 +61,42 @@ function challengeEstimateAttributionWindowSql() {
   `;
 
   return challengeLeadWindowSql(estimateAttributionAt);
+}
+
+function challengeWeightedLeadWindowSql(attributionAt: SQL) {
+  return sql`
+    AND ${attributionAt} >= lc.created_at - (${CHALLENGE_JOB_LEAD_GRACE_DAYS}::int * INTERVAL '1 day')
+    AND ${attributionAt} <= lc.created_at + (${CHALLENGE_WEIGHTED_LOOKBACK_DAYS}::int * INTERVAL '1 day')
+  `;
+}
+
+function challengeRecencyWeightSql(attributionAt: SQL) {
+  return sql`
+    EXP(
+      -GREATEST(EXTRACT(EPOCH FROM (${attributionAt} - lc.created_at)) / 86400.0, 0)
+      / ${CHALLENGE_WEIGHTED_HALF_LIFE_DAYS}
+    )
+  `;
+}
+
+function challengeLeadIdentitySql(alias: string) {
+  return sql.raw(`(
+    ${alias}.tenant_id::text || ':' ||
+    COALESCE(
+      NULLIF(REGEXP_REPLACE(COALESCE(${alias}.phone, ''), '[^0-9]', '', 'g'), ''),
+      NULLIF(LOWER(TRIM(COALESCE(${alias}.email, ''))), ''),
+      ${alias}.id::text
+    )
+  )`);
+}
+
+function challengeLeadIsMetaSql(alias: string) {
+  return sql.raw(`(
+    LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%meta%'
+    OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%facebook%'
+    OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%instagram%'
+    OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) IN ('fb', 'ig')
+  )`);
 }
 
 function parseRepeatedStrings(raw: unknown): string[] {
@@ -289,6 +336,8 @@ export function buildChallengeDashboardResponse(input: {
 
 type ChallengeRunRule = "newest" | "oldest" | "best" | "average";
 type ChallengeCompareMode = "client_funnels" | "funnel_clients";
+type ChallengeViewMode = "funnel" | "impact";
+type ChallengeAttributionModel = "strict" | "weighted";
 type ChallengeBestBy =
   | "activeDays"
   | "costPerLead"
@@ -403,6 +452,14 @@ function parseChallengeRunRule(raw: unknown): ChallengeRunRule {
 
 function parseChallengeCompareMode(raw: unknown): ChallengeCompareMode {
   return raw === "funnel_clients" ? "funnel_clients" : "client_funnels";
+}
+
+function parseChallengeViewMode(raw: unknown): ChallengeViewMode {
+  return raw === "impact" ? "impact" : "funnel";
+}
+
+function parseChallengeAttributionModel(raw: unknown): ChallengeAttributionModel {
+  return raw === "weighted" ? "weighted" : "strict";
 }
 
 function parseChallengeBestBy(raw: unknown): ChallengeBestBy {
@@ -633,16 +690,277 @@ function numberInSql(columnSql: SQL, values: number[]): SQL | null {
   return sql`${columnSql} IN (${sql.join(values.map((value) => sql`${value}`), sql`, `)})`;
 }
 
+function challengeStrictRunOutcomeCtes() {
+  return sql`
+      jobs_by_run AS (
+        SELECT
+          lc.run_id,
+          COUNT(DISTINCT j.id)::int AS total_jobs,
+          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_jobs,
+          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+          ${challengeJobAttributionWindowSql()}
+        LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+        GROUP BY lc.run_id
+      ),
+      estimate_options AS (
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
+
+        UNION ALL
+
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+        WHERE se.lead_id IS NULL
+          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
+      ),
+      estimate_per_lead AS (
+        SELECT run_id, unique_key, AVG(amount) AS avg_estimate
+        FROM estimate_options
+        GROUP BY run_id, unique_key
+      ),
+      estimates_by_run AS (
+        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+        FROM estimate_per_lead
+        GROUP BY run_id
+      ),
+      sold_options AS (
+        SELECT
+          lc.run_id,
+          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+          ${challengeEstimateAttributionWindowSql()}
+
+        UNION ALL
+
+        SELECT
+          lc.run_id,
+          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+        WHERE se.lead_id IS NULL
+          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+          ${challengeEstimateAttributionWindowSql()}
+      ),
+      sold_per_job AS (
+        SELECT run_id, sold_key, SUM(amount) AS sold_value
+        FROM sold_options
+        GROUP BY run_id, sold_key
+      ),
+      sold_by_run AS (
+        SELECT
+          run_id,
+          COALESCE(SUM(sold_value), 0)::numeric AS sold_closed_value,
+          COUNT(DISTINCT sold_key)::int AS sold_jobs
+        FROM sold_per_job
+        GROUP BY run_id
+      )`;
+}
+
+function challengeWeightedRunOutcomeCtes() {
+  const jobAttributionAt = challengeJobAttributionAtSql();
+  const estimateAttributionAt = sql`
+    COALESCE(
+      ${challengeJobAttributionAtSql()},
+      se.st_estimate_created_at,
+      se.sold_on
+    )
+  `;
+
+  return sql`
+      job_weight_candidates AS (
+        SELECT run_id, job_id, status, has_completed_estimate, raw_weight
+        FROM (
+          SELECT
+            lc.run_id,
+            j.id AS job_id,
+            j.status,
+            (j.status = 'completed' AND EXISTS (
+              SELECT 1 FROM sold_estimates sej
+              WHERE sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+            )) AS has_completed_estimate,
+            ${challengeRecencyWeightSql(jobAttributionAt)} AS raw_weight,
+            ROW_NUMBER() OVER (PARTITION BY lc.run_id, j.id ORDER BY lc.created_at DESC, lc.id DESC)::int AS run_candidate_rank
+          FROM lead_cohort lc
+          JOIN jobs j ON j.tenant_id = lc.tenant_id
+          JOIN leads event_lead ON event_lead.id = j.lead_id AND event_lead.tenant_id = j.tenant_id
+          WHERE ${jobAttributionAt} IS NOT NULL
+            AND ${challengeLeadIdentitySql("event_lead")} = lc.unique_key
+            ${challengeWeightedLeadWindowSql(jobAttributionAt)}
+        ) ranked
+        WHERE run_candidate_rank = 1
+      ),
+      job_weights AS (
+        SELECT
+          run_id,
+          job_id,
+          status,
+          has_completed_estimate,
+          raw_weight / NULLIF(SUM(raw_weight) OVER (PARTITION BY job_id), 0) AS weight
+        FROM job_weight_candidates
+      ),
+      jobs_by_run AS (
+        SELECT
+          run_id,
+          COALESCE(SUM(weight), 0)::numeric AS total_jobs,
+          COALESCE(SUM(weight) FILTER (WHERE status = 'cancelled'), 0)::numeric AS cancelled_jobs,
+          COALESCE(SUM(weight) FILTER (WHERE has_completed_estimate), 0)::numeric AS completed_estimate_jobs
+        FROM job_weights
+        GROUP BY run_id
+      ),
+      estimate_events AS (
+        SELECT
+          se.id AS estimate_id,
+          se.tenant_id,
+          ${challengeLeadIdentitySql("event_lead")} AS event_unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          ${estimateAttributionAt} AS event_at
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN leads event_lead ON event_lead.id = COALESCE(se.lead_id, j.lead_id) AND event_lead.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+      ),
+      estimate_weight_candidates AS (
+        SELECT run_id, unique_key, estimate_id, amount, raw_weight
+        FROM (
+          SELECT
+            lc.run_id,
+            lc.unique_key,
+            ee.estimate_id,
+            ee.amount,
+            ${challengeRecencyWeightSql(sql`ee.event_at`)} AS raw_weight,
+            ROW_NUMBER() OVER (PARTITION BY lc.run_id, ee.estimate_id ORDER BY lc.created_at DESC, lc.id DESC)::int AS run_candidate_rank
+          FROM estimate_events ee
+          JOIN lead_cohort lc ON lc.tenant_id = ee.tenant_id AND lc.unique_key = ee.event_unique_key
+          WHERE ee.event_at IS NOT NULL
+            ${challengeWeightedLeadWindowSql(sql`ee.event_at`)}
+        ) ranked
+        WHERE run_candidate_rank = 1
+      ),
+      estimate_weights AS (
+        SELECT
+          run_id,
+          unique_key,
+          estimate_id,
+          amount,
+          raw_weight / NULLIF(SUM(raw_weight) OVER (PARTITION BY estimate_id), 0) AS weight
+        FROM estimate_weight_candidates
+      ),
+      estimate_per_lead AS (
+        SELECT run_id, unique_key, AVG(amount * weight) AS avg_estimate
+        FROM estimate_weights
+        GROUP BY run_id, unique_key
+      ),
+      estimates_by_run AS (
+        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+        FROM estimate_per_lead
+        GROUP BY run_id
+      ),
+      sold_events AS (
+        SELECT
+          sold_key,
+          tenant_id,
+          event_unique_key,
+          MIN(event_at) AS event_at,
+          SUM(amount) AS amount
+        FROM (
+          SELECT
+            COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+            se.tenant_id,
+            ${challengeLeadIdentitySql("event_lead")} AS event_unique_key,
+            COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+            ${estimateAttributionAt} AS event_at
+          FROM sold_estimates se
+          LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+          JOIN leads event_lead ON event_lead.id = COALESCE(se.lead_id, j.lead_id) AND event_lead.tenant_id = se.tenant_id
+          WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+            AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+        ) x
+        WHERE event_at IS NOT NULL
+        GROUP BY sold_key, tenant_id, event_unique_key
+      ),
+      sold_weight_candidates AS (
+        SELECT run_id, tenant_id, sold_key, amount, raw_weight
+        FROM (
+          SELECT
+            lc.run_id,
+            se.tenant_id,
+            se.sold_key,
+            se.amount,
+            ${challengeRecencyWeightSql(sql`se.event_at`)} AS raw_weight,
+            ROW_NUMBER() OVER (PARTITION BY lc.run_id, se.tenant_id, se.sold_key ORDER BY lc.created_at DESC, lc.id DESC)::int AS run_candidate_rank
+          FROM sold_events se
+          JOIN lead_cohort lc ON lc.tenant_id = se.tenant_id AND lc.unique_key = se.event_unique_key
+          WHERE se.event_at IS NOT NULL
+            ${challengeWeightedLeadWindowSql(sql`se.event_at`)}
+        ) ranked
+        WHERE run_candidate_rank = 1
+      ),
+      sold_weights AS (
+        SELECT
+          run_id,
+          tenant_id,
+          sold_key,
+          amount,
+          raw_weight / NULLIF(SUM(raw_weight) OVER (PARTITION BY tenant_id, sold_key), 0) AS weight
+        FROM sold_weight_candidates
+      ),
+      sold_by_run AS (
+        SELECT
+          run_id,
+          COALESCE(SUM(amount * weight), 0)::numeric AS sold_closed_value,
+          COALESCE(SUM(weight), 0)::numeric AS sold_jobs
+        FROM sold_weights
+        GROUP BY run_id
+      )`;
+}
+
+function challengeRunOutcomeCtes(attributionModel: ChallengeAttributionModel) {
+  return attributionModel === "weighted"
+    ? challengeWeightedRunOutcomeCtes()
+    : challengeStrictRunOutcomeCtes();
+}
+
 router.get("/dashboard/challenge/runs", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const selectedClientTenantIds = parseRepeatedNumbers(req.query.clientTenantId);
   const selectedFunnelTypeIds = parseRepeatedNumbers(req.query.funnelTypeId);
   const selectedRunIds = parseRepeatedNumbers(req.query.runId);
+  const viewMode = parseChallengeViewMode(req.query.viewMode);
+  const attributionModel = parseChallengeAttributionModel(req.query.attributionModel);
   const mode = parseChallengeCompareMode(req.query.mode);
   const runRule = parseChallengeRunRule(req.query.runRule);
   const bestBy = parseChallengeBestBy(req.query.bestBy);
   const dayStart = parsePositiveInt(req.query.dayStart, 1);
   const dayEnd = Math.max(dayStart, parsePositiveInt(req.query.dayEnd, 30));
+  const {
+    startDate: impactStartDate,
+    endDate: impactEndDate,
+    startBound: impactStartBound,
+    endBound: impactEndBound,
+  } = parseChallengeDateRange(req.query.startDate, req.query.endDate);
 
   const scope = resolveListTenantScope(req, res, queryTenantId);
   if (!scope.ok) return;
@@ -651,11 +969,15 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
     role: req.session.userRole ?? null,
     sessionTenantId: req.session.tenantId ?? null,
     scopedTenantId: tenantId ?? null,
+    viewMode,
+    attributionModel,
     mode,
     runRule,
     bestBy,
     dayStart,
     dayEnd,
+    impactStartDate: viewMode === "impact" ? impactStartDate : null,
+    impactEndDate: viewMode === "impact" ? impactEndDate : null,
     selectedClientTenantIds: [...selectedClientTenantIds].sort((a, b) => a - b),
     selectedFunnelTypeIds: [...selectedFunnelTypeIds].sort((a, b) => a - b),
     selectedRunIds: [...selectedRunIds].sort((a, b) => a - b),
@@ -697,6 +1019,379 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
     const runRankFilter = runRule === "newest" || runRule === "oldest"
       ? sql`AND run_rank = 1`
       : sql``;
+
+    if (viewMode === "impact") {
+      const selectedTenantFilter = !tenantId && selectedClientTenantIds.length > 0
+        ? numberInSql(sql`l.tenant_id`, selectedClientTenantIds)
+        : null;
+      const selectedCampaignTenantFilter = !tenantId && selectedClientTenantIds.length > 0
+        ? numberInSql(sql`c.tenant_id`, selectedClientTenantIds)
+        : null;
+      const impactLeadTenantFilter = tenantId
+        ? sql`AND l.tenant_id = ${tenantId}`
+        : selectedTenantFilter
+          ? sql`AND ${selectedTenantFilter}`
+          : sql``;
+      const impactCampaignTenantFilter = tenantId
+        ? sql`AND c.tenant_id = ${tenantId}`
+        : selectedCampaignTenantFilter
+          ? sql`AND ${selectedCampaignTenantFilter}`
+          : sql``;
+
+      const [clientsResult, funnelsResult, timelineResult, metricsResult] = await Promise.all([
+        db.execute(sql`
+          SELECT
+            t.id,
+            t.name,
+            COUNT(fr.id)::int AS "runCount"
+          FROM funnel_runs fr
+          JOIN tenants t ON t.id = fr.tenant_id
+          ${scopedWhereClause}
+          GROUP BY t.id, t.name
+          ORDER BY t.name ASC
+        `),
+        db.execute(sql`
+          SELECT
+            ft.id,
+            ft.name,
+            COUNT(fr.id)::int AS "runCount"
+          FROM funnel_runs fr
+          JOIN funnel_types ft ON ft.id = fr.funnel_type_id
+          ${scopedWhereClause}
+          GROUP BY ft.id, ft.name
+          ORDER BY ft.name ASC
+        `),
+        db.execute(sql`
+          SELECT
+            fr.id,
+            fr.tenant_id AS "tenantId",
+            t.name AS "tenantName",
+            fr.funnel_type_id AS "funnelTypeId",
+            ft.name AS "funnelName",
+            fr.name,
+            fr.start_date AS "startDate",
+            fr.end_date AS "endDate",
+            fr.status,
+            GREATEST(1, (COALESCE(fr.end_date, CURRENT_DATE) - fr.start_date + 1))::int AS "activeDays"
+          FROM funnel_runs fr
+          JOIN tenants t ON t.id = fr.tenant_id
+          JOIN funnel_types ft ON ft.id = fr.funnel_type_id
+          ${runWhereClause}
+          ORDER BY fr.start_date DESC, fr.id DESC
+        `),
+        db.execute(sql`
+          WITH lead_identity AS (
+            SELECT
+              l.id,
+              l.tenant_id,
+              l.created_at,
+              ${challengeLeadIdentitySql("l")} AS unique_key,
+              (
+                l.status IN ('booked', 'sold')
+                OR l.hub_status IN ('appt_set', 'appt_booked')
+                OR l.booked_at IS NOT NULL
+                OR l.has_sold_estimate = true
+              ) AS booked,
+              ${challengeLeadIsMetaSql("l")} AS is_meta_lead
+            FROM leads l
+            WHERE TRUE
+              ${impactLeadTenantFilter}
+          ),
+          meta_touch_keys AS (
+            SELECT tenant_id, unique_key, MIN(created_at) AS first_meta_at
+            FROM lead_identity
+            WHERE is_meta_lead
+            GROUP BY tenant_id, unique_key
+          ),
+          meta_leads_window AS (
+            SELECT
+              COUNT(*)::numeric AS meta_leads,
+              COUNT(DISTINCT unique_key)::numeric AS unique_pulse_leads,
+              COUNT(DISTINCT unique_key) FILTER (WHERE booked)::numeric AS appointments_booked
+            FROM lead_identity
+            WHERE is_meta_lead
+              AND created_at >= ${impactStartBound}
+              AND created_at <= ${impactEndBound}
+          ),
+          job_events_base AS (
+            SELECT
+              j.id,
+              j.tenant_id,
+              el.unique_key,
+              ${challengeJobAttributionAtSql()} AS booked_at,
+              j.completed_at,
+              ${challengeCancellationAtSql()} AS cancelled_at,
+              j.status,
+              EXISTS (
+                SELECT 1 FROM sold_estimates sej
+                WHERE sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+              ) AS has_estimate
+            FROM jobs j
+            JOIN lead_identity el ON el.id = j.lead_id AND el.tenant_id = j.tenant_id
+          ),
+          job_events AS (
+            SELECT jeb.*
+            FROM job_events_base jeb
+            JOIN meta_touch_keys mt
+              ON mt.tenant_id = jeb.tenant_id
+              AND mt.unique_key = jeb.unique_key
+              AND mt.first_meta_at <= GREATEST(
+                COALESCE(jeb.booked_at, '-infinity'::timestamp),
+                COALESCE(jeb.completed_at, '-infinity'::timestamp),
+                COALESCE(jeb.cancelled_at, '-infinity'::timestamp)
+              )
+          ),
+          jobs_window AS (
+            SELECT
+              COUNT(DISTINCT id) FILTER (
+                WHERE (booked_at >= ${impactStartBound} AND booked_at <= ${impactEndBound})
+                  OR (completed_at >= ${impactStartBound} AND completed_at <= ${impactEndBound})
+                  OR (cancelled_at >= ${impactStartBound} AND cancelled_at <= ${impactEndBound})
+              )::numeric AS total_jobs,
+              COUNT(DISTINCT id) FILTER (
+                WHERE cancelled_at >= ${impactStartBound} AND cancelled_at <= ${impactEndBound}
+              )::numeric AS cancelled_jobs,
+              COUNT(DISTINCT id) FILTER (
+                WHERE status = 'completed'
+                  AND has_estimate
+                  AND completed_at >= ${impactStartBound}
+                  AND completed_at <= ${impactEndBound}
+              )::numeric AS completed_estimate_jobs
+            FROM job_events
+          ),
+          estimate_events AS (
+            SELECT
+              COALESCE(se.job_id::text, 'lead:' || se.lead_id::text, 'estimate:' || se.id::text) AS estimate_group_key,
+              se.id AS estimate_id,
+              se.tenant_id,
+              el.unique_key,
+              COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+              COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at
+            FROM sold_estimates se
+            LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+            JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+            WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ),
+          meta_estimate_events AS (
+            SELECT ee.*
+            FROM estimate_events ee
+            JOIN meta_touch_keys mt
+              ON mt.tenant_id = ee.tenant_id
+              AND mt.unique_key = ee.unique_key
+              AND mt.first_meta_at <= ee.estimate_at
+            WHERE ee.estimate_at >= ${impactStartBound}
+              AND ee.estimate_at <= ${impactEndBound}
+          ),
+          estimate_per_opportunity AS (
+            SELECT estimate_group_key, AVG(amount) AS avg_estimate
+            FROM meta_estimate_events
+            GROUP BY estimate_group_key
+          ),
+          estimates_total AS (
+            SELECT COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+            FROM estimate_per_opportunity
+          ),
+          sold_events AS (
+            SELECT
+              sold_key,
+              tenant_id,
+              unique_key,
+              MIN(sold_at) AS sold_at,
+              SUM(amount) AS sold_value
+            FROM (
+              SELECT
+                COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+                se.tenant_id,
+                el.unique_key,
+                COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+                COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at
+              FROM sold_estimates se
+              LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+              JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+              WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+                AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+            ) x
+            WHERE sold_at IS NOT NULL
+            GROUP BY sold_key, tenant_id, unique_key
+          ),
+          meta_sold_events AS (
+            SELECT se.*
+            FROM sold_events se
+            JOIN meta_touch_keys mt
+              ON mt.tenant_id = se.tenant_id
+              AND mt.unique_key = se.unique_key
+              AND mt.first_meta_at <= se.sold_at
+            WHERE se.sold_at >= ${impactStartBound}
+              AND se.sold_at <= ${impactEndBound}
+          ),
+          sold_total AS (
+            SELECT
+              COALESCE(SUM(sold_value), 0)::numeric AS sold_closed_value,
+              COUNT(DISTINCT sold_key)::numeric AS sold_jobs
+            FROM meta_sold_events
+          ),
+          spend_total AS (
+            SELECT
+              COALESCE(SUM(cds.spend), 0)::numeric AS total_spend
+            FROM campaign_daily_stats cds
+            JOIN campaigns c ON c.id = cds.campaign_id
+            WHERE c.platform = 'meta'
+              AND cds.date >= ${impactStartDate}
+              AND cds.date <= ${impactEndDate}
+              ${impactCampaignTenantFilter}
+          ),
+          activity_days AS (
+            SELECT created_at::date AS activity_day
+            FROM lead_identity
+            WHERE is_meta_lead
+              AND created_at >= ${impactStartBound}
+              AND created_at <= ${impactEndBound}
+
+            UNION
+
+            SELECT cds.date AS activity_day
+            FROM campaign_daily_stats cds
+            JOIN campaigns c ON c.id = cds.campaign_id
+            WHERE c.platform = 'meta'
+              AND cds.date >= ${impactStartDate}
+              AND cds.date <= ${impactEndDate}
+              ${impactCampaignTenantFilter}
+              AND COALESCE(cds.spend, 0) > 0
+
+            UNION
+
+            SELECT booked_at::date FROM job_events
+            WHERE booked_at >= ${impactStartBound} AND booked_at <= ${impactEndBound}
+
+            UNION
+
+            SELECT completed_at::date FROM job_events
+            WHERE completed_at >= ${impactStartBound} AND completed_at <= ${impactEndBound}
+
+            UNION
+
+            SELECT cancelled_at::date FROM job_events
+            WHERE cancelled_at >= ${impactStartBound} AND cancelled_at <= ${impactEndBound}
+
+            UNION
+
+            SELECT estimate_at::date FROM meta_estimate_events
+
+            UNION
+
+            SELECT sold_at::date FROM meta_sold_events
+          ),
+          active_days AS (
+            SELECT COUNT(DISTINCT activity_day)::numeric AS active_days
+            FROM activity_days
+            WHERE activity_day IS NOT NULL
+          )
+          SELECT
+            0 AS run_id,
+            1 AS group_run_count,
+            0 AS tenant_id,
+            'Meta channel'::text AS tenant_name,
+            0 AS funnel_type_id,
+            'Meta Impact'::text AS funnel_name,
+            ${`Impact since ${impactStartDate}`}::text AS run_name,
+            ${impactStartDate}::date AS start_date,
+            ${impactEndDate}::date AS end_date,
+            'active'::text AS status,
+            COALESCE(ad.active_days, 0)::numeric AS active_days,
+            COALESCE(mlw.meta_leads, 0)::numeric AS meta_leads,
+            COALESCE(mlw.unique_pulse_leads, 0)::numeric AS unique_pulse_leads,
+            COALESCE(mlw.appointments_booked, 0)::numeric AS appointments_booked,
+            COALESCE(jw.total_jobs, 0)::numeric AS total_jobs,
+            COALESCE(jw.cancelled_jobs, 0)::numeric AS cancelled_jobs,
+            COALESCE(jw.completed_estimate_jobs, 0)::numeric AS completed_estimate_jobs,
+            COALESCE(et.total_estimate_value, 0)::numeric AS total_estimate_value,
+            COALESCE(st.sold_closed_value, 0)::numeric AS sold_closed_value,
+            COALESCE(st.sold_jobs, 0)::numeric AS sold_jobs,
+            COALESCE(sp.total_spend, 0)::numeric AS total_spend
+          FROM meta_leads_window mlw
+          CROSS JOIN jobs_window jw
+          CROSS JOIN estimates_total et
+          CROSS JOIN sold_total st
+          CROSS JOIN spend_total sp
+          CROSS JOIN active_days ad
+        `),
+      ]);
+
+      const availableClients = ((clientsResult as unknown as { rows?: Array<{ id: number; name: string; runCount: number }> }).rows ?? [])
+        .map((row) => ({ id: Number(row.id), name: row.name, runCount: Number(row.runCount ?? 0) }));
+      const availableFunnels = ((funnelsResult as unknown as { rows?: Array<{ id: number; name: string; runCount: number }> }).rows ?? [])
+        .map((row) => ({ id: Number(row.id), name: row.name, runCount: Number(row.runCount ?? 0) }));
+      const timelineRows = ((timelineResult as unknown as { rows?: Array<{
+        id: number;
+        tenantId: number;
+        tenantName: string;
+        funnelTypeId: number;
+        funnelName: string;
+        name: string;
+        startDate: string;
+        endDate: string | null;
+        status: string;
+        activeDays: number;
+      }> }).rows ?? []);
+      const metricRows = ((metricsResult as unknown as { rows?: ChallengeRunRawRow[] }).rows ?? []);
+      const impactRow = buildChallengeRunMetricRow(metricRows[0] ?? {
+        run_id: 0,
+        group_run_count: 1,
+        tenant_id: 0,
+        tenant_name: "Meta channel",
+        funnel_type_id: 0,
+        funnel_name: "Meta Impact",
+        run_name: "Impact",
+        start_date: impactStartDate,
+        end_date: impactEndDate,
+        status: "active",
+        active_days: 0,
+        meta_leads: 0,
+        unique_pulse_leads: 0,
+        appointments_booked: 0,
+        total_jobs: 0,
+        cancelled_jobs: 0,
+        completed_estimate_jobs: 0,
+        total_estimate_value: 0,
+        sold_closed_value: 0,
+        sold_jobs: 0,
+        total_spend: 0,
+      });
+      const row = {
+        ...impactRow,
+        rowKey: "impact:meta",
+        rowLabel: "Meta Impact",
+        funnel: "Meta Impact",
+      };
+
+      return {
+        viewMode,
+        attributionModel: "strict",
+        compareMode: mode,
+        dateRange: { startDate: impactStartDate, endDate: impactEndDate },
+        dayRange: {
+          startDay: dayStart,
+          endDay: dayEnd,
+          label: `Since ${impactStartDate}`,
+        },
+        runRule,
+        bestBy,
+        selectedTenantIds: selectedClientTenantIds,
+        selectedFunnelTypeIds,
+        selectedRunIds,
+        availableClients,
+        availableFunnels,
+        selectedRuns: timelineRows,
+        impactTimeline: timelineRows,
+        summary: row,
+        byFunnel: [row],
+        rows: [row],
+        allocation: {
+          method: "meta_impact_outcome_window",
+          note: "Meta Impact shows outcomes inside the selected date range when the customer has any prior Meta lead touch in the downstream attribution model. Campaign starts are date shortcuts only; older Meta journeys can still produce in-window revenue, estimates, jobs, and cancellations.",
+        },
+      };
+    }
 
     const [clientsResult, funnelsResult, metricsResult] = await Promise.all([
     db.execute(sql`
@@ -804,91 +1499,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         FROM lead_cohort
         GROUP BY run_id
       ),
-      jobs_by_run AS (
-        SELECT
-          lc.run_id,
-          COUNT(DISTINCT j.id)::int AS total_jobs,
-          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_jobs,
-          COUNT(DISTINCT j.id) FILTER (WHERE j.status = 'completed' AND sej.id IS NOT NULL)::int AS completed_estimate_jobs
-        FROM lead_cohort lc
-        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
-          ${challengeJobAttributionWindowSql()}
-        LEFT JOIN sold_estimates sej ON sej.job_id = j.id AND sej.tenant_id = j.tenant_id
-        GROUP BY lc.run_id
-      ),
-      estimate_options AS (
-        SELECT
-          lc.run_id,
-          lc.unique_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
-        FROM lead_cohort lc
-        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
-        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
-        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
-          ${challengeEstimateAttributionWindowSql()}
-
-        UNION ALL
-
-        SELECT
-          lc.run_id,
-          lc.unique_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
-        FROM lead_cohort lc
-        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
-        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
-        WHERE se.lead_id IS NULL
-          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
-          ${challengeEstimateAttributionWindowSql()}
-      ),
-      estimate_per_lead AS (
-        SELECT run_id, unique_key, AVG(amount) AS avg_estimate
-        FROM estimate_options
-        GROUP BY run_id, unique_key
-      ),
-      estimates_by_run AS (
-        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
-        FROM estimate_per_lead
-        GROUP BY run_id
-      ),
-      sold_options AS (
-        SELECT
-          lc.run_id,
-          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
-        FROM lead_cohort lc
-        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
-        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
-        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
-          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
-          ${challengeEstimateAttributionWindowSql()}
-
-        UNION ALL
-
-        SELECT
-          lc.run_id,
-          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
-        FROM lead_cohort lc
-        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
-        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
-        WHERE se.lead_id IS NULL
-          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
-          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
-          ${challengeEstimateAttributionWindowSql()}
-      ),
-      sold_per_job AS (
-        SELECT run_id, sold_key, SUM(amount) AS sold_value
-        FROM sold_options
-        GROUP BY run_id, sold_key
-      ),
-      sold_by_run AS (
-        SELECT
-          run_id,
-          COALESCE(SUM(sold_value), 0)::numeric AS sold_closed_value,
-          COUNT(DISTINCT sold_key)::int AS sold_jobs
-        FROM sold_per_job
-        GROUP BY run_id
-      ),
+      ${challengeRunOutcomeCtes(attributionModel)},
       spend_by_run AS (
         SELECT
           vr.run_id,
@@ -965,12 +1576,12 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         COALESCE(spr.meta_leads, 0)::numeric AS meta_leads,
         COALESCE(lbr.unique_pulse_leads, 0)::int AS unique_pulse_leads,
         COALESCE(lbr.appointments_booked, 0)::int AS appointments_booked,
-        COALESCE(jbr.total_jobs, 0)::int AS total_jobs,
-        COALESCE(jbr.cancelled_jobs, 0)::int AS cancelled_jobs,
-        COALESCE(jbr.completed_estimate_jobs, 0)::int AS completed_estimate_jobs,
+        COALESCE(jbr.total_jobs, 0)::numeric AS total_jobs,
+        COALESCE(jbr.cancelled_jobs, 0)::numeric AS cancelled_jobs,
+        COALESCE(jbr.completed_estimate_jobs, 0)::numeric AS completed_estimate_jobs,
         COALESCE(ebr.total_estimate_value, 0)::numeric AS total_estimate_value,
         COALESCE(sbr.sold_closed_value, 0)::numeric AS sold_closed_value,
-        COALESCE(sbr.sold_jobs, 0)::int AS sold_jobs,
+        COALESCE(sbr.sold_jobs, 0)::numeric AS sold_jobs,
         COALESCE(spr.total_spend, 0)::numeric AS total_spend
       FROM valid_runs vr
       LEFT JOIN lead_by_run lbr ON lbr.run_id = vr.run_id
@@ -993,6 +1604,8 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
   const summary = summarizeChallengeRunRows(rows);
 
     return {
+      viewMode,
+      attributionModel,
       compareMode: mode,
       dayRange: {
         startDay: dayStart,
@@ -1022,8 +1635,10 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
       byFunnel: rows,
       rows,
       allocation: {
-        method: "meta_campaign_adset_funnel_mapping",
-        note: "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign/ad-set mappings for the same run days.",
+        method: attributionModel === "weighted" ? "weighted_recency_funnel_attribution" : "meta_campaign_adset_funnel_mapping",
+        note: attributionModel === "weighted"
+          ? `Weighted Funnel Mode keeps leads and spend in each run window, then splits downstream jobs, cancellations, estimates, and sold value across prior funnel entries for the same customer using recency weighting over a ${CHALLENGE_WEIGHTED_LOOKBACK_DAYS}-day lookback.`
+          : "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign/ad-set mappings for the same run days.",
       },
     };
   })();
