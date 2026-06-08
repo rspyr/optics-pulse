@@ -1,4 +1,4 @@
-import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable, integrationSyncLogsTable } from "@workspace/db";
+import { db, jobsTable, attributionEventsTable, leadsTable, tenantsTable, reconciliationRunsTable, integrationSyncLogsTable, leadStatusHistoryTable } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, desc, gte, sql, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { uploadOfflineConversions, uploadEnhancedConversions } from "./integrations/google-ads";
@@ -9,6 +9,8 @@ import { normalizePhone, hashValue, hashPhone, hashEmail, phoneMatchesSql, findL
 const LOOKBACK_DAYS = 90;
 const UNMATCHED_TIER = "unmatched";
 const LEAD_FUNNEL_TIER = "lead_funnel";
+const SOLD_PROMOTION_WINDOW_DAYS = 90;
+const SOLD_PROMOTION_REASON = "reconciliation:sold_invoice_match";
 
 export function normalizeAddress(address: string): string {
   return address
@@ -67,6 +69,84 @@ function knownFunnel(lead: LeadFunnelAttributionLead): boolean {
 
 function leadAddress(lead: LeadFunnelAttributionLead): string {
   return [lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(", ");
+}
+
+function parseMaybeDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function utcDateKey(date: Date): string {
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function isUtcMidnight(date: Date): boolean {
+  return date.getUTCHours() === 0
+    && date.getUTCMinutes() === 0
+    && date.getUTCSeconds() === 0
+    && date.getUTCMilliseconds() === 0;
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+export function isRevenueDateWithinLeadPromotionWindow(
+  leadCreatedAt: Date | string,
+  dates: {
+    stJobOriginAt?: Date | string | null;
+    completedAt?: Date | string | null;
+    invoiceDate?: Date | string | null;
+  },
+): boolean {
+  const leadCreated = parseMaybeDate(leadCreatedAt);
+  if (!leadCreated) return false;
+
+  const latestAllowed = addDays(leadCreated, SOLD_PROMOTION_WINDOW_DAYS);
+  const priorityDate =
+    parseMaybeDate(dates.stJobOriginAt) ??
+    parseMaybeDate(dates.completedAt) ??
+    parseMaybeDate(dates.invoiceDate);
+  if (!priorityDate) return false;
+
+  if (priorityDate >= leadCreated && priorityDate <= latestAllowed) return true;
+
+  // ServiceTitan invoices often arrive as date-only midnight values. Treat only
+  // those midnight invoice fallbacks as same-day eligible when exact job dates
+  // are unavailable.
+  if (dates.stJobOriginAt || dates.completedAt || !dates.invoiceDate) return false;
+  if (!isUtcMidnight(priorityDate)) return false;
+  const invoiceDay = utcDateKey(priorityDate);
+  return invoiceDay >= utcDateKey(leadCreated) && invoiceDay <= utcDateKey(latestAllowed);
+}
+
+function revenueDatePromotionSql(): SQL {
+  return sql`
+    CASE
+      WHEN ${jobsTable.stJobOriginAt} IS NOT NULL THEN
+        ${jobsTable.stJobOriginAt} >= ${leadsTable.createdAt}
+        AND ${jobsTable.stJobOriginAt} <= ${leadsTable.createdAt} + (${SOLD_PROMOTION_WINDOW_DAYS}::int * INTERVAL '1 day')
+      WHEN ${jobsTable.completedAt} IS NOT NULL THEN
+        ${jobsTable.completedAt} >= ${leadsTable.createdAt}
+        AND ${jobsTable.completedAt} <= ${leadsTable.createdAt} + (${SOLD_PROMOTION_WINDOW_DAYS}::int * INTERVAL '1 day')
+      WHEN ${jobsTable.invoiceDate} IS NOT NULL THEN
+        (
+          ${jobsTable.invoiceDate} >= ${leadsTable.createdAt}
+          AND ${jobsTable.invoiceDate} <= ${leadsTable.createdAt} + (${SOLD_PROMOTION_WINDOW_DAYS}::int * INTERVAL '1 day')
+        )
+        OR (
+          ${jobsTable.invoiceDate} = date_trunc('day', ${jobsTable.invoiceDate})
+          AND ${jobsTable.invoiceDate}::date >= ${leadsTable.createdAt}::date
+          AND ${jobsTable.invoiceDate}::date <= (${leadsTable.createdAt} + (${SOLD_PROMOTION_WINDOW_DAYS}::int * INTERVAL '1 day'))::date
+        )
+      ELSE false
+    END
+  `;
 }
 
 export function resolveLeadFunnelAttribution(
@@ -456,11 +536,9 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
   const jobsProcessed = unmatchedJobs.length;
   const matchRate = jobsProcessed > 0 ? Math.round((totalMatched / jobsProcessed) * 100 * 10) / 10 : 0;
 
-  // Auto-promote leads to `sold` whenever they are now linked to a job
-  // that has an invoice. This handles both the rows matched in *this*
-  // run (allMatchedJobIds) and serves as an idempotent backfill for any
-  // historical job→lead links that were established before this rule
-  // existed.
+  // Auto-promote leads to `sold` only when a linked, matched invoice/job is
+  // plausibly downstream of the lead. The job/estimate attribution link remains
+  // intact for Impact reporting even when the date falls outside this window.
   // `appt_booked` is the project-standard terminal positive hub state
   // and is treated as the sold-equivalent everywhere else in the
   // codebase (e.g. dashboard close-rate conditions). Promote both the
@@ -475,15 +553,35 @@ export async function runReconciliation(tenantId: number | null, triggerType: "m
         AND ${jobsTable.hasInvoice} = true
         AND ${jobsTable.matchLevel} IS NOT NULL
         AND ${jobsTable.matchLevel} <> ${UNMATCHED_TIER}
+        AND (${revenueDatePromotionSql()})
     )`,
   ];
   if (tenantId) soldPromotionConditions.push(eq(leadsTable.tenantId, tenantId));
-  const soldPromotionResult = await db.update(leadsTable)
-    .set({ status: "sold", hubStatus: "appt_booked", updatedAt: new Date() })
-    .where(and(...soldPromotionConditions))
-    .returning({ id: leadsTable.id });
-  if (soldPromotionResult.length > 0) {
-    console.log(`[Reconciliation] Promoted ${soldPromotionResult.length} lead(s) to sold (status='sold', hubStatus='appt_booked') based on invoiced jobs`);
+  const soldPromotionCandidatesResult = await db.select({
+    id: leadsTable.id,
+    tenantId: leadsTable.tenantId,
+    fromStatus: leadsTable.hubStatus,
+  }).from(leadsTable).where(and(...soldPromotionConditions));
+
+  if (soldPromotionCandidatesResult.length > 0) {
+    const promotedLeadIds = soldPromotionCandidatesResult.map((lead) => lead.id);
+    await db.update(leadsTable)
+      .set({ status: "sold", hubStatus: "appt_booked", updatedAt: new Date() })
+      .where(sql`${leadsTable.id} IN (${sql.join(promotedLeadIds.map((id) => sql`${id}`), sql`, `)})`);
+
+    const historyRows = soldPromotionCandidatesResult
+      .filter((lead) => lead.fromStatus !== "appt_booked")
+      .map((lead) => ({
+        leadId: lead.id,
+        tenantId: lead.tenantId,
+        fromStatus: lead.fromStatus,
+        toStatus: "appt_booked",
+        reason: SOLD_PROMOTION_REASON,
+      }));
+    if (historyRows.length > 0) {
+      await db.insert(leadStatusHistoryTable).values(historyRows);
+    }
+    console.log(`[Reconciliation] Promoted ${soldPromotionCandidatesResult.length} lead(s) to sold (status='sold', hubStatus='appt_booked') based on in-window invoiced jobs`);
   }
 
   await db.insert(reconciliationRunsTable).values({
