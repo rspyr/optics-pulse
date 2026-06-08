@@ -231,15 +231,10 @@ function PodiumUserLinking({ tenantId }: { tenantId: number }) {
 }
 
 export default function Settings() {
-  const { user, isAgency, selectedTenantId, setSelectedTenantId, effectiveTenantId } = useAuth();
+  const { user, isAgency, effectiveTenantId } = useAuth();
   const isClientUser = user?.role === "client_user";
   const tenantId = effectiveTenantId;
-  const { tenants, tenantsLoading } = useTenants();
-
-  useEffect(() => {
-    if (!isAgency) return;
-    if (!selectedTenantId && tenants.length > 0) setSelectedTenantId(tenants[0].id);
-  }, [isAgency, selectedTenantId, tenants, setSelectedTenantId]);
+  const { tenantsLoading } = useTenants();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -860,24 +855,6 @@ export default function Settings() {
         <p className="font-sub text-muted-foreground text-sm tracking-wide">YOUR ACCOUNT CONFIGURATION</p>
       </header>
 
-      {isAgency && tenants.length > 0 && (
-        <PremiumCard className="p-4">
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select value={selectedTenantId != null ? String(selectedTenantId) : ""} onValueChange={v => setSelectedTenantId(parseInt(v))}>
-              <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 w-auto min-w-[160px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {tenants.map(t => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </PremiumCard>
-      )}
-
       {isAgency && !tenantId && tenantsLoading && (
         <PremiumCard className="p-6">
           <div className="animate-pulse space-y-3">
@@ -890,7 +867,7 @@ export default function Settings() {
 
       {isAgency && !tenantId && !tenantsLoading && (
         <PremiumCard>
-          <p className="text-center text-muted-foreground py-8">Select a tenant above to manage settings.</p>
+          <p className="text-center text-muted-foreground py-8">Use the top-right Scope selector to choose a tenant for settings.</p>
         </PremiumCard>
       )}
 

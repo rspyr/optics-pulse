@@ -19,6 +19,7 @@ import { recordLeadStatusChange } from "../services/lead-status-history";
 import { resetBookingCache } from "../services/lead-booking-cache";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { handleResubmission } from "../services/lead-resubmission";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -1246,35 +1247,6 @@ router.post("/leads-hub/create", async (req, res) => {
     return;
   }
 
-  // Mirror routeRowToFunnel / unrouted-sheet-rows: if the phone already
-  // belongs to a lead in this tenant, treat the manual submit as a
-  // resubmission instead of creating a duplicate. Matching is done on the
-  // normalized form (digits-only, leading "1" stripped) on both sides so
-  // formatted input like "(555) 123-4567" still catches an existing
-  // "5551234567" lead.
-  const normalizedPhone = normalizePhone(typeof phone === "string" ? phone : "");
-  if (normalizedPhone) {
-    const [dup] = await db
-      .select({ id: leadsTable.id })
-      .from(leadsTable)
-      .where(and(
-        eq(leadsTable.tenantId, tenantId),
-        eq(leadsTable.phone, normalizedPhone),
-      ))
-      .limit(1);
-    if (dup) {
-      try {
-        await handleResubmission(tenantId, dup.id, "Manual Add Lead");
-      } catch (err) {
-        console.warn("[LeadsHub Create] Resubmission failed for lead", dup.id, err);
-      }
-      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dup.id));
-      if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
-      res.status(200).json({ ...(refreshed ?? { id: dup.id }), resubmitted: true });
-      return;
-    }
-  }
-
   let validatedCsrId: number | null = null;
   let csrName: string | null = null;
   if (assignedCsrId) {
@@ -1308,24 +1280,51 @@ router.post("/leads-hub/create", async (req, res) => {
   const initialHubStatus = parsedCallbackAt ? "call_back" : "day_1";
   const initialLeadStatus = parsedCallbackAt ? "contacted" : "new";
 
-  const [lead] = await db.insert(leadsTable).values({
+  const dedupeResult = await createLeadWithDedupe(
     tenantId,
-    firstName,
-    lastName,
-    phone: phone ? normalizePhone(phone) || null : null,
-    email: email || null,
-    source: normalizedSource,
-    originalSource: normalizedSource,
-    serviceType: serviceType || null,
-    funnelId: funnelId || null,
-    assignedCsrId: validatedCsrId,
-    assignedTo: csrName,
-    contactPreferences: contactPreferences || [],
-    hubStatus: initialHubStatus,
-    dayInSequence: 1,
-    status: initialLeadStatus,
-    callbackAt: parsedCallbackAt,
-  }).returning();
+    { phone: typeof phone === "string" ? phone : null, email: typeof email === "string" ? email : null },
+    async (tx, lockedIdentity) => {
+      const [lead] = await tx.insert(leadsTable).values({
+        tenantId,
+        firstName,
+        lastName,
+        phone: lockedIdentity.phone,
+        email: lockedIdentity.email,
+        source: normalizedSource,
+        originalSource: normalizedSource,
+        serviceType: serviceType || null,
+        funnelId: funnelId || null,
+        assignedCsrId: validatedCsrId,
+        assignedTo: csrName,
+        contactPreferences: contactPreferences || [],
+        hubStatus: initialHubStatus,
+        dayInSequence: 1,
+        status: initialLeadStatus,
+        callbackAt: parsedCallbackAt,
+      }).returning();
+      return lead;
+    },
+    {
+      createdAfter: new Date(Date.now() - LEAD_INQUIRY_DEDUPE_WINDOW_MS),
+      funnelId: funnelId || null,
+      requireSameFunnelWhenKnown: true,
+      skipDeadLeads: true,
+    },
+  );
+
+  if (dedupeResult.deduplicated) {
+    try {
+      await handleResubmission(tenantId, dedupeResult.lead.id, "Manual Add Lead");
+    } catch (err) {
+      console.warn("[LeadsHub Create] Resubmission failed for lead", dedupeResult.lead.id, err);
+    }
+    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dedupeResult.lead.id));
+    if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+    res.status(200).json({ ...(refreshed ?? { id: dedupeResult.lead.id }), resubmitted: true });
+    return;
+  }
+
+  const lead = dedupeResult.lead;
 
   await recordLeadStatusChange({
     leadId: lead.id,

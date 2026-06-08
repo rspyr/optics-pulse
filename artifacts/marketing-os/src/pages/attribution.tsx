@@ -38,7 +38,7 @@ interface FunnelAliasGroup {
 }
 
 export default function Attribution() {
-  const { tenants, localTenantId, effectiveTenantId, setSelectedTenantId, isAgency, tenantsLoading } = useTenantFilter();
+  const { effectiveTenantId, isAgency, tenantsLoading } = useTenantFilter();
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterMatch, setFilterMatch] = useState<string>("all");
@@ -592,33 +592,6 @@ export default function Attribution() {
         )}
       </header>
 
-      {isAgency && tenants.length > 0 && (
-        <PremiumCard className="p-4">
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select
-              value={localTenantId != null ? String(localTenantId) : "all"}
-              onValueChange={v => setSelectedTenantId(v === "all" ? null : parseInt(v))}
-            >
-              <SelectTrigger className="w-auto bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tenants</SelectItem>
-                {tenants.map(t => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {localTenantId == null && (
-              <span className="text-[11px] text-white/40">
-                Ingestion Mode &amp; Funnel Aliases tabs require a specific tenant.
-              </span>
-            )}
-          </div>
-        </PremiumCard>
-      )}
-
       {isAgency && effectiveTenantId == null && tenantsLoading && (
         <PremiumCard className="p-6">
           <div className="animate-pulse space-y-3">
@@ -632,7 +605,7 @@ export default function Attribution() {
       {isAgency && effectiveTenantId == null && !tenantsLoading && (
         <PremiumCard className="p-6">
           <p className="text-sm text-white/50">
-            Select a tenant above (or in the header SCOPE chip) to view attribution events.
+            Use the top-right Scope selector to choose a tenant for attribution events, ingestion mode, and funnel rules.
           </p>
         </PremiumCard>
       )}

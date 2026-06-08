@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, trackerHeartbeatsTable, tenantsTable, attributionEventsTable, leadsTable, funnelTypesTable, tenantFunnelTypesTable, callAttemptsTable } from "@workspace/db";
 import { TrackerSubmitBody } from "@workspace/api-zod";
-import { eq, and, gte } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { emitNewAttributionEvent } from "../socket";
 import { scheduleOrEmitNewLead } from "../services/lead-notify-scheduler";
@@ -15,8 +15,9 @@ import { detectFields } from "../services/field-detection";
 import { normalizeFunnel } from "../services/funnel-normalizer";
 import { resolveSubdomainFunnel } from "../services/subdomain-funnel-resolver";
 import { resolveRouteFunnel } from "../services/route-funnel-resolver";
-import { hashValue, normalizePhone, hashPhone } from "../lib/phone-utils";
+import { hashValue, hashPhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS, TRACKER_RETRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 import { emitLeadUpdated } from "../socket";
 import { logTrackerAttempt, updateTrackerAttempt } from "../services/tracker-audit";
 
@@ -556,117 +557,83 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
 
       if (!isTestLead) {
         const resolvedLeadType = resolvedFunnelStr || (utmSource || "form");
-
-        if (ingestionMode === "both") {
-          const overlapWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
-          let isDuplicate = false;
-          if (pii.phone) {
-            const normalizedPhone = normalizePhone(pii.phone);
-            const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-              .from(leadsTable)
-              .where(and(
-                eq(leadsTable.tenantId, tenantId),
-                gte(leadsTable.createdAt, overlapWindow),
-              ));
-            isDuplicate = recentLeads.some(l =>
-              l.phone && normalizePhone(l.phone) === normalizedPhone
-            );
-          }
-          if (!isDuplicate && pii.email) {
-            const emailLower = pii.email.toLowerCase().trim();
-            const emailLeads = await db.select({ id: leadsTable.id })
-              .from(leadsTable)
-              .where(and(
-                eq(leadsTable.tenantId, tenantId),
-                eq(leadsTable.email, emailLower),
-                gte(leadsTable.createdAt, overlapWindow),
-              ))
-              .limit(1);
-            isDuplicate = emailLeads.length > 0;
-          }
-          if (isDuplicate) {
-            // Resurface as resubmission instead of silently suppressing
-            let dupLeadId: number | null = null;
-            if (pii.phone) {
-              const normalizedPhone = normalizePhone(pii.phone);
-              const recentLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-                .from(leadsTable)
-                .where(and(
-                  eq(leadsTable.tenantId, tenantId),
-                  gte(leadsTable.createdAt, overlapWindow),
-                ));
-              const dup = recentLeads.find(l => l.phone && normalizePhone(l.phone) === normalizedPhone);
-              dupLeadId = dup?.id ?? null;
-            }
-            if (!dupLeadId && pii.email) {
-              const emailLower = pii.email.toLowerCase().trim();
-              const [emailDup] = await db.select({ id: leadsTable.id }).from(leadsTable)
-                .where(and(
-                  eq(leadsTable.tenantId, tenantId),
-                  eq(leadsTable.email, emailLower),
-                  gte(leadsTable.createdAt, overlapWindow),
-                ))
-                .limit(1);
-              dupLeadId = emailDup?.id ?? null;
-            }
-            if (dupLeadId) {
-              const result = await handleResubmission(tenantId, dupLeadId, "Universal Tracker");
-              await db.update(attributionEventsTable)
-                .set({ createdLeadId: dupLeadId })
-                .where(eq(attributionEventsTable.id, event.id));
-              const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dupLeadId));
-              if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
-              await updateTrackerAttempt(auditId, {
-                tenantId,
-                clientId,
-                outcome: "resubmitted",
-                httpStatus: 200,
-                message: `Resurfaced as resubmission on lead #${dupLeadId}`,
-                attributionEventId: event.id,
-              });
-              res.json({ success: true, eventId: event.id, deduplicated: true, resubmitted: true, reactivated: result.reactivated, duplicateLeadId: dupLeadId });
-              return;
-            }
-            await updateTrackerAttempt(auditId, {
-              tenantId,
-              clientId,
-              outcome: "duplicate",
-              httpStatus: 200,
-              message: "Duplicate of recent lead within 48h overlap window",
-              attributionEventId: event.id,
-            });
-            res.json({ success: true, eventId: event.id, deduplicated: true });
-            return;
-          }
-        }
-
         const rawApptDate = detection.fields.find(f => f.mapsTo === "appointmentDate")?.value || null;
         const rawApptTime = detection.fields.find(f => f.mapsTo === "appointmentTime")?.value || null;
         const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
+        const dedupeWindowMs = ingestionMode === "both"
+          ? LEAD_INQUIRY_DEDUPE_WINDOW_MS
+          : TRACKER_RETRY_DEDUPE_WINDOW_MS;
 
-        const [newLead] = await db.insert(leadsTable).values({
+        const dedupeResult = await createLeadWithDedupe(
           tenantId,
-          firstName: pii.firstName || "Unknown",
-          lastName: pii.lastName || "",
-          phone: pii.phone ? normalizePhone(pii.phone) || null : null,
-          email: pii.email || null,
-          source: resolvedSourceStr,
-          originalSource: resolvedSourceStr,
-          matchedGclid: gclid || null,
-          interestType: null,
-          leadType: resolvedLeadType,
-          funnelId: resolvedFunnelId,
-          appointmentDate: rawApptDate,
-          appointmentTime: rawApptTime,
-          hubStatus: hasApptDetails ? "appt_booked" : "day_1",
-          preBooked: hasApptDetails,
-          dayInSequence: 1,
-          status: "new",
-          address: detection.addressParts.street || null,
-          city: detection.addressParts.city || null,
-          state: detection.addressParts.state || null,
-          zip: detection.addressParts.zip || null,
-        }).returning();
+          { phone: pii.phone, email: pii.email },
+          async (tx, identity) => {
+            const [newLead] = await tx.insert(leadsTable).values({
+              tenantId,
+              firstName: pii.firstName || "Unknown",
+              lastName: pii.lastName || "",
+              phone: identity.phone,
+              email: identity.email,
+              source: resolvedSourceStr,
+              originalSource: resolvedSourceStr,
+              matchedGclid: gclid || null,
+              interestType: null,
+              leadType: resolvedLeadType,
+              funnelId: resolvedFunnelId,
+              appointmentDate: rawApptDate,
+              appointmentTime: rawApptTime,
+              addOns: null,
+              hubStatus: hasApptDetails ? "appt_booked" : "day_1",
+              preBooked: hasApptDetails,
+              dayInSequence: 1,
+              status: "new",
+              address: detection.addressParts.street || null,
+              city: detection.addressParts.city || null,
+              state: detection.addressParts.state || null,
+              zip: detection.addressParts.zip || null,
+            }).returning();
+            return newLead;
+          },
+          {
+            createdAfter: new Date(Date.now() - dedupeWindowMs),
+            funnelId: resolvedFunnelId,
+            requireSameFunnelWhenKnown: true,
+            skipDeadLeads: true,
+          },
+        );
+
+        if (dedupeResult.deduplicated) {
+          const result = await handleResubmission(tenantId, dedupeResult.lead.id, "Universal Tracker", {
+            appointmentDate: rawApptDate,
+            appointmentTime: rawApptTime,
+            addOns: null,
+            submittedAt: Number.isNaN(submittedAt.getTime()) ? null : submittedAt,
+          });
+          await db.update(attributionEventsTable)
+            .set({ createdLeadId: dedupeResult.lead.id })
+            .where(eq(attributionEventsTable.id, event.id));
+          const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, dedupeResult.lead.id));
+          if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
+          await updateTrackerAttempt(auditId, {
+            tenantId,
+            clientId,
+            outcome: "resubmitted",
+            httpStatus: 200,
+            message: `Resurfaced as ${dedupeResult.matchedBy}-matched resubmission on lead #${dedupeResult.lead.id}`,
+            attributionEventId: event.id,
+          });
+          res.json({
+            success: true,
+            eventId: event.id,
+            deduplicated: true,
+            resubmitted: true,
+            reactivated: result.reactivated,
+            duplicateLeadId: dedupeResult.lead.id,
+          });
+          return;
+        }
+
+        const newLead = dedupeResult.lead;
 
         if (newLead) {
           const { recordLeadStatusChange } = await import("../services/lead-status-history");

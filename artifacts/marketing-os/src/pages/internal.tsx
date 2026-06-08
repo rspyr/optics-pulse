@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAuth } from "@/components/auth-context";
-import { useGetCrossTenantOverview, useListLeads, useGetReconciliationStatus, useRunReconciliation, useListTenants } from "@workspace/api-client-react";
+import { useGetCrossTenantOverview, useListLeads, useGetReconciliationStatus, useRunReconciliation } from "@workspace/api-client-react";
 import type { ReconciliationRun } from "@workspace/api-client-react";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
 import { formatCurrency } from "@/lib/utils";
@@ -97,42 +97,15 @@ export default function Internal() {
     );
   }, [rangePreset, customRange]);
 
-  // The tenant filter lives in AuthContext so the same selection scopes
-  // /attribution, /admin/tenants, and any other admin surface — and survives
-  // page reloads via shared localStorage. "All Tenants" is represented as
-  // `null` and restores the agency-wide view everywhere.
-  const { selectedTenantId: globalTenantId, setSelectedTenantId: setGlobalTenantId } = useAuth();
+  const { selectedTenantId: globalTenantId } = useAuth();
 
   const { data, isLoading } = useGetCrossTenantOverview({ startDate, endDate, tenantId: globalTenantId ?? undefined });
   const { data: reconStatus, refetch: refetchRecon } = useGetReconciliationStatus(globalTenantId ? { tenantId: globalTenantId } : undefined);
   const reconMutation = useRunReconciliation();
-  // Unfiltered tenant list for the global selector — `data.tenants` collapses
-  // to a single row when a tenant is selected, so we can't drive the dropdown
-  // off of it.
-  const { data: allTenants } = useListTenants();
-  const tenantOptions = useMemo(() => {
-    const all = allTenants ?? [];
-    const active = all
-      .filter((t) => t.isActive !== false)
-      .map((t) => ({ id: t.id, name: t.name, inactive: false }));
-    // If the persisted selection points at a tenant that's been deactivated,
-    // surface it in the dropdown with an "(inactive)" tag so the admin can
-    // see what's selected and switch away — otherwise the trigger renders
-    // blank and the user has no easy escape hatch.
-    if (globalTenantId && !active.some((t) => t.id === globalTenantId)) {
-      const inactive = all.find((t) => t.id === globalTenantId);
-      if (inactive) {
-        active.push({ id: inactive.id, name: inactive.name, inactive: true });
-      }
-    }
-    return active.sort((a, b) => a.name.localeCompare(b.name));
-  }, [allTenants, globalTenantId]);
   const selectedTenantName = useMemo(() => {
     if (!globalTenantId) return null;
-    return tenantOptions.find((t) => t.id === globalTenantId)?.name
-      ?? data?.tenants?.[0]?.tenantName
-      ?? null;
-  }, [globalTenantId, tenantOptions, data?.tenants]);
+    return data?.tenants?.[0]?.tenantName ?? null;
+  }, [globalTenantId, data?.tenants]);
 
   const [sortKey, setSortKey] = useState<SortKey>("roas");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -409,7 +382,7 @@ export default function Internal() {
     const meta = BACKFILL_INTEGRATIONS[integ];
     if (!meta) return;
     if (!syncTenantId) {
-      toast({ title: "Pick a tenant first", description: "Backfill runs against a single tenant — choose one from the selector above.", variant: "destructive" });
+      toast({ title: "Pick a tenant first", description: "Backfill runs against a single tenant — choose one from the top-right Scope selector.", variant: "destructive" });
       return;
     }
     const days = Number(backfillDays[integ] ?? meta.default);
@@ -480,7 +453,7 @@ export default function Internal() {
   // we surface progress via toasts and refresh the status panel afterward.
   const recomputeRevenue = () => {
     if (!syncTenantId) {
-      toast({ title: "Pick a tenant first", description: "Revenue recompute runs against a single tenant — choose one from the selector above.", variant: "destructive" });
+      toast({ title: "Pick a tenant first", description: "Revenue recompute runs against a single tenant — choose one from the top-right Scope selector.", variant: "destructive" });
       return;
     }
     if (!confirm("Recompute ServiceTitan revenue for this tenant? This runs a full re-sync of all invoices and estimates with the corrected rebate logic and may take several minutes.")) return;
@@ -529,7 +502,7 @@ export default function Internal() {
 
   const triggerSync = async (integration: string) => {
     if (!syncTenantId) {
-      toast({ title: "Pick a tenant first", description: "Manual sync runs against a single tenant — choose one from the tenant selector at the top of the page.", variant: "destructive" });
+      toast({ title: "Pick a tenant first", description: "Manual sync runs against a single tenant — choose one from the top-right Scope selector.", variant: "destructive" });
       return;
     }
     const targetTenantId = syncTenantId;
@@ -687,25 +660,6 @@ export default function Internal() {
             endDate={endDate}
             onChange={handleRangeChange}
           />
-          <div className="flex items-center gap-2 bg-card border border-white/10 rounded-lg px-3 py-1">
-            <Users className="w-4 h-4 text-muted-foreground" />
-            <Select
-              value={globalTenantId != null ? String(globalTenantId) : "all"}
-              onValueChange={(v) => setGlobalTenantId(v === "all" ? null : Number(v))}
-            >
-              <SelectTrigger className="bg-transparent border-0 text-white text-sm w-auto min-w-[160px] focus:outline-none focus:ring-0 px-0 py-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tenants</SelectItem>
-                {tenantOptions.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>
-                    {t.inactive ? `${t.name} (inactive)` : t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="flex items-center gap-2 bg-card border border-white/10 rounded-lg px-3 py-2">
             <Filter className="w-4 h-4 text-muted-foreground" />
             <input
@@ -1203,7 +1157,7 @@ export default function Internal() {
                             onClick={() => triggerBackfill(integ)}
                             disabled={integBusy || !syncTenantId || bf?.status === "running"}
                             className="ml-auto text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
-                            title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
+                            title={!syncTenantId ? "Pick a tenant from the top-right Scope selector" : undefined}
                           >
                             {integBusy || bf?.status === "running"
                               ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -1220,7 +1174,7 @@ export default function Internal() {
                               onClick={recomputeRevenue}
                               disabled={recomputeBusy || !syncTenantId || bf?.status === "running"}
                               className="text-xs py-1 px-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center gap-1"
-                              title={!syncTenantId ? "Pick a tenant from the selector above" : undefined}
+                              title={!syncTenantId ? "Pick a tenant from the top-right Scope selector" : undefined}
                             >
                               {recomputeBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                               Recompute revenue
@@ -1375,7 +1329,7 @@ export default function Internal() {
                 <button
                   onClick={() => triggerSync(integ)}
                   disabled={!!syncLoading[integ] || !syncTenantId}
-                  title={!syncTenantId ? "Pick a tenant from the selector at the top of the page" : undefined}
+                  title={!syncTenantId ? "Pick a tenant from the top-right Scope selector" : undefined}
                   className="mt-3 w-full text-xs py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
                 >
                   {syncLoading[integ] ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}

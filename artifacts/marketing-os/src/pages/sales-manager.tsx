@@ -4921,9 +4921,6 @@ export default function SalesManager() {
     }
   }, [isAgency, globalTenantId, setSelectedTenantId]);
 
-  // The Tenant <Select> on this page mirrors the global SCOPE chip in the
-  // header. We deliberately don't auto-pick a tenant here — that was making
-  // the chip "jump" on navigation. Operator must pick one explicitly.
   const selectedTenantId = isAgency ? globalTenantId : (user?.tenantId ?? null);
   const effectiveTenantId = selectedTenantId;
   const isClientUser = !isAgency && user?.role === "client_user";
@@ -4963,27 +4960,6 @@ export default function SalesManager() {
         </div>
       </div>
 
-      {isAgency && tenants.length > 0 && (
-        <PremiumCard className="p-4">
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-white/40 uppercase tracking-wider">Tenant</label>
-            <Select
-              value={selectedTenantId != null ? String(selectedTenantId) : undefined}
-              onValueChange={v => setSelectedTenantId(parseInt(v))}
-            >
-              <SelectTrigger className="bg-white/5 border border-white/10 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-primary/50 h-auto w-auto min-w-[140px]">
-                <SelectValue placeholder="Select tenant..." />
-              </SelectTrigger>
-              <SelectContent>
-                {tenants.map(t => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </PremiumCard>
-      )}
-
       {isAgency && !selectedTenantId && tenantsLoading && (
         <PremiumCard className="p-6">
           <div className="animate-pulse space-y-3">
@@ -4997,7 +4973,7 @@ export default function SalesManager() {
       {isAgency && !selectedTenantId && !tenantsLoading && (
         <PremiumCard className="p-6 text-center">
           <p className="text-sm text-white/60">
-            Select a tenant above (or in the header SCOPE chip) to view the Sales Manager Hub.
+            Use the top-right Scope selector to choose a tenant for the Sales Manager Hub.
           </p>
         </PremiumCard>
       )}

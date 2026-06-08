@@ -13,9 +13,9 @@ export interface TenantOption {
  * Shared tenant list source for every tenant-scoped admin surface.
  *
  * Fetches `/api/tenants` once per session (deduped + cached by react-query)
- * so that the header SCOPE chip, per-page TENANT dropdowns, and "Select a
- * tenant" empty states all read from the same source and show a consistent
- * loading skeleton instead of issuing duplicate requests on every page.
+ * so that the header SCOPE chip and "Select a tenant" empty states all read
+ * from the same source and show a consistent loading skeleton instead of
+ * issuing duplicate requests on every page.
  *
  * The raw payload is preserved (not mapped down) so heavier admin surfaces
  * like `admin-tenants` can read additional fields (loadableConfig, isActive,

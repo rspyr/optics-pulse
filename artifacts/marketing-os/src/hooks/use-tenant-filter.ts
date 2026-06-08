@@ -7,9 +7,8 @@ export type { TenantOption };
 /**
  * Tenant filter hook shared by every admin surface that scopes itself by
  * tenant. Reads from / writes to the global persisted selection in
- * `AuthContext` so the header SCOPE chip and any per-page TENANT dropdown
- * always show the same value — including across navigation and full page
- * reloads.
+ * `AuthContext` so the header SCOPE chip drives tenant-scoped pages
+ * consistently across navigation and full page reloads.
  *
  * The tenant list itself is fetched once per session by the shared
  * `useTenants` hook (deduped + cached by react-query) so every consumer
@@ -45,8 +44,8 @@ export function useTenantFilter(tenantIdOverride?: number) {
     setGlobalTenantId(id);
   }, [setGlobalTenantId]);
 
-  // `localTenantId` is kept for backwards compat with existing callers that
-  // bind a <Select> to it. It mirrors the persisted global selection.
+  // `localTenantId` is kept for compatibility with scoped embeds/deep links.
+  // It mirrors the persisted global selection when no override is supplied.
   const localTenantId = tenantIdOverride ?? globalTenantId;
 
   const effectiveTenantId = tenantIdOverride

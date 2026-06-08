@@ -10,8 +10,8 @@ import { scheduleAutoPass } from "../services/auto-pass-scheduler";
 import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
-import { normalizePhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 import { emitLeadUpdated } from "../socket";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
@@ -376,14 +376,6 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       return;
     }
 
-    const existingPhoneToLeadId = new Map<string, number>();
-    const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone })
-      .from(leadsTable)
-      .where(eq(leadsTable.tenantId, config.tenantId));
-    for (const l of existingLeads) {
-      if (l.phone) existingPhoneToLeadId.set(normalizePhone(l.phone), l.id);
-    }
-
     let imported = 0;
     let skipped = 0;
     let resubmitted = 0;
@@ -392,20 +384,6 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
     const resubmittedLeadIds: number[] = [];
 
     for (const row of rows) {
-      const normalizedPhone = normalizePhone(row.phone || "");
-      if (normalizedPhone && existingPhoneToLeadId.has(normalizedPhone)) {
-        const dupLeadId = existingPhoneToLeadId.get(normalizedPhone)!;
-        try {
-          await handleResubmission(config.tenantId, dupLeadId, "Google Sheets");
-          resubmittedLeadIds.push(dupLeadId);
-          resubmitted++;
-        } catch (err) {
-          console.warn("[SheetsIngest] Resubmission failed for lead", dupLeadId, err);
-          skipped++;
-        }
-        continue;
-      }
-
       if (!row.firstName && !row.lastName) {
         skipped++;
         continue;
@@ -438,8 +416,6 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         continue;
       }
 
-      if (normalizedPhone) existingPhoneToLeadId.set(normalizedPhone, 0);
-
       const isPreBooked = isPreBookedCellValue(row.appointmentBooked);
       const hasApptDetails = isValidAppointmentValue(row.appointmentDate) || isValidAppointmentValue(row.appointmentTime);
       const effectivePreBooked = isPreBooked || hasApptDetails;
@@ -452,32 +428,59 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
         : null;
 
       const normalizedIntakeSource = await normalizeSource(config.tenantId, row.source || "Unknown");
-      const [lead] = await db.insert(leadsTable).values({
-        tenantId: config.tenantId,
-        firstName: row.firstName || "Unknown",
-        lastName: row.lastName || "",
-        phone: normalizedPhone || null,
-        email: row.email || null,
-        source: normalizedIntakeSource,
-        originalSource: normalizedIntakeSource,
-        serviceType: row.serviceType || null,
-        notes: row.notes || null,
-        address: row.address || null,
-        city: row.city || null,
-        state: row.state || null,
-        zip: row.zip || null,
-        appointmentDate: row.appointmentDate || null,
-        appointmentTime: row.appointmentTime || null,
-        addOns: row.addOns || null,
-        visibleAfter,
-        funnelId: resolvedFunnelId,
-        leadType: funnelName || null,
-        hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
-        dayInSequence: 1,
-        status: "new",
-        preBooked: effectivePreBooked,
-        contactPreferences: [],
-      }).returning();
+      const dedupeResult = await createLeadWithDedupe(
+        config.tenantId,
+        { phone: row.phone, email: row.email },
+        async (tx, lockedIdentity) => {
+          const [lead] = await tx.insert(leadsTable).values({
+            tenantId: config.tenantId,
+            firstName: row.firstName || "Unknown",
+            lastName: row.lastName || "",
+            phone: lockedIdentity.phone,
+            email: lockedIdentity.email,
+            source: normalizedIntakeSource,
+            originalSource: normalizedIntakeSource,
+            serviceType: row.serviceType || null,
+            notes: row.notes || null,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null,
+            zip: row.zip || null,
+            appointmentDate: row.appointmentDate || null,
+            appointmentTime: row.appointmentTime || null,
+            addOns: row.addOns || null,
+            visibleAfter,
+            funnelId: resolvedFunnelId,
+            leadType: funnelName || null,
+            hubStatus: effectivePreBooked ? "appt_booked" : "day_1",
+            dayInSequence: 1,
+            status: "new",
+            preBooked: effectivePreBooked,
+            contactPreferences: [],
+          }).returning();
+          return lead;
+        },
+        {
+          createdAfter: new Date(Date.now() - LEAD_INQUIRY_DEDUPE_WINDOW_MS),
+          funnelId: resolvedFunnelId,
+          requireSameFunnelWhenKnown: true,
+          skipDeadLeads: true,
+        },
+      );
+
+      if (dedupeResult.deduplicated) {
+        try {
+          await handleResubmission(config.tenantId, dedupeResult.lead.id, "Google Sheets");
+          resubmittedLeadIds.push(dedupeResult.lead.id);
+          resubmitted++;
+        } catch (err) {
+          console.warn("[SheetsIngest] Resubmission failed for lead", dedupeResult.lead.id, err);
+          skipped++;
+        }
+        continue;
+      }
+
+      const lead = dedupeResult.lead;
 
       if (lead) {
         const { recordLeadStatusChange } = await import("../services/lead-status-history");
