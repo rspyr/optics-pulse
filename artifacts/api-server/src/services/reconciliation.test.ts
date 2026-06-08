@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hashValue, normalizePhone } from "../lib/phone-utils";
-import { normalizeAddress, resolveLeadFunnelAttribution } from "./reconciliation";
+import { isRevenueDateWithinLeadPromotionWindow, normalizeAddress, resolveLeadFunnelAttribution } from "./reconciliation";
 
 describe("hashValue", () => {
   it("returns a sha256 hex digest", () => {
@@ -179,5 +179,53 @@ describe("resolveLeadFunnelAttribution", () => {
     );
 
     expect(result).toBeNull();
+  });
+});
+
+describe("isRevenueDateWithinLeadPromotionWindow", () => {
+  const leadCreatedAt = "2026-06-06T23:18:03.000Z";
+
+  it("rejects invoices from before the lead was created", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      invoiceDate: "2021-07-01T00:00:00.000Z",
+    })).toBe(false);
+  });
+
+  it("rejects job origin dates from earlier on the same day", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      stJobOriginAt: "2026-06-06T15:00:00.000Z",
+      invoiceDate: "2026-06-07T00:00:00.000Z",
+    })).toBe(false);
+  });
+
+  it("allows a valid post-lead job inside the 90-day promotion window", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      stJobOriginAt: "2026-06-07T15:00:00.000Z",
+    })).toBe(true);
+  });
+
+  it("rejects post-lead jobs after the 90-day promotion window", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      completedAt: "2026-09-06T23:18:04.000Z",
+    })).toBe(false);
+  });
+
+  it("allows same-day date-only invoice values when no job dates are available", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      invoiceDate: "2026-06-06T00:00:00.000Z",
+    })).toBe(true);
+  });
+
+  it("rejects earlier same-day invoice timestamps that are not date-only values", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      invoiceDate: "2026-06-06T15:00:00.000Z",
+    })).toBe(false);
+  });
+
+  it("uses job dates ahead of invoice dates when deciding promotion eligibility", () => {
+    expect(isRevenueDateWithinLeadPromotionWindow(leadCreatedAt, {
+      completedAt: "2026-06-06T15:00:00.000Z",
+      invoiceDate: "2026-06-07T00:00:00.000Z",
+    })).toBe(false);
   });
 });
