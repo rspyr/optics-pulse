@@ -56,8 +56,8 @@ function makeInsertChain(results: () => unknown[], onValues?: (v: unknown) => vo
   };
 }
 
-vi.mock("@workspace/db", () => ({
-  db: {
+vi.mock("@workspace/db", () => {
+  const dbObj: Record<string, unknown> = {
     select: vi.fn().mockImplementation((..._args: unknown[]) => {
       const idx = mockDb._selectIdx++;
       return makeSelectChain(() => mockDb.selectResults[idx] || []);
@@ -72,18 +72,27 @@ vi.mock("@workspace/db", () => ({
     update: vi.fn().mockImplementation(() => ({
       set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
     })),
-  },
-  trackerHeartbeatsTable: Symbol("trackerHeartbeatsTable"),
-  tenantsTable: Symbol("tenantsTable"),
-  attributionEventsTable: Symbol("attributionEventsTable"),
-  leadsTable: Symbol("leadsTable"),
-  funnelTypesTable: Symbol("funnelTypesTable"),
-  tenantFunnelTypesTable: Symbol("tenantFunnelTypesTable"),
-  callAttemptsTable: Symbol("callAttemptsTable"),
-  fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
-  funnelAliasesTable: Symbol("funnelAliasesTable"),
-  routeFunnelRulesTable: Symbol("routeFunnelRulesTable"),
-}));
+    execute: vi.fn().mockResolvedValue(undefined),
+  };
+  // The dedupe path runs inside db.transaction(); route the transaction
+  // callback through the same mock so tx.select/tx.insert/tx.execute share the
+  // index counters and insertCalls tracking as the top-level db.
+  dbObj.transaction = vi.fn().mockImplementation((cb: (tx: unknown) => unknown) => cb(dbObj));
+  return {
+    db: dbObj,
+    trackerHeartbeatsTable: Symbol("trackerHeartbeatsTable"),
+    tenantsTable: Symbol("tenantsTable"),
+    attributionEventsTable: Symbol("attributionEventsTable"),
+    leadsTable: Symbol("leadsTable"),
+    leadStatusHistoryTable: Symbol("leadStatusHistoryTable"),
+    funnelTypesTable: Symbol("funnelTypesTable"),
+    tenantFunnelTypesTable: Symbol("tenantFunnelTypesTable"),
+    callAttemptsTable: Symbol("callAttemptsTable"),
+    fieldMappingRulesTable: Symbol("fieldMappingRulesTable"),
+    funnelAliasesTable: Symbol("funnelAliasesTable"),
+    routeFunnelRulesTable: Symbol("routeFunnelRulesTable"),
+  };
+});
 
 vi.mock("../socket", () => ({
   emitNewLead: vi.fn(),
@@ -150,8 +159,13 @@ vi.mock("../services/reconciliation", () => ({
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((...args: unknown[]) => args),
   and: vi.fn((...args: unknown[]) => args),
+  or: vi.fn((...args: unknown[]) => args),
+  ne: vi.fn((...args: unknown[]) => args),
   gte: vi.fn((...args: unknown[]) => args),
+  desc: vi.fn((...args: unknown[]) => args),
+  isNull: vi.fn((...args: unknown[]) => args),
   inArray: vi.fn((...args: unknown[]) => args),
+  sql: vi.fn((...args: unknown[]) => args),
 }));
 
 import express from "express";
@@ -347,7 +361,9 @@ describe("POST /collect/submit", () => {
     const tenant = { id: 6, name: "Tenant", leadIngestionMode: "tracker" };
     const fakeEvent = { id: 200, tenantId: 6 };
     const fakeLead = { id: 40, tenantId: 6 };
-    mockDb.selectResults = [[tenant], [fakeLead]];
+    // selectResults[0] = tenant lookup; the dedupe identity lookups inside the
+    // transaction default to [] (no existing lead) so createLead runs.
+    mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent], [fakeLead], []];
 
     await sendRequest(app, "/collect/submit", {
@@ -419,7 +435,9 @@ describe("POST /collect/submit", () => {
     const tenant = { id: 8, name: "Tenant", leadIngestionMode: "tracker" };
     const fakeEvent = { id: 500, tenantId: 8 };
     const fakeLead = { id: 50, tenantId: 8 };
-    mockDb.selectResults = [[tenant], [fakeLead]];
+    // selectResults[0] = tenant lookup; the dedupe identity lookups inside the
+    // transaction default to [] (no existing lead) so createLead runs.
+    mockDb.selectResults = [[tenant]];
     mockDb.insertResults = [[fakeEvent], [fakeLead], []];
 
     await sendRequest(app, "/collect/submit", {
