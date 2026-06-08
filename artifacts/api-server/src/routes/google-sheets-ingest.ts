@@ -11,7 +11,7 @@ import { isValidAppointmentValue } from "../utils/appointment-validation";
 import { isPreBookedCellValue } from "../utils/pre-booked-trigger";
 import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
-import { createLeadWithDedupe, normalizeLeadIdentity, type NormalizedLeadIdentity } from "../services/lead-dedupe";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 import { emitLeadUpdated } from "../socket";
 import { assertResourceTenantAccess } from "../lib/tenant-scope";
 
@@ -376,23 +376,6 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
       return;
     }
 
-    const existingPhoneToLeadId = new Map<string, number>();
-    const existingEmailToLeadId = new Map<string, number>();
-    const registerIdentity = (leadId: number, identity: NormalizedLeadIdentity) => {
-      if (identity.phone) existingPhoneToLeadId.set(identity.phone, leadId);
-      if (identity.email) existingEmailToLeadId.set(identity.email, leadId);
-    };
-    const findKnownLeadId = (identity: NormalizedLeadIdentity): number | null =>
-      (identity.phone ? existingPhoneToLeadId.get(identity.phone) : undefined)
-      ?? (identity.email ? existingEmailToLeadId.get(identity.email) : undefined)
-      ?? null;
-    const existingLeads = await db.select({ id: leadsTable.id, phone: leadsTable.phone, email: leadsTable.email })
-      .from(leadsTable)
-      .where(eq(leadsTable.tenantId, config.tenantId));
-    for (const l of existingLeads) {
-      registerIdentity(l.id, normalizeLeadIdentity({ phone: l.phone, email: l.email }));
-    }
-
     let imported = 0;
     let skipped = 0;
     let resubmitted = 0;
@@ -401,20 +384,6 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
     const resubmittedLeadIds: number[] = [];
 
     for (const row of rows) {
-      const identity = normalizeLeadIdentity({ phone: row.phone, email: row.email });
-      const knownLeadId = findKnownLeadId(identity);
-      if (knownLeadId) {
-        try {
-          await handleResubmission(config.tenantId, knownLeadId, "Google Sheets");
-          resubmittedLeadIds.push(knownLeadId);
-          resubmitted++;
-        } catch (err) {
-          console.warn("[SheetsIngest] Resubmission failed for lead", knownLeadId, err);
-          skipped++;
-        }
-        continue;
-      }
-
       if (!row.firstName && !row.lastName) {
         skipped++;
         continue;
@@ -491,6 +460,12 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
           }).returning();
           return lead;
         },
+        {
+          createdAfter: new Date(Date.now() - LEAD_INQUIRY_DEDUPE_WINDOW_MS),
+          funnelId: resolvedFunnelId,
+          requireSameFunnelWhenKnown: true,
+          skipDeadLeads: true,
+        },
       );
 
       if (dedupeResult.deduplicated) {
@@ -502,14 +477,12 @@ router.post("/sheet-configs/:configId/ingest", requireRole("super_admin", "agenc
           console.warn("[SheetsIngest] Resubmission failed for lead", dedupeResult.lead.id, err);
           skipped++;
         }
-        registerIdentity(dedupeResult.lead.id, identity);
         continue;
       }
 
       const lead = dedupeResult.lead;
 
       if (lead) {
-        registerIdentity(lead.id, identity);
         const { recordLeadStatusChange } = await import("../services/lead-status-history");
         await recordLeadStatusChange({
           leadId: lead.id,

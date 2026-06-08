@@ -19,7 +19,7 @@ import { recordLeadStatusChange } from "../services/lead-status-history";
 import { resetBookingCache } from "../services/lead-booking-cache";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { handleResubmission } from "../services/lead-resubmission";
-import { createLeadWithDedupe, findExistingLeadByIdentity, normalizeLeadIdentity } from "../services/lead-dedupe";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -1247,26 +1247,6 @@ router.post("/leads-hub/create", async (req, res) => {
     return;
   }
 
-  // If this contact already belongs to a lead in this tenant, treat the manual
-  // submit as a resubmission instead of creating a duplicate. Matching uses the
-  // same normalized phone + email rules as tracker and sheet ingestion.
-  const identity = normalizeLeadIdentity({
-    phone: typeof phone === "string" ? phone : null,
-    email: typeof email === "string" ? email : null,
-  });
-  const existingMatch = await findExistingLeadByIdentity(db, tenantId, identity);
-  if (existingMatch) {
-    try {
-      await handleResubmission(tenantId, existingMatch.lead.id, "Manual Add Lead");
-    } catch (err) {
-      console.warn("[LeadsHub Create] Resubmission failed for lead", existingMatch.lead.id, err);
-    }
-    const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingMatch.lead.id));
-    if (refreshed) emitLeadUpdated(tenantId, refreshed as unknown as Record<string, unknown>);
-    res.status(200).json({ ...(refreshed ?? { id: existingMatch.lead.id }), resubmitted: true });
-    return;
-  }
-
   let validatedCsrId: number | null = null;
   let csrName: string | null = null;
   if (assignedCsrId) {
@@ -1323,6 +1303,12 @@ router.post("/leads-hub/create", async (req, res) => {
         callbackAt: parsedCallbackAt,
       }).returning();
       return lead;
+    },
+    {
+      createdAfter: new Date(Date.now() - LEAD_INQUIRY_DEDUPE_WINDOW_MS),
+      funnelId: funnelId || null,
+      requireSameFunnelWhenKnown: true,
+      skipDeadLeads: true,
     },
   );
 

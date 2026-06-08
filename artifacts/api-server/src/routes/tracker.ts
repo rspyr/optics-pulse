@@ -17,7 +17,7 @@ import { resolveSubdomainFunnel } from "../services/subdomain-funnel-resolver";
 import { resolveRouteFunnel } from "../services/route-funnel-resolver";
 import { hashValue, hashPhone } from "../lib/phone-utils";
 import { handleResubmission } from "../services/lead-resubmission";
-import { createLeadWithDedupe } from "../services/lead-dedupe";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS, TRACKER_RETRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 import { emitLeadUpdated } from "../socket";
 import { logTrackerAttempt, updateTrackerAttempt } from "../services/tracker-audit";
 
@@ -560,6 +560,9 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
         const rawApptDate = detection.fields.find(f => f.mapsTo === "appointmentDate")?.value || null;
         const rawApptTime = detection.fields.find(f => f.mapsTo === "appointmentTime")?.value || null;
         const hasApptDetails = isValidAppointmentValue(rawApptDate) || isValidAppointmentValue(rawApptTime);
+        const dedupeWindowMs = ingestionMode === "both"
+          ? LEAD_INQUIRY_DEDUPE_WINDOW_MS
+          : TRACKER_RETRY_DEDUPE_WINDOW_MS;
 
         const dedupeResult = await createLeadWithDedupe(
           tenantId,
@@ -590,6 +593,12 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
               zip: detection.addressParts.zip || null,
             }).returning();
             return newLead;
+          },
+          {
+            createdAfter: new Date(Date.now() - dedupeWindowMs),
+            funnelId: resolvedFunnelId,
+            requireSameFunnelWhenKnown: true,
+            skipDeadLeads: true,
           },
         );
 

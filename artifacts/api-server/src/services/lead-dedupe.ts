@@ -1,6 +1,9 @@
 import { db, leadsTable } from "@workspace/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
 import { normalizePhone } from "../lib/phone-utils";
+
+export const LEAD_INQUIRY_DEDUPE_WINDOW_MS = 48 * 60 * 60 * 1000;
+export const TRACKER_RETRY_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
 
 export interface LeadIdentityInput {
   phone?: string | null;
@@ -17,7 +20,19 @@ export interface ExistingLeadMatch {
   matchedBy: "phone" | "email";
 }
 
+export interface LeadDedupeScope {
+  /** Only leads created at or after this timestamp can dedupe the new inquiry. */
+  createdAfter?: Date | null;
+  /** Incoming funnel. If present, a different existing funnel means new inquiry. */
+  funnelId?: number | null;
+  /** Enforce same funnel when both the incoming and existing leads have one. */
+  requireSameFunnelWhenKnown?: boolean;
+  /** Do not dedupe into dead leads; live intake should create a fresh actionable lead. */
+  skipDeadLeads?: boolean;
+}
+
 type LeadDedupeQueryable = Pick<typeof db, "select" | "insert" | "execute">;
+type LeadDedupeCandidate = Pick<typeof leadsTable.$inferSelect, "createdAt" | "funnelId" | "hubStatus">;
 
 export function normalizeEmail(email: string | null | undefined): string | null {
   const normalized = email?.trim().toLowerCase() ?? "";
@@ -38,17 +53,42 @@ export function buildLeadIdentityKeys(identity: NormalizedLeadIdentity): string[
   return [...keys].sort();
 }
 
+export function leadMatchesDedupeScope(lead: LeadDedupeCandidate, scope: LeadDedupeScope = {}): boolean {
+  if (scope.createdAfter && lead.createdAt < scope.createdAfter) return false;
+  if (scope.skipDeadLeads && lead.hubStatus === "dead") return false;
+  if (
+    scope.requireSameFunnelWhenKnown
+    && scope.funnelId != null
+    && lead.funnelId != null
+    && lead.funnelId !== scope.funnelId
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function leadDedupeConditions(tenantId: number, scope: LeadDedupeScope = {}) {
+  const conditions = [eq(leadsTable.tenantId, tenantId)];
+  if (scope.createdAfter) conditions.push(gte(leadsTable.createdAt, scope.createdAfter));
+  if (scope.skipDeadLeads) conditions.push(ne(leadsTable.hubStatus, "dead"));
+  if (scope.requireSameFunnelWhenKnown && scope.funnelId != null) {
+    conditions.push(or(isNull(leadsTable.funnelId), eq(leadsTable.funnelId, scope.funnelId))!);
+  }
+  return conditions;
+}
+
 export async function findExistingLeadByIdentity(
   queryable: Pick<typeof db, "select">,
   tenantId: number,
   identity: NormalizedLeadIdentity,
+  scope: LeadDedupeScope = {},
 ): Promise<ExistingLeadMatch | null> {
   if (identity.phone) {
     const [lead] = await queryable
       .select()
       .from(leadsTable)
       .where(and(
-        eq(leadsTable.tenantId, tenantId),
+        ...leadDedupeConditions(tenantId, scope),
         eq(leadsTable.phone, identity.phone),
       ))
       .orderBy(desc(leadsTable.createdAt), desc(leadsTable.id))
@@ -61,7 +101,7 @@ export async function findExistingLeadByIdentity(
       .select()
       .from(leadsTable)
       .where(and(
-        eq(leadsTable.tenantId, tenantId),
+        ...leadDedupeConditions(tenantId, scope),
         sql`LOWER(TRIM(COALESCE(${leadsTable.email}, ''))) = ${identity.email}`,
       ))
       .orderBy(desc(leadsTable.createdAt), desc(leadsTable.id))
@@ -83,6 +123,7 @@ export async function createLeadWithDedupe(
   tenantId: number,
   input: LeadIdentityInput,
   createLead: (tx: LeadDedupeQueryable, identity: NormalizedLeadIdentity) => Promise<typeof leadsTable.$inferSelect | undefined>,
+  scope: LeadDedupeScope = {},
 ): Promise<
   | { deduplicated: false; lead: typeof leadsTable.$inferSelect; matchedBy?: never }
   | { deduplicated: true; lead: typeof leadsTable.$inferSelect; matchedBy: ExistingLeadMatch["matchedBy"] }
@@ -98,7 +139,7 @@ export async function createLeadWithDedupe(
 
   return db.transaction(async (tx) => {
     await lockLeadIdentity(tx, tenantId, identity);
-    const existing = await findExistingLeadByIdentity(tx, tenantId, identity);
+    const existing = await findExistingLeadByIdentity(tx, tenantId, identity, scope);
     if (existing) {
       return { deduplicated: true, lead: existing.lead, matchedBy: existing.matchedBy };
     }

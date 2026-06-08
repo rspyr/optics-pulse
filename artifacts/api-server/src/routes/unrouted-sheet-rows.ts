@@ -21,7 +21,7 @@ import { normalizeSource } from "../services/source-normalizer";
 import { handleResubmission } from "../services/lead-resubmission";
 import { emitLeadUpdated } from "../socket";
 import { normalizePhone, phoneMatchesSql } from "../lib/phone-utils";
-import { createLeadWithDedupe, findExistingLeadByIdentity, normalizeLeadIdentity } from "../services/lead-dedupe";
+import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 
 const router: IRouter = Router();
 
@@ -267,24 +267,6 @@ async function routeRowToFunnel(
   }
 
   const data = (row.rowData || {}) as Record<string, string>;
-  const identity = normalizeLeadIdentity({ phone: data.phone, email: data.email });
-
-  const existingMatch = await findExistingLeadByIdentity(db, row.tenantId, identity);
-  if (existingMatch) {
-    try {
-      await handleResubmission(row.tenantId, existingMatch.lead.id, "Google Sheets");
-      const [refreshed] = await db.select().from(leadsTable).where(eq(leadsTable.id, existingMatch.lead.id));
-      if (refreshed) emitLeadUpdated(row.tenantId, refreshed as unknown as Record<string, unknown>);
-    } catch (err) {
-      console.warn("[UnroutedRoute] Resubmission failed for lead", existingMatch.lead.id, err);
-    }
-    const valueMapUpdated = await maybeUpdateValueMap(config, row, funnelId, addToValueMap);
-    await db
-      .update(unroutedSheetRowsTable)
-      .set({ resolvedAt: new Date(), resolvedByUserId: userId ?? null, resolvedLeadId: existingMatch.lead.id, resolvedVia: "resubmission" })
-      .where(eq(unroutedSheetRowsTable.id, rowId));
-    return { ok: true, rowId, leadId: existingMatch.lead.id, resubmitted: true, valueMapUpdated };
-  }
 
   const isPreBooked = isPreBookedCellValue(data.appointmentBooked);
   const hasApptDetails = isValidAppointmentValue(data.appointmentDate) || isValidAppointmentValue(data.appointmentTime);
@@ -330,6 +312,12 @@ async function routeRowToFunnel(
         contactPreferences: [],
       }).returning();
       return lead;
+    },
+    {
+      createdAfter: new Date(Date.now() - LEAD_INQUIRY_DEDUPE_WINDOW_MS),
+      funnelId,
+      requireSameFunnelWhenKnown: true,
+      skipDeadLeads: true,
     },
   );
 
