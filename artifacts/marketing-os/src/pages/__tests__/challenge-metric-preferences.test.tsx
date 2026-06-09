@@ -34,6 +34,7 @@ const challengeResponse: any = {
     funnel: null,
     rowKey: "summary",
     rowLabel: "Selected comparison",
+    selectedRunIds: [101, 102],
     activeDays: 14,
     costPerLead: 100,
     metaLeads: 10,
@@ -63,6 +64,7 @@ const challengeResponse: any = {
       funnelName: "Install",
       runName: "Newest run",
       runCount: 1,
+      selectedRunIds: [101],
       activeDays: 14,
       costPerLead: 100,
       metaLeads: 10,
@@ -91,6 +93,7 @@ const challengeResponse: any = {
       funnelName: "Repair",
       runName: "Newest run",
       runCount: 1,
+      selectedRunIds: [102],
       activeDays: 10,
       costPerLead: 200,
       metaLeads: 4,
@@ -142,6 +145,42 @@ const impactResponse: any = {
 };
 impactResponse.rows = impactResponse.byFunnel;
 
+const auditTitles: Record<string, string> = {
+  uniquePulseLeads: "Unique Pulse Leads",
+  appointmentsBooked: "Appointments Booked",
+};
+
+function makeAuditResponse(url: string) {
+  const parsed = new URL(url, "http://localhost");
+  const metricKey = parsed.searchParams.get("metricKey") || "uniquePulseLeads";
+  return {
+    metricKey,
+    title: auditTitles[metricKey] || "Challenge Audit",
+    scopeLabel: parsed.searchParams.get("scopeLabel") || "Selected Challenge scope",
+    displayedValue: Number(parsed.searchParams.get("displayedValue") || 0),
+    auditValue: Number(parsed.searchParams.get("displayedValue") || 0),
+    reconciliationStatus: "matched",
+    reconciliationNote: "Audit total matches the clicked Challenge value.",
+    paging: { limit: 50, offset: 0 },
+    sections: [
+      {
+        key: "customers",
+        label: "Customer list",
+        totalRows: 1,
+        totals: { count: 1 },
+        columns: [
+          { key: "customerName", label: "Customer" },
+          { key: "phone", label: "Phone" },
+          { key: "serviceAddress", label: "Service Address" },
+        ],
+        rows: [
+          { customerName: "Alice Reed", phone: "555-0101", serviceAddress: "100 Main St" },
+        ],
+      },
+    ],
+  };
+}
+
 function installLocalStorageShim() {
   const values = new Map<string, string>();
   const storage = {
@@ -176,6 +215,12 @@ describe("Challenge metric preferences", () => {
               visibility: { costPerLead: false },
             },
           }),
+        } as Response;
+      }
+      if (url.includes("/api/dashboard/challenge/audit")) {
+        return {
+          ok: true,
+          json: async () => makeAuditResponse(url),
         } as Response;
       }
       if (url.includes("/api/dashboard/challenge")) {
@@ -221,6 +266,46 @@ describe("Challenge metric preferences", () => {
 
     expect(metaLeadCell).toHaveAttribute("data-challenge-hover", "active");
     expect(container.querySelectorAll('[data-challenge-hover="active"]')).toHaveLength(3);
+  });
+
+  it("opens an audit drawer from a summary stat card", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByRole("button", { name: /open audit for unique pulse leads: 10/i }));
+
+    expect(await screen.findByRole("heading", { name: "Unique Pulse Leads" })).toBeInTheDocument();
+    expect(await screen.findByText("Alice Reed")).toBeInTheDocument();
+    await waitFor(() => {
+      const auditUrl = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input))
+        .find((url) => url.includes("/api/dashboard/challenge/audit"));
+      expect(auditUrl).toContain("metricKey=uniquePulseLeads");
+      expect(auditUrl).toContain("scope=summary");
+      expect(auditUrl).toContain("displayedValue=10");
+    });
+  });
+
+  it("opens a row-scoped audit drawer from a comparison metric cell", async () => {
+    const user = userEvent.setup();
+    render(<Challenge />);
+
+    await screen.findByText("Comparison Breakdown");
+    vi.mocked(global.fetch).mockClear();
+
+    await user.click(screen.getByLabelText("Install Appointments Booked: 5"));
+
+    expect(await screen.findByRole("heading", { name: "Appointments Booked" })).toBeInTheDocument();
+    await waitFor(() => {
+      const auditUrl = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input))
+        .find((url) => url.includes("/api/dashboard/challenge/audit"));
+      expect(auditUrl).toContain("metricKey=appointmentsBooked");
+      expect(auditUrl).toContain("scope=row");
+      expect(auditUrl).toContain("runId=101");
+      expect(auditUrl).toContain("displayedValue=5");
+    });
   });
 
   it("nests run selection inside the funnel dropdown", async () => {

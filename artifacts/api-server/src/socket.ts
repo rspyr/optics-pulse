@@ -229,7 +229,8 @@ export function initSocketIO(httpServer: HTTPServer, sessionMiddleware: unknown)
     });
   });
 
-  if (process.env.NODE_ENV !== "production") {
+  const demoLeadsEnabled = process.env.ENABLE_DEMO_LEADS === "1" || process.env.ENABLE_DEMO_LEADS === "true";
+  if (process.env.NODE_ENV !== "production" && demoLeadsEnabled) {
     startDemoMode();
   }
 
