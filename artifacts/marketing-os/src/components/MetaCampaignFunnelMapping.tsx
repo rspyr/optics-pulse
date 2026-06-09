@@ -82,6 +82,7 @@ type CampaignMapping = {
   funnelTypeId: number | null;
   funnelName: string | null;
   mappingSource: string | null;
+  adSetMappingCount: number;
   suggestedFunnelTypeId: number | null;
   suggestedFunnelName: string | null;
   suggestedMatchCode: string | null;
@@ -198,7 +199,7 @@ export function MetaCampaignFunnelMapping({
   const filteredCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
     return statusFilteredCampaigns.filter((campaign) => {
-      if (showOnlyUnmapped && campaign.funnelTypeId != null) return false;
+      if (showOnlyUnmapped && (campaign.funnelTypeId != null || campaign.adSetMappingCount > 0)) return false;
       if (!q) return true;
       return [
         campaign.name,
@@ -230,7 +231,7 @@ export function MetaCampaignFunnelMapping({
   const funnelOptions = data?.funnels ?? [];
   const allRows = mappingLevel === "campaign" ? statusFilteredCampaigns : statusFilteredAdSets;
   const mappedCount = mappingLevel === "campaign"
-    ? statusFilteredCampaigns.filter((campaign) => campaign.funnelTypeId != null).length
+    ? statusFilteredCampaigns.filter((campaign) => campaign.funnelTypeId != null || campaign.adSetMappingCount > 0).length
     : statusFilteredAdSets.filter((adSet) => adSet.effectiveFunnelTypeId != null).length;
   const unmappedCount = Math.max(0, allRows.length - mappedCount);
 
@@ -523,16 +524,26 @@ function CampaignTable({
                       ))}
                     </SelectContent>
                   </Select>
+                  {campaign.funnelTypeId == null && campaign.adSetMappingCount > 0 && (
+                    <p className="mt-1 text-xs text-sky-200">Split by ad sets</p>
+                  )}
                 </td>
                 <td className="w-64 p-4">
-                  <SuggestionCell
-                    saving={saving}
-                    mapped={campaign.funnelTypeId != null}
-                    suggestedFunnelName={campaign.suggestedFunnelName}
-                    suggestedFunnelTypeId={campaign.suggestedFunnelTypeId}
-                    suggestedMatchCode={campaign.suggestedMatchCode}
-                    onUse={(id) => onSave(campaign, id)}
-                  />
+                  {campaign.funnelTypeId == null && campaign.adSetMappingCount > 0 ? (
+                    <span className="inline-flex items-center gap-2 text-xs text-sky-200">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      {campaign.adSetMappingCount} ad sets mapped
+                    </span>
+                  ) : (
+                    <SuggestionCell
+                      saving={saving}
+                      mapped={campaign.funnelTypeId != null}
+                      suggestedFunnelName={campaign.suggestedFunnelName}
+                      suggestedFunnelTypeId={campaign.suggestedFunnelTypeId}
+                      suggestedMatchCode={campaign.suggestedMatchCode}
+                      onUse={(id) => onSave(campaign, id)}
+                    />
+                  )}
                 </td>
               </tr>
             );
