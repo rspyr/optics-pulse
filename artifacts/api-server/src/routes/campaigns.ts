@@ -182,6 +182,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       cfm.funnel_type_id,
       ft.name AS funnel_name,
       cfm.mapping_source,
+      COALESCE(ad_set_counts.ad_set_mapping_count, 0)::int AS ad_set_mapping_count,
       COALESCE(SUM(cds.spend), 0)::numeric AS spend,
       COALESCE(SUM(cds.conversions), 0)::numeric AS conversions
     FROM campaigns c
@@ -198,9 +199,20 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       AND tft.funnel_type_id = cfm.funnel_type_id
     LEFT JOIN funnel_types ft
       ON ft.id = tft.funnel_type_id
+    LEFT JOIN (
+      SELECT
+        tenant_id,
+        campaign_id,
+        COUNT(*)::int AS ad_set_mapping_count
+      FROM campaign_funnel_mappings
+      WHERE ad_set_external_id IS NOT NULL
+      GROUP BY tenant_id, campaign_id
+    ) ad_set_counts
+      ON ad_set_counts.tenant_id = c.tenant_id
+      AND ad_set_counts.campaign_id = c.id
     WHERE c.tenant_id = ${tenantId}
       AND c.platform = 'meta'
-    GROUP BY c.id, c.external_id, c.name, c.status, c.currency, c.meta_ad_account_id, cfm.funnel_type_id, ft.name, cfm.mapping_source
+    GROUP BY c.id, c.external_id, c.name, c.status, c.currency, c.meta_ad_account_id, cfm.funnel_type_id, ft.name, cfm.mapping_source, ad_set_counts.ad_set_mapping_count
     HAVING COALESCE(SUM(cds.spend), 0) > 0
     ORDER BY spend DESC, c.name ASC
   `);
@@ -215,6 +227,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     funnel_type_id: number | null;
     funnel_name: string | null;
     mapping_source: string | null;
+    ad_set_mapping_count: string | number | null;
     spend: string | number | null;
     conversions: string | number | null;
   };
@@ -236,6 +249,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       funnelTypeId: row.funnel_type_id == null ? null : Number(row.funnel_type_id),
       funnelName: row.funnel_name,
       mappingSource: row.mapping_source,
+      adSetMappingCount: Number(row.ad_set_mapping_count ?? 0),
       suggestedFunnelTypeId: suggested?.funnel.id ?? null,
       suggestedFunnelName: suggested?.funnel.name ?? null,
       suggestedMatchCode: suggested?.matchedCode ?? null,
