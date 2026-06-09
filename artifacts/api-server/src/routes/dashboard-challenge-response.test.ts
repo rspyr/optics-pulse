@@ -38,7 +38,21 @@ vi.mock("../lib/tenant-scope", () => ({
   resolveListTenantScope: vi.fn(),
 }));
 
-const { buildChallengeDashboardResponse } = await import("./dashboard");
+const { buildChallengeDashboardResponse, isChallengeTestLeadName } = await import("./dashboard");
+
+describe("Challenge lead-name test filtering", () => {
+  it("flags Challenge test leads without catching normal names that only contain those letters", () => {
+    expect(isChallengeTestLeadName("Aaron", "test")).toBe(true);
+    expect(isChallengeTestLeadName("YooJin test", "")).toBe(true);
+    expect(isChallengeTestLeadName("QA", "TEST")).toBe(true);
+    expect(isChallengeTestLeadName("Test-Lead", "")).toBe(true);
+
+    expect(isChallengeTestLeadName("Contest", "Winner")).toBe(false);
+    expect(isChallengeTestLeadName("Attest", "Homeowner")).toBe(false);
+    expect(isChallengeTestLeadName("Latest", "Lead")).toBe(false);
+    expect(isChallengeTestLeadName("John", "Doe")).toBe(false);
+  });
+});
 
 describe("buildChallengeDashboardResponse", () => {
   it("calculates cancellation rate from cancelled jobs divided by total jobs", () => {

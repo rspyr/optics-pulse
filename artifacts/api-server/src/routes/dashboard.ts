@@ -21,6 +21,17 @@ const CHALLENGE_WEIGHTED_HALF_LIFE_DAYS = 180;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+export const CHALLENGE_TEST_LEAD_NAME_PATTERN = "(^|[^[:alnum:]])test([^[:alnum:]]|$)";
+const CHALLENGE_TEST_LEAD_NAME_REGEX = /(^|[^a-z0-9])test([^a-z0-9]|$)/i;
+
+export function isChallengeTestLeadName(firstName: unknown, lastName: unknown): boolean {
+  const fullName = [firstName, lastName]
+    .map((part) => typeof part === "string" ? part.trim() : "")
+    .filter(Boolean)
+    .join(" ");
+  return CHALLENGE_TEST_LEAD_NAME_REGEX.test(fullName);
+}
+
 function challengeJobAttributionAtSql() {
   return sql`
     COALESCE(
@@ -96,6 +107,13 @@ function challengeLeadIsMetaSql(alias: string) {
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%facebook%'
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%instagram%'
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) IN ('fb', 'ig')
+  )`);
+}
+
+function challengeLeadIsNotTestSql(alias: string) {
+  return sql.raw(`NOT (
+    CONCAT_WS(' ', COALESCE(${alias}.first_name, ''), COALESCE(${alias}.last_name, ''))
+    ~* '${CHALLENGE_TEST_LEAD_NAME_PATTERN}'
   )`);
 }
 
@@ -1284,6 +1302,7 @@ function challengeAuditRunBaseCtes(input: ChallengeAuditContext) {
         )
         AND l.created_at >= vr.window_start::timestamp
         AND l.created_at < (vr.window_end + INTERVAL '1 day')::timestamp
+        AND ${challengeLeadIsNotTestSql("l")}
     )
   `;
 }
@@ -1340,6 +1359,7 @@ function challengeAuditImpactBaseCtes(input: ChallengeAuditContext) {
       JOIN tenants t ON t.id = l.tenant_id
       WHERE TRUE
         ${impactLeadTenantFilter}
+        AND ${challengeLeadIsNotTestSql("l")}
     ),
     meta_touch_keys AS (
       SELECT tenant_id, unique_key, MIN(created_at) AS first_meta_at
@@ -2830,6 +2850,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
             FROM leads l
             WHERE TRUE
               ${impactLeadTenantFilter}
+              AND ${challengeLeadIsNotTestSql("l")}
           ),
           meta_touch_keys AS (
             SELECT tenant_id, unique_key, MIN(created_at) AS first_meta_at
@@ -3224,6 +3245,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           )
           AND l.created_at >= vr.window_start::timestamp
           AND l.created_at < (vr.window_end + INTERVAL '1 day')::timestamp
+          AND ${challengeLeadIsNotTestSql("l")}
       ),
       lead_by_run AS (
         SELECT
@@ -3443,6 +3465,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       WHERE l.created_at >= ${startBound}
         AND l.created_at <= ${endBound}
         ${tenantLeadFilter}
+        AND ${challengeLeadIsNotTestSql("l")}
     ),
     lead_cohort AS (
       SELECT *
@@ -3690,6 +3713,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     WHERE l.created_at >= ${startBound}
       AND l.created_at <= ${endBound}
       ${tenantLeadFilter}
+      AND ${challengeLeadIsNotTestSql("l")}
     ORDER BY funnel ASC
   `);
 
