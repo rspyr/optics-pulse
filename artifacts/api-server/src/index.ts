@@ -36,6 +36,8 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+const backgroundJobsDisabled = process.env.DISABLE_BACKGROUND_JOBS === "1" || process.env.DISABLE_BACKGROUND_JOBS === "true";
+
 const httpServer = createServer(app);
 initSocketIO(httpServer, sessionMiddleware);
 
@@ -60,6 +62,11 @@ async function startServer() {
 
   httpServer.listen(port, async () => {
     console.log(`Server listening on port ${port}`);
+    if (backgroundJobsDisabled) {
+      console.log("[startup] Background jobs disabled by DISABLE_BACKGROUND_JOBS; API routes remain available.");
+      return;
+    }
+
     await runOneTimeMigrations();
     // Reap orphaned sync_log rows left at status='running' by the previous
     // process — otherwise a backfill that was in flight during the last

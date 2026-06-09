@@ -21,6 +21,17 @@ const CHALLENGE_WEIGHTED_HALF_LIFE_DAYS = 180;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+export const CHALLENGE_TEST_LEAD_NAME_PATTERN = "(^|[^[:alnum:]])test([^[:alnum:]]|$)";
+const CHALLENGE_TEST_LEAD_NAME_REGEX = /(^|[^a-z0-9])test([^a-z0-9]|$)/i;
+
+export function isChallengeTestLeadName(firstName: unknown, lastName: unknown): boolean {
+  const fullName = [firstName, lastName]
+    .map((part) => typeof part === "string" ? part.trim() : "")
+    .filter(Boolean)
+    .join(" ");
+  return CHALLENGE_TEST_LEAD_NAME_REGEX.test(fullName);
+}
+
 function challengeJobAttributionAtSql() {
   return sql`
     COALESCE(
@@ -96,6 +107,13 @@ function challengeLeadIsMetaSql(alias: string) {
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%facebook%'
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) LIKE '%instagram%'
     OR LOWER(COALESCE(NULLIF(${alias}.original_source, ''), ${alias}.source, '')) IN ('fb', 'ig')
+  )`);
+}
+
+function challengeLeadIsNotTestSql(alias: string) {
+  return sql.raw(`NOT (
+    CONCAT_WS(' ', COALESCE(${alias}.first_name, ''), COALESCE(${alias}.last_name, ''))
+    ~* '${CHALLENGE_TEST_LEAD_NAME_PATTERN}'
   )`);
 }
 
@@ -943,6 +961,1742 @@ function challengeRunOutcomeCtes(attributionModel: ChallengeAttributionModel) {
     : challengeStrictRunOutcomeCtes();
 }
 
+type ChallengeAuditColumn = {
+  key: string;
+  label: string;
+  align?: "left" | "right" | "center";
+  format?: "text" | "number" | "currency" | "percent" | "date" | "datetime" | "boolean";
+};
+
+type ChallengeAuditRow = Record<string, string | number | boolean | null>;
+
+type ChallengeAuditSection = {
+  key: string;
+  label: string;
+  columns: ChallengeAuditColumn[];
+  rows: ChallengeAuditRow[];
+  totalRows: number;
+  totals?: Record<string, string | number | null>;
+};
+
+type ChallengeAuditSectionResult = {
+  section: ChallengeAuditSection;
+  totals: Record<string, number>;
+};
+
+type ChallengeAuditContext = {
+  metricKey: ChallengeBestBy;
+  viewMode: ChallengeViewMode;
+  attributionModel: ChallengeAttributionModel;
+  mode: ChallengeCompareMode;
+  runRule: ChallengeRunRule;
+  bestBy: ChallengeBestBy;
+  tenantId: number | null;
+  selectedClientTenantIds: number[];
+  selectedFunnelTypeIds: number[];
+  selectedRunIds: number[];
+  dayStart: number;
+  dayEnd: number;
+  impactStartDate: string;
+  impactEndDate: string;
+  impactStartBound: Date;
+  impactEndBound: Date;
+  limit: number;
+  offset: number;
+};
+
+const CHALLENGE_AUDIT_DEFAULT_LIMIT = 50;
+const CHALLENGE_AUDIT_PAGE_MAX = 200;
+const CHALLENGE_AUDIT_EXPORT_MAX = 5000;
+
+const CHALLENGE_AUDIT_LABELS: Record<ChallengeBestBy, string> = {
+  activeDays: "Active Days",
+  costPerLead: "Cost Per Lead",
+  metaLeads: "Leads From Meta",
+  uniquePulseLeads: "Unique Pulse Leads",
+  appointmentsBooked: "Appointments Booked",
+  bookingRate: "Booking Rate",
+  cancellationRate: "Cancellation Rate",
+  totalEstimateValue: "Total Estimate Value",
+  totalSoldClosedValue: "Total Sold/Closed Value",
+  roasPotential: "ROAS Potential",
+  roasSold: "ROAS Sold",
+  totalSpend: "Total Spend",
+  averageCostPerInHomeAppointment: "Avg Cost Per In-Home Appointment",
+  costToAcquireCustomer: "Cost To Acquire Customer",
+  averageClosedJobValue: "Average Closed Job Value",
+};
+
+const leadAuditColumns: ChallengeAuditColumn[] = [
+  { key: "customerName", label: "Customer" },
+  { key: "phone", label: "Phone" },
+  { key: "serviceAddress", label: "Service Address" },
+  { key: "firstReceivedAt", label: "First Lead", format: "datetime" },
+  { key: "latestReceivedAt", label: "Latest Lead", format: "datetime" },
+  { key: "booked", label: "Booked", format: "boolean", align: "center" },
+  { key: "appointment", label: "Appointment" },
+  { key: "leadCount", label: "Submissions", format: "number", align: "right" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+];
+
+const spendAuditColumns: ChallengeAuditColumn[] = [
+  { key: "date", label: "Date", format: "date" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+  { key: "campaign", label: "Campaign" },
+  { key: "adSetExternalId", label: "Ad Set ID" },
+  { key: "adExternalId", label: "Ad ID" },
+  { key: "spend", label: "Spend", format: "currency", align: "right" },
+  { key: "metaLeads", label: "Meta Leads", format: "number", align: "right" },
+  { key: "impressions", label: "Impressions", format: "number", align: "right" },
+  { key: "clicks", label: "Clicks", format: "number", align: "right" },
+];
+
+const jobAuditColumns: ChallengeAuditColumn[] = [
+  { key: "customerName", label: "Customer" },
+  { key: "phone", label: "Phone" },
+  { key: "serviceAddress", label: "Service Address" },
+  { key: "status", label: "Status" },
+  { key: "stJobNumber", label: "ST Job #" },
+  { key: "jobType", label: "Job Type" },
+  { key: "jobAttributionAt", label: "Booked/Origin", format: "datetime" },
+  { key: "completedAt", label: "Completed", format: "datetime" },
+  { key: "cancelled", label: "Cancelled", format: "boolean", align: "center" },
+  { key: "cancelledAt", label: "Cancelled At", format: "datetime" },
+  { key: "hasEstimate", label: "Estimate", format: "boolean", align: "center" },
+  { key: "attributionCredit", label: "Credit", format: "number", align: "right" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+];
+
+const estimateAuditColumns: ChallengeAuditColumn[] = [
+  { key: "customerName", label: "Customer" },
+  { key: "phone", label: "Phone" },
+  { key: "serviceAddress", label: "Service Address" },
+  { key: "creditedValue", label: "Credited Value", format: "currency", align: "right" },
+  { key: "optionCount", label: "Options", format: "number", align: "right" },
+  { key: "estimateIds", label: "Estimate IDs" },
+  { key: "estimateStatuses", label: "Statuses" },
+  { key: "estimateAt", label: "Estimate Date", format: "datetime" },
+  { key: "stJobNumber", label: "ST Job #" },
+  { key: "attributionCredit", label: "Credit", format: "number", align: "right" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+];
+
+const soldAuditColumns: ChallengeAuditColumn[] = [
+  { key: "customerName", label: "Customer" },
+  { key: "phone", label: "Phone" },
+  { key: "serviceAddress", label: "Service Address" },
+  { key: "soldValue", label: "Sold Value", format: "currency", align: "right" },
+  { key: "soldAt", label: "Sold/Closed", format: "datetime" },
+  { key: "estimateIds", label: "Estimate IDs" },
+  { key: "stJobNumber", label: "ST Job #" },
+  { key: "soldKey", label: "Sold Key" },
+  { key: "attributionCredit", label: "Credit", format: "number", align: "right" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+];
+
+const activeDayAuditColumns: ChallengeAuditColumn[] = [
+  { key: "date", label: "Date", format: "date" },
+  { key: "activity", label: "Activity" },
+  { key: "client", label: "Client" },
+  { key: "funnel", label: "Funnel" },
+  { key: "run", label: "Run" },
+];
+
+function parseChallengeAuditMetric(raw: unknown): ChallengeBestBy | null {
+  return typeof raw === "string" && CHALLENGE_BEST_BY_KEYS.has(raw as ChallengeBestBy)
+    ? raw as ChallengeBestBy
+    : null;
+}
+
+function parseNonNegativeInt(raw: unknown, fallback: number, max: number): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  return Math.min(Math.floor(value), max);
+}
+
+function parseChallengeAuditLimit(raw: unknown): number {
+  if (raw === "all") return CHALLENGE_AUDIT_EXPORT_MAX;
+  return parseNonNegativeInt(raw, CHALLENGE_AUDIT_DEFAULT_LIMIT, CHALLENGE_AUDIT_PAGE_MAX);
+}
+
+function parseDisplayedValue(raw: unknown): number | null {
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function pickAuditRows(result: unknown): Record<string, unknown>[] {
+  return ((result as { rows?: Record<string, unknown>[] }).rows ?? []);
+}
+
+function stripAuditMeta(row: Record<string, unknown>): ChallengeAuditRow {
+  const {
+    __totalRows: _totalRows,
+    __auditValue: _auditValue,
+    __auditNumerator: _auditNumerator,
+    __auditDenominator: _auditDenominator,
+    __auditSpend: _auditSpend,
+    __auditMetaLeads: _auditMetaLeads,
+    __auditCount: _auditCount,
+    ...rest
+  } = row;
+  return rest as ChallengeAuditRow;
+}
+
+function sectionFromRows(
+  key: string,
+  label: string,
+  columns: ChallengeAuditColumn[],
+  rows: Record<string, unknown>[],
+  totals: Record<string, number> = {},
+): ChallengeAuditSectionResult {
+  const first = rows[0] ?? {};
+  const totalRows = Number(first.__totalRows ?? rows.length);
+  return {
+    section: {
+      key,
+      label,
+      columns,
+      rows: rows.map(stripAuditMeta),
+      totalRows,
+      totals,
+    },
+    totals,
+  };
+}
+
+function auditStatus(metricKey: ChallengeBestBy, displayedValue: number | null, auditValue: number) {
+  if (displayedValue == null) return "info";
+  const tolerance = metricKey === "bookingRate" || metricKey === "cancellationRate"
+    ? 0.15
+    : metricKey === "roasPotential" || metricKey === "roasSold"
+      ? 0.05
+      : 0.51;
+  return Math.abs(displayedValue - auditValue) <= tolerance ? "matched" : "review";
+}
+
+function challengeAuditRunBaseCtes(input: ChallengeAuditContext) {
+  const scopeConditions: SQL[] = [sql`fr.status <> 'archived'`];
+  if (input.tenantId) scopeConditions.push(sql`fr.tenant_id = ${input.tenantId}`);
+  const clientFilter = numberInSql(sql`fr.tenant_id`, input.selectedClientTenantIds);
+  const funnelFilter = numberInSql(sql`fr.funnel_type_id`, input.selectedFunnelTypeIds);
+  const runFilter = numberInSql(sql`fr.id`, input.selectedRunIds);
+  if (clientFilter) scopeConditions.push(clientFilter);
+  if (funnelFilter) scopeConditions.push(funnelFilter);
+  if (runFilter) scopeConditions.push(runFilter);
+  const runWhereClause = sql`WHERE ${sql.join(scopeConditions, sql` AND `)}`;
+  const startOffset = input.dayStart - 1;
+  const endOffset = input.dayEnd - 1;
+  const groupPartition = input.mode === "funnel_clients" ? sql`fr.tenant_id` : sql`fr.funnel_type_id`;
+  const runRankOrder = input.runRule === "oldest"
+    ? sql`start_date ASC, run_id ASC`
+    : sql`start_date DESC, run_id DESC`;
+  const runRankFilter = input.selectedRunIds.length === 0 && (input.runRule === "newest" || input.runRule === "oldest")
+    ? sql`AND run_rank = 1`
+    : sql``;
+
+  return sql`
+    candidate_runs AS (
+      SELECT
+        fr.id AS run_id,
+        ${groupPartition} AS comparison_group_key,
+        fr.tenant_id,
+        t.name AS tenant_name,
+        fr.funnel_type_id,
+        ft.name AS funnel_name,
+        fr.name AS run_name,
+        fr.start_date,
+        fr.end_date,
+        fr.status,
+        (fr.start_date + (${startOffset}::int * INTERVAL '1 day'))::date AS window_start,
+        LEAST(
+          (fr.start_date + (${endOffset}::int * INTERVAL '1 day'))::date,
+          COALESCE(fr.end_date, CURRENT_DATE)
+        ) AS window_end
+      FROM funnel_runs fr
+      JOIN tenants t ON t.id = fr.tenant_id
+      JOIN funnel_types ft ON ft.id = fr.funnel_type_id
+      ${runWhereClause}
+    ),
+    valid_candidates AS (
+      SELECT *
+      FROM candidate_runs
+      WHERE window_start <= window_end
+    ),
+    ranked_runs AS (
+      SELECT
+        valid_candidates.*,
+        ROW_NUMBER() OVER (PARTITION BY comparison_group_key ORDER BY ${runRankOrder})::int AS run_rank
+      FROM valid_candidates
+    ),
+    valid_runs AS (
+      SELECT *
+      FROM ranked_runs
+      WHERE TRUE
+      ${runRankFilter}
+    ),
+    lead_cohort AS (
+      SELECT
+        vr.run_id,
+        vr.tenant_id AS run_tenant_id,
+        vr.tenant_name,
+        vr.funnel_type_id,
+        vr.funnel_name,
+        vr.run_name,
+        vr.start_date,
+        vr.end_date,
+        vr.window_start,
+        vr.window_end,
+        l.id,
+        l.tenant_id,
+        l.created_at,
+        l.first_name,
+        l.last_name,
+        l.phone,
+        l.email,
+        l.address,
+        l.city,
+        l.state,
+        l.zip,
+        l.appointment_date,
+        l.appointment_time,
+        l.booked_at,
+        l.status AS lead_status,
+        l.hub_status,
+        l.source,
+        l.original_source,
+        (
+          l.tenant_id::text || ':' ||
+          COALESCE(
+            NULLIF(REGEXP_REPLACE(COALESCE(l.phone, ''), '[^0-9]', '', 'g'), ''),
+            NULLIF(LOWER(TRIM(COALESCE(l.email, ''))), ''),
+            l.id::text
+          )
+        ) AS unique_key,
+        (
+          l.status IN ('booked', 'sold')
+          OR l.hub_status IN ('appt_set', 'appt_booked')
+          OR l.booked_at IS NOT NULL
+          OR l.has_sold_estimate = true
+        ) AS booked,
+        ${challengeLeadIsMetaSql("l")} AS is_meta_lead
+      FROM valid_runs vr
+      JOIN leads l
+        ON l.tenant_id = vr.tenant_id
+        AND (
+          l.funnel_id = vr.funnel_type_id
+          OR (
+            l.funnel_id IS NULL
+            AND l.lead_type IS NOT NULL
+            AND LOWER(TRIM(l.lead_type)) = LOWER(TRIM(vr.funnel_name))
+          )
+        )
+        AND l.created_at >= vr.window_start::timestamp
+        AND l.created_at < (vr.window_end + INTERVAL '1 day')::timestamp
+        AND ${challengeLeadIsNotTestSql("l")}
+    )
+  `;
+}
+
+function challengeAuditImpactBaseCtes(input: ChallengeAuditContext) {
+  const selectedTenantFilter = !input.tenantId && input.selectedClientTenantIds.length > 0
+    ? numberInSql(sql`l.tenant_id`, input.selectedClientTenantIds)
+    : null;
+  const selectedCampaignTenantFilter = !input.tenantId && input.selectedClientTenantIds.length > 0
+    ? numberInSql(sql`c.tenant_id`, input.selectedClientTenantIds)
+    : null;
+  const impactLeadTenantFilter = input.tenantId
+    ? sql`AND l.tenant_id = ${input.tenantId}`
+    : selectedTenantFilter
+      ? sql`AND ${selectedTenantFilter}`
+      : sql``;
+  const impactCampaignTenantFilter = input.tenantId
+    ? sql`AND c.tenant_id = ${input.tenantId}`
+    : selectedCampaignTenantFilter
+      ? sql`AND ${selectedCampaignTenantFilter}`
+      : sql``;
+
+  return sql`
+    lead_identity AS (
+      SELECT
+        l.id,
+        l.tenant_id,
+        t.name AS tenant_name,
+        l.created_at,
+        l.first_name,
+        l.last_name,
+        l.phone,
+        l.email,
+        l.address,
+        l.city,
+        l.state,
+        l.zip,
+        l.appointment_date,
+        l.appointment_time,
+        l.booked_at,
+        l.status AS lead_status,
+        l.hub_status,
+        l.source,
+        l.original_source,
+        ${challengeLeadIdentitySql("l")} AS unique_key,
+        (
+          l.status IN ('booked', 'sold')
+          OR l.hub_status IN ('appt_set', 'appt_booked')
+          OR l.booked_at IS NOT NULL
+          OR l.has_sold_estimate = true
+        ) AS booked,
+        ${challengeLeadIsMetaSql("l")} AS is_meta_lead
+      FROM leads l
+      JOIN tenants t ON t.id = l.tenant_id
+      WHERE TRUE
+        ${impactLeadTenantFilter}
+        AND ${challengeLeadIsNotTestSql("l")}
+    ),
+    meta_touch_keys AS (
+      SELECT tenant_id, unique_key, MIN(created_at) AS first_meta_at
+      FROM lead_identity
+      WHERE is_meta_lead
+      GROUP BY tenant_id, unique_key
+    ),
+    impact_campaign_scope AS (
+      SELECT c.*
+      FROM campaigns c
+      WHERE c.platform = 'meta'
+        ${impactCampaignTenantFilter}
+    )
+  `;
+}
+
+async function queryChallengeAuditLeads(input: ChallengeAuditContext, bookedOnly: boolean): Promise<ChallengeAuditSectionResult> {
+  const bookedFilter = bookedOnly ? sql`WHERE any_booked = true` : sql``;
+  const sectionKey = bookedOnly ? "bookedLeads" : "uniquePulseLeads";
+  const sectionLabel = bookedOnly ? "Booked customer list" : "Unique Pulse customer list";
+
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      deduped_leads AS (
+        SELECT *
+        FROM (
+          SELECT
+            li.*,
+            MIN(li.created_at) OVER (PARTITION BY li.tenant_id, li.unique_key) AS first_received_at,
+            MAX(li.created_at) OVER (PARTITION BY li.tenant_id, li.unique_key) AS latest_received_at,
+            COUNT(*) OVER (PARTITION BY li.tenant_id, li.unique_key)::int AS lead_count,
+            BOOL_OR(li.booked) OVER (PARTITION BY li.tenant_id, li.unique_key) AS any_booked,
+            ROW_NUMBER() OVER (PARTITION BY li.tenant_id, li.unique_key ORDER BY li.created_at ASC, li.id ASC)::int AS unique_rank
+          FROM lead_identity li
+          WHERE li.is_meta_lead
+            AND li.created_at >= ${input.impactStartBound}
+            AND li.created_at <= ${input.impactEndBound}
+        ) ranked
+        WHERE unique_rank = 1
+      ),
+      filtered AS (
+        SELECT *
+        FROM deduped_leads
+        ${bookedFilter}
+      )
+      SELECT
+        (TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS "customerName",
+        phone,
+        NULLIF(CONCAT_WS(', ', NULLIF(address, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(zip, '')), '') AS "serviceAddress",
+        first_received_at AS "firstReceivedAt",
+        latest_received_at AS "latestReceivedAt",
+        any_booked AS booked,
+        NULLIF(CONCAT_WS(' ', NULLIF(appointment_date, ''), NULLIF(appointment_time, '')), '') AS appointment,
+        lead_count AS "leadCount",
+        tenant_name AS client,
+        'Meta Impact'::text AS funnel,
+        'Impact Window'::text AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COUNT(*) OVER()::numeric AS "__auditValue",
+        SUM(CASE WHEN any_booked THEN 1 ELSE 0 END) OVER()::numeric AS "__auditNumerator",
+        COUNT(*) OVER()::numeric AS "__auditDenominator"
+      FROM filtered
+      ORDER BY first_received_at DESC, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+
+    const first = rows[0] ?? {};
+    return sectionFromRows(sectionKey, sectionLabel, leadAuditColumns, rows, {
+      count: toNumber(first.__auditValue),
+      booked: toNumber(first.__auditNumerator),
+      total: toNumber(first.__auditDenominator),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    deduped_leads AS (
+      SELECT *
+      FROM (
+        SELECT
+          lc.*,
+          MIN(lc.created_at) OVER (PARTITION BY lc.run_id, lc.unique_key) AS first_received_at,
+          MAX(lc.created_at) OVER (PARTITION BY lc.run_id, lc.unique_key) AS latest_received_at,
+          COUNT(*) OVER (PARTITION BY lc.run_id, lc.unique_key)::int AS lead_count,
+          BOOL_OR(lc.booked) OVER (PARTITION BY lc.run_id, lc.unique_key) AS any_booked,
+          ROW_NUMBER() OVER (PARTITION BY lc.run_id, lc.unique_key ORDER BY lc.created_at ASC, lc.id ASC)::int AS unique_rank
+        FROM lead_cohort lc
+      ) ranked
+      WHERE unique_rank = 1
+    ),
+    filtered AS (
+      SELECT *
+      FROM deduped_leads
+      ${bookedFilter}
+    )
+    SELECT
+      (TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS "customerName",
+      phone,
+      NULLIF(CONCAT_WS(', ', NULLIF(address, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(zip, '')), '') AS "serviceAddress",
+      first_received_at AS "firstReceivedAt",
+      latest_received_at AS "latestReceivedAt",
+      any_booked AS booked,
+      NULLIF(CONCAT_WS(' ', NULLIF(appointment_date, ''), NULLIF(appointment_time, '')), '') AS appointment,
+      lead_count AS "leadCount",
+      tenant_name AS client,
+      funnel_name AS funnel,
+      run_name AS run,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COUNT(*) OVER()::numeric AS "__auditValue",
+      SUM(CASE WHEN any_booked THEN 1 ELSE 0 END) OVER()::numeric AS "__auditNumerator",
+      COUNT(*) OVER()::numeric AS "__auditDenominator"
+    FROM filtered
+    ORDER BY first_received_at DESC, "customerName" ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+
+  const first = rows[0] ?? {};
+  return sectionFromRows(sectionKey, sectionLabel, leadAuditColumns, rows, {
+    count: toNumber(first.__auditValue),
+    booked: toNumber(first.__auditNumerator),
+    total: toNumber(first.__auditDenominator),
+  });
+}
+
+async function queryChallengeAuditImpactMetaLeadSubmissions(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+  const baseCtes = challengeAuditImpactBaseCtes(input);
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    filtered AS (
+      SELECT *
+      FROM lead_identity
+      WHERE is_meta_lead
+        AND created_at >= ${input.impactStartBound}
+        AND created_at <= ${input.impactEndBound}
+    )
+    SELECT
+      (TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS "customerName",
+      phone,
+      NULLIF(CONCAT_WS(', ', NULLIF(address, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(zip, '')), '') AS "serviceAddress",
+      created_at AS "firstReceivedAt",
+      created_at AS "latestReceivedAt",
+      booked,
+      NULLIF(CONCAT_WS(' ', NULLIF(appointment_date, ''), NULLIF(appointment_time, '')), '') AS appointment,
+      1::int AS "leadCount",
+      tenant_name AS client,
+      'Meta Impact'::text AS funnel,
+      'Impact Window'::text AS run,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COUNT(*) OVER()::numeric AS "__auditValue"
+    FROM filtered
+    ORDER BY created_at DESC, "customerName" ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+
+  const first = rows[0] ?? {};
+  return sectionFromRows("metaLeadSubmissions", "Meta lead submissions", leadAuditColumns, rows, {
+    count: toNumber(first.__auditValue),
+  });
+}
+
+async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      spend_rows AS (
+        SELECT
+          cds.date,
+          t.name AS client,
+          'Meta Impact'::text AS funnel,
+          'Impact Window'::text AS run,
+          c.name AS campaign,
+          NULL::text AS ad_set_external_id,
+          NULL::text AS ad_external_id,
+          COALESCE(cds.spend, 0)::numeric AS spend,
+          COALESCE(cds.conversions, 0)::numeric AS meta_leads,
+          COALESCE(cds.impressions, 0)::numeric AS impressions,
+          COALESCE(cds.clicks, 0)::numeric AS clicks
+        FROM campaign_daily_stats cds
+        JOIN impact_campaign_scope c ON c.id = cds.campaign_id
+        JOIN tenants t ON t.id = c.tenant_id
+        WHERE cds.date >= ${input.impactStartDate}
+          AND cds.date <= ${input.impactEndDate}
+      )
+      SELECT
+        date,
+        client,
+        funnel,
+        run,
+        campaign,
+        ad_set_external_id AS "adSetExternalId",
+        ad_external_id AS "adExternalId",
+        ROUND(spend, 2)::numeric AS spend,
+        meta_leads AS "metaLeads",
+        impressions,
+        clicks,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(spend) OVER(), 0)::numeric AS "__auditSpend",
+        COALESCE(SUM(meta_leads) OVER(), 0)::numeric AS "__auditMetaLeads"
+      FROM spend_rows
+      ORDER BY date DESC, campaign ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+
+    const first = rows[0] ?? {};
+    return sectionFromRows("spend", "Meta spend and lead ledger", spendAuditColumns, rows, {
+      spend: round2(toNumber(first.__auditSpend)),
+      metaLeads: round1(toNumber(first.__auditMetaLeads)),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    spend_rows AS (
+      SELECT
+        vr.run_id,
+        vr.tenant_name,
+        vr.funnel_name,
+        vr.run_name,
+        mads.date,
+        c.name AS campaign,
+        mads.ad_set_external_id,
+        mads.ad_external_id,
+        COALESCE(mads.spend, 0)::numeric AS spend,
+        COALESCE(mads.conversions, 0)::numeric AS meta_leads,
+        COALESCE(mads.impressions, 0)::numeric AS impressions,
+        COALESCE(mads.clicks, 0)::numeric AS clicks
+      FROM valid_runs vr
+      JOIN campaigns c
+        ON c.tenant_id = vr.tenant_id
+        AND c.platform = 'meta'
+      JOIN meta_ad_daily_stats mads
+        ON mads.tenant_id = vr.tenant_id
+        AND mads.campaign_external_id = c.external_id
+        AND mads.date >= vr.window_start
+        AND mads.date <= vr.window_end
+      LEFT JOIN campaign_funnel_mappings ad_cfm
+        ON ad_cfm.tenant_id = vr.tenant_id
+        AND ad_cfm.campaign_id = c.id
+        AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+      LEFT JOIN campaign_funnel_mappings campaign_cfm
+        ON campaign_cfm.tenant_id = vr.tenant_id
+        AND campaign_cfm.campaign_id = c.id
+        AND campaign_cfm.ad_set_external_id IS NULL
+      WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+    )
+    SELECT
+      date,
+      tenant_name AS client,
+      funnel_name AS funnel,
+      run_name AS run,
+      campaign,
+      ad_set_external_id AS "adSetExternalId",
+      ad_external_id AS "adExternalId",
+      ROUND(spend, 2)::numeric AS spend,
+      meta_leads AS "metaLeads",
+      impressions,
+      clicks,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COALESCE(SUM(spend) OVER(), 0)::numeric AS "__auditSpend",
+      COALESCE(SUM(meta_leads) OVER(), 0)::numeric AS "__auditMetaLeads"
+    FROM spend_rows
+    ORDER BY date DESC, client ASC, funnel ASC, campaign ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+
+  const first = rows[0] ?? {};
+  return sectionFromRows("spend", "Meta spend and lead ledger", spendAuditColumns, rows, {
+    spend: round2(toNumber(first.__auditSpend)),
+    metaLeads: round1(toNumber(first.__auditMetaLeads)),
+  });
+}
+
+async function queryChallengeAuditActiveDays(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      job_events_base AS (
+        SELECT
+          j.id,
+          j.tenant_id,
+          el.unique_key,
+          ${challengeJobAttributionAtSql()} AS booked_at,
+          j.completed_at,
+          ${challengeCancellationAtSql()} AS cancelled_at
+        FROM jobs j
+        JOIN lead_identity el ON el.id = j.lead_id AND el.tenant_id = j.tenant_id
+      ),
+      job_events AS (
+        SELECT jeb.*
+        FROM job_events_base jeb
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = jeb.tenant_id
+          AND mt.unique_key = jeb.unique_key
+          AND mt.first_meta_at <= GREATEST(
+            COALESCE(jeb.booked_at, '-infinity'::timestamp),
+            COALESCE(jeb.completed_at, '-infinity'::timestamp),
+            COALESCE(jeb.cancelled_at, '-infinity'::timestamp)
+          )
+      ),
+      estimate_events AS (
+        SELECT
+          se.tenant_id,
+          el.unique_key,
+          COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+      ),
+      meta_estimate_events AS (
+        SELECT ee.*
+        FROM estimate_events ee
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = ee.tenant_id
+          AND mt.unique_key = ee.unique_key
+          AND mt.first_meta_at <= ee.estimate_at
+        WHERE ee.estimate_at >= ${input.impactStartBound}
+          AND ee.estimate_at <= ${input.impactEndBound}
+      ),
+      sold_events AS (
+        SELECT
+          se.tenant_id,
+          el.unique_key,
+          COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+      ),
+      meta_sold_events AS (
+        SELECT se.*
+        FROM sold_events se
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = se.tenant_id
+          AND mt.unique_key = se.unique_key
+          AND mt.first_meta_at <= se.sold_at
+        WHERE se.sold_at >= ${input.impactStartBound}
+          AND se.sold_at <= ${input.impactEndBound}
+      ),
+      activity_source AS (
+        SELECT created_at::date AS activity_day, 'Meta lead received'::text AS activity
+        FROM lead_identity
+        WHERE is_meta_lead
+          AND created_at >= ${input.impactStartBound}
+          AND created_at <= ${input.impactEndBound}
+
+        UNION ALL
+
+        SELECT cds.date AS activity_day, 'Meta spend'::text AS activity
+        FROM campaign_daily_stats cds
+        JOIN impact_campaign_scope c ON c.id = cds.campaign_id
+        WHERE cds.date >= ${input.impactStartDate}
+          AND cds.date <= ${input.impactEndDate}
+          AND COALESCE(cds.spend, 0) > 0
+
+        UNION ALL
+
+        SELECT booked_at::date, 'Job booked/originated'::text FROM job_events
+        WHERE booked_at >= ${input.impactStartBound} AND booked_at <= ${input.impactEndBound}
+
+        UNION ALL
+
+        SELECT completed_at::date, 'Job completed'::text FROM job_events
+        WHERE completed_at >= ${input.impactStartBound} AND completed_at <= ${input.impactEndBound}
+
+        UNION ALL
+
+        SELECT cancelled_at::date, 'Job cancelled'::text FROM job_events
+        WHERE cancelled_at >= ${input.impactStartBound} AND cancelled_at <= ${input.impactEndBound}
+
+        UNION ALL
+
+        SELECT estimate_at::date, 'Estimate created'::text FROM meta_estimate_events
+
+        UNION ALL
+
+        SELECT sold_at::date, 'Sold/closed'::text FROM meta_sold_events
+      ),
+      activity_days AS (
+        SELECT activity_day, STRING_AGG(DISTINCT activity, ', ' ORDER BY activity) AS activity
+        FROM activity_source
+        WHERE activity_day IS NOT NULL
+        GROUP BY activity_day
+      )
+      SELECT
+        activity_day AS date,
+        activity,
+        'Meta channel'::text AS client,
+        'Meta Impact'::text AS funnel,
+        'Impact Window'::text AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COUNT(*) OVER()::numeric AS "__auditValue"
+      FROM activity_days
+      ORDER BY activity_day DESC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows("activeDays", "Active day ledger", activeDayAuditColumns, rows, {
+      count: toNumber(first.__auditValue),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    activity_source AS (
+      SELECT
+        lc.run_id,
+        lc.tenant_name,
+        lc.funnel_name,
+        lc.run_name,
+        lc.created_at::date AS activity_day,
+        'Pulse lead received'::text AS activity
+      FROM lead_cohort lc
+
+      UNION ALL
+
+      SELECT
+        vr.run_id,
+        vr.tenant_name,
+        vr.funnel_name,
+        vr.run_name,
+        mads.date AS activity_day,
+        'Meta spend or conversion'::text AS activity
+      FROM valid_runs vr
+      JOIN campaigns c
+        ON c.tenant_id = vr.tenant_id
+        AND c.platform = 'meta'
+      JOIN meta_ad_daily_stats mads
+        ON mads.tenant_id = vr.tenant_id
+        AND mads.campaign_external_id = c.external_id
+        AND mads.date >= vr.window_start
+        AND mads.date <= vr.window_end
+      LEFT JOIN campaign_funnel_mappings ad_cfm
+        ON ad_cfm.tenant_id = vr.tenant_id
+        AND ad_cfm.campaign_id = c.id
+        AND ad_cfm.ad_set_external_id = mads.ad_set_external_id
+      LEFT JOIN campaign_funnel_mappings campaign_cfm
+        ON campaign_cfm.tenant_id = vr.tenant_id
+        AND campaign_cfm.campaign_id = c.id
+        AND campaign_cfm.ad_set_external_id IS NULL
+      WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+        AND (
+          COALESCE(mads.spend, 0) > 0
+          OR COALESCE(mads.conversions, 0) > 0
+        )
+    ),
+    activity_days AS (
+      SELECT
+        run_id,
+        tenant_name,
+        funnel_name,
+        run_name,
+        activity_day,
+        STRING_AGG(DISTINCT activity, ', ' ORDER BY activity) AS activity
+      FROM activity_source
+      WHERE activity_day IS NOT NULL
+      GROUP BY run_id, tenant_name, funnel_name, run_name, activity_day
+    )
+    SELECT
+      activity_day AS date,
+      activity,
+      tenant_name AS client,
+      funnel_name AS funnel,
+      run_name AS run,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COUNT(*) OVER()::numeric AS "__auditValue"
+    FROM activity_days
+    ORDER BY activity_day DESC, client ASC, funnel ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+  const first = rows[0] ?? {};
+  return sectionFromRows("activeDays", "Active day ledger", activeDayAuditColumns, rows, {
+    count: toNumber(first.__auditValue),
+  });
+}
+
+async function queryChallengeAuditJobs(input: ChallengeAuditContext, completedEstimateOnly: boolean): Promise<ChallengeAuditSectionResult> {
+  const sectionKey = completedEstimateOnly ? "completedEstimateJobs" : "jobs";
+  const sectionLabel = completedEstimateOnly ? "Completed estimate jobs" : "Job and cancellation ledger";
+  const completedFilter = completedEstimateOnly ? sql`WHERE has_estimate = true AND status = 'completed'` : sql``;
+
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      job_events_base AS (
+        SELECT
+          j.id,
+          j.tenant_id,
+          t.name AS tenant_name,
+          el.unique_key,
+          ${challengeJobAttributionAtSql()} AS job_attribution_at,
+          j.completed_at,
+          ${challengeCancellationAtSql()} AS cancelled_at,
+          j.status,
+          j.st_job_number,
+          j.st_job_id,
+          j.customer_name,
+          j.customer_phone,
+          j.service_address,
+          COALESCE(j.job_type_name, j.job_type) AS job_type,
+          EXISTS (
+            SELECT 1 FROM sold_estimates sej
+            WHERE sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+          ) AS has_estimate
+        FROM jobs j
+        JOIN lead_identity el ON el.id = j.lead_id AND el.tenant_id = j.tenant_id
+        JOIN tenants t ON t.id = j.tenant_id
+      ),
+      job_events AS (
+        SELECT jeb.*
+        FROM job_events_base jeb
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = jeb.tenant_id
+          AND mt.unique_key = jeb.unique_key
+          AND mt.first_meta_at <= GREATEST(
+            COALESCE(jeb.job_attribution_at, '-infinity'::timestamp),
+            COALESCE(jeb.completed_at, '-infinity'::timestamp),
+            COALESCE(jeb.cancelled_at, '-infinity'::timestamp)
+          )
+        WHERE (jeb.job_attribution_at >= ${input.impactStartBound} AND jeb.job_attribution_at <= ${input.impactEndBound})
+          OR (jeb.completed_at >= ${input.impactStartBound} AND jeb.completed_at <= ${input.impactEndBound})
+          OR (jeb.cancelled_at >= ${input.impactStartBound} AND jeb.cancelled_at <= ${input.impactEndBound})
+      ),
+      filtered AS (
+        SELECT *
+        FROM job_events
+        ${completedFilter}
+      )
+      SELECT
+        customer_name AS "customerName",
+        customer_phone AS phone,
+        service_address AS "serviceAddress",
+        status,
+        st_job_number AS "stJobNumber",
+        st_job_id AS "stJobId",
+        job_type AS "jobType",
+        job_attribution_at AS "jobAttributionAt",
+        completed_at AS "completedAt",
+        (cancelled_at >= ${input.impactStartBound} AND cancelled_at <= ${input.impactEndBound}) AS cancelled,
+        cancelled_at AS "cancelledAt",
+        has_estimate AS "hasEstimate",
+        1::numeric AS "attributionCredit",
+        tenant_name AS client,
+        'Meta Impact'::text AS funnel,
+        'Impact Window'::text AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COUNT(*) OVER()::numeric AS "__auditDenominator",
+        SUM(CASE WHEN cancelled_at >= ${input.impactStartBound} AND cancelled_at <= ${input.impactEndBound} THEN 1 ELSE 0 END) OVER()::numeric AS "__auditNumerator",
+        SUM(CASE WHEN has_estimate AND status = 'completed' THEN 1 ELSE 0 END) OVER()::numeric AS "__auditCount"
+      FROM filtered
+      ORDER BY COALESCE(cancelled_at, completed_at, job_attribution_at) DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows(sectionKey, sectionLabel, jobAuditColumns, rows, {
+      totalJobs: toNumber(first.__auditDenominator),
+      cancelledJobs: toNumber(first.__auditNumerator),
+      completedEstimateJobs: toNumber(first.__auditCount),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  if (input.attributionModel === "weighted") {
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      ${challengeWeightedRunOutcomeCtes()},
+      job_rows AS (
+        SELECT
+          jw.run_id,
+          vr.tenant_name,
+          vr.funnel_name,
+          vr.run_name,
+          j.customer_name,
+          j.customer_phone,
+          j.service_address,
+          j.status,
+          j.st_job_number,
+          j.st_job_id,
+          COALESCE(j.job_type_name, j.job_type) AS job_type,
+          ${challengeJobAttributionAtSql()} AS job_attribution_at,
+          j.completed_at,
+          ${challengeCancellationAtSql()} AS cancelled_at,
+          jw.has_completed_estimate AS has_estimate,
+          COALESCE(jw.weight, 0)::numeric AS attribution_credit
+        FROM job_weights jw
+        JOIN jobs j ON j.id = jw.job_id
+        JOIN valid_runs vr ON vr.run_id = jw.run_id
+      ),
+      filtered AS (
+        SELECT *
+        FROM job_rows
+        ${completedFilter}
+      )
+      SELECT
+        customer_name AS "customerName",
+        customer_phone AS phone,
+        service_address AS "serviceAddress",
+        status,
+        st_job_number AS "stJobNumber",
+        st_job_id AS "stJobId",
+        job_type AS "jobType",
+        job_attribution_at AS "jobAttributionAt",
+        completed_at AS "completedAt",
+        status = 'cancelled' AS cancelled,
+        cancelled_at AS "cancelledAt",
+        has_estimate AS "hasEstimate",
+        ROUND(attribution_credit, 4)::numeric AS "attributionCredit",
+        tenant_name AS client,
+        funnel_name AS funnel,
+        run_name AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(attribution_credit) OVER(), 0)::numeric AS "__auditDenominator",
+        COALESCE(SUM(attribution_credit) FILTER (WHERE status = 'cancelled') OVER(), 0)::numeric AS "__auditNumerator",
+        COALESCE(SUM(attribution_credit) FILTER (WHERE has_estimate AND status = 'completed') OVER(), 0)::numeric AS "__auditCount"
+      FROM filtered
+      ORDER BY COALESCE(cancelled_at, completed_at, job_attribution_at) DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows(sectionKey, sectionLabel, jobAuditColumns, rows, {
+      totalJobs: round2(toNumber(first.__auditDenominator)),
+      cancelledJobs: round2(toNumber(first.__auditNumerator)),
+      completedEstimateJobs: round2(toNumber(first.__auditCount)),
+    });
+  }
+
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    job_rows AS (
+      SELECT DISTINCT ON (lc.run_id, j.id)
+        lc.run_id,
+        lc.tenant_name,
+        lc.funnel_name,
+        lc.run_name,
+        j.customer_name,
+        j.customer_phone,
+        j.service_address,
+        j.status,
+        j.st_job_number,
+        j.st_job_id,
+        COALESCE(j.job_type_name, j.job_type) AS job_type,
+        ${challengeJobAttributionAtSql()} AS job_attribution_at,
+        j.completed_at,
+        ${challengeCancellationAtSql()} AS cancelled_at,
+        EXISTS (
+          SELECT 1 FROM sold_estimates sej
+          WHERE sej.job_id = j.id AND sej.tenant_id = j.tenant_id
+        ) AS has_estimate
+      FROM lead_cohort lc
+      JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        ${challengeJobAttributionWindowSql()}
+      ORDER BY lc.run_id, j.id, j.created_at DESC
+    ),
+    filtered AS (
+      SELECT *
+      FROM job_rows
+      ${completedFilter}
+    )
+    SELECT
+      customer_name AS "customerName",
+      customer_phone AS phone,
+      service_address AS "serviceAddress",
+      status,
+      st_job_number AS "stJobNumber",
+      st_job_id AS "stJobId",
+      job_type AS "jobType",
+      job_attribution_at AS "jobAttributionAt",
+      completed_at AS "completedAt",
+      status = 'cancelled' AS cancelled,
+      cancelled_at AS "cancelledAt",
+      has_estimate AS "hasEstimate",
+      1::numeric AS "attributionCredit",
+      tenant_name AS client,
+      funnel_name AS funnel,
+      run_name AS run,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COUNT(*) OVER()::numeric AS "__auditDenominator",
+      SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) OVER()::numeric AS "__auditNumerator",
+      SUM(CASE WHEN has_estimate AND status = 'completed' THEN 1 ELSE 0 END) OVER()::numeric AS "__auditCount"
+    FROM filtered
+    ORDER BY COALESCE(cancelled_at, completed_at, job_attribution_at) DESC NULLS LAST, "customerName" ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+  const first = rows[0] ?? {};
+  return sectionFromRows(sectionKey, sectionLabel, jobAuditColumns, rows, {
+    totalJobs: toNumber(first.__auditDenominator),
+    cancelledJobs: toNumber(first.__auditNumerator),
+    completedEstimateJobs: toNumber(first.__auditCount),
+  });
+}
+
+async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      estimate_events AS (
+        SELECT
+          COALESCE(se.job_id::text, 'lead:' || se.lead_id::text, 'estimate:' || se.id::text) AS estimate_group_key,
+          se.id AS estimate_id,
+          se.st_estimate_id,
+          se.estimate_status,
+          se.tenant_id,
+          el.tenant_name,
+          el.unique_key,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
+          COALESCE(j.customer_name, TRIM(COALESCE(el.first_name, '') || ' ' || COALESCE(el.last_name, ''))) AS customer_name,
+          COALESCE(j.customer_phone, el.phone) AS phone,
+          COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(el.address, ''), NULLIF(el.city, ''), NULLIF(el.state, ''), NULLIF(el.zip, '')), '')) AS service_address,
+          j.st_job_number
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+      ),
+      meta_estimate_events AS (
+        SELECT ee.*
+        FROM estimate_events ee
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = ee.tenant_id
+          AND mt.unique_key = ee.unique_key
+          AND mt.first_meta_at <= ee.estimate_at
+        WHERE ee.estimate_at >= ${input.impactStartBound}
+          AND ee.estimate_at <= ${input.impactEndBound}
+      ),
+      credited AS (
+        SELECT
+          estimate_group_key,
+          MIN(customer_name) AS customer_name,
+          MIN(phone) AS phone,
+          MIN(service_address) AS service_address,
+          ROUND(AVG(amount), 2)::numeric AS credited_value,
+          COUNT(*)::int AS option_count,
+          STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
+          STRING_AGG(DISTINCT COALESCE(NULLIF(estimate_status, ''), 'unknown'), ', ' ORDER BY COALESCE(NULLIF(estimate_status, ''), 'unknown')) AS estimate_statuses,
+          MIN(estimate_at) AS estimate_at,
+          STRING_AGG(DISTINCT st_job_number, ', ' ORDER BY st_job_number) FILTER (WHERE st_job_number IS NOT NULL) AS st_job_number,
+          MIN(tenant_name) AS tenant_name
+        FROM meta_estimate_events
+        GROUP BY estimate_group_key
+      )
+      SELECT
+        customer_name AS "customerName",
+        phone,
+        service_address AS "serviceAddress",
+        credited_value AS "creditedValue",
+        option_count AS "optionCount",
+        estimate_ids AS "estimateIds",
+        estimate_statuses AS "estimateStatuses",
+        estimate_at AS "estimateAt",
+        st_job_number AS "stJobNumber",
+        1::numeric AS "attributionCredit",
+        tenant_name AS client,
+        'Meta Impact'::text AS funnel,
+        'Impact Window'::text AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(credited_value) OVER(), 0)::numeric AS "__auditValue"
+      FROM credited
+      ORDER BY estimate_at DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows("estimates", "Credited estimate opportunities", estimateAuditColumns, rows, {
+      value: round2(toNumber(first.__auditValue)),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  const outcomeCtes = input.attributionModel === "weighted" ? challengeWeightedRunOutcomeCtes() : sql``;
+  const rows = pickAuditRows(await db.execute(input.attributionModel === "weighted"
+    ? sql`
+      WITH ${baseCtes},
+      ${outcomeCtes},
+      credited AS (
+        SELECT
+          ew.run_id,
+          ew.unique_key,
+          MIN(vr.tenant_name) AS tenant_name,
+          MIN(vr.funnel_name) AS funnel_name,
+          MIN(vr.run_name) AS run_name,
+          ROUND(AVG(ew.amount * ew.weight), 2)::numeric AS credited_value,
+          COUNT(*)::int AS option_count,
+          ROUND(SUM(ew.weight), 4)::numeric AS attribution_credit,
+          STRING_AGG(DISTINCT se.st_estimate_id, ', ' ORDER BY se.st_estimate_id) AS estimate_ids,
+          STRING_AGG(DISTINCT COALESCE(NULLIF(se.estimate_status, ''), 'unknown'), ', ' ORDER BY COALESCE(NULLIF(se.estimate_status, ''), 'unknown')) AS estimate_statuses,
+          MIN(COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on)) AS estimate_at,
+          MIN(COALESCE(j.customer_name, TRIM(COALESCE(el.first_name, '') || ' ' || COALESCE(el.last_name, '')))) AS customer_name,
+          MIN(COALESCE(j.customer_phone, el.phone)) AS phone,
+          MIN(COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(el.address, ''), NULLIF(el.city, ''), NULLIF(el.state, ''), NULLIF(el.zip, '')), ''))) AS service_address,
+          STRING_AGG(DISTINCT j.st_job_number, ', ' ORDER BY j.st_job_number) FILTER (WHERE j.st_job_number IS NOT NULL) AS st_job_number
+        FROM estimate_weights ew
+        JOIN valid_runs vr ON vr.run_id = ew.run_id
+        JOIN sold_estimates se ON se.id = ew.estimate_id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN leads el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+        GROUP BY ew.run_id, ew.unique_key
+      )
+      SELECT
+        customer_name AS "customerName",
+        phone,
+        service_address AS "serviceAddress",
+        credited_value AS "creditedValue",
+        option_count AS "optionCount",
+        estimate_ids AS "estimateIds",
+        estimate_statuses AS "estimateStatuses",
+        estimate_at AS "estimateAt",
+        st_job_number AS "stJobNumber",
+        attribution_credit AS "attributionCredit",
+        tenant_name AS client,
+        funnel_name AS funnel,
+        run_name AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(credited_value) OVER(), 0)::numeric AS "__auditValue"
+      FROM credited
+      ORDER BY estimate_at DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `
+    : sql`
+      WITH ${baseCtes},
+      estimate_options AS (
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          lc.tenant_name,
+          lc.funnel_name,
+          lc.run_name,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          se.st_estimate_id,
+          se.estimate_status,
+          COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
+          COALESCE(j.customer_name, TRIM(COALESCE(lc.first_name, '') || ' ' || COALESCE(lc.last_name, ''))) AS customer_name,
+          COALESCE(j.customer_phone, lc.phone) AS phone,
+          COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(lc.address, ''), NULLIF(lc.city, ''), NULLIF(lc.state, ''), NULLIF(lc.zip, '')), '')) AS service_address,
+          j.st_job_number
+        FROM lead_cohort lc
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
+
+        UNION ALL
+
+        SELECT
+          lc.run_id,
+          lc.unique_key,
+          lc.tenant_name,
+          lc.funnel_name,
+          lc.run_name,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          se.st_estimate_id,
+          se.estimate_status,
+          COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
+          COALESCE(j.customer_name, TRIM(COALESCE(lc.first_name, '') || ' ' || COALESCE(lc.last_name, ''))) AS customer_name,
+          COALESCE(j.customer_phone, lc.phone) AS phone,
+          COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(lc.address, ''), NULLIF(lc.city, ''), NULLIF(lc.state, ''), NULLIF(lc.zip, '')), '')) AS service_address,
+          j.st_job_number
+        FROM lead_cohort lc
+        JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+        JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+        WHERE se.lead_id IS NULL
+          AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          ${challengeEstimateAttributionWindowSql()}
+      ),
+      credited AS (
+        SELECT
+          run_id,
+          unique_key,
+          MIN(tenant_name) AS tenant_name,
+          MIN(funnel_name) AS funnel_name,
+          MIN(run_name) AS run_name,
+          ROUND(AVG(amount), 2)::numeric AS credited_value,
+          COUNT(*)::int AS option_count,
+          STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
+          STRING_AGG(DISTINCT COALESCE(NULLIF(estimate_status, ''), 'unknown'), ', ' ORDER BY COALESCE(NULLIF(estimate_status, ''), 'unknown')) AS estimate_statuses,
+          MIN(estimate_at) AS estimate_at,
+          MIN(customer_name) AS customer_name,
+          MIN(phone) AS phone,
+          MIN(service_address) AS service_address,
+          STRING_AGG(DISTINCT st_job_number, ', ' ORDER BY st_job_number) FILTER (WHERE st_job_number IS NOT NULL) AS st_job_number
+        FROM estimate_options
+        GROUP BY run_id, unique_key
+      )
+      SELECT
+        customer_name AS "customerName",
+        phone,
+        service_address AS "serviceAddress",
+        credited_value AS "creditedValue",
+        option_count AS "optionCount",
+        estimate_ids AS "estimateIds",
+        estimate_statuses AS "estimateStatuses",
+        estimate_at AS "estimateAt",
+        st_job_number AS "stJobNumber",
+        1::numeric AS "attributionCredit",
+        tenant_name AS client,
+        funnel_name AS funnel,
+        run_name AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(credited_value) OVER(), 0)::numeric AS "__auditValue"
+      FROM credited
+      ORDER BY estimate_at DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+
+  const first = rows[0] ?? {};
+  return sectionFromRows("estimates", "Credited estimate opportunities", estimateAuditColumns, rows, {
+    value: round2(toNumber(first.__auditValue)),
+  });
+}
+
+async function queryChallengeAuditSold(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+  if (input.viewMode === "impact") {
+    const baseCtes = challengeAuditImpactBaseCtes(input);
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      sold_events AS (
+        SELECT
+          COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+          se.tenant_id,
+          el.tenant_name,
+          el.unique_key,
+          COALESCE(j.customer_name, TRIM(COALESCE(el.first_name, '') || ' ' || COALESCE(el.last_name, ''))) AS customer_name,
+          COALESCE(j.customer_phone, el.phone) AS phone,
+          COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(el.address, ''), NULLIF(el.city, ''), NULLIF(el.state, ''), NULLIF(el.zip, '')), '')) AS service_address,
+          j.st_job_number,
+          se.st_estimate_id,
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN lead_identity el ON el.id = COALESCE(se.lead_id, j.lead_id) AND el.tenant_id = se.tenant_id
+        WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+          AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+      ),
+      meta_sold_events AS (
+        SELECT se.*
+        FROM sold_events se
+        JOIN meta_touch_keys mt
+          ON mt.tenant_id = se.tenant_id
+          AND mt.unique_key = se.unique_key
+          AND mt.first_meta_at <= se.sold_at
+        WHERE se.sold_at >= ${input.impactStartBound}
+          AND se.sold_at <= ${input.impactEndBound}
+      ),
+      credited AS (
+        SELECT
+          sold_key,
+          MIN(customer_name) AS customer_name,
+          MIN(phone) AS phone,
+          MIN(service_address) AS service_address,
+          ROUND(SUM(amount), 2)::numeric AS sold_value,
+          MIN(sold_at) AS sold_at,
+          STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
+          STRING_AGG(DISTINCT st_job_number, ', ' ORDER BY st_job_number) FILTER (WHERE st_job_number IS NOT NULL) AS st_job_number,
+          MIN(tenant_name) AS tenant_name
+        FROM meta_sold_events
+        GROUP BY sold_key
+      )
+      SELECT
+        customer_name AS "customerName",
+        phone,
+        service_address AS "serviceAddress",
+        sold_value AS "soldValue",
+        sold_at AS "soldAt",
+        estimate_ids AS "estimateIds",
+        st_job_number AS "stJobNumber",
+        sold_key AS "soldKey",
+        1::numeric AS "attributionCredit",
+        tenant_name AS client,
+        'Meta Impact'::text AS funnel,
+        'Impact Window'::text AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(sold_value) OVER(), 0)::numeric AS "__auditValue",
+        COUNT(*) OVER()::numeric AS "__auditCount"
+      FROM credited
+      ORDER BY sold_at DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows("sold", "Sold/closed opportunities", soldAuditColumns, rows, {
+      value: round2(toNumber(first.__auditValue)),
+      soldJobs: toNumber(first.__auditCount),
+    });
+  }
+
+  const baseCtes = challengeAuditRunBaseCtes(input);
+  if (input.attributionModel === "weighted") {
+    const rows = pickAuditRows(await db.execute(sql`
+      WITH ${baseCtes},
+      ${challengeWeightedRunOutcomeCtes()},
+      credited AS (
+        SELECT
+          sw.run_id,
+          sw.tenant_id,
+          sw.sold_key,
+          ROUND(SUM(sw.amount * sw.weight), 2)::numeric AS sold_value,
+          ROUND(SUM(sw.weight), 4)::numeric AS attribution_credit,
+          MIN(vr.tenant_name) AS tenant_name,
+          MIN(vr.funnel_name) AS funnel_name,
+          MIN(vr.run_name) AS run_name
+        FROM sold_weights sw
+        JOIN valid_runs vr ON vr.run_id = sw.run_id
+        GROUP BY sw.run_id, sw.tenant_id, sw.sold_key
+      )
+      SELECT
+        detail.customer_name AS "customerName",
+        detail.phone,
+        detail.service_address AS "serviceAddress",
+        credited.sold_value AS "soldValue",
+        detail.sold_at AS "soldAt",
+        detail.estimate_ids AS "estimateIds",
+        detail.st_job_number AS "stJobNumber",
+        credited.sold_key AS "soldKey",
+        credited.attribution_credit AS "attributionCredit",
+        credited.tenant_name AS client,
+        credited.funnel_name AS funnel,
+        credited.run_name AS run,
+        COUNT(*) OVER()::int AS "__totalRows",
+        COALESCE(SUM(credited.sold_value) OVER(), 0)::numeric AS "__auditValue",
+        COALESCE(SUM(credited.attribution_credit) OVER(), 0)::numeric AS "__auditCount"
+      FROM credited
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(j.customer_name, TRIM(COALESCE(l.first_name, '') || ' ' || COALESCE(l.last_name, ''))) AS customer_name,
+          COALESCE(j.customer_phone, l.phone) AS phone,
+          COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(l.address, ''), NULLIF(l.city, ''), NULLIF(l.state, ''), NULLIF(l.zip, '')), '')) AS service_address,
+          COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at,
+          se.st_estimate_id AS estimate_ids,
+          j.st_job_number AS st_job_number
+        FROM sold_estimates se
+        LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+        JOIN leads l ON l.id = COALESCE(se.lead_id, j.lead_id) AND l.tenant_id = se.tenant_id
+        WHERE se.tenant_id = credited.tenant_id
+          AND COALESCE(se.job_id::text, 'estimate:' || se.id::text) = credited.sold_key
+        ORDER BY sold_at DESC NULLS LAST
+        LIMIT 1
+      ) detail ON TRUE
+      ORDER BY detail.sold_at DESC NULLS LAST, "customerName" ASC
+      LIMIT ${input.limit}
+      OFFSET ${input.offset}
+    `));
+    const first = rows[0] ?? {};
+    return sectionFromRows("sold", "Sold/closed opportunities", soldAuditColumns, rows, {
+      value: round2(toNumber(first.__auditValue)),
+      soldJobs: round2(toNumber(first.__auditCount)),
+    });
+  }
+
+  const rows = pickAuditRows(await db.execute(sql`
+    WITH ${baseCtes},
+    sold_options AS (
+      SELECT
+        lc.run_id,
+        lc.tenant_name,
+        lc.funnel_name,
+        lc.run_name,
+        COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+        COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at,
+        se.st_estimate_id,
+        COALESCE(j.customer_name, TRIM(COALESCE(lc.first_name, '') || ' ' || COALESCE(lc.last_name, ''))) AS customer_name,
+        COALESCE(j.customer_phone, lc.phone) AS phone,
+        COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(lc.address, ''), NULLIF(lc.city, ''), NULLIF(lc.state, ''), NULLIF(lc.zip, '')), '')) AS service_address,
+        j.st_job_number
+      FROM lead_cohort lc
+      JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
+      LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
+      WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+        AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+        ${challengeEstimateAttributionWindowSql()}
+
+      UNION ALL
+
+      SELECT
+        lc.run_id,
+        lc.tenant_name,
+        lc.funnel_name,
+        lc.run_name,
+        COALESCE(se.job_id::text, 'estimate:' || se.id::text) AS sold_key,
+        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+        COALESCE(se.sold_on, se.st_estimate_created_at, ${challengeJobAttributionAtSql()}) AS sold_at,
+        se.st_estimate_id,
+        COALESCE(j.customer_name, TRIM(COALESCE(lc.first_name, '') || ' ' || COALESCE(lc.last_name, ''))) AS customer_name,
+        COALESCE(j.customer_phone, lc.phone) AS phone,
+        COALESCE(j.service_address, NULLIF(CONCAT_WS(', ', NULLIF(lc.address, ''), NULLIF(lc.city, ''), NULLIF(lc.state, ''), NULLIF(lc.zip, '')), '')) AS service_address,
+        j.st_job_number
+      FROM lead_cohort lc
+      JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
+      JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
+      WHERE se.lead_id IS NULL
+        AND COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
+        AND (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold')
+        ${challengeEstimateAttributionWindowSql()}
+    ),
+    credited AS (
+      SELECT
+        run_id,
+        sold_key,
+        MIN(tenant_name) AS tenant_name,
+        MIN(funnel_name) AS funnel_name,
+        MIN(run_name) AS run_name,
+        ROUND(SUM(amount), 2)::numeric AS sold_value,
+        MIN(sold_at) AS sold_at,
+        STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
+        STRING_AGG(DISTINCT st_job_number, ', ' ORDER BY st_job_number) FILTER (WHERE st_job_number IS NOT NULL) AS st_job_number,
+        MIN(customer_name) AS customer_name,
+        MIN(phone) AS phone,
+        MIN(service_address) AS service_address
+      FROM sold_options
+      GROUP BY run_id, sold_key
+    )
+    SELECT
+      customer_name AS "customerName",
+      phone,
+      service_address AS "serviceAddress",
+      sold_value AS "soldValue",
+      sold_at AS "soldAt",
+      estimate_ids AS "estimateIds",
+      st_job_number AS "stJobNumber",
+      sold_key AS "soldKey",
+      1::numeric AS "attributionCredit",
+      tenant_name AS client,
+      funnel_name AS funnel,
+      run_name AS run,
+      COUNT(*) OVER()::int AS "__totalRows",
+      COALESCE(SUM(sold_value) OVER(), 0)::numeric AS "__auditValue",
+      COUNT(*) OVER()::numeric AS "__auditCount"
+    FROM credited
+    ORDER BY sold_at DESC NULLS LAST, "customerName" ASC
+    LIMIT ${input.limit}
+    OFFSET ${input.offset}
+  `));
+  const first = rows[0] ?? {};
+  return sectionFromRows("sold", "Sold/closed opportunities", soldAuditColumns, rows, {
+    value: round2(toNumber(first.__auditValue)),
+    soldJobs: toNumber(first.__auditCount),
+  });
+}
+
+async function buildChallengeAuditPayload(input: ChallengeAuditContext, displayedValue: number | null, scopeLabel: string) {
+  let sections: ChallengeAuditSectionResult[] = [];
+  let auditValue = 0;
+
+  if (input.metricKey === "activeDays") {
+    const activeDays = await queryChallengeAuditActiveDays(input);
+    sections = [activeDays];
+    auditValue = activeDays.totals.count ?? 0;
+  } else if (input.metricKey === "metaLeads") {
+    if (input.viewMode === "impact") {
+      const submissions = await queryChallengeAuditImpactMetaLeadSubmissions(input);
+      sections = [submissions];
+      auditValue = submissions.totals.count ?? 0;
+    } else {
+      const spend = await queryChallengeAuditSpend(input);
+      sections = [spend];
+      auditValue = spend.totals.metaLeads ?? 0;
+    }
+  } else if (input.metricKey === "uniquePulseLeads") {
+    const leads = await queryChallengeAuditLeads(input, false);
+    sections = [leads];
+    auditValue = leads.totals.count ?? 0;
+  } else if (input.metricKey === "appointmentsBooked") {
+    const appointments = await queryChallengeAuditLeads(input, true);
+    sections = [appointments];
+    auditValue = appointments.totals.count ?? 0;
+  } else if (input.metricKey === "bookingRate") {
+    const leads = await queryChallengeAuditLeads(input, false);
+    sections = [leads];
+    auditValue = leads.totals.total > 0 ? round1(((leads.totals.booked ?? 0) / leads.totals.total) * 100) : 0;
+  } else if (input.metricKey === "cancellationRate") {
+    const jobs = await queryChallengeAuditJobs(input, false);
+    sections = [jobs];
+    auditValue = jobs.totals.totalJobs > 0 ? round1(((jobs.totals.cancelledJobs ?? 0) / jobs.totals.totalJobs) * 100) : 0;
+  } else if (input.metricKey === "totalEstimateValue") {
+    const estimates = await queryChallengeAuditEstimates(input);
+    sections = [estimates];
+    auditValue = estimates.totals.value ?? 0;
+  } else if (input.metricKey === "totalSoldClosedValue") {
+    const sold = await queryChallengeAuditSold(input);
+    sections = [sold];
+    auditValue = sold.totals.value ?? 0;
+  } else if (input.metricKey === "totalSpend") {
+    const spend = await queryChallengeAuditSpend(input);
+    sections = [spend];
+    auditValue = spend.totals.spend ?? 0;
+  } else if (input.metricKey === "costPerLead") {
+    const spend = await queryChallengeAuditSpend(input);
+    const leadBasis = input.viewMode === "impact"
+      ? await queryChallengeAuditImpactMetaLeadSubmissions(input)
+      : spend;
+    sections = input.viewMode === "impact" ? [spend, leadBasis] : [spend];
+    const denominator = input.viewMode === "impact" ? (leadBasis.totals.count ?? 0) : (spend.totals.metaLeads ?? 0);
+    auditValue = denominator > 0 ? round2((spend.totals.spend ?? 0) / denominator) : 0;
+  } else if (input.metricKey === "roasPotential") {
+    const estimates = await queryChallengeAuditEstimates(input);
+    const spend = await queryChallengeAuditSpend(input);
+    sections = [estimates, spend];
+    auditValue = spend.totals.spend > 0 ? round2((estimates.totals.value ?? 0) / spend.totals.spend) : 0;
+  } else if (input.metricKey === "roasSold") {
+    const sold = await queryChallengeAuditSold(input);
+    const spend = await queryChallengeAuditSpend(input);
+    sections = [sold, spend];
+    auditValue = spend.totals.spend > 0 ? round2((sold.totals.value ?? 0) / spend.totals.spend) : 0;
+  } else if (input.metricKey === "averageCostPerInHomeAppointment") {
+    const jobs = await queryChallengeAuditJobs(input, true);
+    const spend = await queryChallengeAuditSpend(input);
+    sections = [jobs, spend];
+    auditValue = jobs.totals.completedEstimateJobs > 0 ? round2((spend.totals.spend ?? 0) / jobs.totals.completedEstimateJobs) : 0;
+  } else if (input.metricKey === "costToAcquireCustomer") {
+    const sold = await queryChallengeAuditSold(input);
+    const spend = await queryChallengeAuditSpend(input);
+    sections = [sold, spend];
+    auditValue = sold.totals.soldJobs > 0 ? round2((spend.totals.spend ?? 0) / sold.totals.soldJobs) : 0;
+  } else if (input.metricKey === "averageClosedJobValue") {
+    const sold = await queryChallengeAuditSold(input);
+    sections = [sold];
+    auditValue = sold.totals.soldJobs > 0 ? round2((sold.totals.value ?? 0) / sold.totals.soldJobs) : 0;
+  }
+
+  const status = auditStatus(input.metricKey, displayedValue, auditValue);
+  const notes: string[] = [];
+  if (input.runRule === "average" && input.viewMode === "funnel") {
+    notes.push("Average run mode displays averaged metric cards; the audit drawer lists the underlying source records for the selected runs.");
+  }
+  if (input.attributionModel === "weighted" && input.viewMode === "funnel") {
+    notes.push("Weighted mode includes attribution credit so one ServiceTitan job or estimate can be split across multiple prior funnel touches.");
+  }
+  if (status === "review") {
+    notes.push("The audit total is close enough to inspect but does not exactly match the clicked value. This usually means the card is an averaged comparison while the drawer is listing the underlying source rows.");
+  } else if (status === "matched") {
+    notes.push("Audit total matches the clicked Challenge value.");
+  } else {
+    notes.push("Audit total is calculated from the same scoped records returned in this drawer.");
+  }
+
+  return {
+    metricKey: input.metricKey,
+    title: CHALLENGE_AUDIT_LABELS[input.metricKey],
+    scopeLabel,
+    displayedValue,
+    auditValue,
+    reconciliationStatus: status,
+    reconciliationNote: notes.join(" "),
+    sections: sections.map((result) => result.section),
+    paging: {
+      limit: input.limit,
+      offset: input.offset,
+    },
+  };
+}
+
+router.get("/dashboard/challenge/audit", async (req, res) => {
+  const metricKey = parseChallengeAuditMetric(req.query.metricKey);
+  if (!metricKey) {
+    res.status(400).json({ error: "Invalid Challenge metric." });
+    return;
+  }
+
+  const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
+  const selectedClientTenantIds = parseRepeatedNumbers(req.query.clientTenantId);
+  const selectedFunnelTypeIds = parseRepeatedNumbers(req.query.funnelTypeId);
+  const selectedRunIds = parseRepeatedNumbers(req.query.runId);
+  const viewMode = parseChallengeViewMode(req.query.viewMode);
+  const attributionModel = parseChallengeAttributionModel(req.query.attributionModel);
+  const mode = parseChallengeCompareMode(req.query.mode);
+  const runRule = parseChallengeRunRule(req.query.runRule);
+  const bestBy = parseChallengeBestBy(req.query.bestBy);
+  const dayStart = parsePositiveInt(req.query.dayStart, 1);
+  const dayEnd = Math.max(dayStart, parsePositiveInt(req.query.dayEnd, 30));
+  const {
+    startDate: impactStartDate,
+    endDate: impactEndDate,
+    startBound: impactStartBound,
+    endBound: impactEndBound,
+  } = parseChallengeDateRange(req.query.startDate, req.query.endDate);
+  const limit = parseChallengeAuditLimit(req.query.limit);
+  const offset = parseNonNegativeInt(req.query.offset, 0, 100_000);
+  const displayedValue = parseDisplayedValue(req.query.displayedValue);
+  const scopeLabel = typeof req.query.scopeLabel === "string" && req.query.scopeLabel.trim()
+    ? req.query.scopeLabel.trim()
+    : "Selected Challenge scope";
+
+  const scope = resolveListTenantScope(req, res, queryTenantId);
+  if (!scope.ok) return;
+
+  const context: ChallengeAuditContext = {
+    metricKey,
+    viewMode,
+    attributionModel,
+    mode,
+    runRule,
+    bestBy,
+    tenantId: scope.tenantId,
+    selectedClientTenantIds,
+    selectedFunnelTypeIds,
+    selectedRunIds,
+    dayStart,
+    dayEnd,
+    impactStartDate,
+    impactEndDate,
+    impactStartBound,
+    impactEndBound,
+    limit,
+    offset,
+  };
+
+  try {
+    res.json(await buildChallengeAuditPayload(context, displayedValue, scopeLabel));
+  } catch (error) {
+    console.error("Challenge audit failed", error);
+    res.status(500).json({ error: "Challenge audit could not load." });
+  }
+});
+
 router.get("/dashboard/challenge/runs", async (req, res) => {
   const queryTenantId = req.query.tenantId ? Number(req.query.tenantId) : null;
   const selectedClientTenantIds = parseRepeatedNumbers(req.query.clientTenantId);
@@ -1096,6 +2850,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
             FROM leads l
             WHERE TRUE
               ${impactLeadTenantFilter}
+              AND ${challengeLeadIsNotTestSql("l")}
           ),
           meta_touch_keys AS (
             SELECT tenant_id, unique_key, MIN(created_at) AS first_meta_at
@@ -1490,6 +3245,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           )
           AND l.created_at >= vr.window_start::timestamp
           AND l.created_at < (vr.window_end + INTERVAL '1 day')::timestamp
+          AND ${challengeLeadIsNotTestSql("l")}
       ),
       lead_by_run AS (
         SELECT
@@ -1709,6 +3465,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       WHERE l.created_at >= ${startBound}
         AND l.created_at <= ${endBound}
         ${tenantLeadFilter}
+        AND ${challengeLeadIsNotTestSql("l")}
     ),
     lead_cohort AS (
       SELECT *
@@ -1956,6 +3713,7 @@ router.get("/dashboard/challenge", async (req, res) => {
     WHERE l.created_at >= ${startBound}
       AND l.created_at <= ${endBound}
       ${tenantLeadFilter}
+      AND ${challengeLeadIsNotTestSql("l")}
     ORDER BY funnel ASC
   `);
 

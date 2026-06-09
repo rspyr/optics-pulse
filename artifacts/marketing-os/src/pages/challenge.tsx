@@ -1,4 +1,4 @@
-import { type FocusEvent, type WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type FocusEvent, type ReactNode, type WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LayoutGroup, motion } from "framer-motion";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
@@ -6,6 +6,7 @@ import { PremiumCard, GradientHeading } from "@/components/ui-helpers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -28,13 +29,19 @@ import {
   Ban,
   CalendarCheck,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
   DollarSign,
+  Download,
   Eye,
   EyeOff,
   GripVertical,
   Info,
   Layers3,
+  Loader2,
   RotateCcw,
+  Search,
   SlidersHorizontal,
   Target,
   TrendingUp,
@@ -171,6 +178,41 @@ type MetricKey =
   | "averageCostPerInHomeAppointment"
   | "costToAcquireCustomer"
   | "averageClosedJobValue";
+
+type ChallengeMetricAuditColumn = {
+  key: string;
+  label: string;
+  align?: "left" | "right" | "center";
+  format?: "text" | "number" | "currency" | "percent" | "date" | "datetime" | "boolean";
+};
+
+type ChallengeMetricAuditSection = {
+  key: string;
+  label: string;
+  columns: ChallengeMetricAuditColumn[];
+  rows: Array<Record<string, string | number | boolean | null>>;
+  totalRows: number;
+  totals?: Record<string, string | number | null>;
+};
+
+type ChallengeMetricAuditResponse = {
+  metricKey: MetricKey;
+  title: string;
+  scopeLabel: string;
+  displayedValue: number | null;
+  auditValue: number;
+  reconciliationStatus: "matched" | "review" | "info";
+  reconciliationNote: string;
+  sections: ChallengeMetricAuditSection[];
+  paging: { limit: number; offset: number };
+};
+
+type ChallengeMetricAuditTarget = {
+  metric: (typeof METRICS)[number];
+  row: ChallengeMetric;
+  scope: "summary" | "row";
+  scopeLabel: string;
+};
 
 const METRICS: Array<{
   key: MetricKey;
@@ -509,6 +551,7 @@ export default function Challenge() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [breakdownHover, setBreakdownHover] = useState<BreakdownHover>(null);
+  const [auditTarget, setAuditTarget] = useState<ChallengeMetricAuditTarget | null>(null);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "agency_user" || user?.role === "client_admin";
   const dayRange = useMemo(() => getDayWindow(dayWindow, customStartDay, customEndDay), [dayWindow, customStartDay, customEndDay]);
@@ -813,6 +856,47 @@ export default function Challenge() {
     }
   }
 
+  function openMetricAudit(metric: (typeof METRICS)[number], row: ChallengeMetric, scope: "summary" | "row") {
+    const rowLabel = scope === "summary" ? "Selected Challenge totals" : row.rowLabel || row.funnel || "Selected row";
+    setAuditTarget({
+      metric,
+      row,
+      scope,
+      scopeLabel: rowLabel,
+    });
+  }
+
+  function buildAuditUrl(target: ChallengeMetricAuditTarget, limit: number | "all", offset: number) {
+    const params = new URLSearchParams({
+      metricKey: target.metric.key,
+      viewMode: reportMode,
+      attributionModel,
+      mode: compareMode,
+      dayStart: String(dayRange.startDay),
+      dayEnd: String(dayRange.endDay),
+      runRule,
+      bestBy,
+      scope: target.scope,
+      scopeLabel: target.scopeLabel,
+      displayedValue: String(target.row[target.metric.key] ?? 0),
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    if (reportMode === "impact") {
+      params.set("startDate", impactStartDate);
+      params.set("endDate", impactEndDate);
+    }
+    if (compareMode === "client_funnels" && effectiveTenantId != null) {
+      params.set("tenantId", String(effectiveTenantId));
+    }
+    sortedIds(selectedFunnelTypeIds).forEach((id) => params.append("funnelTypeId", String(id)));
+    sortedIds(selectedClientTenantIds).forEach((id) => params.append("clientTenantId", String(id)));
+    sortedIds(target.row.selectedRunIds ?? []).forEach((id) => params.append("runId", String(id)));
+
+    return `${API_BASE}/api/dashboard/challenge/audit?${params.toString()}`;
+  }
+
   return (
     <TooltipProvider delayDuration={120}>
     <div className="space-y-6">
@@ -1101,7 +1185,13 @@ export default function Challenge() {
           ) : (
             <section className="relative grid grid-cols-1 gap-4 overflow-visible sm:grid-cols-2 xl:grid-cols-4">
               {visibleMetrics.map((metric) => (
-                <MetricCard key={metric.key} metric={metric} row={displayData.summary} context={metricContext} />
+                <MetricCard
+                  key={metric.key}
+                  metric={metric}
+                  row={displayData.summary}
+                  context={metricContext}
+                  onAudit={() => openMetricAudit(metric, displayData.summary, "summary")}
+                />
               ))}
             </section>
           )}
@@ -1238,6 +1328,7 @@ export default function Challenge() {
                                 )}
                               >
                                 <div
+                                  role="button"
                                   tabIndex={0}
                                   aria-label={`${rowLabel} ${metric.label}: ${metric.format(row[metric.key])}`}
                                   className={cn(
@@ -1248,6 +1339,13 @@ export default function Challenge() {
                                   data-challenge-hover={isActive ? "active" : undefined}
                                   onMouseEnter={() => updateBreakdownHover({ rowKey, metricKey: metric.key })}
                                   onFocus={() => updateBreakdownHover({ rowKey, metricKey: metric.key })}
+                                  onClick={() => openMetricAudit(metric, row, "row")}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      openMetricAudit(metric, row, "row");
+                                    }
+                                  }}
                                 >
                                   {isActive && <PresentationHoverOverlay layoutId="challenge-metric-value-hover" />}
                                   <span className="relative z-10">{metric.format(row[metric.key])}</span>
@@ -1271,6 +1369,15 @@ export default function Challenge() {
         </>
       ) : null}
     </div>
+    <ChallengeMetricAuditDrawer
+      target={auditTarget}
+      open={auditTarget != null}
+      onOpenChange={(open) => {
+        if (!open) setAuditTarget(null);
+      }}
+      requestKey={challengeQuery.cacheKey}
+      buildUrl={(limit, offset) => auditTarget ? buildAuditUrl(auditTarget, limit, offset) : ""}
+    />
     </TooltipProvider>
   );
 }
@@ -1377,7 +1484,6 @@ function MetricExplainerBadge({
         "group-hover:border-secondary/25 group-hover:bg-secondary/10 group-hover:text-[#C0D4E6]",
         explainer && "inline-flex cursor-help items-center gap-1.5",
       )}
-      tabIndex={explainer ? 0 : undefined}
     >
       {metric.shortLabel}
       {explainer && <Info className="h-3 w-3 opacity-70" aria-hidden="true" />}
@@ -1494,21 +1600,26 @@ function MetricCard({
   metric,
   row,
   context,
+  onAudit,
 }: {
   metric: (typeof METRICS)[number];
   row: ChallengeMetric;
   context: MetricExplainerContext;
+  onAudit: () => void;
 }) {
   const Icon = metric.icon;
   const value = row[metric.key];
   return (
-    <div
+    <button
+      type="button"
+      onClick={onAudit}
       className={cn(
-        "group relative z-0 origin-center",
+        "group relative z-0 origin-center text-left outline-none focus-visible:z-30 focus-visible:scale-[1.08] focus-visible:ring-2 focus-visible:ring-primary/70",
         PRESENTATION_CARD_MOTION,
         "hover:z-30 hover:scale-[1.2]",
       )}
       data-challenge-card={metric.key}
+      aria-label={`Open audit for ${metric.label}: ${metric.format(value)}`}
     >
       <PremiumCard
         className={cn(
@@ -1530,8 +1641,353 @@ function MetricCard({
           {metric.sub && <p className={cn("mt-1 text-[11px] text-muted-foreground", PRESENTATION_CARD_SYNC, "group-hover:text-[#C0D4E6]/80")}>{metric.sub(row)}</p>}
         </div>
       </PremiumCard>
+    </button>
+  );
+}
+
+const AUDIT_PAGE_SIZE = 50;
+
+function ChallengeMetricAuditDrawer({
+  target,
+  open,
+  onOpenChange,
+  requestKey,
+  buildUrl,
+}: {
+  target: ChallengeMetricAuditTarget | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  requestKey: string;
+  buildUrl: (limit: number | "all", offset: number) => string;
+}) {
+  const [data, setData] = useState<ChallengeMetricAuditResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    setOffset(0);
+    setSearch("");
+    setActiveSectionKey(null);
+    setData(null);
+    setError(null);
+  }, [target?.metric.key, target?.scopeLabel, requestKey]);
+
+  useEffect(() => {
+    if (!open || !target) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(buildUrl(AUDIT_PAGE_SIZE, offset), { credentials: "include" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<ChallengeMetricAuditResponse>;
+      })
+      .then((next) => {
+        if (cancelled) return;
+        setData(next);
+        setActiveSectionKey((current) => current ?? next.sections[0]?.key ?? null);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message || "Audit could not load");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, target?.metric.key, target?.scopeLabel, target?.scope, offset, requestKey]);
+
+  const activeSection = useMemo(() => {
+    if (!data) return null;
+    return data.sections.find((section) => section.key === activeSectionKey) ?? data.sections[0] ?? null;
+  }, [data, activeSectionKey]);
+
+  const visibleRows = useMemo(() => {
+    const rows = activeSection?.rows ?? [];
+    const needle = search.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) =>
+      Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(needle)),
+    );
+  }, [activeSection?.rows, search]);
+
+  const canPageBack = offset > 0;
+  const canPageForward = Boolean(activeSection && offset + AUDIT_PAGE_SIZE < activeSection.totalRows);
+  const rowStart = activeSection && activeSection.totalRows > 0 ? offset + 1 : 0;
+  const rowEnd = activeSection ? Math.min(offset + AUDIT_PAGE_SIZE, activeSection.totalRows) : 0;
+
+  async function handleExportCsv() {
+    if (!target || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const res = await fetch(buildUrl("all", 0), { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const exportData = await res.json() as ChallengeMetricAuditResponse;
+      const csv = buildChallengeAuditCsv(exportData);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `challenge-audit-${target.metric.key}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CSV export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex h-full w-full flex-col overflow-hidden border-white/10 bg-background p-0 text-white sm:max-w-[1120px]">
+        <SheetHeader className="border-b border-white/10 px-5 py-5 pr-12">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <SheetTitle className="font-display text-2xl text-white">
+                {data?.title ?? target?.metric.label ?? "Metric audit"}
+              </SheetTitle>
+              <SheetDescription className="mt-1 text-sm text-muted-foreground">
+                {data?.scopeLabel ?? target?.scopeLabel ?? "Selected Challenge scope"}
+              </SheetDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit border-white/10 bg-white/[0.03] text-white"
+              disabled={!data || exporting}
+              onClick={handleExportCsv}
+            >
+              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              CSV
+            </Button>
+          </div>
+        </SheetHeader>
+
+        <div className="border-b border-white/10 px-5 py-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <AuditSummaryStat label="Clicked value" value={target ? target.metric.format(target.row[target.metric.key]) : "—"} />
+            <AuditSummaryStat label="Audit value" value={target && data ? target.metric.format(data.auditValue) : loading ? "Loading" : "—"} />
+            <div className={cn(
+              "rounded-lg border px-3 py-2",
+              data?.reconciliationStatus === "matched"
+                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                : data?.reconciliationStatus === "review"
+                  ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                  : "border-white/10 bg-white/[0.03] text-muted-foreground",
+            )}>
+              <div className="text-[10px] font-semibold uppercase tracking-wider opacity-75">Reconciliation</div>
+              <div className="mt-1 text-sm font-semibold capitalize">{data?.reconciliationStatus ?? "Loading"}</div>
+            </div>
+          </div>
+          {data?.reconciliationNote && (
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{data.reconciliationNote}</p>
+          )}
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col">
+          {data && data.sections.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto border-b border-white/10 px-5 py-3">
+              {data.sections.map((section) => (
+                <button
+                  key={section.key}
+                  type="button"
+                  onClick={() => {
+                    setActiveSectionKey(section.key);
+                    setOffset(0);
+                  }}
+                  className={cn(
+                    "shrink-0 rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors",
+                    activeSection?.key === section.key
+                      ? "border-primary bg-primary text-[#C0D4E6]"
+                      : "border-white/10 bg-white/[0.03] text-muted-foreground hover:text-white",
+                  )}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3 border-b border-white/10 px-5 py-3 md:flex-row md:items-center md:justify-between">
+            <div className="relative max-w-md flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Filter current rows"
+                className="h-9 w-full rounded-md border border-white/10 bg-white/[0.03] pl-9 pr-3 text-sm text-white outline-none placeholder:text-muted-foreground focus:border-primary/70"
+              />
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{rowStart}-{rowEnd} of {activeSection?.totalRows ?? 0}</span>
+              <Button variant="outline" size="sm" className="h-8 border-white/10 bg-white/[0.03] px-2" disabled={!canPageBack || loading} onClick={() => setOffset(Math.max(0, offset - AUDIT_PAGE_SIZE))}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="sm" className="h-8 border-white/10 bg-white/[0.03] px-2" disabled={!canPageForward || loading} onClick={() => setOffset(offset + AUDIT_PAGE_SIZE)}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-auto">
+            {loading ? (
+              <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading audit rows
+              </div>
+            ) : error ? (
+              <div className="p-6 text-sm text-red-300">Audit could not load: {error}</div>
+            ) : activeSection && visibleRows.length > 0 ? (
+              <table className="w-full min-w-[960px] border-separate border-spacing-0 text-left text-sm">
+                <thead>
+                  <tr>
+                    {activeSection.columns.map((column) => (
+                      <th
+                        key={column.key}
+                        className={cn(
+                          "sticky top-0 z-10 border-b border-white/10 bg-background px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                          column.align === "right" && "text-right",
+                          column.align === "center" && "text-center",
+                        )}
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((row, index) => (
+                    <tr key={`${activeSection.key}-${offset}-${index}`} className="border-b border-white/5 odd:bg-white/[0.015]">
+                      {activeSection.columns.map((column) => (
+                        <td
+                          key={column.key}
+                          className={cn(
+                            "max-w-72 border-b border-white/5 px-3 py-3 align-top text-white",
+                            column.align === "right" && "text-right",
+                            column.align === "center" && "text-center",
+                            column.key === "serviceAddress" && "whitespace-normal leading-snug",
+                          )}
+                        >
+                          {formatAuditCell(row[column.key], column)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">
+                {search ? "No rows match that filter." : "No audit rows found for this metric."}
+              </div>
+            )}
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function AuditSummaryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-display text-lg text-white">{value}</div>
     </div>
   );
+}
+
+function formatAuditCell(value: unknown, column: ChallengeMetricAuditColumn) {
+  if (value == null || value === "") return <span className="text-muted-foreground">—</span>;
+  let content: ReactNode;
+  if (column.format === "boolean") {
+    content = value ? <span className="text-emerald-300">Yes</span> : <span className="text-muted-foreground">No</span>;
+  } else if (column.format === "currency") {
+    content = formatCurrency(Number(value));
+  } else if (column.format === "number") {
+    content = formatNumber(Number(value));
+  } else if (column.format === "percent") {
+    content = formatPercent(Number(value));
+  } else if (column.format === "date" || column.format === "datetime") {
+    const date = new Date(String(value));
+    content = Number.isNaN(date.getTime())
+      ? String(value)
+      : date.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        ...(column.format === "datetime" ? { hour: "numeric", minute: "2-digit" } : {}),
+      });
+  } else {
+    content = String(value);
+  }
+
+  if (!isCopyableAuditColumn(column.key)) return content;
+  return <CopyableAuditValue value={String(value)}>{content}</CopyableAuditValue>;
+}
+
+function isCopyableAuditColumn(key: string) {
+  return key === "phone"
+    || key === "stJobNumber"
+    || key === "stJobId"
+    || key === "estimateIds"
+    || key === "soldKey"
+    || key === "adSetExternalId"
+    || key === "adExternalId";
+}
+
+function CopyableAuditValue({ value, children }: { value: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      title="Copy"
+      aria-label={`Copy ${value}`}
+      onClick={() => {
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          void navigator.clipboard.writeText(value);
+        }
+      }}
+      className="group inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span className="truncate">{children}</span>
+      <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+    </button>
+  );
+}
+
+function csvCell(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function buildChallengeAuditCsv(data: ChallengeMetricAuditResponse): string {
+  const columns = new Map<string, string>();
+  for (const section of data.sections) {
+    for (const column of section.columns) {
+      columns.set(column.key, column.label);
+    }
+  }
+  const orderedColumns = [...columns.entries()];
+  const header = ["Metric", "Scope", "Section", ...orderedColumns.map(([, label]) => label)];
+  const rows = data.sections.flatMap((section) =>
+    section.rows.map((row) => [
+      data.title,
+      data.scopeLabel,
+      section.label,
+      ...orderedColumns.map(([key]) => row[key] ?? ""),
+    ]),
+  );
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
 function MetricSettingsDropdown({
