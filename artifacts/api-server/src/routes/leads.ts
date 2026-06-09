@@ -68,6 +68,7 @@ router.get("/leads", async (req, res) => {
   const scope = resolveListTenantScope(req, res, query.tenantId, { requireTenant: true });
   if (!scope.ok) return;
   if (scope.tenantId) conditions.push(eq(leadsTable.tenantId, scope.tenantId));
+  conditions.push(sql`${leadsTable.isSpam} IS NOT TRUE`);
 
   if (query.status) {
     const status = query.status as "new" | "contacted" | "booked" | "sold" | "lost" | "cancelled";
@@ -133,6 +134,7 @@ router.get("/leads/hud/queue", async (req, res) => {
     console.error("[Pulse Queue] Smart queue error, falling back:", err);
     const conditions: SQL[] = [];
     if (tenantId) conditions.push(eq(leadsTable.tenantId, tenantId));
+    conditions.push(sql`${leadsTable.isSpam} IS NOT TRUE`);
     conditions.push(inArray(leadsTable.status, ["new", "contacted"]));
     const where = and(...conditions);
     const leads = await db.select().from(leadsTable).where(where).orderBy(desc(leadsTable.createdAt)).limit(100);

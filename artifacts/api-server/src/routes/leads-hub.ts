@@ -20,6 +20,7 @@ import { resetBookingCache } from "../services/lead-booking-cache";
 import { reDeriveLeadFunnel } from "../services/re-derive-lead-funnel";
 import { handleResubmission } from "../services/lead-resubmission";
 import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
+import { getLeadSpamReason } from "../lib/lead-validation";
 
 async function findRoutingConfigForLead(tenantId: number, funnelId: number | null) {
   if (funnelId) {
@@ -87,7 +88,7 @@ router.get("/leads-hub/queue", async (req, res) => {
   const now = new Date();
 
   const visibilityFilter = or(isNull(leadsTable.visibleAfter), lte(leadsTable.visibleAfter, now));
-  const baseConds = [eq(leadsTable.tenantId, tenantId), visibilityFilter];
+  const baseConds = [eq(leadsTable.tenantId, tenantId), visibilityFilter, sql`${leadsTable.isSpam} IS NOT TRUE`];
   if (assignedCsrId) baseConds.push(eq(leadsTable.assignedCsrId, assignedCsrId));
 
   const activeStatuses = ["day_1", "day_2", "day_3", "day_4", "appt_booked"] as const;
@@ -1224,6 +1225,7 @@ router.get("/leads-hub/phone-match", async (req, res) => {
     .from(leadsTable)
     .where(and(
       eq(leadsTable.tenantId, tenantId),
+      sql`${leadsTable.isSpam} IS NOT TRUE`,
       eq(leadsTable.phone, normalized),
     ))
     .limit(1);
@@ -1244,6 +1246,15 @@ router.post("/leads-hub/create", async (req, res) => {
   const { firstName, lastName, phone, email, source, serviceType, funnelId, assignedCsrId, contactPreferences, callbackAt } = req.body;
   if (!firstName || !lastName || !source) {
     res.status(400).json({ error: "firstName, lastName, and source are required" });
+    return;
+  }
+  const spamReason = getLeadSpamReason({
+    firstName: typeof firstName === "string" ? firstName : null,
+    lastName: typeof lastName === "string" ? lastName : null,
+    phone: typeof phone === "string" ? phone : null,
+  });
+  if (spamReason) {
+    res.status(400).json({ error: `This lead looks like spam: ${spamReason}` });
     return;
   }
 
@@ -1744,6 +1755,7 @@ router.get("/leads-hub/stats", async (req, res) => {
     eq(leadsTable.tenantId, tenantId),
     gte(leadsTable.createdAt, startDate),
     lte(leadsTable.createdAt, endDate),
+    sql`${leadsTable.isSpam} IS NOT TRUE`,
   ];
   if (funnelId) baseConds.push(eq(leadsTable.funnelId, funnelId));
 
@@ -2031,6 +2043,7 @@ router.get("/leads-hub/stats/timeseries", async (req, res) => {
     eq(leadsTable.tenantId, tenantId),
     gte(leadsTable.createdAt, startDate),
     lte(leadsTable.createdAt, endDate),
+    sql`${leadsTable.isSpam} IS NOT TRUE`,
   ];
   if (funnelId) baseConds.push(eq(leadsTable.funnelId, funnelId));
   if (source) baseConds.push(eq(leadsTable.source, source));

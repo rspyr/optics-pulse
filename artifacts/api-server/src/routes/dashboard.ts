@@ -111,9 +111,12 @@ function challengeLeadIsMetaSql(alias: string) {
 }
 
 function challengeLeadIsNotTestSql(alias: string) {
-  return sql.raw(`NOT (
-    CONCAT_WS(' ', COALESCE(${alias}.first_name, ''), COALESCE(${alias}.last_name, ''))
-    ~* '${CHALLENGE_TEST_LEAD_NAME_PATTERN}'
+  return sql.raw(`(
+    COALESCE(${alias}.is_spam, false) IS NOT TRUE
+    AND NOT (
+      CONCAT_WS(' ', COALESCE(${alias}.first_name, ''), COALESCE(${alias}.last_name, ''))
+      ~* '${CHALLENGE_TEST_LEAD_NAME_PATTERN}'
+    )
   )`);
 }
 
@@ -165,6 +168,7 @@ type ChallengeRollupRow = {
   cancelled_jobs: string | number | null;
   completed_estimate_jobs: string | number | null;
   total_estimate_value: string | number | null;
+  roas_estimate_value?: string | number | null;
   sold_closed_value: string | number | null;
   sold_jobs: string | number | null;
   all_unique_pulse_leads: string | number | null;
@@ -189,6 +193,7 @@ type ChallengeMetricRow = {
   cancelledJobs: number;
   totalJobs: number;
   totalEstimateValue: number;
+  roasEstimateValue: number;
   totalSoldClosedValue: number;
   roasPotential: number;
   roasSold: number;
@@ -217,6 +222,7 @@ function buildChallengeMetricRow(
   const cancelledJobs = toNumber(row.cancelled_jobs);
   const completedEstimateJobs = toNumber(row.completed_estimate_jobs);
   const totalEstimateValue = toNumber(row.total_estimate_value);
+  const roasEstimateValue = toNumber(row.roas_estimate_value ?? row.total_estimate_value);
   const totalSoldClosedValue = toNumber(row.sold_closed_value);
   const soldJobs = toNumber(row.sold_jobs);
 
@@ -232,8 +238,9 @@ function buildChallengeMetricRow(
     cancelledJobs,
     totalJobs,
     totalEstimateValue: round2(totalEstimateValue),
+    roasEstimateValue: round2(roasEstimateValue),
     totalSoldClosedValue: round2(totalSoldClosedValue),
-    roasPotential: allocatedSpend > 0 ? round2(totalEstimateValue / allocatedSpend) : 0,
+    roasPotential: allocatedSpend > 0 ? round2(roasEstimateValue / allocatedSpend) : 0,
     roasSold: allocatedSpend > 0 ? round2(totalSoldClosedValue / allocatedSpend) : 0,
     totalSpend: round2(allocatedSpend),
     completedEstimateJobs,
@@ -264,6 +271,7 @@ export function buildChallengeDashboardResponse(input: {
     cancelled_jobs: 0,
     completed_estimate_jobs: 0,
     total_estimate_value: 0,
+    roas_estimate_value: 0,
     sold_closed_value: 0,
     sold_jobs: 0,
     all_unique_pulse_leads: 0,
@@ -442,6 +450,7 @@ type ChallengeRunRawRow = {
   cancelled_jobs: string | number | null;
   completed_estimate_jobs: string | number | null;
   total_estimate_value: string | number | null;
+  roas_estimate_value: string | number | null;
   sold_closed_value: string | number | null;
   sold_jobs: string | number | null;
   total_spend: string | number | null;
@@ -494,6 +503,7 @@ function buildChallengeRunMetricRow(row: ChallengeRunRawRow): ChallengeRunMetric
   const cancelledJobs = toNumber(row.cancelled_jobs);
   const completedEstimateJobs = toNumber(row.completed_estimate_jobs);
   const totalEstimateValue = toNumber(row.total_estimate_value);
+  const roasEstimateValue = toNumber(row.roas_estimate_value ?? row.total_estimate_value);
   const totalSoldClosedValue = toNumber(row.sold_closed_value);
   const soldJobs = toNumber(row.sold_jobs);
   const totalSpend = toNumber(row.total_spend);
@@ -526,8 +536,9 @@ function buildChallengeRunMetricRow(row: ChallengeRunRawRow): ChallengeRunMetric
     cancelledJobs,
     totalJobs,
     totalEstimateValue: round2(totalEstimateValue),
+    roasEstimateValue: round2(roasEstimateValue),
     totalSoldClosedValue: round2(totalSoldClosedValue),
-    roasPotential: totalSpend > 0 ? round2(totalEstimateValue / totalSpend) : 0,
+    roasPotential: totalSpend > 0 ? round2(roasEstimateValue / totalSpend) : 0,
     roasSold: totalSpend > 0 ? round2(totalSoldClosedValue / totalSpend) : 0,
     totalSpend: round2(totalSpend),
     completedEstimateJobs,
@@ -564,6 +575,7 @@ function averageChallengeRunRows(rows: ChallengeRunMetricRow[], mode: ChallengeC
     cancelledJobs: avg("cancelledJobs"),
     totalJobs: avg("totalJobs"),
     totalEstimateValue: avg("totalEstimateValue"),
+    roasEstimateValue: avg("roasEstimateValue"),
     totalSoldClosedValue: avg("totalSoldClosedValue"),
     roasPotential: avg("roasPotential"),
     roasSold: avg("roasSold"),
@@ -600,6 +612,7 @@ function summarizeChallengeRunRows(rows: ChallengeRunMetricRow[]): ChallengeRunM
   const cancelledJobs = rows.reduce((sum, row) => sum + row.cancelledJobs, 0);
   const completedEstimateJobs = rows.reduce((sum, row) => sum + row.completedEstimateJobs, 0);
   const totalEstimateValue = rows.reduce((sum, row) => sum + row.totalEstimateValue, 0);
+  const roasEstimateValue = rows.reduce((sum, row) => sum + row.roasEstimateValue, 0);
   const totalSoldClosedValue = rows.reduce((sum, row) => sum + row.totalSoldClosedValue, 0);
   const totalSpend = rows.reduce((sum, row) => sum + row.totalSpend, 0);
   const soldJobs = rows.reduce((sum, row) => sum + row.soldJobs, 0);
@@ -633,8 +646,9 @@ function summarizeChallengeRunRows(rows: ChallengeRunMetricRow[]): ChallengeRunM
     cancelledJobs,
     totalJobs,
     totalEstimateValue: round2(totalEstimateValue),
+    roasEstimateValue: round2(roasEstimateValue),
     totalSoldClosedValue: round2(totalSoldClosedValue),
-    roasPotential: totalSpend > 0 ? round2(totalEstimateValue / totalSpend) : 0,
+    roasPotential: totalSpend > 0 ? round2(roasEstimateValue / totalSpend) : 0,
     roasSold: totalSpend > 0 ? round2(totalSoldClosedValue / totalSpend) : 0,
     totalSpend: round2(totalSpend),
     completedEstimateJobs,
@@ -726,7 +740,8 @@ function challengeStrictRunOutcomeCtes() {
         SELECT
           lc.run_id,
           lc.unique_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold
         FROM lead_cohort lc
         JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
         LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
@@ -738,7 +753,8 @@ function challengeStrictRunOutcomeCtes() {
         SELECT
           lc.run_id,
           lc.unique_key,
-          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+          COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold
         FROM lead_cohort lc
         JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
         JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
@@ -747,12 +763,22 @@ function challengeStrictRunOutcomeCtes() {
           ${challengeEstimateAttributionWindowSql()}
       ),
       estimate_per_lead AS (
-        SELECT run_id, unique_key, AVG(amount) AS avg_estimate
+        SELECT
+          run_id,
+          unique_key,
+          CASE
+            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+            ELSE AVG(amount)
+          END AS total_estimate_value,
+          AVG(amount) AS roas_estimate_value
         FROM estimate_options
         GROUP BY run_id, unique_key
       ),
       estimates_by_run AS (
-        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+        SELECT
+          run_id,
+          COALESCE(SUM(total_estimate_value), 0)::numeric AS total_estimate_value,
+          COALESCE(SUM(roas_estimate_value), 0)::numeric AS roas_estimate_value
         FROM estimate_per_lead
         GROUP BY run_id
       ),
@@ -854,6 +880,7 @@ function challengeWeightedRunOutcomeCtes() {
           se.tenant_id,
           ${challengeLeadIdentitySql("event_lead")} AS event_unique_key,
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold,
           ${estimateAttributionAt} AS event_at
         FROM sold_estimates se
         LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
@@ -861,13 +888,14 @@ function challengeWeightedRunOutcomeCtes() {
         WHERE COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0) > 0
       ),
       estimate_weight_candidates AS (
-        SELECT run_id, unique_key, estimate_id, amount, raw_weight
+        SELECT run_id, unique_key, estimate_id, amount, is_sold, raw_weight
         FROM (
           SELECT
             lc.run_id,
             lc.unique_key,
             ee.estimate_id,
             ee.amount,
+            ee.is_sold,
             ${challengeRecencyWeightSql(sql`ee.event_at`)} AS raw_weight,
             ROW_NUMBER() OVER (PARTITION BY lc.run_id, ee.estimate_id ORDER BY lc.created_at DESC, lc.id DESC)::int AS run_candidate_rank
           FROM estimate_events ee
@@ -883,16 +911,27 @@ function challengeWeightedRunOutcomeCtes() {
           unique_key,
           estimate_id,
           amount,
+          is_sold,
           raw_weight / NULLIF(SUM(raw_weight) OVER (PARTITION BY estimate_id), 0) AS weight
         FROM estimate_weight_candidates
       ),
       estimate_per_lead AS (
-        SELECT run_id, unique_key, AVG(amount * weight) AS avg_estimate
+        SELECT
+          run_id,
+          unique_key,
+          CASE
+            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount * weight) FILTER (WHERE is_sold), 0)
+            ELSE AVG(amount * weight)
+          END AS total_estimate_value,
+          AVG(amount * weight) AS roas_estimate_value
         FROM estimate_weights
         GROUP BY run_id, unique_key
       ),
       estimates_by_run AS (
-        SELECT run_id, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+        SELECT
+          run_id,
+          COALESCE(SUM(total_estimate_value), 0)::numeric AS total_estimate_value,
+          COALESCE(SUM(roas_estimate_value), 0)::numeric AS roas_estimate_value
         FROM estimate_per_lead
         GROUP BY run_id
       ),
@@ -1053,6 +1092,7 @@ const spendAuditColumns: ChallengeAuditColumn[] = [
   { key: "metaLeads", label: "Meta Leads", format: "number", align: "right" },
   { key: "impressions", label: "Impressions", format: "number", align: "right" },
   { key: "clicks", label: "Clicks", format: "number", align: "right" },
+  { key: "allocationNote", label: "Allocation Note" },
 ];
 
 const jobAuditColumns: ChallengeAuditColumn[] = [
@@ -1591,10 +1631,22 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
         c.name AS campaign,
         mads.ad_set_external_id,
         mads.ad_external_id,
-        COALESCE(mads.spend, 0)::numeric AS spend,
-        COALESCE(mads.conversions, 0)::numeric AS meta_leads,
+        CASE
+          WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+            THEN COALESCE(mads.spend, 0)::numeric / NULLIF(active_run_counts.active_run_count, 0)
+          ELSE COALESCE(mads.spend, 0)::numeric
+        END AS spend,
+        CASE
+          WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+            THEN COALESCE(mads.conversions, 0)::numeric / NULLIF(active_run_counts.active_run_count, 0)
+          ELSE COALESCE(mads.conversions, 0)::numeric
+        END AS meta_leads,
         COALESCE(mads.impressions, 0)::numeric AS impressions,
-        COALESCE(mads.clicks, 0)::numeric AS clicks
+        COALESCE(mads.clicks, 0)::numeric AS clicks,
+        CASE WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+          THEN 'Active Funnel split across active run count: ' || active_run_counts.active_run_count::text
+          ELSE NULL
+        END AS allocation_note
       FROM valid_runs vr
       JOIN campaigns c
         ON c.tenant_id = vr.tenant_id
@@ -1612,7 +1664,23 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
         ON campaign_cfm.tenant_id = vr.tenant_id
         AND campaign_cfm.campaign_id = c.id
         AND campaign_cfm.ad_set_external_id IS NULL
-      WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+      CROSS JOIN LATERAL (
+        SELECT COUNT(*)::numeric AS active_run_count
+        FROM funnel_runs afr
+        WHERE afr.tenant_id = vr.tenant_id
+          AND COALESCE(afr.status, 'active') <> 'archived'
+          AND mads.date >= afr.start_date
+          AND mads.date <= COALESCE(afr.end_date, CURRENT_DATE)
+      ) active_run_counts
+      WHERE (
+        COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END) = 'funnel'
+        AND COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+      ) OR (
+        COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+        AND active_run_counts.active_run_count > 0
+        AND mads.date >= vr.start_date
+        AND mads.date <= COALESCE(vr.end_date, CURRENT_DATE)
+      )
     )
     SELECT
       date,
@@ -1626,6 +1694,7 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
       meta_leads AS "metaLeads",
       impressions,
       clicks,
+      allocation_note AS "allocationNote",
       COUNT(*) OVER()::int AS "__totalRows",
       COALESCE(SUM(spend) OVER(), 0)::numeric AS "__auditSpend",
       COALESCE(SUM(meta_leads) OVER(), 0)::numeric AS "__auditMetaLeads"
@@ -1814,7 +1883,25 @@ async function queryChallengeAuditActiveDays(input: ChallengeAuditContext): Prom
         ON campaign_cfm.tenant_id = vr.tenant_id
         AND campaign_cfm.campaign_id = c.id
         AND campaign_cfm.ad_set_external_id IS NULL
-      WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+      CROSS JOIN LATERAL (
+        SELECT COUNT(*)::numeric AS active_run_count
+        FROM funnel_runs afr
+        WHERE afr.tenant_id = vr.tenant_id
+          AND COALESCE(afr.status, 'active') <> 'archived'
+          AND mads.date >= afr.start_date
+          AND mads.date <= COALESCE(afr.end_date, CURRENT_DATE)
+      ) active_run_counts
+      WHERE (
+        (
+          COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END) = 'funnel'
+          AND COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+        ) OR (
+          COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+          AND active_run_counts.active_run_count > 0
+          AND mads.date >= vr.start_date
+          AND mads.date <= COALESCE(vr.end_date, CURRENT_DATE)
+        )
+      )
         AND (
           COALESCE(mads.spend, 0) > 0
           OR COALESCE(mads.conversions, 0) > 0
@@ -2070,7 +2157,20 @@ async function queryChallengeAuditJobs(input: ChallengeAuditContext, completedEs
   });
 }
 
-async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promise<ChallengeAuditSectionResult> {
+async function queryChallengeAuditEstimates(
+  input: ChallengeAuditContext,
+  basis: "totalEstimateValue" | "roasPotential" = "totalEstimateValue",
+): Promise<ChallengeAuditSectionResult> {
+  const creditedValueSql = basis === "roasPotential"
+    ? sql`ROUND(AVG(amount), 2)::numeric`
+    : sql`ROUND(CASE WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0) ELSE AVG(amount) END, 2)::numeric`;
+  const weightedCreditedValueSql = basis === "roasPotential"
+    ? sql`ROUND(AVG(ew.amount * ew.weight), 2)::numeric`
+    : sql`ROUND(CASE WHEN BOOL_OR(ew.is_sold) THEN COALESCE(SUM(ew.amount * ew.weight) FILTER (WHERE ew.is_sold), 0) ELSE AVG(ew.amount * ew.weight) END, 2)::numeric`;
+  const sectionLabel = basis === "roasPotential"
+    ? "ROAS Potential estimate ledger"
+    : "Total Estimate Value ledger";
+
   if (input.viewMode === "impact") {
     const baseCtes = challengeAuditImpactBaseCtes(input);
     const rows = pickAuditRows(await db.execute(sql`
@@ -2085,6 +2185,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           el.tenant_name,
           el.unique_key,
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold,
           COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
           COALESCE(j.customer_name, TRIM(COALESCE(el.first_name, '') || ' ' || COALESCE(el.last_name, ''))) AS customer_name,
           COALESCE(j.customer_phone, el.phone) AS phone,
@@ -2111,7 +2212,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           MIN(customer_name) AS customer_name,
           MIN(phone) AS phone,
           MIN(service_address) AS service_address,
-          ROUND(AVG(amount), 2)::numeric AS credited_value,
+          ${creditedValueSql} AS credited_value,
           COUNT(*)::int AS option_count,
           STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
           STRING_AGG(DISTINCT COALESCE(NULLIF(estimate_status, ''), 'unknown'), ', ' ORDER BY COALESCE(NULLIF(estimate_status, ''), 'unknown')) AS estimate_statuses,
@@ -2143,7 +2244,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
       OFFSET ${input.offset}
     `));
     const first = rows[0] ?? {};
-    return sectionFromRows("estimates", "Credited estimate opportunities", estimateAuditColumns, rows, {
+    return sectionFromRows("estimates", sectionLabel, estimateAuditColumns, rows, {
       value: round2(toNumber(first.__auditValue)),
     });
   }
@@ -2161,7 +2262,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           MIN(vr.tenant_name) AS tenant_name,
           MIN(vr.funnel_name) AS funnel_name,
           MIN(vr.run_name) AS run_name,
-          ROUND(AVG(ew.amount * ew.weight), 2)::numeric AS credited_value,
+          ${weightedCreditedValueSql} AS credited_value,
           COUNT(*)::int AS option_count,
           ROUND(SUM(ew.weight), 4)::numeric AS attribution_credit,
           STRING_AGG(DISTINCT se.st_estimate_id, ', ' ORDER BY se.st_estimate_id) AS estimate_ids,
@@ -2209,6 +2310,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           lc.funnel_name,
           lc.run_name,
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold,
           se.st_estimate_id,
           se.estimate_status,
           COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
@@ -2231,6 +2333,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           lc.funnel_name,
           lc.run_name,
           COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+          (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold,
           se.st_estimate_id,
           se.estimate_status,
           COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at,
@@ -2252,7 +2355,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
           MIN(tenant_name) AS tenant_name,
           MIN(funnel_name) AS funnel_name,
           MIN(run_name) AS run_name,
-          ROUND(AVG(amount), 2)::numeric AS credited_value,
+          ${creditedValueSql} AS credited_value,
           COUNT(*)::int AS option_count,
           STRING_AGG(DISTINCT st_estimate_id, ', ' ORDER BY st_estimate_id) AS estimate_ids,
           STRING_AGG(DISTINCT COALESCE(NULLIF(estimate_status, ''), 'unknown'), ', ' ORDER BY COALESCE(NULLIF(estimate_status, ''), 'unknown')) AS estimate_statuses,
@@ -2287,7 +2390,7 @@ async function queryChallengeAuditEstimates(input: ChallengeAuditContext): Promi
     `));
 
   const first = rows[0] ?? {};
-  return sectionFromRows("estimates", "Credited estimate opportunities", estimateAuditColumns, rows, {
+  return sectionFromRows("estimates", sectionLabel, estimateAuditColumns, rows, {
     value: round2(toNumber(first.__auditValue)),
   });
 }
@@ -2557,7 +2660,7 @@ async function buildChallengeAuditPayload(input: ChallengeAuditContext, displaye
     sections = [jobs];
     auditValue = jobs.totals.totalJobs > 0 ? round1(((jobs.totals.cancelledJobs ?? 0) / jobs.totals.totalJobs) * 100) : 0;
   } else if (input.metricKey === "totalEstimateValue") {
-    const estimates = await queryChallengeAuditEstimates(input);
+    const estimates = await queryChallengeAuditEstimates(input, "totalEstimateValue");
     sections = [estimates];
     auditValue = estimates.totals.value ?? 0;
   } else if (input.metricKey === "totalSoldClosedValue") {
@@ -2577,7 +2680,7 @@ async function buildChallengeAuditPayload(input: ChallengeAuditContext, displaye
     const denominator = input.viewMode === "impact" ? (leadBasis.totals.count ?? 0) : (spend.totals.metaLeads ?? 0);
     auditValue = denominator > 0 ? round2((spend.totals.spend ?? 0) / denominator) : 0;
   } else if (input.metricKey === "roasPotential") {
-    const estimates = await queryChallengeAuditEstimates(input);
+    const estimates = await queryChallengeAuditEstimates(input, "roasPotential");
     const spend = await queryChallengeAuditSpend(input);
     sections = [estimates, spend];
     auditValue = spend.totals.spend > 0 ? round2((estimates.totals.value ?? 0) / spend.totals.spend) : 0;
@@ -2921,6 +3024,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
               se.tenant_id,
               el.unique_key,
               COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+              (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold,
               COALESCE(se.st_estimate_created_at, ${challengeJobAttributionAtSql()}, se.sold_on) AS estimate_at
             FROM sold_estimates se
             LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
@@ -2938,12 +3042,20 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
               AND ee.estimate_at <= ${impactEndBound}
           ),
           estimate_per_opportunity AS (
-            SELECT estimate_group_key, AVG(amount) AS avg_estimate
+            SELECT
+              estimate_group_key,
+              CASE
+                WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+                ELSE AVG(amount)
+              END AS total_estimate_value,
+              AVG(amount) AS roas_estimate_value
             FROM meta_estimate_events
             GROUP BY estimate_group_key
           ),
           estimates_total AS (
-            SELECT COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+            SELECT
+              COALESCE(SUM(total_estimate_value), 0)::numeric AS total_estimate_value,
+              COALESCE(SUM(roas_estimate_value), 0)::numeric AS roas_estimate_value
             FROM estimate_per_opportunity
           ),
           sold_events AS (
@@ -3060,6 +3172,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
             COALESCE(jw.cancelled_jobs, 0)::numeric AS cancelled_jobs,
             COALESCE(jw.completed_estimate_jobs, 0)::numeric AS completed_estimate_jobs,
             COALESCE(et.total_estimate_value, 0)::numeric AS total_estimate_value,
+            COALESCE(et.roas_estimate_value, et.total_estimate_value, 0)::numeric AS roas_estimate_value,
             COALESCE(st.sold_closed_value, 0)::numeric AS sold_closed_value,
             COALESCE(st.sold_jobs, 0)::numeric AS sold_jobs,
             COALESCE(sp.total_spend, 0)::numeric AS total_spend
@@ -3108,6 +3221,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         cancelled_jobs: 0,
         completed_estimate_jobs: 0,
         total_estimate_value: 0,
+        roas_estimate_value: 0,
         sold_closed_value: 0,
         sold_jobs: 0,
         total_spend: 0,
@@ -3258,9 +3372,22 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
       ${challengeRunOutcomeCtes(attributionModel)},
       spend_by_run AS (
         SELECT
-          vr.run_id,
-          COALESCE(SUM(mads.spend), 0)::numeric AS total_spend,
-          COALESCE(SUM(mads.conversions), 0)::numeric AS meta_leads
+          run_id,
+          COALESCE(SUM(allocated_spend), 0)::numeric AS total_spend,
+          COALESCE(SUM(allocated_meta_leads), 0)::numeric AS meta_leads
+        FROM (
+          SELECT
+            vr.run_id,
+            CASE
+              WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+                THEN COALESCE(mads.spend, 0)::numeric / NULLIF(active_run_counts.active_run_count, 0)
+              ELSE COALESCE(mads.spend, 0)::numeric
+            END AS allocated_spend,
+            CASE
+              WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+                THEN COALESCE(mads.conversions, 0)::numeric / NULLIF(active_run_counts.active_run_count, 0)
+              ELSE COALESCE(mads.conversions, 0)::numeric
+            END AS allocated_meta_leads
         FROM valid_runs vr
         JOIN campaigns c
           ON c.tenant_id = vr.tenant_id
@@ -3278,8 +3405,25 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           ON campaign_cfm.tenant_id = vr.tenant_id
           AND campaign_cfm.campaign_id = c.id
           AND campaign_cfm.ad_set_external_id IS NULL
-        WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
-        GROUP BY vr.run_id
+          CROSS JOIN LATERAL (
+            SELECT COUNT(*)::numeric AS active_run_count
+            FROM funnel_runs afr
+            WHERE afr.tenant_id = vr.tenant_id
+              AND COALESCE(afr.status, 'active') <> 'archived'
+              AND mads.date >= afr.start_date
+              AND mads.date <= COALESCE(afr.end_date, CURRENT_DATE)
+          ) active_run_counts
+          WHERE (
+            COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END) = 'funnel'
+            AND COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+          ) OR (
+            COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+            AND active_run_counts.active_run_count > 0
+            AND mads.date >= vr.start_date
+            AND mads.date <= COALESCE(vr.end_date, CURRENT_DATE)
+          )
+        ) allocated
+        GROUP BY run_id
       ),
       activity_days AS (
         SELECT lc.run_id, l.created_at::date AS activity_day
@@ -3306,7 +3450,25 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
           ON campaign_cfm.tenant_id = vr.tenant_id
           AND campaign_cfm.campaign_id = c.id
           AND campaign_cfm.ad_set_external_id IS NULL
-        WHERE COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+        CROSS JOIN LATERAL (
+          SELECT COUNT(*)::numeric AS active_run_count
+          FROM funnel_runs afr
+          WHERE afr.tenant_id = vr.tenant_id
+            AND COALESCE(afr.status, 'active') <> 'archived'
+            AND mads.date >= afr.start_date
+            AND mads.date <= COALESCE(afr.end_date, CURRENT_DATE)
+        ) active_run_counts
+        WHERE (
+          (
+            COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END) = 'funnel'
+            AND COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) = vr.funnel_type_id
+          ) OR (
+            COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
+            AND active_run_counts.active_run_count > 0
+            AND mads.date >= vr.start_date
+            AND mads.date <= COALESCE(vr.end_date, CURRENT_DATE)
+          )
+        )
           AND (
             COALESCE(mads.spend, 0) > 0
             OR COALESCE(mads.conversions, 0) > 0
@@ -3336,6 +3498,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         COALESCE(jbr.cancelled_jobs, 0)::numeric AS cancelled_jobs,
         COALESCE(jbr.completed_estimate_jobs, 0)::numeric AS completed_estimate_jobs,
         COALESCE(ebr.total_estimate_value, 0)::numeric AS total_estimate_value,
+        COALESCE(ebr.roas_estimate_value, ebr.total_estimate_value, 0)::numeric AS roas_estimate_value,
         COALESCE(sbr.sold_closed_value, 0)::numeric AS sold_closed_value,
         COALESCE(sbr.sold_jobs, 0)::numeric AS sold_jobs,
         COALESCE(spr.total_spend, 0)::numeric AS total_spend
@@ -3394,7 +3557,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
         method: attributionModel === "weighted" ? "weighted_recency_funnel_attribution" : "meta_campaign_adset_funnel_mapping",
         note: attributionModel === "weighted"
           ? `Weighted Funnel Mode keeps leads and spend in each run window, then splits downstream jobs, cancellations, estimates, and sold value across prior funnel entries for the same customer using recency weighting over a ${CHALLENGE_WEIGHTED_LOOKBACK_DAYS}-day lookback.`
-          : "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign/ad-set mappings for the same run days.",
+          : "Run comparisons use funnel-day windows. Leads are included by the day they were received inside that run window; jobs, cancellations, estimates, and sold value come from those same leads. Spend and Meta Leads use saved Meta campaign/ad-set mappings for the same run days. Active Funnel mappings are resolved by spend date and split evenly if more than one non-archived funnel run is active for that client on that date.",
       },
     };
   })();
@@ -3519,7 +3682,8 @@ router.get("/dashboard/challenge", async (req, res) => {
       SELECT
         lc.funnel,
         lc.unique_key,
-        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+        (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold
       FROM lead_cohort lc
       JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.lead_id = lc.id
       LEFT JOIN jobs j ON j.id = se.job_id AND j.tenant_id = se.tenant_id
@@ -3531,7 +3695,8 @@ router.get("/dashboard/challenge", async (req, res) => {
       SELECT
         lc.funnel,
         lc.unique_key,
-        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount
+        COALESCE(NULLIF(se.total_amount, 0), se.subtotal, 0)::numeric AS amount,
+        (se.estimate_status IS NULL OR TRIM(se.estimate_status) = '' OR LOWER(se.estimate_status) = 'sold') AS is_sold
       FROM lead_cohort lc
       JOIN jobs j ON j.lead_id = lc.id AND j.tenant_id = lc.tenant_id
       JOIN sold_estimates se ON se.tenant_id = lc.tenant_id AND se.job_id = j.id
@@ -3540,19 +3705,37 @@ router.get("/dashboard/challenge", async (req, res) => {
         ${challengeEstimateAttributionWindowSql()}
     ),
     estimate_per_lead AS (
-      SELECT funnel, unique_key, AVG(amount) AS avg_estimate
+      SELECT
+        funnel,
+        unique_key,
+        CASE
+          WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+          ELSE AVG(amount)
+        END AS total_estimate_value,
+        AVG(amount) AS roas_estimate_value
       FROM estimate_options
       GROUP BY funnel, unique_key
     ),
     estimates_by_funnel AS (
-      SELECT funnel, COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+      SELECT
+        funnel,
+        COALESCE(SUM(total_estimate_value), 0)::numeric AS total_estimate_value,
+        COALESCE(SUM(roas_estimate_value), 0)::numeric AS roas_estimate_value
       FROM estimate_per_lead
       GROUP BY funnel
     ),
     estimates_total AS (
-      SELECT COALESCE(SUM(avg_estimate), 0)::numeric AS total_estimate_value
+      SELECT
+        COALESCE(SUM(total_estimate_value), 0)::numeric AS total_estimate_value,
+        COALESCE(SUM(roas_estimate_value), 0)::numeric AS roas_estimate_value
       FROM (
-        SELECT unique_key, AVG(amount) AS avg_estimate
+        SELECT
+          unique_key,
+          CASE
+            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+            ELSE AVG(amount)
+          END AS total_estimate_value,
+          AVG(amount) AS roas_estimate_value
         FROM estimate_options
         GROUP BY unique_key
       ) x
@@ -3620,6 +3803,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       COALESCE(jt.cancelled_jobs, 0)::int AS cancelled_jobs,
       COALESCE(jt.completed_estimate_jobs, 0)::int AS completed_estimate_jobs,
       COALESCE(et.total_estimate_value, 0)::numeric AS total_estimate_value,
+      COALESCE(et.roas_estimate_value, et.total_estimate_value, 0)::numeric AS roas_estimate_value,
       COALESCE(st.sold_closed_value, 0)::numeric AS sold_closed_value,
       COALESCE(st.sold_jobs, 0)::int AS sold_jobs,
       alt.all_unique_pulse_leads
@@ -3641,6 +3825,7 @@ router.get("/dashboard/challenge", async (req, res) => {
       COALESCE(jbf.cancelled_jobs, 0)::int AS cancelled_jobs,
       COALESCE(jbf.completed_estimate_jobs, 0)::int AS completed_estimate_jobs,
       COALESCE(ebf.total_estimate_value, 0)::numeric AS total_estimate_value,
+      COALESCE(ebf.roas_estimate_value, ebf.total_estimate_value, 0)::numeric AS roas_estimate_value,
       COALESCE(sbf.sold_closed_value, 0)::numeric AS sold_closed_value,
       COALESCE(sbf.sold_jobs, 0)::int AS sold_jobs,
       alt.all_unique_pulse_leads

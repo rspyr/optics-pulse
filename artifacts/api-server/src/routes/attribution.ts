@@ -24,6 +24,7 @@ router.get("/attribution/events", async (req, res) => {
   const scope = resolveListTenantScope(req, res, query.tenantId, { requireTenant: true });
   if (!scope.ok) return;
   if (scope.tenantId) conditions.push(eq(attributionEventsTable.tenantId, scope.tenantId));
+  conditions.push(sql`${attributionEventsTable.isSpam} IS NOT TRUE`);
 
   if (query.matchLevel) {
     const level = query.matchLevel as "diamond" | "golden" | "silver" | "bronze" | "manual" | "unmatched";
@@ -199,6 +200,7 @@ router.get("/attribution/events/facets", async (req, res) => {
   } else if (queryTenantId) {
     conditions.push(eq(attributionEventsTable.tenantId, queryTenantId));
   }
+  conditions.push(sql`${attributionEventsTable.isSpam} IS NOT TRUE`);
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 

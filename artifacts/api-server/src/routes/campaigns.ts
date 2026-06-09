@@ -91,6 +91,8 @@ router.get("/campaigns/stats", async (req, res) => {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const cplOf = (spend: number, conv: number) => (conv > 0 ? round2(spend / conv) : 0);
+const ACTIVE_FUNNEL_MAPPING_MODE = "active_funnel" as const;
+type FunnelMappingMode = "funnel" | typeof ACTIVE_FUNNEL_MAPPING_MODE;
 
 function normalizeCampaignText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
@@ -102,6 +104,11 @@ type FunnelMappingOption = {
   slug: string;
   matchCodes: Array<{ id: number; code: string }>;
 };
+
+function normalizeMappingMode(raw: unknown, funnelTypeId: number | null): FunnelMappingMode | null {
+  if (raw === ACTIVE_FUNNEL_MAPPING_MODE) return ACTIVE_FUNNEL_MAPPING_MODE;
+  return funnelTypeId == null ? null : "funnel";
+}
 
 function suggestFunnel(textValues: string[], funnels: FunnelMappingOption[]) {
   const normalizedTitle = normalizeCampaignText(textValues.filter(Boolean).join(" "));
@@ -148,19 +155,30 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     .orderBy(asc(funnelTypesTable.name));
 
   const funnelIds = funnels.map((funnel) => funnel.id);
-  const matchCodes = funnelIds.length > 0
-    ? await db.select({
+  const matchCodesWhere = funnelIds.length > 0
+    ? sql`(
+        (${campaignFunnelMatchCodesTable.mappingMode} = 'funnel' AND ${campaignFunnelMatchCodesTable.funnelTypeId} IN (${sql.join(funnelIds.map((id) => sql`${id}`), sql`, `)}))
+        OR ${campaignFunnelMatchCodesTable.mappingMode} = 'active_funnel'
+      )`
+    : sql`${campaignFunnelMatchCodesTable.mappingMode} = 'active_funnel'`;
+  const matchCodes = await db.select({
       id: campaignFunnelMatchCodesTable.id,
       funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+      mappingMode: campaignFunnelMatchCodesTable.mappingMode,
       code: campaignFunnelMatchCodesTable.code,
     })
       .from(campaignFunnelMatchCodesTable)
-      .where(inArray(campaignFunnelMatchCodesTable.funnelTypeId, funnelIds))
-      .orderBy(asc(campaignFunnelMatchCodesTable.code))
-    : [];
+      .where(matchCodesWhere)
+      .orderBy(asc(campaignFunnelMatchCodesTable.code));
 
   const codesByFunnel = new Map<number, Array<{ id: number; code: string }>>();
+  const activeFunnelMatchCodes: Array<{ id: number; code: string }> = [];
   for (const code of matchCodes) {
+    if (code.mappingMode === ACTIVE_FUNNEL_MAPPING_MODE) {
+      activeFunnelMatchCodes.push({ id: code.id, code: code.code });
+      continue;
+    }
+    if (code.funnelTypeId == null) continue;
     const list = codesByFunnel.get(code.funnelTypeId) ?? [];
     list.push({ id: code.id, code: code.code });
     codesByFunnel.set(code.funnelTypeId, list);
@@ -180,7 +198,8 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       c.currency,
       c.meta_ad_account_id,
       cfm.funnel_type_id,
-      ft.name AS funnel_name,
+      cfm.mapping_mode,
+      CASE WHEN cfm.mapping_mode = 'active_funnel' THEN 'Active Funnel' ELSE ft.name END AS funnel_name,
       cfm.mapping_source,
       COALESCE(ad_set_counts.ad_set_mapping_count, 0)::int AS ad_set_mapping_count,
       COALESCE(SUM(cds.spend), 0)::numeric AS spend,
@@ -212,7 +231,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       AND ad_set_counts.campaign_id = c.id
     WHERE c.tenant_id = ${tenantId}
       AND c.platform = 'meta'
-    GROUP BY c.id, c.external_id, c.name, c.status, c.currency, c.meta_ad_account_id, cfm.funnel_type_id, ft.name, cfm.mapping_source, ad_set_counts.ad_set_mapping_count
+    GROUP BY c.id, c.external_id, c.name, c.status, c.currency, c.meta_ad_account_id, cfm.funnel_type_id, cfm.mapping_mode, ft.name, cfm.mapping_source, ad_set_counts.ad_set_mapping_count
     HAVING COALESCE(SUM(cds.spend), 0) > 0
     ORDER BY spend DESC, c.name ASC
   `);
@@ -225,6 +244,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     currency: string | null;
     meta_ad_account_id: string | null;
     funnel_type_id: number | null;
+    mapping_mode: string | null;
     funnel_name: string | null;
     mapping_source: string | null;
     ad_set_mapping_count: string | number | null;
@@ -233,7 +253,9 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
   };
 
   const campaigns = ((campaignResult as unknown as { rows?: CampaignMappingRow[] }).rows ?? []).map((row) => {
-    const suggested = row.funnel_type_id ? null : suggestFunnel([row.name], funnelOptions);
+    const funnelTypeId = row.funnel_type_id == null ? null : Number(row.funnel_type_id);
+    const mappingMode = normalizeMappingMode(row.mapping_mode, funnelTypeId);
+    const suggested = mappingMode ? null : suggestFunnel([row.name], funnelOptions);
     const spend = Number(row.spend ?? 0);
     const conversions = Number(row.conversions ?? 0);
     return {
@@ -246,7 +268,8 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       spend: round2(Number.isFinite(spend) ? spend : 0),
       conversions: Number.isFinite(conversions) ? conversions : 0,
       cpl: cplOf(Number.isFinite(spend) ? spend : 0, Number.isFinite(conversions) ? conversions : 0),
-      funnelTypeId: row.funnel_type_id == null ? null : Number(row.funnel_type_id),
+      funnelTypeId,
+      mappingMode,
       funnelName: row.funnel_name,
       mappingSource: row.mapping_source,
       adSetMappingCount: Number(row.ad_set_mapping_count ?? 0),
@@ -266,10 +289,12 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       mas.effective_status,
       mas.ad_account_id,
       ad_cfm.funnel_type_id,
-      ad_ft.name AS funnel_name,
+      ad_cfm.mapping_mode,
+      CASE WHEN ad_cfm.mapping_mode = 'active_funnel' THEN 'Active Funnel' ELSE ad_ft.name END AS funnel_name,
       ad_cfm.mapping_source,
       campaign_cfm.funnel_type_id AS campaign_funnel_type_id,
-      campaign_ft.name AS campaign_funnel_name,
+      campaign_cfm.mapping_mode AS campaign_mapping_mode,
+      CASE WHEN campaign_cfm.mapping_mode = 'active_funnel' THEN 'Active Funnel' ELSE campaign_ft.name END AS campaign_funnel_name,
       campaign_cfm.mapping_source AS campaign_mapping_source,
       COALESCE(SUM(mads.spend), 0)::numeric AS spend,
       COALESCE(SUM(mads.conversions), 0)::numeric AS conversions
@@ -311,9 +336,11 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       mas.effective_status,
       mas.ad_account_id,
       ad_cfm.funnel_type_id,
+      ad_cfm.mapping_mode,
       ad_ft.name,
       ad_cfm.mapping_source,
       campaign_cfm.funnel_type_id,
+      campaign_cfm.mapping_mode,
       campaign_ft.name,
       campaign_cfm.mapping_source
     HAVING COALESCE(SUM(mads.spend), 0) > 0
@@ -329,9 +356,11 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     effective_status: string | null;
     ad_account_id: string | null;
     funnel_type_id: number | null;
+    mapping_mode: string | null;
     funnel_name: string | null;
     mapping_source: string | null;
     campaign_funnel_type_id: number | null;
+    campaign_mapping_mode: string | null;
     campaign_funnel_name: string | null;
     campaign_mapping_source: string | null;
     spend: string | number | null;
@@ -341,8 +370,11 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
   const adSets = ((adSetResult as unknown as { rows?: AdSetMappingRow[] }).rows ?? []).map((row) => {
     const explicitFunnelTypeId = row.funnel_type_id == null ? null : Number(row.funnel_type_id);
     const inheritedFunnelTypeId = row.campaign_funnel_type_id == null ? null : Number(row.campaign_funnel_type_id);
-    const effectiveFunnelTypeId = explicitFunnelTypeId ?? inheritedFunnelTypeId;
-    const suggested = effectiveFunnelTypeId ? null : suggestFunnel([row.ad_set_name, row.campaign_name], funnelOptions);
+    const explicitMappingMode = normalizeMappingMode(row.mapping_mode, explicitFunnelTypeId);
+    const inheritedMappingMode = normalizeMappingMode(row.campaign_mapping_mode, inheritedFunnelTypeId);
+    const effectiveMappingMode = explicitMappingMode ?? inheritedMappingMode;
+    const effectiveFunnelTypeId = effectiveMappingMode === ACTIVE_FUNNEL_MAPPING_MODE ? null : explicitFunnelTypeId ?? inheritedFunnelTypeId;
+    const suggested = effectiveMappingMode ? null : suggestFunnel([row.ad_set_name, row.campaign_name], funnelOptions);
     const spend = Number(row.spend ?? 0);
     const conversions = Number(row.conversions ?? 0);
     return {
@@ -357,14 +389,17 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
       conversions: Number.isFinite(conversions) ? conversions : 0,
       cpl: cplOf(Number.isFinite(spend) ? spend : 0, Number.isFinite(conversions) ? conversions : 0),
       funnelTypeId: explicitFunnelTypeId,
+      mappingMode: explicitMappingMode,
       funnelName: row.funnel_name,
       mappingSource: row.mapping_source,
       campaignFunnelTypeId: inheritedFunnelTypeId,
+      campaignMappingMode: inheritedMappingMode,
       campaignFunnelName: row.campaign_funnel_name,
       campaignMappingSource: row.campaign_mapping_source,
       effectiveFunnelTypeId,
       effectiveFunnelName: row.funnel_name ?? row.campaign_funnel_name,
-      effectiveMappingLevel: explicitFunnelTypeId ? "ad_set" : (inheritedFunnelTypeId ? "campaign" : null),
+      effectiveMappingMode,
+      effectiveMappingLevel: explicitMappingMode ? "ad_set" : (inheritedMappingMode ? "campaign" : null),
       suggestedFunnelTypeId: suggested?.funnel.id ?? null,
       suggestedFunnelName: suggested?.funnel.name ?? null,
       suggestedMatchCode: suggested?.matchedCode ?? null,
@@ -374,6 +409,7 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
   const effectiveMappingResult = await db.execute(sql`
     SELECT
       COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) AS funnel_type_id,
+      COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END) AS mapping_mode,
       COALESCE(SUM(mads.spend), 0)::numeric AS spend,
       COALESCE(SUM(mads.conversions), 0)::numeric AS conversions
     FROM meta_ad_daily_stats mads
@@ -392,20 +428,23 @@ router.get("/campaigns/meta-funnel-mappings", requireRole("super_admin", "agency
     WHERE mads.tenant_id = ${tenantId}
       ${startDate ? sql`AND mads.date >= ${startDate}` : sql``}
       ${endDate ? sql`AND mads.date <= ${endDate}` : sql``}
-    GROUP BY COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id)
+    GROUP BY
+      COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id),
+      COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode, CASE WHEN COALESCE(ad_cfm.funnel_type_id, campaign_cfm.funnel_type_id) IS NULL THEN NULL ELSE 'funnel' END)
   `);
 
-  const effectiveRows = ((effectiveMappingResult as unknown as { rows?: Array<{ funnel_type_id: number | null; spend: string | number | null; conversions: string | number | null }> }).rows ?? []);
+  const effectiveRows = ((effectiveMappingResult as unknown as { rows?: Array<{ funnel_type_id: number | null; mapping_mode: string | null; spend: string | number | null; conversions: string | number | null }> }).rows ?? []);
   const unmappedSpend = effectiveRows
-    .filter((row) => row.funnel_type_id == null)
+    .filter((row) => row.funnel_type_id == null && row.mapping_mode !== ACTIVE_FUNNEL_MAPPING_MODE)
     .reduce((sum, row) => sum + toFiniteNumber(row.spend), 0);
   const unmappedConversions = effectiveRows
-    .filter((row) => row.funnel_type_id == null)
+    .filter((row) => row.funnel_type_id == null && row.mapping_mode !== ACTIVE_FUNNEL_MAPPING_MODE)
     .reduce((sum, row) => sum + toFiniteNumber(row.conversions), 0);
 
   res.json({
     dateRange: { startDate: startDate ?? null, endDate: endDate ?? null },
     funnels: funnelOptions,
+    activeFunnelMatchCodes,
     campaigns,
     adSets,
     unmappedSpend: round2(unmappedSpend),
@@ -419,7 +458,7 @@ function toFiniteNumber(value: unknown): number {
 }
 
 router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "agency_user"), async (req, res) => {
-  const body = req.body as { tenantId?: unknown; funnelTypeId?: unknown; code?: unknown } | undefined;
+  const body = req.body as { tenantId?: unknown; funnelTypeId?: unknown; mappingMode?: unknown; code?: unknown } | undefined;
   const scope = resolveListTenantScope(req, res, body?.tenantId ? Number(body.tenantId) : null);
   if (!scope.ok) return;
   const tenantId = scope.tenantId;
@@ -428,24 +467,27 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
     return;
   }
 
-  const funnelTypeId = Number(body?.funnelTypeId);
+  const mappingMode = body?.mappingMode === ACTIVE_FUNNEL_MAPPING_MODE ? ACTIVE_FUNNEL_MAPPING_MODE : "funnel";
+  const funnelTypeId = mappingMode === ACTIVE_FUNNEL_MAPPING_MODE ? null : Number(body?.funnelTypeId);
   const code = typeof body?.code === "string" ? body.code.trim() : "";
-  if (!Number.isFinite(funnelTypeId) || funnelTypeId <= 0 || !code) {
-    res.status(400).json({ error: "funnelTypeId and code are required." });
+  if ((mappingMode === "funnel" && (!Number.isFinite(funnelTypeId) || (funnelTypeId ?? 0) <= 0)) || !code) {
+    res.status(400).json({ error: "Choose a funnel target and enter a code." });
     return;
   }
 
-  const [tenantFunnel] = await db.select({
-    id: funnelTypesTable.id,
-    name: funnelTypesTable.name,
-  })
-    .from(tenantFunnelTypesTable)
-    .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
-    ))
-    .limit(1);
+  const [tenantFunnel] = mappingMode === ACTIVE_FUNNEL_MAPPING_MODE
+    ? [{ id: null, name: "Active Funnel" }]
+    : await db.select({
+      id: funnelTypesTable.id,
+      name: funnelTypesTable.name,
+    })
+      .from(tenantFunnelTypesTable)
+      .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
+      .where(and(
+        eq(tenantFunnelTypesTable.tenantId, tenantId),
+        eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId as number),
+      ))
+      .limit(1);
 
   if (!tenantFunnel) {
     res.status(400).json({ error: "That funnel is not enabled for this client." });
@@ -455,13 +497,14 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
   const [existing] = await db.select({
     id: campaignFunnelMatchCodesTable.id,
     funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+    mappingMode: campaignFunnelMatchCodesTable.mappingMode,
   })
     .from(campaignFunnelMatchCodesTable)
     .where(sql`LOWER(${campaignFunnelMatchCodesTable.code}) = LOWER(${code})`)
     .limit(1);
 
-  if (existing && existing.funnelTypeId !== funnelTypeId) {
-    res.status(409).json({ error: "That code is already assigned to another funnel." });
+  if (existing && (existing.funnelTypeId !== funnelTypeId || existing.mappingMode !== mappingMode)) {
+    res.status(409).json({ error: "That code is already assigned to another funnel target." });
     return;
   }
 
@@ -473,6 +516,7 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
       .returning({
         id: campaignFunnelMatchCodesTable.id,
         funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+        mappingMode: campaignFunnelMatchCodesTable.mappingMode,
         code: campaignFunnelMatchCodesTable.code,
       });
     res.json({ ...updated, funnelName: tenantFunnel.name });
@@ -481,12 +525,14 @@ router.post("/campaigns/meta-funnel-match-codes", requireRole("super_admin", "ag
 
   const [saved] = await db.insert(campaignFunnelMatchCodesTable).values({
     funnelTypeId,
+    mappingMode,
     code,
     createdByUserId: userId,
     updatedByUserId: userId,
   }).returning({
     id: campaignFunnelMatchCodesTable.id,
     funnelTypeId: campaignFunnelMatchCodesTable.funnelTypeId,
+    mappingMode: campaignFunnelMatchCodesTable.mappingMode,
     code: campaignFunnelMatchCodesTable.code,
   });
 
@@ -536,9 +582,12 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
   });
   if (!access.ok) return;
 
-  const body = req.body as { funnelTypeId?: unknown; mappingLevel?: unknown; adSetExternalId?: unknown } | undefined;
+  const body = req.body as { funnelTypeId?: unknown; mappingMode?: unknown; mappingLevel?: unknown; adSetExternalId?: unknown } | undefined;
   const rawFunnelTypeId = body?.funnelTypeId;
-  const funnelTypeId = rawFunnelTypeId == null || rawFunnelTypeId === ""
+  const requestedMappingMode = body?.mappingMode === ACTIVE_FUNNEL_MAPPING_MODE ? ACTIVE_FUNNEL_MAPPING_MODE : "funnel";
+  const funnelTypeId = requestedMappingMode === ACTIVE_FUNNEL_MAPPING_MODE
+    ? null
+    : rawFunnelTypeId == null || rawFunnelTypeId === ""
     ? null
     : Number(rawFunnelTypeId);
   const adSetExternalId = typeof body?.adSetExternalId === "string" && body.adSetExternalId.trim()
@@ -567,7 +616,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
     }
   }
 
-  if (funnelTypeId == null) {
+  if (funnelTypeId == null && requestedMappingMode !== ACTIVE_FUNNEL_MAPPING_MODE) {
     await db.execute(sql`
       DELETE FROM campaign_funnel_mappings
       WHERE tenant_id = ${campaign.tenantId}
@@ -576,26 +625,28 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
           ? sql`AND ad_set_external_id = ${adSetExternalId}`
           : sql`AND ad_set_external_id IS NULL`}
     `);
-    res.json({ campaignId, adSetExternalId, mappingLevel, funnelTypeId: null, funnelName: null });
+    res.json({ campaignId, adSetExternalId, mappingLevel, funnelTypeId: null, mappingMode: null, funnelName: null });
     return;
   }
 
-  if (!Number.isFinite(funnelTypeId) || funnelTypeId <= 0) {
+  if (requestedMappingMode !== ACTIVE_FUNNEL_MAPPING_MODE && (!Number.isFinite(funnelTypeId) || (funnelTypeId ?? 0) <= 0)) {
     res.status(400).json({ error: "Invalid funnelTypeId" });
     return;
   }
 
-  const [tenantFunnel] = await db.select({
-    id: funnelTypesTable.id,
-    name: funnelTypesTable.name,
-  })
-    .from(tenantFunnelTypesTable)
-    .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
-    .where(and(
-      eq(tenantFunnelTypesTable.tenantId, campaign.tenantId),
-      eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId),
-    ))
-    .limit(1);
+  const [tenantFunnel] = requestedMappingMode === ACTIVE_FUNNEL_MAPPING_MODE
+    ? [{ id: null, name: "Active Funnel" }]
+    : await db.select({
+      id: funnelTypesTable.id,
+      name: funnelTypesTable.name,
+    })
+      .from(tenantFunnelTypesTable)
+      .innerJoin(funnelTypesTable, eq(funnelTypesTable.id, tenantFunnelTypesTable.funnelTypeId))
+      .where(and(
+        eq(tenantFunnelTypesTable.tenantId, campaign.tenantId),
+        eq(tenantFunnelTypesTable.funnelTypeId, funnelTypeId as number),
+      ))
+      .limit(1);
 
   if (!tenantFunnel) {
     res.status(400).json({ error: "That funnel is not enabled for this client." });
@@ -610,6 +661,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
         campaign_id,
         ad_set_external_id,
         funnel_type_id,
+        mapping_mode,
         mapping_source,
         created_by_user_id,
         updated_by_user_id,
@@ -621,6 +673,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
         ${campaignId},
         ${adSetExternalId},
         ${funnelTypeId},
+        ${requestedMappingMode},
         'manual',
         ${userId},
         ${userId},
@@ -630,6 +683,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
       ON CONFLICT (tenant_id, campaign_id, ad_set_external_id) WHERE ad_set_external_id IS NOT NULL
       DO UPDATE SET
         funnel_type_id = EXCLUDED.funnel_type_id,
+        mapping_mode = EXCLUDED.mapping_mode,
         mapping_source = 'manual',
         updated_by_user_id = EXCLUDED.updated_by_user_id,
         updated_at = NOW()
@@ -641,6 +695,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
         campaign_id,
         ad_set_external_id,
         funnel_type_id,
+        mapping_mode,
         mapping_source,
         created_by_user_id,
         updated_by_user_id,
@@ -652,6 +707,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
         ${campaignId},
         NULL,
         ${funnelTypeId},
+        ${requestedMappingMode},
         'manual',
         ${userId},
         ${userId},
@@ -661,6 +717,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
       ON CONFLICT (campaign_id) WHERE ad_set_external_id IS NULL
       DO UPDATE SET
         funnel_type_id = EXCLUDED.funnel_type_id,
+        mapping_mode = EXCLUDED.mapping_mode,
         mapping_source = 'manual',
         updated_by_user_id = EXCLUDED.updated_by_user_id,
         updated_at = NOW()
@@ -672,6 +729,7 @@ router.put("/campaigns/:campaignId/funnel-mapping", requireRole("super_admin", "
     adSetExternalId,
     mappingLevel,
     funnelTypeId,
+    mappingMode: requestedMappingMode,
     funnelName: tenantFunnel.name,
   });
 });

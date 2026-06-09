@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, real, pgEnum, jsonb, uniqueIndex, index, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -54,6 +54,8 @@ export const attributionEventsTable = pgTable("attribution_events", {
   // by `revertManualMatchToUnmatched` when the operator undoes the flip.
   manualSource: text("manual_source"),
   createdLeadId: integer("created_lead_id").references(() => leadsTable.id),
+  isSpam: boolean("is_spam").notNull().default(false),
+  spamReason: text("spam_reason"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   tenantExternalIdUnique: uniqueIndex("attribution_events_tenant_external_id_unique").on(table.tenantId, table.externalId),

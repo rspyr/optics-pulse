@@ -781,6 +781,7 @@ export default function AdminTenants() {
                 <SelectItem value="America/New_York">Eastern</SelectItem>
                 <SelectItem value="America/Chicago">Central</SelectItem>
                 <SelectItem value="America/Denver">Mountain</SelectItem>
+                <SelectItem value="America/Phoenix">Arizona (Phoenix)</SelectItem>
                 <SelectItem value="America/Los_Angeles">Pacific</SelectItem>
               </SelectContent>
             </Select>
@@ -869,6 +870,7 @@ export default function AdminTenants() {
                               <SelectItem value="America/New_York">Eastern</SelectItem>
                               <SelectItem value="America/Chicago">Central</SelectItem>
                               <SelectItem value="America/Denver">Mountain</SelectItem>
+                              <SelectItem value="America/Phoenix">Arizona (Phoenix)</SelectItem>
                               <SelectItem value="America/Los_Angeles">Pacific</SelectItem>
                             </SelectContent>
                           </Select>

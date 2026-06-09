@@ -193,6 +193,7 @@ describe("parseEstimateData", () => {
     expect(result.summary).toBe("Install option");
     expect(result.stEstimateCreatedAt).toEqual(new Date("2026-01-10T00:00:00Z"));
     expect(result.followUpOn).toEqual(new Date("2026-01-20T00:00:00Z"));
+    expect(result.soldOn).toEqual(new Date("2026-01-15T00:00:00Z"));
   });
 
   it("prefers skuName as the breakdown label when present", () => {
