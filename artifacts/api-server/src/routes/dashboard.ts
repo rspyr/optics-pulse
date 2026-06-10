@@ -1086,8 +1086,8 @@ const spendAuditColumns: ChallengeAuditColumn[] = [
   { key: "funnel", label: "Funnel" },
   { key: "run", label: "Run" },
   { key: "campaign", label: "Campaign" },
-  { key: "adSetExternalId", label: "Ad Set ID" },
-  { key: "adExternalId", label: "Ad ID" },
+  { key: "adSet", label: "Ad Set" },
+  { key: "ad", label: "Ad" },
   { key: "spend", label: "Spend", format: "currency", align: "right" },
   { key: "metaLeads", label: "Meta Leads", format: "number", align: "right" },
   { key: "impressions", label: "Impressions", format: "number", align: "right" },
@@ -1578,8 +1578,8 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
           'Meta Impact'::text AS funnel,
           'Impact Window'::text AS run,
           c.name AS campaign,
-          NULL::text AS ad_set_external_id,
-          NULL::text AS ad_external_id,
+          NULL::text AS ad_set,
+          NULL::text AS ad,
           COALESCE(cds.spend, 0)::numeric AS spend,
           COALESCE(cds.conversions, 0)::numeric AS meta_leads,
           COALESCE(cds.impressions, 0)::numeric AS impressions,
@@ -1596,8 +1596,8 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
         funnel,
         run,
         campaign,
-        ad_set_external_id AS "adSetExternalId",
-        ad_external_id AS "adExternalId",
+        ad_set AS "adSet",
+        ad,
         ROUND(spend, 2)::numeric AS spend,
         meta_leads AS "metaLeads",
         impressions,
@@ -1629,8 +1629,8 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
         vr.run_name,
         mads.date,
         c.name AS campaign,
-        mads.ad_set_external_id,
-        mads.ad_external_id,
+        COALESCE(NULLIF(mas.name, ''), mads.ad_set_external_id) AS ad_set,
+        COALESCE(NULLIF(ma.name, ''), mads.ad_external_id) AS ad,
         CASE
           WHEN COALESCE(ad_cfm.mapping_mode, campaign_cfm.mapping_mode) = 'active_funnel'
             THEN COALESCE(mads.spend, 0)::numeric / NULLIF(active_run_counts.active_run_count, 0)
@@ -1656,6 +1656,12 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
         AND mads.campaign_external_id = c.external_id
         AND mads.date >= vr.window_start
         AND mads.date <= vr.window_end
+      LEFT JOIN meta_ad_sets mas
+        ON mas.tenant_id = mads.tenant_id
+        AND mas.external_id = mads.ad_set_external_id
+      LEFT JOIN meta_ads ma
+        ON ma.tenant_id = mads.tenant_id
+        AND ma.external_id = mads.ad_external_id
       LEFT JOIN campaign_funnel_mappings ad_cfm
         ON ad_cfm.tenant_id = vr.tenant_id
         AND ad_cfm.campaign_id = c.id
@@ -1688,8 +1694,8 @@ async function queryChallengeAuditSpend(input: ChallengeAuditContext): Promise<C
       funnel_name AS funnel,
       run_name AS run,
       campaign,
-      ad_set_external_id AS "adSetExternalId",
-      ad_external_id AS "adExternalId",
+      ad_set AS "adSet",
+      ad,
       ROUND(spend, 2)::numeric AS spend,
       meta_leads AS "metaLeads",
       impressions,
