@@ -767,7 +767,7 @@ function challengeStrictRunOutcomeCtes() {
           run_id,
           unique_key,
           CASE
-            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+            WHEN BOOL_OR(is_sold) THEN 0
             ELSE AVG(amount)
           END AS total_estimate_value,
           AVG(amount) AS roas_estimate_value
@@ -920,7 +920,7 @@ function challengeWeightedRunOutcomeCtes() {
           run_id,
           unique_key,
           CASE
-            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount * weight) FILTER (WHERE is_sold), 0)
+            WHEN BOOL_OR(is_sold) THEN 0
             ELSE AVG(amount * weight)
           END AS total_estimate_value,
           AVG(amount * weight) AS roas_estimate_value
@@ -2163,10 +2163,10 @@ async function queryChallengeAuditEstimates(
 ): Promise<ChallengeAuditSectionResult> {
   const creditedValueSql = basis === "roasPotential"
     ? sql`ROUND(AVG(amount), 2)::numeric`
-    : sql`ROUND(CASE WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0) ELSE AVG(amount) END, 2)::numeric`;
+    : sql`ROUND(CASE WHEN BOOL_OR(is_sold) THEN 0 ELSE AVG(amount) END, 2)::numeric`;
   const weightedCreditedValueSql = basis === "roasPotential"
     ? sql`ROUND(AVG(ew.amount * ew.weight), 2)::numeric`
-    : sql`ROUND(CASE WHEN BOOL_OR(ew.is_sold) THEN COALESCE(SUM(ew.amount * ew.weight) FILTER (WHERE ew.is_sold), 0) ELSE AVG(ew.amount * ew.weight) END, 2)::numeric`;
+    : sql`ROUND(CASE WHEN BOOL_OR(ew.is_sold) THEN 0 ELSE AVG(ew.amount * ew.weight) END, 2)::numeric`;
   const sectionLabel = basis === "roasPotential"
     ? "ROAS Potential estimate ledger"
     : "Total Estimate Value ledger";
@@ -3045,7 +3045,7 @@ router.get("/dashboard/challenge/runs", async (req, res) => {
             SELECT
               estimate_group_key,
               CASE
-                WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+                WHEN BOOL_OR(is_sold) THEN 0
                 ELSE AVG(amount)
               END AS total_estimate_value,
               AVG(amount) AS roas_estimate_value
@@ -3709,7 +3709,7 @@ router.get("/dashboard/challenge", async (req, res) => {
         funnel,
         unique_key,
         CASE
-          WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+          WHEN BOOL_OR(is_sold) THEN 0
           ELSE AVG(amount)
         END AS total_estimate_value,
         AVG(amount) AS roas_estimate_value
@@ -3732,7 +3732,7 @@ router.get("/dashboard/challenge", async (req, res) => {
         SELECT
           unique_key,
           CASE
-            WHEN BOOL_OR(is_sold) THEN COALESCE(SUM(amount) FILTER (WHERE is_sold), 0)
+            WHEN BOOL_OR(is_sold) THEN 0
             ELSE AVG(amount)
           END AS total_estimate_value,
           AVG(amount) AS roas_estimate_value
