@@ -257,7 +257,7 @@ const METRICS: Array<{
     icon: DollarSign,
     tone: "text-amber-300",
     format: formatCurrency,
-    explainer: "Open pipeline value from estimates tied to the selected lead cohort. The normal downstream attribution window still applies. If a customer has not sold/closed, their multiple open estimate options are averaged so one customer does not inflate the pipeline by having several choices. If that same customer has since sold/closed on one estimate, the remaining open options are removed because they are no longer realistic pipeline; the sold/closed estimate value is counted instead.",
+    explainer: "Open pipeline value from estimates tied to the selected lead cohort. The normal downstream attribution window still applies. If a customer has not sold/closed, multiple open estimate options are averaged so one customer does not inflate pipeline by having several choices. Once that customer has sold/closed, Total Estimate Value drops to zero and the closed amount moves to Sold/Closed Value.",
   },
   {
     key: "totalSoldClosedValue",
@@ -1422,7 +1422,7 @@ function getMetricExplainer(metric: (typeof METRICS)[number], context: MetricExp
       appointmentsBooked: "Meta leads in the selected impact window that show booked intent in Pulse. Long-tail jobs are counted separately by outcome date.",
       bookingRate: "Booked Meta leads divided by unique Meta leads received inside the selected impact window. Use downstream jobs for long-tail channel impact.",
       cancellationRate: "Canceled Meta-tied jobs with a cancellation date inside the impact window divided by Meta-tied jobs with booking, completion, or cancellation activity inside the same window.",
-      totalEstimateValue: "Estimate pipeline created inside the impact window when the customer has any prior Meta lead touch. Open options are averaged per customer while they are still open; once a customer has sold/closed, the remaining open options are excluded and the sold/closed estimate value is counted instead.",
+      totalEstimateValue: "Estimate pipeline created inside the impact window when the customer has any prior Meta lead touch. Open options are averaged per customer while they are still open; once a customer has sold/closed, Total Estimate Value drops to zero and the closed amount moves to Sold/Closed Value.",
       totalSoldClosedValue: "Sold value closed inside the impact window when the customer has any prior Meta lead touch, even if the original Meta lead happened before the selected start date.",
       roasPotential: "Impact-window average estimate opportunity per customer divided by Meta ad spend. It includes estimate potential regardless of whether that customer later sold/closed, so it measures the value of opportunities Meta created rather than the final closed choice.",
       roasSold: "Impact-window sold value divided by Meta ad spend in the same date range.",
@@ -1436,7 +1436,7 @@ function getMetricExplainer(metric: (typeof METRICS)[number], context: MetricExp
   if (context.attributionModel === "weighted") {
     const explainers: Partial<Record<MetricKey, string>> = {
       cancellationRate: "Canceled downstream job credit divided by downstream job credit. Credit is split across prior funnel entries for the same customer using recency weighting.",
-      totalEstimateValue: "Estimate pipeline split across prior funnel entries for the same customer using recency weighting. Open options are averaged per customer until the customer sells/closes; after that, remaining open options are excluded and the sold/closed estimate value is counted.",
+      totalEstimateValue: "Estimate pipeline split across prior funnel entries for the same customer using recency weighting. Open options are averaged per customer until the customer sells/closes; after that, Total Estimate Value drops to zero and the closed amount moves to Sold/Closed Value.",
       totalSoldClosedValue: "Sold value split across prior funnel entries for the same customer using recency weighting. Newer funnel touches receive more credit.",
       roasPotential: "Weighted average estimate opportunity per customer divided by ad spend. It keeps estimate potential independent from the later sold/closed outcome, while the attribution credit is still split across prior funnel entries for the same customer.",
       roasSold: "Weighted sold value divided by ad spend for the selected run window.",
