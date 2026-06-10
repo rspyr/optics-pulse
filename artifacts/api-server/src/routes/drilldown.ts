@@ -218,6 +218,7 @@ router.get("/drilldown/leads", async (req, res) => {
 
   const conditions: SQL[] = [];
   if (scope.tenantId) conditions.push(eq(leadsTable.tenantId, scope.tenantId));
+  conditions.push(sql`${leadsTable.isSpam} IS NOT TRUE`);
   if (startDate) conditions.push(gte(leadsTable.createdAt, new Date(startDate)));
   if (endDate) conditions.push(lte(leadsTable.createdAt, new Date(endDate + "T23:59:59.999Z")));
   if (status) {
@@ -259,6 +260,7 @@ router.get("/drilldown/jobs", async (req, res) => {
 
   const conditions: SQL[] = [];
   if (scope.tenantId) conditions.push(eq(jobsTable.tenantId, scope.tenantId));
+  conditions.push(sql`(${leadsTable.id} IS NULL OR ${leadsTable.isSpam} IS NOT TRUE)`);
   if (useJobDate) {
     // Match /dashboard/spend-revenue exactly: `<= new Date(endDate)` (midnight)
     // so the drilldown totals reconcile with the chart/card totals.
@@ -726,7 +728,7 @@ router.get("/drilldown/leads/search", async (req, res) => {
     status: leadsTable.status,
     createdAt: leadsTable.createdAt,
   }).from(leadsTable)
-    .where(and(eq(leadsTable.tenantId, queryTenantId), match))
+    .where(and(eq(leadsTable.tenantId, queryTenantId), sql`${leadsTable.isSpam} IS NOT TRUE`, match))
     .orderBy(desc(leadsTable.createdAt))
     .limit(limit);
 

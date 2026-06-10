@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useTenantFilter } from "@/hooks/use-tenant-filter";
+import { useTenants } from "@/hooks/use-tenants";
 import { useAuth } from "@/components/auth-context";
 import {
   Ban,
@@ -111,6 +112,7 @@ type ChallengeMetric = {
   cancelledJobs: number;
   totalJobs: number;
   totalEstimateValue: number;
+  roasEstimateValue?: number;
   totalSoldClosedValue: number;
   roasPotential: number;
   roasSold: number;
@@ -255,7 +257,7 @@ const METRICS: Array<{
     icon: DollarSign,
     tone: "text-amber-300",
     format: formatCurrency,
-    explainer: "Potential pipeline from estimates tied to the selected lead cohort. Estimate/job origin must fall within 90 days of the lead; multiple options for one lead are averaged before summing.",
+    explainer: "Open pipeline value from estimates tied to the selected lead cohort. The normal downstream attribution window still applies. If a customer has not sold/closed, their multiple open estimate options are averaged so one customer does not inflate the pipeline by having several choices. If that same customer has since sold/closed on one estimate, the remaining open options are removed because they are no longer realistic pipeline; the sold/closed estimate value is counted instead.",
   },
   {
     key: "totalSoldClosedValue",
@@ -273,7 +275,7 @@ const METRICS: Array<{
     icon: TrendingUp,
     tone: "text-amber-300",
     format: formatMultiplier,
-    explainer: "Estimate value divided by ad spend for the selected run window. Estimate value uses the downstream lead-cohort attribution rule.",
+    explainer: "Average estimate opportunity generated per customer divided by ad spend. The normal downstream attribution window still applies, but this intentionally looks at estimate potential regardless of whether the customer later sold/closed. If a customer received multiple estimates, those options are averaged for that customer, then summed across customers. Use this to judge whether a funnel is creating high-value estimate opportunities, independent of who closes them or which option the customer ultimately chooses.",
   },
   {
     key: "roasSold",
@@ -531,6 +533,7 @@ function writeMetricPreferences(preferences: MetricPreferences) {
 
 export default function Challenge() {
   const { effectiveTenantId } = useTenantFilter();
+  const { tenants } = useTenants();
   const { user } = useAuth();
   const [reportMode, setReportMode] = useState<ReportMode>("funnel");
   const [attributionModel, setAttributionModel] = useState<AttributionModel>("strict");
@@ -758,6 +761,16 @@ export default function Challenge() {
 
   const availableFunnels = (displayData ?? data)?.availableFunnels ?? [];
   const availableClients = (displayData ?? data)?.availableClients ?? [];
+  const tenantTimezoneByName = useMemo(
+    () => new Map(tenants.map((tenant) => [tenant.name, tenant.timezone || "America/New_York"])),
+    [tenants],
+  );
+  const fallbackTenantTimezone = useMemo(
+    () => effectiveTenantId == null
+      ? undefined
+      : tenants.find((tenant) => tenant.id === effectiveTenantId)?.timezone,
+    [effectiveTenantId, tenants],
+  );
   const selectedFunnelNames = selectedFunnelTypeIds
     .map((id) => availableFunnels.find((funnel) => funnel.id === id)?.name)
     .filter((name): name is string => !!name);
@@ -1377,6 +1390,8 @@ export default function Challenge() {
       }}
       requestKey={challengeQuery.cacheKey}
       buildUrl={(limit, offset) => auditTarget ? buildAuditUrl(auditTarget, limit, offset) : ""}
+      tenantTimezoneByName={tenantTimezoneByName}
+      fallbackTimezone={fallbackTenantTimezone}
     />
     </TooltipProvider>
   );
@@ -1407,9 +1422,9 @@ function getMetricExplainer(metric: (typeof METRICS)[number], context: MetricExp
       appointmentsBooked: "Meta leads in the selected impact window that show booked intent in Pulse. Long-tail jobs are counted separately by outcome date.",
       bookingRate: "Booked Meta leads divided by unique Meta leads received inside the selected impact window. Use downstream jobs for long-tail channel impact.",
       cancellationRate: "Canceled Meta-tied jobs with a cancellation date inside the impact window divided by Meta-tied jobs with booking, completion, or cancellation activity inside the same window.",
-      totalEstimateValue: "Estimate value created inside the impact window when the customer has any prior Meta lead touch in the downstream attribution model.",
+      totalEstimateValue: "Estimate pipeline created inside the impact window when the customer has any prior Meta lead touch. Open options are averaged per customer while they are still open; once a customer has sold/closed, the remaining open options are excluded and the sold/closed estimate value is counted instead.",
       totalSoldClosedValue: "Sold value closed inside the impact window when the customer has any prior Meta lead touch, even if the original Meta lead happened before the selected start date.",
-      roasPotential: "Impact-window estimate value divided by Meta ad spend in the same date range.",
+      roasPotential: "Impact-window average estimate opportunity per customer divided by Meta ad spend. It includes estimate potential regardless of whether that customer later sold/closed, so it measures the value of opportunities Meta created rather than the final closed choice.",
       roasSold: "Impact-window sold value divided by Meta ad spend in the same date range.",
       averageCostPerInHomeAppointment: "Meta spend divided by completed Meta-tied jobs with estimates inside the selected impact window.",
       costToAcquireCustomer: "Meta spend divided by sold Meta-tied jobs closed inside the selected impact window.",
@@ -1421,9 +1436,9 @@ function getMetricExplainer(metric: (typeof METRICS)[number], context: MetricExp
   if (context.attributionModel === "weighted") {
     const explainers: Partial<Record<MetricKey, string>> = {
       cancellationRate: "Canceled downstream job credit divided by downstream job credit. Credit is split across prior funnel entries for the same customer using recency weighting.",
-      totalEstimateValue: "Estimate value split across prior funnel entries for the same customer using recency weighting, then summed without double-counting total pipeline.",
+      totalEstimateValue: "Estimate pipeline split across prior funnel entries for the same customer using recency weighting. Open options are averaged per customer until the customer sells/closes; after that, remaining open options are excluded and the sold/closed estimate value is counted.",
       totalSoldClosedValue: "Sold value split across prior funnel entries for the same customer using recency weighting. Newer funnel touches receive more credit.",
-      roasPotential: "Weighted estimate value divided by ad spend for the selected run window.",
+      roasPotential: "Weighted average estimate opportunity per customer divided by ad spend. It keeps estimate potential independent from the later sold/closed outcome, while the attribution credit is still split across prior funnel entries for the same customer.",
       roasSold: "Weighted sold value divided by ad spend for the selected run window.",
       averageCostPerInHomeAppointment: "Ad spend divided by weighted completed downstream jobs that have estimates.",
       costToAcquireCustomer: "Ad spend divided by weighted sold downstream jobs.",
@@ -1653,12 +1668,16 @@ function ChallengeMetricAuditDrawer({
   onOpenChange,
   requestKey,
   buildUrl,
+  tenantTimezoneByName,
+  fallbackTimezone,
 }: {
   target: ChallengeMetricAuditTarget | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   requestKey: string;
   buildUrl: (limit: number | "all", offset: number) => string;
+  tenantTimezoneByName: Map<string, string>;
+  fallbackTimezone?: string;
 }) {
   const [data, setData] = useState<ChallengeMetricAuditResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1878,8 +1897,8 @@ function ChallengeMetricAuditDrawer({
                             column.align === "center" && "text-center",
                             column.key === "serviceAddress" && "whitespace-normal leading-snug",
                           )}
-                        >
-                          {formatAuditCell(row[column.key], column)}
+                      >
+                          {formatAuditCell(row[column.key], column, row, tenantTimezoneByName, fallbackTimezone)}
                         </td>
                       ))}
                     </tr>
@@ -1907,7 +1926,13 @@ function AuditSummaryStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatAuditCell(value: unknown, column: ChallengeMetricAuditColumn) {
+function formatAuditCell(
+  value: unknown,
+  column: ChallengeMetricAuditColumn,
+  row?: Record<string, unknown>,
+  tenantTimezoneByName?: Map<string, string>,
+  fallbackTimezone?: string,
+) {
   if (value == null || value === "") return <span className="text-muted-foreground">—</span>;
   let content: ReactNode;
   if (column.format === "boolean") {
@@ -1920,12 +1945,20 @@ function formatAuditCell(value: unknown, column: ChallengeMetricAuditColumn) {
     content = formatPercent(Number(value));
   } else if (column.format === "date" || column.format === "datetime") {
     const date = new Date(String(value));
+    const rowTimezone = typeof row?.clientTimezone === "string"
+      ? row.clientTimezone
+      : typeof row?.client === "string"
+        ? tenantTimezoneByName?.get(row.client)
+        : undefined;
+    const timeZone = rowTimezone || fallbackTimezone;
     content = Number.isNaN(date.getTime())
       ? String(value)
       : date.toLocaleString("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",
+        ...(timeZone ? { timeZone } : {}),
+        ...(timeZone && column.format === "datetime" ? { timeZoneName: "short" as const } : {}),
         ...(column.format === "datetime" ? { hour: "numeric", minute: "2-digit" } : {}),
       });
   } else {

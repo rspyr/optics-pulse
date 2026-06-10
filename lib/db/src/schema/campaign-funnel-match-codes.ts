@@ -5,7 +5,8 @@ import { usersTable } from "./users";
 
 export const campaignFunnelMatchCodesTable = pgTable("campaign_funnel_match_codes", {
   id: serial("id").primaryKey(),
-  funnelTypeId: integer("funnel_type_id").notNull().references(() => funnelTypesTable.id, { onDelete: "cascade" }),
+  funnelTypeId: integer("funnel_type_id").references(() => funnelTypesTable.id, { onDelete: "cascade" }),
+  mappingMode: text("mapping_mode").notNull().default("funnel"),
   code: text("code").notNull(),
   createdByUserId: integer("created_by_user_id").references(() => usersTable.id, { onDelete: "set null" }),
   updatedByUserId: integer("updated_by_user_id").references(() => usersTable.id, { onDelete: "set null" }),

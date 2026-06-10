@@ -1,5 +1,5 @@
 import { db, callAttemptsTable, leadsTable, scheduledFollowupsTable } from "@workspace/db";
-import { eq, and, desc, sql, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, gte, lte, type SQL } from "drizzle-orm";
 
 interface CallAttemptRecord {
   id: number;
@@ -237,7 +237,7 @@ export async function getSmartQueue(tenantId: number | null): Promise<{
   backgroundCount: number;
   total: number;
 }> {
-  const conditions: ReturnType<typeof eq>[] = [];
+  const conditions: SQL[] = [sql`${leadsTable.isSpam} IS NOT TRUE`];
   if (tenantId) conditions.push(eq(leadsTable.tenantId, tenantId));
 
   const statusCondition = inArray(leadsTable.status, ["new", "contacted"]);

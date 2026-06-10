@@ -20,6 +20,7 @@ import { handleResubmission } from "../services/lead-resubmission";
 import { createLeadWithDedupe, LEAD_INQUIRY_DEDUPE_WINDOW_MS, TRACKER_RETRY_DEDUPE_WINDOW_MS } from "../services/lead-dedupe";
 import { emitLeadUpdated } from "../socket";
 import { logTrackerAttempt, updateTrackerAttempt } from "../services/tracker-audit";
+import { getLeadSpamReason } from "../lib/lead-validation";
 
 // Pulse.js sends `submitted_at` as an ISO string. The generated Zod schema
 // coerces to `Date` (and also accepts `null` since the OpenAPI spec was
@@ -385,6 +386,23 @@ router.post("/collect/submit", trackerSubmitLimiter, async (req, res) => {
 
     const detection = await detectFields(tenantId, fields, pageUrl, formId, formName);
     const pii = detection.pii;
+    const spamReason = getLeadSpamReason({
+      firstName: pii.firstName,
+      lastName: pii.lastName,
+      phone: pii.phone,
+    });
+    if (spamReason) {
+      await updateTrackerAttempt(auditId, {
+        tenantId,
+        clientId,
+        outcome: "blocked_spam",
+        httpStatus: 200,
+        message: spamReason,
+      });
+      res.json({ success: true, blocked: true, reason: "spam" });
+      return;
+    }
+
     const hashedPhone = pii.phone ? hashPhone(pii.phone) : null;
     const hashedEmail = pii.email ? hashValue(pii.email) : null;
 

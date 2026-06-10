@@ -987,12 +987,12 @@ export function parseEstimateData(estimate: STEstimate, patterns: RegExp[] = REB
     estimateStatus: estimate.status?.name || null,
     summary: estimate.summary || null,
     stEstimateCreatedAt: parseServiceTitanDate(estimate.createdOn),
-    followUpOn: estimate.followUpOn ? new Date(estimate.followUpOn) : null,
+    followUpOn: parseServiceTitanDate(estimate.followUpOn),
     subtotal,
     rebateAmount,
     totalAmount,
     rebateBreakdown,
-    soldOn: estimate.soldOn ? new Date(estimate.soldOn) : null,
+    soldOn: parseServiceTitanDate(estimate.soldOn),
     soldByEmployeeId: estimate.soldBy,
   };
 }

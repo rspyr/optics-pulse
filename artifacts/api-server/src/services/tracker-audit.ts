@@ -15,6 +15,7 @@ export type TrackerOutcome =
   | "invalid_payload"
   | "unknown_client"
   | "missing_client_id"
+  | "blocked_spam"
   | "rate_limited"
   | "server_error"
   | "diagnostic_recorded";

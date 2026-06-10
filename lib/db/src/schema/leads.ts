@@ -63,6 +63,8 @@ export const leadsTable = pgTable("leads", {
   podiumContactUid: text("podium_contact_uid"),
   manuallyTransferred: boolean("manually_transferred").notNull().default(false),
   hasSoldEstimate: boolean("has_sold_estimate").notNull().default(false),
+  isSpam: boolean("is_spam").notNull().default(false),
+  spamReason: text("spam_reason"),
   resubmittedAt: timestamp("resubmitted_at"),
   resubmissionCount: integer("resubmission_count").notNull().default(0),
 
