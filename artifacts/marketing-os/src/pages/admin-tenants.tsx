@@ -4,7 +4,7 @@ import { useAuth } from "@/components/auth-context";
 import { useTenants, type TenantOption } from "@/hooks/use-tenants";
 import { MetaCampaignFunnelMapping } from "@/components/MetaCampaignFunnelMapping";
 import { PremiumCard, GradientHeading, Badge } from "@/components/ui-helpers";
-import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info, Megaphone } from "lucide-react";
+import { Plus, Edit2, X, Check, Trash2, Key, ChevronDown, ChevronUp, Shield, Activity, CheckCircle, XCircle, Bell, Mail, Loader2, Copy, Code, Settings, Trophy, Pause, Play, Info, Megaphone, Clock } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
@@ -34,6 +34,8 @@ interface TenantForm {
   podiumApiToken: string;
   podiumLocationId: string;
   monthlyBudget: string;
+  stJobsSyncUtcMinuteOffset: string;
+  stRevenueSyncUtcMinuteOffset: string;
   isDemo: boolean;
 }
 
@@ -96,12 +98,70 @@ const emptyForm: TenantForm = {
   podiumApiToken: "",
   podiumLocationId: "",
   monthlyBudget: "",
+  stJobsSyncUtcMinuteOffset: "0",
+  stRevenueSyncUtcMinuteOffset: "5",
   isDemo: false,
 };
 
 const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 
 type EditTab = "integrations" | "campaignMapping" | "alerts" | "scripts" | "leaderboard" | "maintenance";
+
+interface SyncTypeStatus {
+  lastRun: string | null;
+  lastStatus: string;
+  recordsProcessed: number;
+  scheduledForUtc?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  nextScheduledForUtc?: string | null;
+}
+
+interface IntegrationStatus {
+  lastSync: string | null;
+  lastStatus: string;
+  lastRecords: number;
+  errorCount: number;
+  syncTypes?: Record<string, SyncTypeStatus>;
+}
+
+const ST_SCHEDULE_INTERVAL_MINUTES = 15;
+
+function parseStUtcMinuteOffset(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < ST_SCHEDULE_INTERVAL_MINUTES
+    ? parsed
+    : fallback;
+}
+
+function stUtcScheduleLabels(offset: number): string {
+  return Array.from(
+    { length: 4 },
+    (_, idx) => `:${String(offset + idx * ST_SCHEDULE_INTERVAL_MINUTES).padStart(2, "0")}`,
+  ).join(" / ");
+}
+
+function nextUtcScheduleTime(offset: number, from = new Date()): string {
+  const next = new Date(from.getTime());
+  next.setUTCSeconds(0, 0);
+  if (from.getUTCSeconds() > 0 || from.getUTCMilliseconds() > 0) {
+    next.setUTCMinutes(next.getUTCMinutes() + 1);
+  }
+  for (let i = 0; i <= ST_SCHEDULE_INTERVAL_MINUTES; i++) {
+    if (next.getUTCMinutes() % ST_SCHEDULE_INTERVAL_MINUTES === offset) {
+      return next.toISOString().replace(".000Z", "Z");
+    }
+    next.setUTCMinutes(next.getUTCMinutes() + 1);
+  }
+  return next.toISOString().replace(".000Z", "Z");
+}
+
+function formatUtcDateTime(value?: string | null): string {
+  if (!value) return "Not scheduled yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not scheduled yet";
+  return date.toISOString().replace(".000Z", "Z");
+}
 
 function SetupGuide({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -171,7 +231,7 @@ export default function AdminTenants() {
   const [form, setForm] = useState<TenantForm>(emptyForm);
   const [showIntegrationConfig, setShowIntegrationConfig] = useState(false);
   const [expandedSyncTenant, setExpandedSyncTenant] = useState<number | null>(null);
-  const [tenantSyncStatuses, setTenantSyncStatuses] = useState<Record<number, { statusByIntegration: Record<string, { lastSync: string | null; lastStatus: string; lastRecords: number; errorCount: number }> }>>({});
+  const [tenantSyncStatuses, setTenantSyncStatuses] = useState<Record<number, { statusByIntegration: Record<string, IntegrationStatus> }>>({});
   const [editTab, setEditTab] = useState<EditTab>("integrations");
   const [googleAdsConnecting, setGoogleAdsConnecting] = useState(false);
   const [googleAdsOAuthMessage, setGoogleAdsOAuthMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -361,6 +421,8 @@ export default function AdminTenants() {
       serviceTitanId: form.serviceTitanId || undefined,
       timezone: form.timezone,
       isDemo: form.isDemo,
+      stJobsSyncUtcMinuteOffset: parseStUtcMinuteOffset(form.stJobsSyncUtcMinuteOffset, 0),
+      stRevenueSyncUtcMinuteOffset: parseStUtcMinuteOffset(form.stRevenueSyncUtcMinuteOffset, 5),
     };
     // Whole dollars; blank uses the default budget (omit so the server keeps
     // the column default). Otherwise persist the override on create.
@@ -390,6 +452,8 @@ export default function AdminTenants() {
       serviceTitanId: form.serviceTitanId || undefined,
       timezone: form.timezone,
       isDemo: form.isDemo,
+      stJobsSyncUtcMinuteOffset: parseStUtcMinuteOffset(form.stJobsSyncUtcMinuteOffset, 0),
+      stRevenueSyncUtcMinuteOffset: parseStUtcMinuteOffset(form.stRevenueSyncUtcMinuteOffset, 5),
     };
     // Whole dollars; blank clears the override (null → falls back to default).
     const trimmedBudget = form.monthlyBudget.trim();
@@ -450,6 +514,8 @@ export default function AdminTenants() {
       podiumApiToken: typeof lc.podiumApiToken === "string" ? lc.podiumApiToken : "",
       podiumLocationId: typeof lc.podiumLocationId === "string" ? lc.podiumLocationId : "",
       monthlyBudget: t.monthlyBudget != null ? String(t.monthlyBudget) : "",
+      stJobsSyncUtcMinuteOffset: t.stJobsSyncUtcMinuteOffset != null ? String(t.stJobsSyncUtcMinuteOffset) : "0",
+      stRevenueSyncUtcMinuteOffset: t.stRevenueSyncUtcMinuteOffset != null ? String(t.stRevenueSyncUtcMinuteOffset) : "5",
       isDemo: Boolean(t.isDemo),
     });
     setDirtyFields(new Set());
@@ -525,6 +591,56 @@ export default function AdminTenants() {
     );
   };
 
+  const ServiceTitanScheduleFields = () => {
+    const jobsOffset = parseStUtcMinuteOffset(form.stJobsSyncUtcMinuteOffset, 0);
+    const revenueOffset = parseStUtcMinuteOffset(form.stRevenueSyncUtcMinuteOffset, 5);
+    return (
+      <div className="mt-4 rounded-lg border border-blue-500/20 bg-blue-500/[0.04] p-4">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="mt-0.5 rounded-md bg-blue-500/15 p-2 text-blue-300">
+            <Clock className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-sm font-medium text-white">ServiceTitan UTC schedule</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Offsets are exact UTC minute slots inside each 15-minute window. Jobs and revenue can be staggered per tenant.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="rounded-md border border-white/10 bg-background/40 p-3">
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Jobs minute offset</label>
+            <input
+              type="number"
+              min={0}
+              max={14}
+              step={1}
+              value={form.stJobsSyncUtcMinuteOffset}
+              onChange={(e) => setForm(f => ({ ...f, stJobsSyncUtcMinuteOffset: e.target.value }))}
+              className={inputClass + " w-full"}
+            />
+            <div className="mt-2 font-mono text-xs text-blue-200">{stUtcScheduleLabels(jobsOffset)} UTC</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">Next: {nextUtcScheduleTime(jobsOffset)}</div>
+          </div>
+          <div className="rounded-md border border-white/10 bg-background/40 p-3">
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1 block">Revenue minute offset</label>
+            <input
+              type="number"
+              min={0}
+              max={14}
+              step={1}
+              value={form.stRevenueSyncUtcMinuteOffset}
+              onChange={(e) => setForm(f => ({ ...f, stRevenueSyncUtcMinuteOffset: e.target.value }))}
+              className={inputClass + " w-full"}
+            />
+            <div className="mt-2 font-mono text-xs text-blue-200">{stUtcScheduleLabels(revenueOffset)} UTC</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">Next: {nextUtcScheduleTime(revenueOffset)}</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const IntegrationFields = () => (
     <div className="mt-4 border border-white/10 rounded-lg p-4 bg-background/30">
       <button
@@ -547,6 +663,7 @@ export default function AdminTenants() {
               <SecretInput field="serviceTitanClientSecret" label="Client Secret" />
               <SecretInput field="serviceTitanAppKey" label="App Key" />
             </div>
+            <ServiceTitanScheduleFields />
           </div>
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -998,9 +1115,32 @@ export default function AdminTenants() {
                                 </div>
                                 <div className="text-xs text-muted-foreground space-y-1">
                                   <div>Last Success: {status.lastSync ? new Date(status.lastSync).toLocaleString() : "Never"}</div>
-                                  <div>Latest Run: <span className={status.lastStatus === "completed" ? "text-emerald-400" : status.lastStatus === "error" ? "text-red-400" : "text-muted-foreground"}>{status.lastStatus}</span></div>
+                                  <div>Latest Run: <span className={status.lastStatus === "completed" ? "text-emerald-400" : status.lastStatus === "error" ? "text-red-400" : status.lastStatus === "skipped" ? "text-amber-300" : "text-muted-foreground"}>{status.lastStatus}</span></div>
                                   <div>Records: {status.lastRecords}</div>
                                   {status.errorCount > 0 && <div className="text-red-400">Errors (recent): {status.errorCount}</div>}
+                                  {key === "service_titan" && status.syncTypes && (
+                                    <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
+                                      {(["jobs", "revenue"] as const).map((syncType) => {
+                                        const sync = status.syncTypes?.[syncType];
+                                        return (
+                                          <div key={syncType} className="rounded bg-white/[0.03] p-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <span className="text-white/80 capitalize">{syncType}</span>
+                                              <span className={`text-[11px] ${sync?.lastStatus === "completed" ? "text-emerald-400" : sync?.lastStatus === "error" ? "text-red-400" : sync?.lastStatus === "skipped" ? "text-amber-300" : "text-muted-foreground"}`}>
+                                                {sync?.lastStatus || "never"}
+                                              </span>
+                                            </div>
+                                            <div className="mt-1 space-y-0.5 text-[11px]">
+                                              <div>Next scheduled: <span className="font-mono text-blue-200">{formatUtcDateTime(sync?.nextScheduledForUtc)}</span></div>
+                                              <div>Last scheduled: <span className="font-mono text-white/70">{formatUtcDateTime(sync?.scheduledForUtc)}</span></div>
+                                              <div>Started: <span className="font-mono text-white/70">{formatUtcDateTime(sync?.startedAt)}</span></div>
+                                              <div>Completed: <span className="font-mono text-white/70">{formatUtcDateTime(sync?.completedAt)}</span></div>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             ))}

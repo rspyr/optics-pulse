@@ -1,6 +1,6 @@
 import { db, tenantsTable, jobsTable, leadsTable, attributionEventsTable, campaignsTable, campaignDailyStatsTable, integrationSyncLogsTable, soldEstimatesTable, callAttemptsTable, metaAdsTable, metaAdSetsTable, metaAdDailyStatsTable } from "@workspace/db";
 import { emitSyncFailureNotification, emitSyncCatchupNotification } from "./notifications";
-import { eq, and, isNull, isNotNull, sql, desc, or, type SQL } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, sql, desc, or, inArray, type SQL } from "drizzle-orm";
 import { decryptConfig } from "../lib/encryption";
 import { SERVICE_TITAN_JOB_STATUSES, SERVICE_TITAN_ESTIMATE_STATUSES, fetchJobsByStatuses, formatSTJobForSync, fetchJobCanceledLog, getServiceTitanJobCancelledAt, fetchCustomerContactsById, fetchLocationsByIds, formatLocationAddress, fetchInvoices, parseInvoiceData, fetchSoldEstimates, parseEstimateData, resolveEmployeeName, clearEmployeeCache, compileRebatePatterns, DEFAULT_REBATE_LABELS, hashStJobId, type STJob, type STInvoice, type STEstimate } from "./integrations/service-titan";
 import { fetchCampaignPerformance, formatCampaignRow } from "./integrations/google-ads";
@@ -13,6 +13,26 @@ import { classifyBackfillError } from "./backfill-status-format";
 import { DEFAULT_INACTIVITY_STALE_MINUTES } from "./orphan-sync-reaper";
 import { createGuardedRunner } from "../lib/reentrancy-guard";
 import { getChallengeJobAttributionAt, getLeadSearchWindowForJob } from "./challenge-job-attribution";
+import {
+  DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  buildScheduledServiceTitanMetadata,
+  getServiceTitanUtcScheduleLabels,
+  getUtcMinuteSlot,
+  normalizeServiceTitanUtcMinuteOffset,
+  serviceTitanOffsetDueAt,
+  type ScheduledServiceTitanSyncType,
+} from "./service-titan-utc-schedule";
+
+export {
+  DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  SERVICE_TITAN_SCHEDULE_INTERVAL_MINUTES,
+  SERVICE_TITAN_UTC_SCHEDULER_VERSION,
+  getNextServiceTitanScheduledAt,
+  getServiceTitanUtcScheduleLabels,
+  normalizeServiceTitanUtcMinuteOffset,
+} from "./service-titan-utc-schedule";
 
 interface TenantApiConfig {
   serviceTitanClientId?: string;
@@ -68,6 +88,23 @@ type ServiceTitanSyncConfig = {
   appKey?: string;
 };
 
+type SyncLogOptions = {
+  triggeredBySyncLogId?: number | null;
+  scheduledForUtc?: Date | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type ScheduledSyncOptions = {
+  syncLogId?: number;
+  scheduledForUtc?: Date | null;
+  schedulerMetadata?: Record<string, unknown> | null;
+  triggeredBySyncLogId?: number | null;
+};
+
+type ServiceTitanRevenueSyncOptions = ScheduledSyncOptions & {
+  fullResync?: boolean;
+};
+
 function createServiceTitanJobFormatter(stConfig: ServiceTitanSyncConfig, tenantId: number) {
   let warnedCancelLogFailure = false;
 
@@ -113,7 +150,7 @@ async function logSync(
   integration: string,
   syncType: string,
   startedAt: Date,
-  options?: { triggeredBySyncLogId?: number | null },
+  options?: SyncLogOptions,
 ) {
   const [log] = await db.insert(integrationSyncLogsTable).values({
     tenantId,
@@ -122,8 +159,92 @@ async function logSync(
     status: "running",
     startedAt,
     triggeredBySyncLogId: options?.triggeredBySyncLogId ?? null,
+    scheduledForUtc: options?.scheduledForUtc ?? null,
+    metadata: options?.metadata ?? null,
   }).returning();
   return log;
+}
+
+async function insertSkippedScheduledServiceTitanLog(
+  tenantId: number,
+  syncType: ScheduledServiceTitanSyncType,
+  scheduledForUtc: Date,
+  metadata: Record<string, unknown>,
+  reason: string,
+) {
+  const now = new Date();
+  const [log] = await db.insert(integrationSyncLogsTable)
+    .values({
+      tenantId,
+      integration: "service_titan",
+      syncType,
+      status: "skipped",
+      recordsProcessed: 0,
+      errorMessage: reason,
+      metadata,
+      scheduledForUtc,
+      startedAt: now,
+      completedAt: now,
+    })
+    .onConflictDoNothing()
+    .returning();
+  return log ?? null;
+}
+
+async function claimScheduledServiceTitanLog(
+  tenantId: number,
+  syncType: ScheduledServiceTitanSyncType,
+  activeSyncTypes: string[],
+  scheduledForUtc: Date,
+  metadata: Record<string, unknown>,
+) {
+  const [active] = await db.select({
+      id: integrationSyncLogsTable.id,
+      syncType: integrationSyncLogsTable.syncType,
+      scheduledForUtc: integrationSyncLogsTable.scheduledForUtc,
+      startedAt: integrationSyncLogsTable.startedAt,
+    })
+    .from(integrationSyncLogsTable)
+    .where(and(
+      eq(integrationSyncLogsTable.tenantId, tenantId),
+      eq(integrationSyncLogsTable.integration, "service_titan"),
+      eq(integrationSyncLogsTable.status, "running"),
+      inArray(integrationSyncLogsTable.syncType, activeSyncTypes),
+    ))
+    .limit(1);
+
+  if (active) {
+    await insertSkippedScheduledServiceTitanLog(
+      tenantId,
+      syncType,
+      scheduledForUtc,
+      {
+        ...metadata,
+        skippedBecause: "prior_sync_running",
+        activeSyncLogId: active.id,
+        activeSyncType: active.syncType,
+        activeScheduledForUtc: active.scheduledForUtc?.toISOString?.() ?? null,
+        activeStartedAt: active.startedAt?.toISOString?.() ?? null,
+      },
+      `Skipped scheduled ${syncType} run because ${active.syncType} sync log ${active.id} is still running`,
+    );
+    return null;
+  }
+
+  const [log] = await db.insert(integrationSyncLogsTable)
+    .values({
+      tenantId,
+      integration: "service_titan",
+      syncType,
+      status: "running",
+      startedAt: new Date(),
+      scheduledForUtc,
+      metadata,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  return log ?? null;
 }
 
 async function completeSyncLog(logId: number, status: string, recordsProcessed: number, errorMessage?: string) {
@@ -560,11 +681,15 @@ export async function syncCallRailAttribution(
   }
 }
 
-export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: number; error?: string }> {
+export async function syncServiceTitanJobs(tenantId: number, options: ScheduledSyncOptions = {}): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) return { synced: 0, error: "Tenant not found" };
+  if (!tenant) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "error", 0, "Tenant not found");
+    return { synced: 0, error: "Tenant not found" };
+  }
 
   if (tenant.stSyncPaused) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "skipped", 0, "ServiceTitan sync is paused for this tenant");
     return { synced: 0, error: "ServiceTitan sync is paused for this tenant" };
   }
 
@@ -576,12 +701,22 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
       !config?.serviceTitanAppKey && "App Key",
     ].filter(Boolean).join(", ");
     const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
-    const missingLog = await logSync(tenantId, "service_titan", "jobs", new Date());
-    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    const missingLogId = options.syncLogId ?? (await logSync(tenantId, "service_titan", "jobs", new Date(), {
+      scheduledForUtc: options.scheduledForUtc,
+      metadata: options.schedulerMetadata,
+      triggeredBySyncLogId: options.triggeredBySyncLogId,
+    })).id;
+    await completeSyncLog(missingLogId, "error", 0, errorMessage);
     return { synced: 0, error: errorMessage };
   }
 
-  const syncLog = await logSync(tenantId, "service_titan", "jobs", new Date());
+  const syncLog = options.syncLogId
+    ? { id: options.syncLogId }
+    : await logSync(tenantId, "service_titan", "jobs", new Date(), {
+        scheduledForUtc: options.scheduledForUtc,
+        metadata: options.schedulerMetadata,
+        triggeredBySyncLogId: options.triggeredBySyncLogId,
+      });
 
   // Per-tenant advisory lock (0x5354414e = 'STAN') prevents the 15-min
   // scheduled sync from racing with a manual ServiceTitan backfill on the
@@ -748,11 +883,6 @@ export async function syncServiceTitanJobs(tenantId: number): Promise<{ synced: 
         console.error(`[Sync] Post-sync reconciliation failed for tenant ${tenantId}:`, (err as Error).message);
       }
 
-      try {
-        await syncServiceTitanInvoices(tenantId);
-      } catch (err) {
-        console.error(`[Sync] Post-sync invoice sync failed for tenant ${tenantId}:`, (err as Error).message);
-      }
     }
 
     return { synced };
@@ -2532,11 +2662,15 @@ export async function backfillServiceTitanJobs(
   }
 }
 
-export async function syncServiceTitanInvoices(tenantId: number, options?: { fullResync?: boolean }): Promise<{ synced: number; error?: string }> {
+export async function syncServiceTitanInvoices(tenantId: number, options: ServiceTitanRevenueSyncOptions = {}): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) return { synced: 0, error: "Tenant not found" };
+  if (!tenant) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "error", 0, "Tenant not found");
+    return { synced: 0, error: "Tenant not found" };
+  }
 
   if (tenant.stSyncPaused) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "skipped", 0, "ServiceTitan sync is paused for this tenant");
     return { synced: 0, error: "ServiceTitan sync is paused for this tenant" };
   }
 
@@ -2548,8 +2682,12 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
       !config?.serviceTitanAppKey && "App Key",
     ].filter(Boolean).join(", ");
     const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
-    const missingLog = await logSync(tenantId, "service_titan", "invoices", new Date());
-    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    const missingLogId = options.syncLogId ?? (await logSync(tenantId, "service_titan", "invoices", new Date(), {
+      scheduledForUtc: options.scheduledForUtc,
+      metadata: options.schedulerMetadata,
+      triggeredBySyncLogId: options.triggeredBySyncLogId,
+    })).id;
+    await completeSyncLog(missingLogId, "error", 0, errorMessage);
     return { synced: 0, error: errorMessage };
   }
 
@@ -2566,7 +2704,13 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
 
   const modifiedOnOrAfter = options?.fullResync ? undefined : (lastSuccessfulSync?.completedAt?.toISOString() ?? undefined);
 
-  const syncLog = await logSync(tenantId, "service_titan", "invoices", new Date());
+  const syncLog = options.syncLogId
+    ? { id: options.syncLogId }
+    : await logSync(tenantId, "service_titan", "invoices", new Date(), {
+        scheduledForUtc: options.scheduledForUtc,
+        metadata: options.schedulerMetadata,
+        triggeredBySyncLogId: options.triggeredBySyncLogId,
+      });
 
   try {
     const stConfig = {
@@ -2812,11 +2956,15 @@ export async function syncServiceTitanInvoices(tenantId: number, options?: { ful
   }
 }
 
-export async function syncServiceTitanEstimates(tenantId: number, options?: { fullResync?: boolean }): Promise<{ synced: number; error?: string }> {
+export async function syncServiceTitanEstimates(tenantId: number, options: ServiceTitanRevenueSyncOptions = {}): Promise<{ synced: number; error?: string }> {
   const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId));
-  if (!tenant) return { synced: 0, error: "Tenant not found" };
+  if (!tenant) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "error", 0, "Tenant not found");
+    return { synced: 0, error: "Tenant not found" };
+  }
 
   if (tenant.stSyncPaused) {
+    if (options.syncLogId) await completeSyncLog(options.syncLogId, "skipped", 0, "ServiceTitan sync is paused for this tenant");
     return { synced: 0, error: "ServiceTitan sync is paused for this tenant" };
   }
 
@@ -2828,8 +2976,12 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
       !config?.serviceTitanAppKey && "App Key",
     ].filter(Boolean).join(", ");
     const errorMessage = `ServiceTitan not configured (missing: ${missing})`;
-    const missingLog = await logSync(tenantId, "service_titan", "estimates", new Date());
-    await completeSyncLog(missingLog.id, "error", 0, errorMessage);
+    const missingLogId = options.syncLogId ?? (await logSync(tenantId, "service_titan", "estimates", new Date(), {
+      scheduledForUtc: options.scheduledForUtc,
+      metadata: options.schedulerMetadata,
+      triggeredBySyncLogId: options.triggeredBySyncLogId,
+    })).id;
+    await completeSyncLog(missingLogId, "error", 0, errorMessage);
     return { synced: 0, error: errorMessage };
   }
 
@@ -2846,7 +2998,13 @@ export async function syncServiceTitanEstimates(tenantId: number, options?: { fu
 
   const modifiedOnOrAfter = options?.fullResync ? undefined : (lastSuccessfulSync?.completedAt?.toISOString() ?? undefined);
 
-  const syncLog = await logSync(tenantId, "service_titan", "estimates", new Date());
+  const syncLog = options.syncLogId
+    ? { id: options.syncLogId }
+    : await logSync(tenantId, "service_titan", "estimates", new Date(), {
+        scheduledForUtc: options.scheduledForUtc,
+        metadata: options.schedulerMetadata,
+        triggeredBySyncLogId: options.triggeredBySyncLogId,
+      });
 
   try {
     const stConfig = {
@@ -3120,28 +3278,157 @@ export async function recomputeServiceTitanRevenue(tenantId: number): Promise<Re
   }
 }
 
+async function runScheduledServiceTitanJobs(
+  tenant: typeof tenantsTable.$inferSelect,
+  scheduledForUtc: Date,
+): Promise<void> {
+  const minuteOffset = normalizeServiceTitanUtcMinuteOffset(
+    tenant.stJobsSyncUtcMinuteOffset,
+    DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  );
+  const metadata = buildScheduledServiceTitanMetadata("jobs", scheduledForUtc, minuteOffset, {
+    tenantName: tenant.name,
+  });
+  const syncLog = await claimScheduledServiceTitanLog(
+    tenant.id,
+    "jobs",
+    ["jobs", "backfill"],
+    scheduledForUtc,
+    metadata,
+  );
+  if (!syncLog) return;
+
+  await syncServiceTitanJobs(tenant.id, {
+    syncLogId: syncLog.id,
+    scheduledForUtc,
+    schedulerMetadata: metadata,
+  });
+}
+
+async function runScheduledServiceTitanRevenue(
+  tenant: typeof tenantsTable.$inferSelect,
+  scheduledForUtc: Date,
+): Promise<void> {
+  const minuteOffset = normalizeServiceTitanUtcMinuteOffset(
+    tenant.stRevenueSyncUtcMinuteOffset,
+    DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  );
+  const metadata = buildScheduledServiceTitanMetadata("revenue", scheduledForUtc, minuteOffset, {
+    tenantName: tenant.name,
+    childSyncTypes: ["invoices", "estimates"],
+  });
+  const revenueLog = await claimScheduledServiceTitanLog(
+    tenant.id,
+    "revenue",
+    ["revenue", "invoices", "estimates"],
+    scheduledForUtc,
+    metadata,
+  );
+  if (!revenueLog) return;
+
+  let synced = 0;
+  const errors: string[] = [];
+  try {
+    const invoiceResult = await syncServiceTitanInvoices(tenant.id, {
+      scheduledForUtc,
+      triggeredBySyncLogId: revenueLog.id,
+      schedulerMetadata: {
+        ...metadata,
+        childSyncType: "invoices",
+      },
+    });
+    synced += invoiceResult.synced;
+    if (invoiceResult.error) errors.push(`invoices: ${invoiceResult.error}`);
+
+    const estimateResult = await syncServiceTitanEstimates(tenant.id, {
+      scheduledForUtc,
+      triggeredBySyncLogId: revenueLog.id,
+      schedulerMetadata: {
+        ...metadata,
+        childSyncType: "estimates",
+      },
+    });
+    synced += estimateResult.synced;
+    if (estimateResult.error) errors.push(`estimates: ${estimateResult.error}`);
+
+    await completeSyncLog(
+      revenueLog.id,
+      errors.length > 0 ? "error" : "completed",
+      synced,
+      errors.length > 0 ? errors.join("; ") : undefined,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await completeSyncLog(revenueLog.id, "error", synced, message);
+    throw err;
+  }
+}
+
+let serviceTitanUtcTimer: ReturnType<typeof setTimeout> | null = null;
+let syncSchedulerGeneration = 0;
 let syncTimers: ReturnType<typeof setInterval>[] = [];
+
+function scheduleNextServiceTitanUtcTick(
+  runServiceTitanUtcSweep: () => Promise<boolean>,
+  generation: number,
+) {
+  const now = new Date();
+  const elapsedInMinuteMs = now.getUTCSeconds() * 1000 + now.getUTCMilliseconds();
+  const delayMs = elapsedInMinuteMs === 0 ? 60_000 : 60_000 - elapsedInMinuteMs;
+  serviceTitanUtcTimer = setTimeout(() => {
+    if (generation !== syncSchedulerGeneration) return;
+    void runServiceTitanUtcSweep().catch((err) => {
+      console.error("[SyncScheduler] ServiceTitan UTC scheduler tick failed:", err);
+    });
+    scheduleNextServiceTitanUtcTick(runServiceTitanUtcSweep, generation);
+  }, delayMs);
+}
 
 export function startSyncScheduler() {
   stopSyncScheduler();
 
-  const jobsSyncInterval = 15 * 60 * 1000;
   const campaignSyncInterval = 60 * 60 * 1000;
+  const generation = ++syncSchedulerGeneration;
 
   // Each periodic sweep below is wrapped in its own re-entrancy guard so a run
   // that outlasts its interval (slow DB, many tenants) makes the next tick skip
   // instead of stacking overlapping sweeps. Guards are per-sweep, so the timers
   // never block each other — only repeated ticks of the same sweep coalesce.
-  const runJobsSweep = createGuardedRunner("SyncScheduler:jobs", async () => {
-    console.log("[SyncScheduler] Starting ServiceTitan jobs sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
+  const runServiceTitanUtcSweep = createGuardedRunner("SyncScheduler:service-titan-utc", async () => {
+    const scheduledForUtc = getUtcMinuteSlot(new Date());
+    const tenants = await db.select().from(tenantsTable).where(and(
+      eq(tenantsTable.isActive, true),
+      eq(tenantsTable.stSyncPaused, false),
+    ));
+    let dispatched = 0;
     for (const tenant of tenants) {
-      await syncServiceTitanJobs(tenant.id);
+      const jobsOffset = normalizeServiceTitanUtcMinuteOffset(
+        tenant.stJobsSyncUtcMinuteOffset,
+        DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+      );
+      if (serviceTitanOffsetDueAt(jobsOffset, scheduledForUtc)) {
+        dispatched++;
+        void runScheduledServiceTitanJobs(tenant, scheduledForUtc).catch((err) => {
+          console.error(`[SyncScheduler] Scheduled ServiceTitan jobs failed for tenant ${tenant.id}:`, err);
+        });
+      }
+
+      const revenueOffset = normalizeServiceTitanUtcMinuteOffset(
+        tenant.stRevenueSyncUtcMinuteOffset,
+        DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+      );
+      if (serviceTitanOffsetDueAt(revenueOffset, scheduledForUtc)) {
+        dispatched++;
+        void runScheduledServiceTitanRevenue(tenant, scheduledForUtc).catch((err) => {
+          console.error(`[SyncScheduler] Scheduled ServiceTitan revenue failed for tenant ${tenant.id}:`, err);
+        });
+      }
+    }
+    if (dispatched > 0) {
+      console.log(`[SyncScheduler] Dispatched ${dispatched} ServiceTitan scheduled run(s) for ${scheduledForUtc.toISOString()}`);
     }
   });
-  const jobsTimer = setInterval(() => {
-    void runJobsSweep();
-  }, jobsSyncInterval);
+  scheduleNextServiceTitanUtcTick(runServiceTitanUtcSweep, generation);
 
   const runCampaignSweep = createGuardedRunner("SyncScheduler:campaigns", async () => {
     console.log("[SyncScheduler] Starting Google Ads campaign sync for all tenants");
@@ -3182,19 +3469,6 @@ export function startSyncScheduler() {
   const metaTimer = setInterval(() => {
     void runMetaSweep();
   }, 5 * 60 * 1000); // check every 5 minutes whether the trigger hour has arrived
-
-  const invoiceSyncInterval = 15 * 60 * 1000;
-  const runInvoiceSweep = createGuardedRunner("SyncScheduler:invoices", async () => {
-    console.log("[SyncScheduler] Starting ServiceTitan invoice + estimates sync for all tenants");
-    const tenants = await db.select().from(tenantsTable).where(eq(tenantsTable.isActive, true));
-    for (const tenant of tenants) {
-      await syncServiceTitanInvoices(tenant.id);
-      await syncServiceTitanEstimates(tenant.id);
-    }
-  });
-  const invoiceTimer = setInterval(() => {
-    void runInvoiceSweep();
-  }, invoiceSyncInterval);
 
   const reviewSyncInterval = 6 * 60 * 60 * 1000;
   const reviewTimer = setInterval(async () => {
@@ -3253,11 +3527,16 @@ export function startSyncScheduler() {
     void runCallRailSweep();
   }, callRailSyncIntervalMs);
 
-  syncTimers = [jobsTimer, campaignTimer, metaTimer, invoiceTimer, reviewTimer, orphanReaperTimer, callRailTimer];
-  console.log(`[SyncScheduler] Started: ST jobs 15min, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, invoices+estimates 15min, Podium PAUSED, CallRail ${Math.round(callRailSyncIntervalMs / 60000)}min (${callRailSyncWindowDays}d attribution window), orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
+  syncTimers = [campaignTimer, metaTimer, reviewTimer, orphanReaperTimer, callRailTimer];
+  console.log(`[SyncScheduler] Started: ST UTC scheduler jobs default ${getServiceTitanUtcScheduleLabels(DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET).join("/")} and revenue default ${getServiceTitanUtcScheduleLabels(DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET).join("/")} UTC, Google Ads 60min, Meta nightly @${metaSyncHourEt}:00 ET, Podium PAUSED, CallRail ${Math.round(callRailSyncIntervalMs / 60000)}min (${callRailSyncWindowDays}d attribution window), orphan reaper ${Math.round(orphanReaperIntervalMs / 60000)}min (stale > ${orphanReaperStaleMinutes}min)`);
 }
 
 export function stopSyncScheduler() {
+  syncSchedulerGeneration++;
+  if (serviceTitanUtcTimer) {
+    clearTimeout(serviceTitanUtcTimer);
+    serviceTitanUtcTimer = null;
+  }
   for (const timer of syncTimers) {
     clearInterval(timer);
   }

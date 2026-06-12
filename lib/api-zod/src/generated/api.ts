@@ -23,6 +23,8 @@ export const ListTenantsResponseItem = zod.object({
   name: zod.string(),
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
+  stJobsSyncUtcMinuteOffset: zod.number().optional(),
+  stRevenueSyncUtcMinuteOffset: zod.number().optional(),
   isActive: zod.boolean(),
   isDemo: zod.boolean(),
   createdAt: zod.date(),
@@ -40,6 +42,8 @@ export const CreateTenantBody = zod.object({
   serviceTitanId: zod.string().optional(),
   timezone: zod.string().default(createTenantBodyTimezoneDefault),
   isDemo: zod.boolean().default(createTenantBodyIsDemoDefault),
+  stJobsSyncUtcMinuteOffset: zod.number().int().min(0).max(14).optional(),
+  stRevenueSyncUtcMinuteOffset: zod.number().int().min(0).max(14).optional(),
   monthlyBudget: zod
     .number()
     .nullish()
@@ -60,6 +64,8 @@ export const GetTenantResponse = zod.object({
   name: zod.string(),
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
+  stJobsSyncUtcMinuteOffset: zod.number().optional(),
+  stRevenueSyncUtcMinuteOffset: zod.number().optional(),
   isActive: zod.boolean(),
   isDemo: zod.boolean(),
   createdAt: zod.date(),
@@ -79,6 +85,8 @@ export const UpdateTenantBody = zod.object({
   isActive: zod.boolean().optional(),
   isDemo: zod.boolean().optional(),
   stSyncPaused: zod.boolean().optional(),
+  stJobsSyncUtcMinuteOffset: zod.number().int().min(0).max(14).optional(),
+  stRevenueSyncUtcMinuteOffset: zod.number().int().min(0).max(14).optional(),
   monthlyBudget: zod
     .number()
     .nullish()
@@ -92,6 +100,8 @@ export const UpdateTenantResponse = zod.object({
   name: zod.string(),
   serviceTitanId: zod.string().nullish(),
   timezone: zod.string(),
+  stJobsSyncUtcMinuteOffset: zod.number().optional(),
+  stRevenueSyncUtcMinuteOffset: zod.number().optional(),
   isActive: zod.boolean(),
   isDemo: zod.boolean(),
   createdAt: zod.date(),

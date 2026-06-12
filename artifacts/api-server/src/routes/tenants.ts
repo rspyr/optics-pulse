@@ -7,7 +7,14 @@ import { assertResourceTenantAccess } from "../lib/tenant-scope";
 import { encryptConfig, decryptConfig } from "../lib/encryption";
 import { DEFAULT_SOURCE_ALIASES } from "../services/source-normalizer";
 import { DEFAULT_REBATE_LABELS } from "../services/integrations/service-titan";
-import { recomputeServiceTitanRevenue } from "../services/sync-scheduler";
+import {
+  DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  getNextServiceTitanScheduledAt,
+  getServiceTitanUtcScheduleLabels,
+  normalizeServiceTitanUtcMinuteOffset,
+  recomputeServiceTitanRevenue,
+} from "../services/sync-scheduler";
 
 const router: IRouter = Router();
 
@@ -84,6 +91,22 @@ function sanitizeTenant(tenant: typeof tenantsTable.$inferSelect) {
     rebateLabels: storedLabels && storedLabels.length > 0 ? storedLabels : [...DEFAULT_REBATE_LABELS],
     usingDefaults: !(storedLabels && storedLabels.length > 0),
   };
+  const stJobsOffset = normalizeServiceTitanUtcMinuteOffset(
+    tenant.stJobsSyncUtcMinuteOffset,
+    DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  );
+  const stRevenueOffset = normalizeServiceTitanUtcMinuteOffset(
+    tenant.stRevenueSyncUtcMinuteOffset,
+    DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  );
+  result.stJobsSyncUtcMinuteOffset = stJobsOffset;
+  result.stRevenueSyncUtcMinuteOffset = stRevenueOffset;
+  result.stSyncSchedule = {
+    jobsUtcTimes: getServiceTitanUtcScheduleLabels(stJobsOffset),
+    revenueUtcTimes: getServiceTitanUtcScheduleLabels(stRevenueOffset),
+    nextJobsScheduledForUtc: getNextServiceTitanScheduledAt(stJobsOffset).toISOString(),
+    nextRevenueScheduledForUtc: getNextServiceTitanScheduledAt(stRevenueOffset).toISOString(),
+  };
   return result;
 }
 
@@ -122,6 +145,12 @@ router.post("/tenants", requireRole("super_admin", "agency_user"), async (req, r
     timezone: body.timezone || "America/New_York",
     isDemo: req.body.isDemo === true ? true : false,
   };
+  if (body.stJobsSyncUtcMinuteOffset !== undefined) {
+    insertData.stJobsSyncUtcMinuteOffset = body.stJobsSyncUtcMinuteOffset;
+  }
+  if (body.stRevenueSyncUtcMinuteOffset !== undefined) {
+    insertData.stRevenueSyncUtcMinuteOffset = body.stRevenueSyncUtcMinuteOffset;
+  }
   // Optional per-client monthly ad budget (whole dollars). Omitted or null
   // leaves the column at its default so the agency overview's Budget Pace
   // falls back to the default budget. Reject negative or non-integer values.
@@ -205,6 +234,18 @@ router.patch("/tenants/:tenantId", async (req, res) => {
   }
   if (body.stSyncPaused !== undefined && (role === "super_admin" || role === "agency_user")) {
     updateData.stSyncPaused = body.stSyncPaused;
+  }
+  if (body.stJobsSyncUtcMinuteOffset !== undefined || body.stRevenueSyncUtcMinuteOffset !== undefined) {
+    if (role !== "super_admin" && role !== "agency_user") {
+      res.status(403).json({ error: "Only agency users can modify ServiceTitan sync schedules" });
+      return;
+    }
+    if (body.stJobsSyncUtcMinuteOffset !== undefined) {
+      updateData.stJobsSyncUtcMinuteOffset = body.stJobsSyncUtcMinuteOffset;
+    }
+    if (body.stRevenueSyncUtcMinuteOffset !== undefined) {
+      updateData.stRevenueSyncUtcMinuteOffset = body.stRevenueSyncUtcMinuteOffset;
+    }
   }
   // Per-client monthly ad budget (whole dollars). Only agency staff may set
   // it. `null` clears the override so the agency overview's Budget Pace falls

@@ -11,6 +11,8 @@ export interface Tenant {
   name: string;
   serviceTitanId?: string | null;
   timezone: string;
+  stJobsSyncUtcMinuteOffset?: number;
+  stRevenueSyncUtcMinuteOffset?: number;
   isActive: boolean;
   isDemo: boolean;
   createdAt: Date;

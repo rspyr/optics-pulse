@@ -2,7 +2,18 @@ import { Router, type IRouter } from "express";
 import { db, integrationSyncLogsTable, tenantsTable, jobsTable } from "@workspace/db";
 import { eq, desc, and, notInArray, inArray, isNotNull, isNull, count, sql } from "drizzle-orm";
 import { requireRole } from "../middleware/auth";
-import { syncGoogleAdsCampaigns, syncMetaCampaigns, syncCallRailAttribution, backfillGoogleAdsCampaigns, backfillServiceTitanJobs, recomputeServiceTitanRevenue } from "../services/sync-scheduler";
+import {
+  DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+  DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+  getNextServiceTitanScheduledAt,
+  normalizeServiceTitanUtcMinuteOffset,
+  syncGoogleAdsCampaigns,
+  syncMetaCampaigns,
+  syncCallRailAttribution,
+  backfillGoogleAdsCampaigns,
+  backfillServiceTitanJobs,
+  recomputeServiceTitanRevenue,
+} from "../services/sync-scheduler";
 import { cleanupCallRailPulseLeads, DEFAULT_CALLRAIL_BACKFILL_DAYS, MAX_CALLRAIL_BACKFILL_DAYS } from "../services/integrations/callrail";
 import { decryptConfig } from "../lib/encryption";
 import { parseBackfillProgress, classifyBackfillError, computeChunkPercent, type BackfillProgressDetail, type BackfillErrorDetail } from "../services/backfill-status-format";
@@ -384,6 +395,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
 
   const configuredMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false, callrail: false };
   const pausedMap: Record<string, boolean> = { service_titan: false, google_ads: false, meta: false, callrail: false };
+  const serviceTitanNextScheduledByType: Record<string, string | null> = {};
   const reconnectMap: Record<string, { needs: boolean; reason: string | null }> = {
     service_titan: { needs: false, reason: null },
     google_ads: { needs: false, reason: null },
@@ -398,6 +410,16 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         needs: tenant.metaNeedsReconnect === true,
         reason: tenant.metaReconnectReason ?? null,
       };
+      const jobsOffset = normalizeServiceTitanUtcMinuteOffset(
+        tenant.stJobsSyncUtcMinuteOffset,
+        DEFAULT_ST_JOBS_SYNC_UTC_MINUTE_OFFSET,
+      );
+      const revenueOffset = normalizeServiceTitanUtcMinuteOffset(
+        tenant.stRevenueSyncUtcMinuteOffset,
+        DEFAULT_ST_REVENUE_SYNC_UTC_MINUTE_OFFSET,
+      );
+      serviceTitanNextScheduledByType.jobs = getNextServiceTitanScheduledAt(jobsOffset).toISOString();
+      serviceTitanNextScheduledByType.revenue = getNextServiceTitanScheduledAt(revenueOffset).toISOString();
       if (tenant.apiConfig && typeof tenant.apiConfig === "string") {
         try {
           const config = decryptConfig(tenant.apiConfig) as Record<string, string>;
@@ -425,7 +447,7 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     needsReconnect: boolean;
     reconnectReason: string | null;
     latestErrorCode: string | null;
-    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null }>;
+    syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null; scheduledForUtc: string | null; startedAt: string | null; completedAt: string | null; nextScheduledForUtc: string | null }>;
   }> = {};
 
   for (const integ of integrations) {
@@ -434,13 +456,17 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
     const latest = integLogs[0];
     const lastSuccessful = integLogs.find((l) => l.status === "completed");
 
-    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null }> = {};
+    const syncTypes: Record<string, { lastRun: string | null; lastStatus: string; recordsProcessed: number; totalRecordsProcessed: number; runningLogId: number | null; cancelRequested: boolean; totalRecords: number | null; progressUpdatedAt: string | null; phase: string | null; scheduledForUtc: string | null; startedAt: string | null; completedAt: string | null; nextScheduledForUtc: string | null }> = {};
     // Union of sync types: from the recent log window (latest run/status info)
     // AND from the cumulative aggregation (which covers full history, so we
     // still show sync types whose last run is older than the 60-row window).
     const typeSet = new Set<string>(integLogs.map((l) => l.syncType));
     for (const row of cumulativeTotals as Array<{ integration: string; syncType: string }>) {
       if (row.integration === integ) typeSet.add(row.syncType);
+    }
+    if (tenantId && integ === "service_titan") {
+      typeSet.add("jobs");
+      typeSet.add("revenue");
     }
     for (const st of typeSet) {
       const typeLogs = integLogs.filter((l) => l.syncType === st);
@@ -469,6 +495,12 @@ router.get("/integrations/sync-status", requireRole("super_admin", "agency_user"
         // Only meaningful while the run is `running`.
         phase: latestOfType?.status === "running"
           ? latestOfType.progressPhase ?? null
+          : null,
+        scheduledForUtc: latestOfType?.scheduledForUtc?.toISOString() ?? null,
+        startedAt: latestOfType?.startedAt?.toISOString() ?? null,
+        completedAt: latestOfType?.completedAt?.toISOString() ?? null,
+        nextScheduledForUtc: integ === "service_titan"
+          ? serviceTitanNextScheduledByType[st] ?? null
           : null,
       };
     }
