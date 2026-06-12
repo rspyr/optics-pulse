@@ -14,6 +14,8 @@ export interface Tenant {
   name: string;
   serviceTitanId?: string | null;
   timezone: string;
+  stJobsSyncUtcMinuteOffset?: number;
+  stRevenueSyncUtcMinuteOffset?: number;
   isActive: boolean;
   isDemo: boolean;
   createdAt: string;
@@ -24,6 +26,8 @@ export interface CreateTenantInput {
   serviceTitanId?: string;
   timezone?: string;
   isDemo?: boolean;
+  stJobsSyncUtcMinuteOffset?: number;
+  stRevenueSyncUtcMinuteOffset?: number;
   /** Client's monthly ad budget in whole dollars. Null or omitted uses the default budget for the agency overview's Budget Pace. */
   monthlyBudget?: number | null;
 }
@@ -35,6 +39,8 @@ export interface UpdateTenantInput {
   isActive?: boolean;
   isDemo?: boolean;
   stSyncPaused?: boolean;
+  stJobsSyncUtcMinuteOffset?: number;
+  stRevenueSyncUtcMinuteOffset?: number;
   /** Client's monthly ad budget in whole dollars. Null clears the override so the agency overview falls back to the default budget. */
   monthlyBudget?: number | null;
 }

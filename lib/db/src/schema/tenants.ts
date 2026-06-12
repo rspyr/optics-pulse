@@ -19,6 +19,8 @@ export const tenantsTable = pgTable("tenants", {
   isActive: boolean("is_active").notNull().default(true),
   isDemo: boolean("is_demo").notNull().default(false),
   stSyncPaused: boolean("st_sync_paused").notNull().default(true),
+  stJobsSyncUtcMinuteOffset: integer("st_jobs_sync_utc_minute_offset").notNull().default(0),
+  stRevenueSyncUtcMinuteOffset: integer("st_revenue_sync_utc_minute_offset").notNull().default(5),
   leadIngestionMode: text("lead_ingestion_mode").notNull().default("sheets"),
   metaNeedsReconnect: boolean("meta_needs_reconnect").notNull().default(false),
   metaReconnectReason: text("meta_reconnect_reason"),

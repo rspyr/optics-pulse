@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, serial, integer, text, timestamp, jsonb, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 
 export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
@@ -64,9 +65,14 @@ export const integrationSyncLogsTable = pgTable("integration_sync_logs", {
   // explain "why did this tenant just kick off a 6-month backfill?".
   triggeredBySyncLogId: integer("triggered_by_sync_log_id"),
   metadata: jsonb("metadata"),
+  scheduledForUtc: timestamp("scheduled_for_utc"),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => ({
+  scheduledSlotIdx: uniqueIndex("integration_sync_logs_scheduled_slot_idx")
+    .on(t.tenantId, t.integration, t.syncType, t.scheduledForUtc)
+    .where(sql`scheduled_for_utc IS NOT NULL`),
+}));
 
 export type IntegrationSyncLog = typeof integrationSyncLogsTable.$inferSelect;

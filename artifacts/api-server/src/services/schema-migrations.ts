@@ -25,6 +25,7 @@ const BOOTSTRAP_PENDING = new Set([
   "0088_global_campaign_funnel_match_codes",
   "0089_challenge_lead_type_index_plain",
   "0094_active_funnel_spam_flags",
+  "0095_service_titan_utc_schedule",
 ]);
 
 function resolveMigrationsDir(): string {
